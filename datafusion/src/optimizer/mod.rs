@@ -18,8 +18,8 @@
 //! This module contains a query optimizer that operates against a logical plan and applies
 //! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
 
-pub mod cross_join_elimination;
 pub mod common_subexpr_eliminate;
+pub mod cross_join_elimination;
 pub mod eliminate_limit;
 pub mod filter_push_down;
 pub mod limit_push_down;

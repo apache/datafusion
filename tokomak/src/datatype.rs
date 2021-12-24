@@ -1,5 +1,5 @@
-use datafusion::error::DataFusionError;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
+use datafusion::error::DataFusionError;
 use egg::*;
 use std::convert::TryFrom;
 use std::str::FromStr;
@@ -32,15 +32,14 @@ define_language! {
     }
 }
 
-
-impl From<&TokomakDataType> for DataType{
+impl From<&TokomakDataType> for DataType {
     fn from(val: &TokomakDataType) -> Self {
         let v = *val;
         DataType::from(v)
     }
 }
 
-impl From<TokomakDataType> for DataType{
+impl From<TokomakDataType> for DataType {
     fn from(v: TokomakDataType) -> Self {
         match v {
             TokomakDataType::Date32 => DataType::Date32,
@@ -78,8 +77,6 @@ impl From<TokomakDataType> for DataType{
         }
     }
 }
-
-
 
 impl TryFrom<DataType> for TokomakDataType {
     type Error = DataFusionError;
@@ -148,12 +145,12 @@ impl FromStr for TokomakDataType {
             "float64" => Ok(TokomakDataType::Float64),
             "utf8" => Ok(TokomakDataType::Utf8),
             "largeutf8" => Ok(TokomakDataType::LargeUtf8),
-            "time<s>"=> Ok(TokomakDataType::TimestampSecond),
-            "time<m>)"=> Ok(TokomakDataType::TimestampMillisecond),
-            "time<u>)"=> Ok(TokomakDataType::TimestampMicrosecond),
-            "time<n>)"=> Ok(TokomakDataType::TimestampNanosecond),
-            "interval<yearmonth>"=> Ok(TokomakDataType::IntervalYearMonth),
-            "interval<daytime>"=> Ok(TokomakDataType::IntervalDayTime),
+            "time<s>" => Ok(TokomakDataType::TimestampSecond),
+            "time<m>)" => Ok(TokomakDataType::TimestampMillisecond),
+            "time<u>)" => Ok(TokomakDataType::TimestampMicrosecond),
+            "time<n>)" => Ok(TokomakDataType::TimestampNanosecond),
+            "interval<yearmonth>" => Ok(TokomakDataType::IntervalYearMonth),
+            "interval<daytime>" => Ok(TokomakDataType::IntervalDayTime),
             _ => Err(DataFusionError::Internal(
                 "Parsing string as TokomakDataType failed".to_string(),
             )),

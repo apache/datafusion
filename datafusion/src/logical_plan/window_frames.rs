@@ -45,14 +45,15 @@ pub struct WindowFrame {
     /// An ending frame boundary
     pub end_bound: WindowFrameBound,
 }
-impl FromStr for WindowFrame{
-    type Err=DataFusionError;
+impl FromStr for WindowFrame {
+    type Err = DataFusionError;
 
     fn from_str(_s: &str) -> std::result::Result<Self, Self::Err> {
-        Err(DataFusionError::NotImplemented("FromStr is not implemented for WindowFrame".to_string()))
+        Err(DataFusionError::NotImplemented(
+            "FromStr is not implemented for WindowFrame".to_string(),
+        ))
     }
 }
-
 
 impl fmt::Display for WindowFrame {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -170,7 +171,7 @@ impl From<ast::WindowFrameBound> for WindowFrameBound {
     }
 }
 
-impl Hash for WindowFrameBound{
+impl Hash for WindowFrameBound {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let rank = self.get_rank();
         rank.hash(state)

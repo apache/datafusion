@@ -28,7 +28,7 @@ use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 /// example of how to use this extension API
 pub trait UserDefinedLogicalNode: fmt::Debug {
     /// Return the name of the user defined node
-    fn name(&self)->&'static str;
+    fn name(&self) -> &'static str;
     /// Return a reference to self as Any, to support dynamic downcasting
     fn as_any(&self) -> &dyn Any;
 

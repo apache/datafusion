@@ -370,8 +370,8 @@ pub enum Expr {
     Wildcard,
 }
 
-impl std::ops::Neg for Expr{
-    type Output=Expr;
+impl std::ops::Neg for Expr {
+    type Output = Expr;
 
     fn neg(self) -> Self::Output {
         Expr::Negative(Box::new(self))

@@ -1,18 +1,21 @@
-
-
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
 use std::hash::Hash;
 use std::io::Empty;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::collections::HashMap;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::TableProvider;
 use datafusion::error::DataFusionError;
+use datafusion::error::Result as DFResult;
+use datafusion::logical_plan::lit;
+use datafusion::logical_plan::plan;
+use datafusion::logical_plan::union_with_alias;
+use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::logical_plan::Column;
 use datafusion::logical_plan::DFField;
 use datafusion::logical_plan::DFSchema;
@@ -24,12 +27,9 @@ use datafusion::logical_plan::LogicalPlanBuilder;
 use datafusion::logical_plan::Operator;
 use datafusion::logical_plan::Partitioning;
 use datafusion::logical_plan::UserDefinedLogicalNode;
-use datafusion::logical_plan::lit;
-use datafusion::logical_plan::union_with_alias;
-use datafusion::logical_plan::plan;
-use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
+use egg::define_language;
 use egg::Analysis;
 use egg::EGraph;
 use egg::FromOp;
@@ -37,13 +37,13 @@ use egg::Language;
 use egg::LanguageChildren;
 use egg::RecExpr;
 use egg::Symbol;
-use egg::define_language;
-use datafusion::error::Result as DFResult;
 
-use egg::Id;
-use log::Log;
-use log::debug;
-use tokio::runtime::Handle;
+use crate::expr::BetweenExpr;
+use crate::expr::CastExpr;
+use crate::expr::FunctionCall;
+use crate::expr::InListExpr;
+use crate::expr::SortExpr;
+use crate::expr::TokomakColumn;
 use crate::RefCount;
 use crate::ScalarUDFName;
 use crate::SortSpec;
@@ -52,24 +52,23 @@ use crate::Tokomak;
 use crate::TokomakAnalysis;
 use crate::UDAFName;
 use crate::UDF;
-use crate::expr::BetweenExpr;
-use crate::expr::CastExpr;
-use crate::expr::FunctionCall;
-use crate::expr::InListExpr;
-use crate::expr::SortExpr;
-use crate::expr::TokomakColumn;
+use egg::Id;
+use log::debug;
+use log::Log;
+use tokio::runtime::Handle;
 
 use crate::expr::WindowBuiltinCallFramed;
 use crate::expr::WindowBuiltinCallUnframed;
 use crate::scalar::TokomakScalar;
 
-
-use datafusion::physical_plan::functions::BuiltinScalarFunction;
-use datafusion::physical_plan::aggregates::AggregateFunction;
-use datafusion::physical_plan::window_functions::{BuiltInWindowFunction, WindowFunction};
 use crate::TokomakDataType;
+use datafusion::physical_plan::aggregates::AggregateFunction;
+use datafusion::physical_plan::functions::BuiltinScalarFunction;
+use datafusion::physical_plan::window_functions::{
+    BuiltInWindowFunction, WindowFunction,
+};
 
-type Binop = [Id;3];
+type Binop = [Id; 3];
 define_language! {
     pub enum TokomakLogicalPlan{
         //Logical plan nodes
@@ -117,7 +116,7 @@ define_language! {
         "*" = Multiply([Id;2]),
         "/" = Divide([Id;2]),
         "%" = Modulus([Id;2]),
-        
+
         "or" = Or([Id;2]),
         "and" = And([Id;2]),
         "=" = Eq([Id;2]),
@@ -132,14 +131,14 @@ define_language! {
         "regex_not_imatch"=RegexNotIMatch([Id;2]),
         "is_distinct"=IsDistinctFrom([Id;2]),
         "is_not_distinct"=IsNotDistinctFrom([Id;2]),
-    
+
         "not" = Not([Id;1]),
-    
-    
+
+
         "is_not_null" = IsNotNull([Id;1]),
         "is_null" = IsNull([Id;1]),
         "negative" = Negative([Id;1]),
-        //expr low high 
+        //expr low high
         "between" = Between([Id;3]),
         "between_inverted" = BetweenInverted([Id;3]),
 
@@ -148,13 +147,13 @@ define_language! {
         "in_list" = InList([Id;2]),
         "not_in_list" = NotInList([Id;2]),
         "elist" = EList(Box<[Id]>),
-    
+
         //ScalarValue types
         ScalarBuiltin(BuiltinScalarFunction),
         AggregateBuiltin(AggregateFunction),
         WindowBuiltin(WindowFunction),
         Scalar(TokomakScalar),
-    
+
         //THe fist expression for all of the function call types must be the corresponding function type
         //For UDFs this is a string, which is looked up in the ExecutionProps
         //The last expression must be a List and is the arguments for the function.
@@ -177,7 +176,7 @@ define_language! {
         SortSpec(SortSpec),
         ScalarUDF(ScalarUDFName),
         AggregateUDF(UDAFName),
-        
+
         Column(TokomakColumn),
         WindowFrame(WindowFrame),
         // cast id as expr. Type is encoded as symbol
@@ -191,21 +190,21 @@ define_language! {
         Schema(TokomakSchema),
         Type(TokomakDataType),
         "keys"=JoinKeys(JoinKeys),
-        
+
         Str(Symbol),
         "None"=None,
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash,Clone)]
-pub struct UDLN([Id;3]);
-impl UDLN{
-    pub fn new(name: Id, inputs: Id, exprs: Id)->Self{
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub struct UDLN([Id; 3]);
+impl UDLN {
+    pub fn new(name: Id, inputs: Id, exprs: Id) -> Self {
         UDLN([name, inputs, exprs])
     }
 }
 
-impl LanguageChildren for UDLN{
+impl LanguageChildren for UDLN {
     fn len(&self) -> usize {
         3
     }
@@ -227,8 +226,7 @@ impl LanguageChildren for UDLN{
     }
 }
 
-
- /// The CASE expression is similar to a series of nested if/else and there are two forms that
+/// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
 /// corresponding "then" expressions, and an optional "else" expression.
 ///
@@ -247,7 +245,7 @@ impl LanguageChildren for UDLN{
 /// END
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct CaseIf(Box<[Id]>);
-impl LanguageChildren for CaseIf{
+impl LanguageChildren for CaseIf {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -268,14 +266,14 @@ impl LanguageChildren for CaseIf{
         &mut self.0[..]
     }
 }
-impl CaseIf{
-    fn when_then(&self)->&[Id]{
-        &self.0[0..self.0.len()-1]
+impl CaseIf {
+    fn when_then(&self) -> &[Id] {
+        &self.0[0..self.0.len() - 1]
     }
-    fn else_expr(&self)->Option<Id>{
-        if self.0.len() %2 ==0{
+    fn else_expr(&self) -> Option<Id> {
+        if self.0.len() % 2 == 0 {
             None
-        }else{
+        } else {
             Some(*self.0.last().unwrap())
         }
     }
@@ -284,7 +282,7 @@ impl CaseIf{
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct CaseLit(Box<[Id]>);
 
-impl LanguageChildren for CaseLit{
+impl LanguageChildren for CaseLit {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -306,102 +304,166 @@ impl LanguageChildren for CaseLit{
     }
 }
 
-impl CaseLit{
-    fn expr(&self)->Id{
+impl CaseLit {
+    fn expr(&self) -> Id {
         self.0[0]
     }
-    fn when_then(&self)->&[Id]{
-        &self.0[1..self.0.len()-2]
+    fn when_then(&self) -> &[Id] {
+        &self.0[1..self.0.len() - 2]
     }
-    fn else_expr(&self)->Option<Id>{
+    fn else_expr(&self) -> Option<Id> {
         //expr when then [when then]... else
-        if self.0.len() % 2 ==0{
+        if self.0.len() % 2 == 0 {
             Some(self.0.last().unwrap().clone())
-        }else{
+        } else {
             None
         }
     }
 }
 
-
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct TokomakSchema(Arc<DFSchema>);
-impl fmt::Display for TokomakSchema{
+impl fmt::Display for TokomakSchema {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0.as_ref())
     }
 }
-impl FromStr for TokomakSchema{
+impl FromStr for TokomakSchema {
     type Err = DataFusionError;
     fn from_str(_s: &str) -> Result<Self, Self::Err> {
-        return Err(DataFusionError::Internal(String::new()))
+        return Err(DataFusionError::Internal(String::new()));
     }
 }
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct TableProject(pub Arc<Vec<usize>>);
-impl fmt::Display for TableProject{
+impl fmt::Display for TableProject {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self.0.as_ref())
     }
 }
-impl FromStr for TableProject{
-    type Err=DataFusionError;
+impl FromStr for TableProject {
+    type Err = DataFusionError;
 
     fn from_str(_s: &str) -> Result<Self, Self::Err> {
         Err(DataFusionError::Internal(String::new()))
     }
 }
-fn try_create_language_child<L: LanguageChildren>(children: Vec<Id>)->Result<L, DataFusionError>{
-    if L::can_be_length(children.len()){
+fn try_create_language_child<L: LanguageChildren>(
+    children: Vec<Id>,
+) -> Result<L, DataFusionError> {
+    if L::can_be_length(children.len()) {
         Ok(L::from_vec(children))
-    }else{
-        Err(DataFusionError::Internal(format!("Could not create {} node, {} number of children is unsupported", std::any::type_name::<L>(), children.len())))
-    }
-
-}
-
-
-impl TokomakLogicalPlan{
-    pub fn is_expr(&self)->bool{
-        use TokomakLogicalPlan::*;
-        matches!(&self, Plus(_) | Minus(_) | Multiply(_) | Divide(_) | Modulus(_) | Or(_) | And(_) | Eq(_) | NotEq(_) | Lt(_) | LtEq(_) | Gt(_) | GtEq(_) | RegexMatch(_) | RegexIMatch(_) | RegexNotMatch(_) | RegexNotIMatch(_) | IsDistinctFrom(_) | IsNotDistinctFrom(_) | Not(_) | IsNotNull(_) | IsNull(_) | Negative(_) | Between(_) | BetweenInverted(_) | Like(_) | NotLike(_) | InList(_) | NotInList(_) | ScalarBuiltinCall(_) | ScalarUDFCall(_) | AggregateBuiltinCall(_) | AggregateBuiltinDistinctCall(_) | AggregateUDFCall(_) | WindowBuiltinCallUnframed(_) | WindowBuiltinCallFramed(_) | SortExpr(_) | Column(_) | Cast(_) | TryCast(_)  |Scalar(_) )
-    }
-    pub fn is_plan(&self)->bool{
-        use TokomakLogicalPlan::*;
-        matches!(&self, Filter(_) | Projection(_) | InnerJoin(_) | LeftJoin(_) | RightJoin(_) | FullJoin(_) | SemiJoin(_) | AntiJoin(_) | Extension(_) | CrossJoin(_) | Limit(_) | EmptyRelation(_)  | TableScan(_) | Union(_) | Window(_) | Aggregate(_) | Sort(_)  )
-    }
-
-    pub fn is_supporting(&self)->bool{
-        use TokomakLogicalPlan::*;
-        matches!(&self, EList(_)|PList(_)| Str(_) | None | Table(_) | TableProject(_))
+    } else {
+        Err(DataFusionError::Internal(format!(
+            "Could not create {} node, {} number of children is unsupported",
+            std::any::type_name::<L>(),
+            children.len()
+        )))
     }
 }
 
+impl TokomakLogicalPlan {
+    pub fn is_expr(&self) -> bool {
+        use TokomakLogicalPlan::*;
+        matches!(
+            &self,
+            Plus(_)
+                | Minus(_)
+                | Multiply(_)
+                | Divide(_)
+                | Modulus(_)
+                | Or(_)
+                | And(_)
+                | Eq(_)
+                | NotEq(_)
+                | Lt(_)
+                | LtEq(_)
+                | Gt(_)
+                | GtEq(_)
+                | RegexMatch(_)
+                | RegexIMatch(_)
+                | RegexNotMatch(_)
+                | RegexNotIMatch(_)
+                | IsDistinctFrom(_)
+                | IsNotDistinctFrom(_)
+                | Not(_)
+                | IsNotNull(_)
+                | IsNull(_)
+                | Negative(_)
+                | Between(_)
+                | BetweenInverted(_)
+                | Like(_)
+                | NotLike(_)
+                | InList(_)
+                | NotInList(_)
+                | ScalarBuiltinCall(_)
+                | ScalarUDFCall(_)
+                | AggregateBuiltinCall(_)
+                | AggregateBuiltinDistinctCall(_)
+                | AggregateUDFCall(_)
+                | WindowBuiltinCallUnframed(_)
+                | WindowBuiltinCallFramed(_)
+                | SortExpr(_)
+                | Column(_)
+                | Cast(_)
+                | TryCast(_)
+                | Scalar(_)
+        )
+    }
+    pub fn is_plan(&self) -> bool {
+        use TokomakLogicalPlan::*;
+        matches!(
+            &self,
+            Filter(_)
+                | Projection(_)
+                | InnerJoin(_)
+                | LeftJoin(_)
+                | RightJoin(_)
+                | FullJoin(_)
+                | SemiJoin(_)
+                | AntiJoin(_)
+                | Extension(_)
+                | CrossJoin(_)
+                | Limit(_)
+                | EmptyRelation(_)
+                | TableScan(_)
+                | Union(_)
+                | Window(_)
+                | Aggregate(_)
+                | Sort(_)
+        )
+    }
 
-
-
+    pub fn is_supporting(&self) -> bool {
+        use TokomakLogicalPlan::*;
+        matches!(
+            &self,
+            EList(_) | PList(_) | Str(_) | None | Table(_) | TableProject(_)
+        )
+    }
+}
 
 #[derive(Clone)]
 pub struct Table(pub Arc<dyn TableProvider>);
 
-impl FromStr for Table{
-    type Err=DataFusionError;
+impl FromStr for Table {
+    type Err = DataFusionError;
     fn from_str(_s: &str) -> Result<Self, Self::Err> {
         Err(DataFusionError::Internal(String::new()))
     }
 }
-impl std::fmt::Debug for Table{
+impl std::fmt::Debug for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("Table").finish()
     }
 }
-impl std::fmt::Display for Table{
+impl std::fmt::Display for Table {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f,"{:?}", self.0.table_type())
+        write!(f, "{:?}", self.0.table_type())
     }
 }
 
-impl PartialEq for Table{
+impl PartialEq for Table {
     fn eq(&self, other: &Self) -> bool {
         let self_ptr = Arc::as_ptr(&self.0) as *const u8 as usize;
         let other_ptr = Arc::as_ptr(&other.0) as *const u8 as usize;
@@ -409,22 +471,22 @@ impl PartialEq for Table{
     }
 }
 
-impl Eq for Table{}
-impl Ord for Table{
+impl Eq for Table {}
+impl Ord for Table {
     fn cmp(&self, other: &Self) -> Ordering {
         let self_ptr = Arc::as_ptr(&self.0) as *const u8 as usize;
         let other_ptr = Arc::as_ptr(&other.0) as *const u8 as usize;
         self_ptr.cmp(&other_ptr)
     }
 }
-impl PartialOrd for Table{
+impl PartialOrd for Table {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         let self_ptr = (Arc::as_ptr(&self.0) as *const u8) as usize;
         let other_ptr = Arc::as_ptr(&other.0) as *const u8 as usize;
         Some(self_ptr.cmp(&other_ptr))
     }
 }
-impl Hash for Table{
+impl Hash for Table {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let fat_ptr = Arc::as_ptr(&self.0);
         let ptr = (fat_ptr as *const u8) as usize;
@@ -432,10 +494,9 @@ impl Hash for Table{
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Union(Box<[Id]>);
-impl LanguageChildren for Union{
+impl LanguageChildren for Union {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -457,64 +518,62 @@ impl LanguageChildren for Union{
     }
 }
 
-
-impl Union{
-    pub fn new(inputs: Id, schema: Id, alias: Option<Id>)->Self{
-        let union = match alias{
-            Some(a)=> vec![inputs, schema, a],
-            None => vec![inputs,schema],
+impl Union {
+    pub fn new(inputs: Id, schema: Id, alias: Option<Id>) -> Self {
+        let union = match alias {
+            Some(a) => vec![inputs, schema, a],
+            None => vec![inputs, schema],
         };
         Self(union.into_boxed_slice())
     }
 
-    pub fn inputs(&self)->Id{
+    pub fn inputs(&self) -> Id {
         self.0[0]
     }
 
-    pub fn schema(&self)->Id{
+    pub fn schema(&self) -> Id {
         *self.0.last().unwrap()
     }
-    pub fn alias(&self)->Option<Id>{
-        if self.0.len() == 3{
+    pub fn alias(&self) -> Option<Id> {
+        if self.0.len() == 3 {
             Some(self.0[1])
-        }else{
+        } else {
             None
         }
     }
 }
 
 pub struct ExtensionNode([Id; 4]);
-impl ExtensionNode{
-    pub fn new(exprs: Id, input_plans: Id, ext_node: Id, schema: Id)->Self{
-        Self([exprs, input_plans, ext_node,schema])
+impl ExtensionNode {
+    pub fn new(exprs: Id, input_plans: Id, ext_node: Id, schema: Id) -> Self {
+        Self([exprs, input_plans, ext_node, schema])
+    }
 }
-}
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Projection(Box<[Id]>);
-impl Projection{
-    pub fn new(exprs: Id, input: Id, alias: Option<Id>, schema: Id)->Self{
-        let s = match alias{
-            Some(alias)=> vec![exprs, input, alias, schema],
+impl Projection {
+    pub fn new(exprs: Id, input: Id, alias: Option<Id>, schema: Id) -> Self {
+        let s = match alias {
+            Some(alias) => vec![exprs, input, alias, schema],
             None => vec![exprs, input, schema],
-        }.into_boxed_slice();
+        }
+        .into_boxed_slice();
         Self(s)
     }
-    pub fn exprs(&self)->Id{
+    pub fn exprs(&self) -> Id {
         self.0[0]
     }
-    pub fn input(&self)->Id{
+    pub fn input(&self) -> Id {
         self.0[1]
     }
-    pub fn schema(&self)->Id{
+    pub fn schema(&self) -> Id {
         *self.0.last().unwrap()
     }
-    pub fn alias(&self)->Option<Id>{
-        if self.0.len()!=4{
+    pub fn alias(&self) -> Option<Id> {
+        if self.0.len() != 4 {
             None
-        }else{
+        } else {
             Some(self.0[2])
         }
     }
@@ -522,72 +581,80 @@ impl Projection{
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Clone)]
 pub struct TableScan([Id; 5]);
-impl TableScan{
-    pub fn new(table_name: Id, source: Id, projection: Id, filters: Id, limit: Id)->Self{
+impl TableScan {
+    pub fn new(
+        table_name: Id,
+        source: Id,
+        projection: Id,
+        filters: Id,
+        limit: Id,
+    ) -> Self {
         Self([table_name, source, projection, filters, limit])
     }
-    pub fn name(&self)->Id{
+    pub fn name(&self) -> Id {
         self.0[0]
     }
-    pub fn source(&self)->Id{
+    pub fn source(&self) -> Id {
         self.0[1]
     }
-    pub fn projection(&self)->Id{
+    pub fn projection(&self) -> Id {
         self.0[2]
     }
 
-    pub fn filters(&self)->Id{
+    pub fn filters(&self) -> Id {
         self.0[3]
     }
-    pub fn limit(&self)->Id{
+    pub fn limit(&self) -> Id {
         self.0[4]
     }
 
-    pub fn projected_schema(&self, egraph: &EGraph<TokomakLogicalPlan, TokomakAnalysis>)->DFSchema{
-        let name = match & egraph[self.name()].nodes[0]{
-            TokomakLogicalPlan::Str(s)=>s.as_str(),
-            _=>panic!(),
+    pub fn projected_schema(
+        &self,
+        egraph: &EGraph<TokomakLogicalPlan, TokomakAnalysis>,
+    ) -> DFSchema {
+        let name = match &egraph[self.name()].nodes[0] {
+            TokomakLogicalPlan::Str(s) => s.as_str(),
+            _ => panic!(),
         };
-        assert!(egraph[self.source()].nodes.len()==1);
-        let source = match &egraph[self.source()].nodes[0]{
-            TokomakLogicalPlan::Table(t)=>&t.0,
-            _=>panic!()
+        assert!(egraph[self.source()].nodes.len() == 1);
+        let source = match &egraph[self.source()].nodes[0] {
+            TokomakLogicalPlan::Table(t) => &t.0,
+            _ => panic!(),
         };
-        assert!(egraph[self.projection()].nodes.len()==1);
-        let projection = match &egraph[self.projection()].nodes[0]{
-            TokomakLogicalPlan::TableProject(t)=>Some(&t.0),
-            TokomakLogicalPlan::None=>None,
-            p=>panic!("TableScan expected TableProject or None as  projection found {}", p)
+        assert!(egraph[self.projection()].nodes.len() == 1);
+        let projection = match &egraph[self.projection()].nodes[0] {
+            TokomakLogicalPlan::TableProject(t) => Some(&t.0),
+            TokomakLogicalPlan::None => None,
+            p => panic!(
+                "TableScan expected TableProject or None as  projection found {}",
+                p
+            ),
         };
         let mut fields: Vec<DFField> = projection
             .as_ref()
             .map(|p| {
-                
-                    p.iter()
-                        .map(|i| {
-                            DFField::from_qualified(&name, source.schema().field(*i).clone())
-                        })
-                        .collect()
-                
+                p.iter()
+                    .map(|i| {
+                        DFField::from_qualified(&name, source.schema().field(*i).clone())
+                    })
+                    .collect()
             })
             .unwrap_or_else(|| {
                 let schema = source.schema().as_ref().clone();
 
-            
                 schema
                     .fields()
                     .iter()
                     .map(|f| DFField::from_qualified(&name, f.clone()))
                     .collect()
-                
             });
-            fields.sort_by_key(|f| f.qualified_name());
-            let projected_schema = DFSchema::new(fields).unwrap();
-            projected_schema
+        fields.sort_by_key(|f| f.qualified_name());
+        let projected_schema = DFSchema::new(fields).unwrap();
+        projected_schema
     }
 }
 
-impl LanguageChildren for TableScan{
+impl LanguageChildren for TableScan {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -598,7 +665,10 @@ impl LanguageChildren for TableScan{
 
     fn from_vec(v: Vec<Id>) -> Self {
         //egg requires that can_be_length is called before from_vec so this should be okay
-        Self(v.try_into().expect("Incorrect length for <TableScan as LanguageChildren>::from_vec"))
+        Self(
+            v.try_into()
+                .expect("Incorrect length for <TableScan as LanguageChildren>::from_vec"),
+        )
     }
 
     fn as_slice(&self) -> &[Id] {
@@ -609,9 +679,9 @@ impl LanguageChildren for TableScan{
         &mut self.0[..]
     }
 }
-#[derive(Debug,Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct JoinKeys(pub Box<[Id]>);
-impl LanguageChildren for JoinKeys{
+impl LanguageChildren for JoinKeys {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -633,16 +703,16 @@ impl LanguageChildren for JoinKeys{
         &mut self.0[..]
     }
 }
-impl JoinKeys{
-    pub fn new(v: Vec<Id>)->Option<Self>{
-        if Self::can_be_length(v.len()){
+impl JoinKeys {
+    pub fn new(v: Vec<Id>) -> Option<Self> {
+        if Self::can_be_length(v.len()) {
             Some(Self::from_vec(v))
-        }else{
+        } else {
             None
         }
     }
 }
-impl fmt::Display for JoinKeys{
+impl fmt::Display for JoinKeys {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "JoinKeys({:?})", self.0)
     }
@@ -650,37 +720,45 @@ impl fmt::Display for JoinKeys{
 
 use std::collections::HashSet;
 
-pub struct PlanConverter<'a>{
+pub struct PlanConverter<'a> {
     egraph: &'a mut EGraph<TokomakLogicalPlan, TokomakAnalysis>,
 }
 
-
-
-
-impl<'a> PlanConverter<'a>{
-    fn add_udf(&mut self, key:Symbol, udf:Arc<ScalarUDF>)->DFResult<()>{
-        if let Some(existing_udf) =  self.egraph.analysis.sudf_registry.insert(key, udf){
-            return Err(DataFusionError::Plan(format!("Found 2 udfs with the same name in the plan: '{}'", key)));
+impl<'a> PlanConverter<'a> {
+    fn add_udf(&mut self, key: Symbol, udf: Arc<ScalarUDF>) -> DFResult<()> {
+        if let Some(existing_udf) = self.egraph.analysis.sudf_registry.insert(key, udf) {
+            return Err(DataFusionError::Plan(format!(
+                "Found 2 udfs with the same name in the plan: '{}'",
+                key
+            )));
         }
         Ok(())
     }
 
-    fn add_udaf(&mut self, key:Symbol, udaf: Arc<AggregateUDF>)->DFResult<()>{
-        if let Some(existing_udaf) = self.egraph.analysis.udaf_registry.insert(key, udaf){
-            return Err(DataFusionError::Plan(format!("Found 2 udafs with the same name: '{}'", key)));
+    fn add_udaf(&mut self, key: Symbol, udaf: Arc<AggregateUDF>) -> DFResult<()> {
+        if let Some(existing_udaf) = self.egraph.analysis.udaf_registry.insert(key, udaf)
+        {
+            return Err(DataFusionError::Plan(format!(
+                "Found 2 udafs with the same name: '{}'",
+                key
+            )));
         }
         Ok(())
     }
 
-    fn to_tokomak_expr(&mut self, expr: &Expr,schema:&DFSchema)->DFResult<Id>{
-       self.to_tokomak_expr_inner(expr, schema)
+    fn to_tokomak_expr(&mut self, expr: &Expr, schema: &DFSchema) -> DFResult<Id> {
+        self.to_tokomak_expr_inner(expr, schema)
     }
 
-    fn to_tokomak_expr_invariant_name(&mut self, expr: &Expr, schema: &DFSchema)->DFResult<Id>{
+    fn to_tokomak_expr_invariant_name(
+        &mut self,
+        expr: &Expr,
+        schema: &DFSchema,
+    ) -> DFResult<Id> {
         let invariant_alias: String;
-        let (e, alias) = match expr{
-            Expr::Alias(e, alias)=>(e.as_ref(),alias),
-            Expr::Column(_)=> return self.to_tokomak_expr_inner(&expr, schema),
+        let (e, alias) = match expr {
+            Expr::Alias(e, alias) => (e.as_ref(), alias),
+            Expr::Column(_) => return self.to_tokomak_expr_inner(&expr, schema),
             e => {
                 invariant_alias = e.name(schema)?;
                 (e, &invariant_alias)
@@ -689,39 +767,55 @@ impl<'a> PlanConverter<'a>{
         let expr = self.to_tokomak_expr_inner(e, schema)?;
         let alias = self.as_tokomak_str(alias.as_str());
 
-        let aliased_expr = self.egraph.add(TokomakLogicalPlan::ExprAlias([expr, alias]));
+        let aliased_expr = self
+            .egraph
+            .add(TokomakLogicalPlan::ExprAlias([expr, alias]));
         Ok(aliased_expr)
     }
 
-    fn set_datatype(&mut self, id: Id, dt: DataType)->DFResult<()>{
-        let dt = match &self.egraph[id].data{
-            TData::DataType(existing) =>{
-                if existing.as_ref() != &dt{
-                    return Err(DataFusionError::Plan(format!("TokomakOptimizer found mismatched expression: existing={} new={}",existing, dt)))
-                }else{
-                    return Ok(())
+    fn set_datatype(&mut self, id: Id, dt: DataType) -> DFResult<()> {
+        let dt = match &self.egraph[id].data {
+            TData::DataType(existing) => {
+                if existing.as_ref() != &dt {
+                    return Err(DataFusionError::Plan(format!("TokomakOptimizer found mismatched expression: existing={} new={}",existing, dt)));
+                } else {
+                    return Ok(());
                 }
             }
-            TData::Schema(s)=> return Err(DataFusionError::Plan(format!("TokomakOptimizer found schema instead of datatype: {}", s))),
-            _=> {
-                let dt=if self.egraph.analysis.datatype_cache.contains(&dt){
-                    self.egraph.analysis.datatype_cache.get(&dt).unwrap().clone()
-                }else{
-                   RefCount::new(dt)
+            TData::Schema(s) => {
+                return Err(DataFusionError::Plan(format!(
+                    "TokomakOptimizer found schema instead of datatype: {}",
+                    s
+                )))
+            }
+            _ => {
+                let dt = if self.egraph.analysis.datatype_cache.contains(&dt) {
+                    self.egraph
+                        .analysis
+                        .datatype_cache
+                        .get(&dt)
+                        .unwrap()
+                        .clone()
+                } else {
+                    RefCount::new(dt)
                 };
                 dt
             }
         };
-        self.egraph[id].data= TData::DataType(dt);
+        self.egraph[id].data = TData::DataType(dt);
         Ok(())
     }
-    
+
     #[allow(clippy::wrong_self_convention)]
-    fn to_tokomak_expr_inner(&mut self, expr: &Expr, schema:&DFSchema) -> Result<Id, DataFusionError> {
+    fn to_tokomak_expr_inner(
+        &mut self,
+        expr: &Expr,
+        schema: &DFSchema,
+    ) -> Result<Id, DataFusionError> {
         let datatype = expr.get_type(schema)?;
 
         let texpr: TokomakLogicalPlan = match expr {
-            Expr::Alias(e, alias)=>{
+            Expr::Alias(e, alias) => {
                 let id = self.to_tokomak_expr_inner(e, schema)?;
                 let alias = self.as_tokomak_str(alias.as_str());
                 TokomakLogicalPlan::ExprAlias([id, alias])
@@ -752,7 +846,6 @@ impl<'a> PlanConverter<'a>{
                     Operator::IsDistinctFrom => TokomakLogicalPlan::IsDistinctFrom,
                     Operator::IsNotDistinctFrom => TokomakLogicalPlan::IsNotDistinctFrom,
                 })([left, right])
-                
             }
             Expr::Column(c) => TokomakLogicalPlan::Column(c.clone().into()),
             Expr::Literal(s) => TokomakLogicalPlan::Scalar(s.clone().into()),
@@ -769,7 +862,7 @@ impl<'a> PlanConverter<'a>{
                 TokomakLogicalPlan::IsNotNull([e])
             }
             Expr::Negative(expr) => {
-                let e = self.to_tokomak_expr_inner(expr,schema)?;
+                let e = self.to_tokomak_expr_inner(expr, schema)?;
                 TokomakLogicalPlan::Negative([e])
             }
             Expr::Between {
@@ -801,9 +894,11 @@ impl<'a> PlanConverter<'a>{
                 TokomakLogicalPlan::TryCast([e, dt])
             }
             Expr::ScalarFunction { fun, args } => {
-                let func = self.egraph.add(TokomakLogicalPlan::ScalarBuiltin(fun.clone()));
+                let func = self
+                    .egraph
+                    .add(TokomakLogicalPlan::ScalarBuiltin(fun.clone()));
                 let args = self.as_tokomak_expr_list(args, schema)?;
-                TokomakLogicalPlan::ScalarBuiltinCall(FunctionCall::new(func, args ))
+                TokomakLogicalPlan::ScalarBuiltinCall(FunctionCall::new(func, args))
             }
             Expr::InList {
                 expr,
@@ -823,40 +918,46 @@ impl<'a> PlanConverter<'a>{
                 args,
                 distinct,
             } => {
-                let func = self.egraph.add(TokomakLogicalPlan::AggregateBuiltin(fun.clone()));
+                let func = self
+                    .egraph
+                    .add(TokomakLogicalPlan::AggregateBuiltin(fun.clone()));
                 let args = self.as_tokomak_expr_list(args, schema)?;
                 let fun_call = FunctionCall::new(func, args);
                 match distinct {
-                    true => {
-                        TokomakLogicalPlan::AggregateBuiltinDistinctCall(fun_call)
-                    }
+                    true => TokomakLogicalPlan::AggregateBuiltinDistinctCall(fun_call),
                     false => TokomakLogicalPlan::AggregateBuiltinCall(fun_call),
                 }
             }
-            Expr::Case {expr, when_then_expr, else_expr  } => {
-                let mut exprs = Vec::with_capacity(expr.is_some() as usize + when_then_expr.len()*2 + else_expr.is_some() as usize);
-                if let Some(e) = expr{
+            Expr::Case {
+                expr,
+                when_then_expr,
+                else_expr,
+            } => {
+                let mut exprs = Vec::with_capacity(
+                    expr.is_some() as usize
+                        + when_then_expr.len() * 2
+                        + else_expr.is_some() as usize,
+                );
+                if let Some(e) = expr {
                     let e = self.to_tokomak_expr(e, schema)?;
                     exprs.push(e);
-                    
                 }
-                for (when,then) in when_then_expr{
+                for (when, then) in when_then_expr {
                     let when = self.to_tokomak_expr(when, schema)?;
                     let then = self.to_tokomak_expr(then, schema)?;
                     exprs.push(when);
                     exprs.push(then);
                 }
-                if let Some(else_expr)=else_expr{
+                if let Some(else_expr) = else_expr {
                     let els = self.to_tokomak_expr(else_expr, schema)?;
                     exprs.push(els);
                 }
-                if expr.is_some(){
+                if expr.is_some() {
                     TokomakLogicalPlan::CaseLit(CaseLit::from_vec(exprs))
-                }else{
+                } else {
                     TokomakLogicalPlan::CaseIf(CaseIf::from_vec(exprs))
                 }
-
-            },
+            }
             Expr::Sort {
                 expr,
                 asc,
@@ -874,7 +975,7 @@ impl<'a> PlanConverter<'a>{
             }
             Expr::ScalarUDF { fun, args } => {
                 let fun_name: Symbol = fun.name.clone().into();
-                self.add_udf(fun_name , fun.clone())?;
+                self.add_udf(fun_name, fun.clone())?;
                 let func = self
                     .egraph
                     .add(TokomakLogicalPlan::ScalarUDF(ScalarUDFName(fun_name)));
@@ -892,16 +993,25 @@ impl<'a> PlanConverter<'a>{
                 window_frame,
             } => {
                 let args = self.as_tokomak_expr_list(args, schema)?;
-                let partition = self.as_tokomak_expr_list(partition_by,schema)?;
+                let partition = self.as_tokomak_expr_list(partition_by, schema)?;
                 let order_by = self.as_tokomak_expr_list(order_by, schema)?;
-                let fun_id = self.egraph.add(TokomakLogicalPlan::WindowBuiltin(fun.clone()));
-                
+                let fun_id = self
+                    .egraph
+                    .add(TokomakLogicalPlan::WindowBuiltin(fun.clone()));
+
                 match window_frame {
                     Some(frame) => {
-                        let frame_id = self.egraph.add(TokomakLogicalPlan::WindowFrame(*frame));
-                        TokomakLogicalPlan::WindowBuiltinCallFramed(WindowBuiltinCallFramed::new(fun_id, args, partition, order_by, frame_id))
+                        let frame_id =
+                            self.egraph.add(TokomakLogicalPlan::WindowFrame(*frame));
+                        TokomakLogicalPlan::WindowBuiltinCallFramed(
+                            WindowBuiltinCallFramed::new(
+                                fun_id, args, partition, order_by, frame_id,
+                            ),
+                        )
                     }
-                    None => TokomakLogicalPlan::WindowBuiltinCallUnframed(WindowBuiltinCallUnframed::new(fun_id, args, partition, order_by)),
+                    None => TokomakLogicalPlan::WindowBuiltinCallUnframed(
+                        WindowBuiltinCallUnframed::new(fun_id, args, partition, order_by),
+                    ),
                 }
             }
             Expr::AggregateUDF { fun, args } => {
@@ -909,7 +1019,7 @@ impl<'a> PlanConverter<'a>{
                 let func = self
                     .egraph
                     .add(TokomakLogicalPlan::AggregateUDF(UDAFName(fun_name)));
-                let args = self.as_tokomak_expr_list(args,schema)?;
+                let args = self.as_tokomak_expr_list(args, schema)?;
                 let func_call = FunctionCall::new(func, args);
                 self.add_udaf(fun_name, fun.clone())?;
                 TokomakLogicalPlan::AggregateUDFCall(func_call)
@@ -922,66 +1032,106 @@ impl<'a> PlanConverter<'a>{
             }
         };
         //Ensure that the datatypes for all inserted nodes is consistent
-        
+
         let id = self.egraph.add(texpr);
         self.set_datatype(id, datatype)?;
         Ok(id)
     }
-    
-    fn as_tokomak_expr_list(&mut self, exprs: &[Expr], schema: &DFSchema)->Result<Id, DataFusionError>{
-        let ids = exprs.iter().map(|e| self.to_tokomak_expr_inner(e, schema)).collect::<Result<Vec<_>, _>>()?;
-        Ok(self.egraph.add(TokomakLogicalPlan::EList(ids.into_boxed_slice())))
+
+    fn as_tokomak_expr_list(
+        &mut self,
+        exprs: &[Expr],
+        schema: &DFSchema,
+    ) -> Result<Id, DataFusionError> {
+        let ids = exprs
+            .iter()
+            .map(|e| self.to_tokomak_expr_inner(e, schema))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self
+            .egraph
+            .add(TokomakLogicalPlan::EList(ids.into_boxed_slice())))
     }
 
-
-    fn as_tokomak_projection_list(&mut self, exprs: &[Expr], schema: &DFSchema)->Result<Id, DataFusionError>{
-        let ids = exprs.iter().map(|e| self.to_tokomak_expr_invariant_name(e, schema)).collect::<Result<Vec<_>, _>>()?;
-        Ok(self.egraph.add(TokomakLogicalPlan::EList(ids.into_boxed_slice())))
+    fn as_tokomak_projection_list(
+        &mut self,
+        exprs: &[Expr],
+        schema: &DFSchema,
+    ) -> Result<Id, DataFusionError> {
+        let ids = exprs
+            .iter()
+            .map(|e| self.to_tokomak_expr_invariant_name(e, schema))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(self
+            .egraph
+            .add(TokomakLogicalPlan::EList(ids.into_boxed_slice())))
     }
 
-    fn as_tokomak_plan_list(&mut self, plans: &[LogicalPlan])->Result<Id, DataFusionError>{
+    fn as_tokomak_plan_list(
+        &mut self,
+        plans: &[LogicalPlan],
+    ) -> Result<Id, DataFusionError> {
         let ids = Vec::with_capacity(plans.len());
-        for plan in plans{
+        for plan in plans {
             let id = self.as_tokomak_plan(plan)?;
-            self.set_schema( id, plan.schema()).unwrap();
+            self.set_schema(id, plan.schema()).unwrap();
         }
-        Ok(self.egraph.add(TokomakLogicalPlan::PList(ids.into_boxed_slice())))
+        Ok(self
+            .egraph
+            .add(TokomakLogicalPlan::PList(ids.into_boxed_slice())))
     }
-    fn set_schema(&mut self, plan_id: Id, schema: &DFSchema)->Result<(), DataFusionError>{
+    fn set_schema(
+        &mut self,
+        plan_id: Id,
+        schema: &DFSchema,
+    ) -> Result<(), DataFusionError> {
         self.set_schema_inner(plan_id, schema)
     }
 
-    fn set_schema_inner(&mut self, plan_id: Id, schema: &DFSchema)->Result<(), DataFusionError>{
-        let s: RefCount<DFSchema> = match &self.egraph[plan_id].data{
-            TData::DataType(dt) => return Err(DataFusionError::Plan(format!("TokomakOptimizer attempted to add schema found existing datatype: {}", dt))),
+    fn set_schema_inner(
+        &mut self,
+        plan_id: Id,
+        schema: &DFSchema,
+    ) -> Result<(), DataFusionError> {
+        let s: RefCount<DFSchema> = match &self.egraph[plan_id].data {
+            TData::DataType(dt) => {
+                return Err(DataFusionError::Plan(format!(
+                "TokomakOptimizer attempted to add schema found existing datatype: {}",
+                dt
+            )))
+            }
             _ => {
-                let schema = match self.egraph.analysis.schema_cache.get(schema){
+                let schema = match self.egraph.analysis.schema_cache.get(schema) {
                     Some(s) => s.clone(),
                     None => {
                         let mut fields = schema.fields().clone();
                         fields.sort_by_key(|field| field.qualified_column());
                         RefCount::new(DFSchema::new(fields)?)
-                    },
+                    }
                 };
-               schema
-            },
+                schema
+            }
         };
         self.egraph[plan_id].data = TData::Schema(s.clone());
         self.egraph.analysis.schema_cache.insert(s);
         Ok(())
     }
-    
-    fn as_tokomak_str<'b>(&mut self, s: impl Into<Option<&'b str>>)->Id{
+
+    fn as_tokomak_str<'b>(&mut self, s: impl Into<Option<&'b str>>) -> Id {
         let s = s.into();
-        match s{
-            Some(s)=>self.egraph.add(TokomakLogicalPlan::Str(s.into())),
+        match s {
+            Some(s) => self.egraph.add(TokomakLogicalPlan::Str(s.into())),
             None => self.egraph.add(TokomakLogicalPlan::None),
         }
     }
 
-    fn as_join_keys(&mut self, on: &[(Column, Column)], lschema: &Arc<DFSchema>, rschema: &Arc<DFSchema>)->Result<Id, DataFusionError>{
-        let mut ids = Vec::with_capacity(on.len()*2);
-        for (l, r) in on{
+    fn as_join_keys(
+        &mut self,
+        on: &[(Column, Column)],
+        lschema: &Arc<DFSchema>,
+        rschema: &Arc<DFSchema>,
+    ) -> Result<Id, DataFusionError> {
+        let mut ids = Vec::with_capacity(on.len() * 2);
+        for (l, r) in on {
             let lid = self.egraph.add(TokomakLogicalPlan::Column(l.into()));
             let rid = self.egraph.add(TokomakLogicalPlan::Column(r.into()));
             let lfield = lschema.field_from_column(l)?;
@@ -991,61 +1141,98 @@ impl<'a> PlanConverter<'a>{
             ids.push(lid);
             ids.push(rid);
         }
-        assert!(ids.len()%2 ==0, "JoinKeys length must be even");
-        Ok(self.egraph.add(TokomakLogicalPlan::JoinKeys(JoinKeys::from_vec(ids))))
+        assert!(ids.len() % 2 == 0, "JoinKeys length must be even");
+        Ok(self
+            .egraph
+            .add(TokomakLogicalPlan::JoinKeys(JoinKeys::from_vec(ids))))
     }
-    
-    fn convert_projection(&mut self, projection: &plan::Projection)->Result<TokomakLogicalPlan, DataFusionError>{
+
+    fn convert_projection(
+        &mut self,
+        projection: &plan::Projection,
+    ) -> Result<TokomakLogicalPlan, DataFusionError> {
         //All conversion functions should use structured bindings so that new properties being added is a hard error as that might affect
         //the validity of some optimizations
-        let plan::Projection{ input, expr, schema: _schema, alias} = projection;
+        let plan::Projection {
+            input,
+            expr,
+            schema: _schema,
+            alias,
+        } = projection;
         let exprs = self.as_tokomak_projection_list(&expr, input.schema())?;
         let input = self.as_tokomak_plan(input)?;
         let alias = self.as_tokomak_str(alias.as_ref().map(|s| s.as_str()));
         Ok(TokomakLogicalPlan::Projection([input, exprs, alias]))
     }
 
-    fn convert_filter(&mut self, filter: &plan::Filter)->DFResult<TokomakLogicalPlan>{
+    fn convert_filter(&mut self, filter: &plan::Filter) -> DFResult<TokomakLogicalPlan> {
         //Since all of the rules dealing with filters are of the form (filter ?input_plan (and ?predicate_of_interest ?other))
-        //add a dummy value to the predicate so that teh above pattern will still match. The Filter removal rule will remove all 
+        //add a dummy value to the predicate so that teh above pattern will still match. The Filter removal rule will remove all
         //filter plans with literal true value
-        let plan::Filter{predicate, input} = filter;
-        let predicate = predicate.clone().and(lit(true));     
+        let plan::Filter { predicate, input } = filter;
+        let predicate = predicate.clone().and(lit(true));
         let predicate = self.to_tokomak_expr_inner(&predicate, input.schema())?;
         let input = self.as_tokomak_plan(input)?;
         Ok(TokomakLogicalPlan::Filter([input, predicate]))
     }
 
-    fn convert_window(&mut self, window: &plan::Window)->DFResult<TokomakLogicalPlan>{
-        let plan::Window{window_expr , input, schema: _schema} = window;
-        let window_expr = self.as_tokomak_projection_list(&window_expr, input.schema())?;
+    fn convert_window(&mut self, window: &plan::Window) -> DFResult<TokomakLogicalPlan> {
+        let plan::Window {
+            window_expr,
+            input,
+            schema: _schema,
+        } = window;
+        let window_expr =
+            self.as_tokomak_projection_list(&window_expr, input.schema())?;
         let input = self.as_tokomak_plan(input)?;
         Ok(TokomakLogicalPlan::Window([input, window_expr]))
     }
 
-    fn convert_aggregate(&mut self, aggregate: &plan::Aggregate)->DFResult<TokomakLogicalPlan>{
-        let plan::Aggregate{input, aggr_expr, group_expr, schema: _schema} = aggregate;
+    fn convert_aggregate(
+        &mut self,
+        aggregate: &plan::Aggregate,
+    ) -> DFResult<TokomakLogicalPlan> {
+        let plan::Aggregate {
+            input,
+            aggr_expr,
+            group_expr,
+            schema: _schema,
+        } = aggregate;
         let group_expr = self.as_tokomak_expr_list(&group_expr, input.schema())?;
-        let aggr_expr = self.as_tokomak_projection_list(&aggr_expr,  input.schema())?;
+        let aggr_expr = self.as_tokomak_projection_list(&aggr_expr, input.schema())?;
         let input = self.as_tokomak_plan(input)?;
-        Ok(TokomakLogicalPlan::Aggregate([input, aggr_expr, group_expr]))
+        Ok(TokomakLogicalPlan::Aggregate([
+            input, aggr_expr, group_expr,
+        ]))
     }
 
-    fn convert_sort(&mut self, sort: &plan::Sort)->DFResult<TokomakLogicalPlan>{
-        let plan::Sort{input, expr} = sort;
+    fn convert_sort(&mut self, sort: &plan::Sort) -> DFResult<TokomakLogicalPlan> {
+        let plan::Sort { input, expr } = sort;
         let exprs = self.as_tokomak_expr_list(&expr, sort.input.schema())?;
         let input = self.as_tokomak_plan(input)?;
         Ok(TokomakLogicalPlan::Sort([input, exprs]))
     }
 
-    fn convert_join(&mut self, join: &plan::Join)->DFResult<TokomakLogicalPlan>{
+    fn convert_join(&mut self, join: &plan::Join) -> DFResult<TokomakLogicalPlan> {
         //TODO: handle null_equals_null
-        let plan::Join{left, right, on, join_type, join_constraint:_join_constraint, schema: _schema, null_equals_null } = join;
+        let plan::Join {
+            left,
+            right,
+            on,
+            join_type,
+            join_constraint: _join_constraint,
+            schema: _schema,
+            null_equals_null,
+        } = join;
         let on = self.as_join_keys(&on, left.schema(), right.schema())?;
         let left = self.as_tokomak_plan(left)?;
         let right = self.as_tokomak_plan(right)?;
-        let null_equals_null = self.egraph.add(TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(*null_equals_null))));
-        Ok((match join_type{
+        let null_equals_null =
+            self.egraph
+                .add(TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(
+                    *null_equals_null,
+                ))));
+        Ok((match join_type {
             datafusion::logical_plan::JoinType::Inner => TokomakLogicalPlan::InnerJoin,
             datafusion::logical_plan::JoinType::Left => TokomakLogicalPlan::LeftJoin,
             datafusion::logical_plan::JoinType::Right => TokomakLogicalPlan::RightJoin,
@@ -1055,54 +1242,102 @@ impl<'a> PlanConverter<'a>{
         })([left, right, on, null_equals_null]))
     }
 
-    fn convert_crossjoin(&mut self, cross: &plan::CrossJoin)->DFResult<TokomakLogicalPlan>{
-        let plan::CrossJoin{left, right, schema: _schema} = cross;
+    fn convert_crossjoin(
+        &mut self,
+        cross: &plan::CrossJoin,
+    ) -> DFResult<TokomakLogicalPlan> {
+        let plan::CrossJoin {
+            left,
+            right,
+            schema: _schema,
+        } = cross;
         let left = self.as_tokomak_plan(left)?;
         let right = self.as_tokomak_plan(right)?;
         Ok(TokomakLogicalPlan::CrossJoin([left, right]))
     }
 
-    fn convert_union(&mut self, union: &plan::Union)->DFResult<TokomakLogicalPlan>{
-        let plan::Union{inputs,alias, schema: _schema}=union;
+    fn convert_union(&mut self, union: &plan::Union) -> DFResult<TokomakLogicalPlan> {
+        let plan::Union {
+            inputs,
+            alias,
+            schema: _schema,
+        } = union;
         let plans = self.as_tokomak_plan_list(&inputs)?;
         let alias = self.as_tokomak_str(alias.as_ref().map(|s| s.as_str()));
-        Ok(TokomakLogicalPlan::Union([plans,alias]))
+        Ok(TokomakLogicalPlan::Union([plans, alias]))
     }
 
-    fn convert_table_scan(&mut self, table_scan: &plan::TableScan)->DFResult<TokomakLogicalPlan>{
-        let plan::TableScan{table_name, source, projection, projected_schema:_projected_schema, limit, filters} = table_scan;
-        let schema= source.schema().as_ref().clone();
-        let dfschema = DFSchema::try_from_qualified_schema(table_name.as_str(), &schema) ?;
-        
+    fn convert_table_scan(
+        &mut self,
+        table_scan: &plan::TableScan,
+    ) -> DFResult<TokomakLogicalPlan> {
+        let plan::TableScan {
+            table_name,
+            source,
+            projection,
+            projected_schema: _projected_schema,
+            limit,
+            filters,
+        } = table_scan;
+        let schema = source.schema().as_ref().clone();
+        let dfschema = DFSchema::try_from_qualified_schema(table_name.as_str(), &schema)?;
+
         let filters = self.as_tokomak_expr_list(&filters, &dfschema)?;
-        let source= self.egraph.add(TokomakLogicalPlan::Table(Table(source.clone())));
+        let source = self
+            .egraph
+            .add(TokomakLogicalPlan::Table(Table(source.clone())));
         let table_name = self.as_tokomak_str(table_name.as_str());
-        let projection = match &projection{
-            Some(proj) => self.egraph.add(TokomakLogicalPlan::TableProject(TableProject(Arc::new(proj.clone())))),
+        let projection = match &projection {
+            Some(proj) => {
+                self.egraph
+                    .add(TokomakLogicalPlan::TableProject(TableProject(Arc::new(
+                        proj.clone(),
+                    ))))
+            }
             None => self.egraph.add(TokomakLogicalPlan::None),
         };
-        let limit =  self.egraph.add(match limit{
-            Some(lim) => TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(*lim as u64))),
+        let limit = self.egraph.add(match limit {
+            Some(lim) => {
+                TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(*lim as u64)))
+            }
             None => TokomakLogicalPlan::None,
         });
-        Ok(TokomakLogicalPlan::TableScan(TableScan::new(table_name, source, projection, filters, limit)))
+        Ok(TokomakLogicalPlan::TableScan(TableScan::new(
+            table_name, source, projection, filters, limit,
+        )))
     }
 
-    fn convert_empty_relation(&mut self, empty_relation: &plan::EmptyRelation)->DFResult<TokomakLogicalPlan>{
-        let plan::EmptyRelation{produce_one_row, schema: _schema} = empty_relation;
+    fn convert_empty_relation(
+        &mut self,
+        empty_relation: &plan::EmptyRelation,
+    ) -> DFResult<TokomakLogicalPlan> {
+        let plan::EmptyRelation {
+            produce_one_row,
+            schema: _schema,
+        } = empty_relation;
         let produce_one_row = TokomakScalar::Boolean(Some(*produce_one_row));
-        let produce_one_row = self.egraph.add(TokomakLogicalPlan::Scalar(produce_one_row));
+        let produce_one_row =
+            self.egraph.add(TokomakLogicalPlan::Scalar(produce_one_row));
         Ok(TokomakLogicalPlan::EmptyRelation([produce_one_row]))
     }
-    fn convert_limit(&mut self, limit: &plan::Limit)->DFResult<TokomakLogicalPlan>{
-        let plan::Limit{n , input} = limit;
-        let n = self.egraph.add(TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(*n as u64))));
+    fn convert_limit(&mut self, limit: &plan::Limit) -> DFResult<TokomakLogicalPlan> {
+        let plan::Limit { n, input } = limit;
+        let n = self
+            .egraph
+            .add(TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(
+                *n as u64,
+            ))));
         let input = self.as_tokomak_plan(input)?;
-        Ok(TokomakLogicalPlan::Limit([input, n]))  
+        Ok(TokomakLogicalPlan::Limit([input, n]))
     }
 
-    fn convert_extension(&mut self, ext: &plan::Extension)->DFResult<TokomakLogicalPlan>{
-        return Err(DataFusionError::NotImplemented(String::from("The tokomak optimizer does not support logical extension plan nodes yet")));
+    fn convert_extension(
+        &mut self,
+        ext: &plan::Extension,
+    ) -> DFResult<TokomakLogicalPlan> {
+        return Err(DataFusionError::NotImplemented(String::from(
+            "The tokomak optimizer does not support logical extension plan nodes yet",
+        )));
         //let plan::Extension{node} = ext;
         //let name = node.name();
         //let inputs = node.inputs().into_iter().map(|l| l.clone()).collect::<Vec<_>>();
@@ -1113,7 +1348,7 @@ impl<'a> PlanConverter<'a>{
         //Ok(TokomakLogicalPlan::Extension(UDLN::new(name_id, plist, elist)))
     }
 
-    fn as_tokomak_plan(&mut self, plan: &LogicalPlan)->Result<Id, DataFusionError>{
+    fn as_tokomak_plan(&mut self, plan: &LogicalPlan) -> Result<Id, DataFusionError> {
         let tplan = match plan{
             LogicalPlan::Projection(p) => self.convert_projection(p)?,
             LogicalPlan::Filter (f ) => self.convert_filter(f)?,
@@ -1123,7 +1358,6 @@ impl<'a> PlanConverter<'a>{
             LogicalPlan::Join (j)=>self.convert_join(j)?,
             LogicalPlan::CrossJoin(c)=>self.convert_crossjoin(c)?,
             LogicalPlan::Repartition(r) => {
-                
                 let input = self.as_tokomak_plan(&r.input)?;
                 match &r.partitioning_scheme{
                     datafusion::logical_plan::Partitioning::RoundRobinBatch(size) => {
@@ -1137,7 +1371,7 @@ impl<'a> PlanConverter<'a>{
                         let expr_list = self.as_tokomak_expr_list(&expr, r.input.schema())?;
                         TokomakLogicalPlan::Hash([input, size_id, expr_list])
                     },
-                } 
+                }
             },
             LogicalPlan::Union(u)=> self.convert_union(u)?,
             LogicalPlan::TableScan(t)=>self.convert_table_scan(t)?,
@@ -1153,31 +1387,31 @@ impl<'a> PlanConverter<'a>{
             LogicalPlan::DropTable(_)) =>  return Err(DataFusionError::NotImplemented(format!("The logical plan {:?} will not be implemented for the Tokomak optimizer", plan))),
         };
         let id = self.egraph.add(tplan);
-        
+
         self.set_schema(id, &plan.schema()).unwrap();
         Ok(id)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Limit([Id;3]);
-impl Limit{
-    pub fn new(input: Id, limit: Id, schema: Id)->Self{
-        Self([input,limit, schema])
+pub struct Limit([Id; 3]);
+impl Limit {
+    pub fn new(input: Id, limit: Id, schema: Id) -> Self {
+        Self([input, limit, schema])
     }
 
-    pub fn input(&self)->Id{
+    pub fn input(&self) -> Id {
         self.0[0]
     }
-    pub fn limit(&self)->Id{
+    pub fn limit(&self) -> Id {
         self.0[1]
     }
-    pub fn schema(&self)->Id{
+    pub fn schema(&self) -> Id {
         self.0[2]
     }
 }
 
-impl LanguageChildren for Limit{
+impl LanguageChildren for Limit {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -1199,124 +1433,199 @@ impl LanguageChildren for Limit{
     }
 }
 
-pub fn to_tokomak_plan(plan: &LogicalPlan, egraph: &mut EGraph<TokomakLogicalPlan, TokomakAnalysis>)->Result<Id, DataFusionError>{
-    let mut converter = PlanConverter{egraph};
+pub fn to_tokomak_plan(
+    plan: &LogicalPlan,
+    egraph: &mut EGraph<TokomakLogicalPlan, TokomakAnalysis>,
+) -> Result<Id, DataFusionError> {
+    let mut converter = PlanConverter { egraph };
     converter.as_tokomak_plan(plan)
 }
 
-fn unexpected_node(curr_node: &'static str, unexpected_plan: &TokomakLogicalPlan, expected: &'static str)->DataFusionError{
-    DataFusionError::Internal(format!("{} expected a node of type {} found {:?}", curr_node, expected, unexpected_plan))
+fn unexpected_node(
+    curr_node: &'static str,
+    unexpected_plan: &TokomakLogicalPlan,
+    expected: &'static str,
+) -> DataFusionError {
+    DataFusionError::Internal(format!(
+        "{} expected a node of type {} found {:?}",
+        curr_node, expected, unexpected_plan
+    ))
 }
 
-fn unexpected_expr(node: &TokomakLogicalPlan, parent: &'static str, expected: &'static str)->DataFusionError{
-        DataFusionError::Internal(format!("{} Expected node of {}, found {:?}",parent, expected, node))
+fn unexpected_expr(
+    node: &TokomakLogicalPlan,
+    parent: &'static str,
+    expected: &'static str,
+) -> DataFusionError {
+    DataFusionError::Internal(format!(
+        "{} Expected node of {}, found {:?}",
+        parent, expected, node
+    ))
 }
-
 
 struct TokomakPlanConverter<'a> {
     refs: &'a [TokomakLogicalPlan],
     analysis: &'a TokomakAnalysis,
     eclasses: &'a [Id],
-    egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>
+    egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>,
 }
-impl<'a> TokomakPlanConverter<'a>{
+impl<'a> TokomakPlanConverter<'a> {
     fn new(
         rec_expr: &'a RecExpr<TokomakLogicalPlan>,
         analysis: &'a TokomakAnalysis,
         eclasses: &'a [Id],
-        egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>
+        egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>,
     ) -> Self {
         Self {
             refs: rec_expr.as_ref(),
             analysis,
             eclasses,
-            egraph
+            egraph,
         }
     }
-    fn get_ref(&self, id: Id)->&TokomakLogicalPlan{
+    fn get_ref(&self, id: Id) -> &TokomakLogicalPlan {
         let idx: usize = id.into();
         &self.refs[idx]
     }
-    fn convert_inlist(&self, [expr, list]: &[Id;2], negated: bool)->Result<Expr, DataFusionError>{
-        let name = if negated{ "NotInList"} else{"InList"};
-        let elist = match self.get_ref(*list){
+    fn convert_inlist(
+        &self,
+        [expr, list]: &[Id; 2],
+        negated: bool,
+    ) -> Result<Expr, DataFusionError> {
+        let name = if negated { "NotInList" } else { "InList" };
+        let elist = match self.get_ref(*list) {
             TokomakLogicalPlan::EList(l) => l,
             node => return Err(unexpected_expr(node, name, "List")),
         };
         let expr = self.convert_to_expr(*expr)?.into();
 
-        let list = elist.iter().map(|i| self.convert_to_expr(*i)).collect::<DFResult<Vec<_>>>()?;
-        Ok(Expr::InList{ expr, list, negated })
+        let list = elist
+            .iter()
+            .map(|i| self.convert_to_expr(*i))
+            .collect::<DFResult<Vec<_>>>()?;
+        Ok(Expr::InList {
+            expr,
+            list,
+            negated,
+        })
     }
 
-    fn to_when_then_list(&self,when_then :&[Id])->DFResult<Vec<(Box<Expr>, Box<Expr>)>>{
-        assert!(when_then.len()%2==0);
-        let mut wt = Vec::with_capacity(when_then.len()/2);
-        for win in when_then.chunks_exact(2){
+    fn to_when_then_list(
+        &self,
+        when_then: &[Id],
+    ) -> DFResult<Vec<(Box<Expr>, Box<Expr>)>> {
+        assert!(when_then.len() % 2 == 0);
+        let mut wt = Vec::with_capacity(when_then.len() / 2);
+        for win in when_then.chunks_exact(2) {
             let when = win[0];
             let then = win[1];
             let when = self.convert_to_expr(when)?.into();
             let then = self.convert_to_expr(then)?.into();
-            wt.push((when,then));
+            wt.push((when, then));
         }
         Ok(wt)
     }
-    fn to_binary_op(&self, [left, right]: &[Id;2], op: Operator)->Result<Expr, DataFusionError>{
+    fn to_binary_op(
+        &self,
+        [left, right]: &[Id; 2],
+        op: Operator,
+    ) -> Result<Expr, DataFusionError> {
         let left = self.convert_to_expr(*left)?;
         let right = self.convert_to_expr(*right)?;
         Ok(datafusion::logical_plan::binary_expr(left, op, right))
     }
-    fn extract_usize_from_scalar(&self, s: &TokomakScalar, parent: &'static str)->Result<usize, DataFusionError>{
-        let ret_val = match s{
-            TokomakScalar::Int8(Some(v))=>if *v <=0{
-              return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found negative value: {}", parent, v)));  
-            }else{
-                *v as usize
-            },
-            TokomakScalar::Int16(Some(v))=>if *v <=0{
-                return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found negative value: {}", parent, v)));  
-            }else{
-                *v as usize
-            },
-            TokomakScalar::Int32(Some(v))=>if *v <=0{
-                return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found negative value: {}", parent, v)));  
-            }else{
-                *v as usize
-            },
-            TokomakScalar::Int64(Some(v))=>if *v <=0{
-                return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found negative value: {}", parent, v)));  
-            }else{
-                *v as usize
-            },
-            TokomakScalar::UInt8(Some(v))=>*v as usize,
-            TokomakScalar::UInt16(Some(v))=>*v as usize,
-            TokomakScalar::UInt32(Some(v))=>*v as usize,
-            TokomakScalar::UInt64(Some(v))=>*v as usize,
-            v=>return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found scalar value {}",parent, v))),
+    fn extract_usize_from_scalar(
+        &self,
+        s: &TokomakScalar,
+        parent: &'static str,
+    ) -> Result<usize, DataFusionError> {
+        let ret_val = match s {
+            TokomakScalar::Int8(Some(v)) => {
+                if *v <= 0 {
+                    return Err(DataFusionError::Plan(format!(
+                        "TokomakOptimizer {} expected usize found negative value: {}",
+                        parent, v
+                    )));
+                } else {
+                    *v as usize
+                }
+            }
+            TokomakScalar::Int16(Some(v)) => {
+                if *v <= 0 {
+                    return Err(DataFusionError::Plan(format!(
+                        "TokomakOptimizer {} expected usize found negative value: {}",
+                        parent, v
+                    )));
+                } else {
+                    *v as usize
+                }
+            }
+            TokomakScalar::Int32(Some(v)) => {
+                if *v <= 0 {
+                    return Err(DataFusionError::Plan(format!(
+                        "TokomakOptimizer {} expected usize found negative value: {}",
+                        parent, v
+                    )));
+                } else {
+                    *v as usize
+                }
+            }
+            TokomakScalar::Int64(Some(v)) => {
+                if *v <= 0 {
+                    return Err(DataFusionError::Plan(format!(
+                        "TokomakOptimizer {} expected usize found negative value: {}",
+                        parent, v
+                    )));
+                } else {
+                    *v as usize
+                }
+            }
+            TokomakScalar::UInt8(Some(v)) => *v as usize,
+            TokomakScalar::UInt16(Some(v)) => *v as usize,
+            TokomakScalar::UInt32(Some(v)) => *v as usize,
+            TokomakScalar::UInt64(Some(v)) => *v as usize,
+            v => {
+                return Err(DataFusionError::Plan(format!(
+                    "TokomakOptimizer {} expected usize found scalar value {}",
+                    parent, v
+                )))
+            }
         };
         Ok(ret_val)
     }
-    fn extract_usize(&self, id: Id, parent: &'static str)->Result<usize, DataFusionError>{
-        let scalar = match self.get_ref(id){
-            TokomakLogicalPlan::Scalar(s)=>s,
-            p=>return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected scalar usize, found {:?}", parent, p))),
+    fn extract_usize(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<usize, DataFusionError> {
+        let scalar = match self.get_ref(id) {
+            TokomakLogicalPlan::Scalar(s) => s,
+            p => {
+                return Err(DataFusionError::Plan(format!(
+                    "TokomakOptimizer {} expected scalar usize, found {:?}",
+                    parent, p
+                )))
+            }
         };
         self.extract_usize_from_scalar(scalar, parent)
     }
-    fn extract_datatype(&self, id: Id, parent: &'static str)->Result<DataType, DataFusionError>{
+    fn extract_datatype(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<DataType, DataFusionError> {
         let dt = match self.get_ref(id) {
-            TokomakLogicalPlan::Type(ty)=> ty,
+            TokomakLogicalPlan::Type(ty) => ty,
             node => return Err(unexpected_expr(node, parent, "Type")),
         };
         Ok(dt.into())
     }
 
-    fn convert_to_expr(&self, id: Id)->Result<Expr, DataFusionError>{
+    fn convert_to_expr(&self, id: Id) -> Result<Expr, DataFusionError> {
         Ok(self.convert_to_expr_inner(id).unwrap())
     }
-    fn convert_to_expr_inner(&self, id: Id)->Result<Expr, DataFusionError>{
-            
-            let expr = match self.get_ref(id) {
+    fn convert_to_expr_inner(&self, id: Id) -> Result<Expr, DataFusionError> {
+        let expr = match self.get_ref(id) {
                 TokomakLogicalPlan::ExprAlias([e, alis])=>{
                     let e = self.convert_to_expr_inner(*e)?;
                     let alias = self.extract_alias(*alis, "Expr::Alias")?;
@@ -1394,7 +1703,6 @@ impl<'a> TokomakPlanConverter<'a>{
                 TokomakLogicalPlan::InList(inlist)=>self.convert_inlist(inlist, false)?,
                 TokomakLogicalPlan::NotInList(inlist)=>self.convert_inlist(inlist, true)?,
                 TokomakLogicalPlan::Scalar(s) => Expr::Literal(s.clone().into()),
-                
                 TokomakLogicalPlan::ScalarBuiltinCall(func_call) => {
                     let fun = match self.get_ref(func_call.fun()){
                         TokomakLogicalPlan::ScalarBuiltin(f)=>f,
@@ -1450,7 +1758,6 @@ impl<'a> TokomakPlanConverter<'a>{
                         distinct: true
                     }
                 },
-                
                 TokomakLogicalPlan::AggregateUDFCall(func_call) => {
                     let udf_name = match self.get_ref(func_call.fun()){
                         TokomakLogicalPlan::AggregateUDF(name)=> name.0,
@@ -1460,7 +1767,6 @@ impl<'a> TokomakPlanConverter<'a>{
                         Some(s) => s.clone(),
                         None => return Err(DataFusionError::Internal(format!("Did not find the aggregate UDF '{}' in the registry", udf_name))),
                     };
-                    
                     let args = self.extract_expr_list(func_call.args(), "AggregateUDF.args")?;
                     Expr::AggregateUDF{
                         fun,
@@ -1539,7 +1845,6 @@ impl<'a> TokomakPlanConverter<'a>{
                         None => None,
                     };
                     Expr::Case{expr: Some(expr), when_then_expr: when_then, else_expr}
-                    
                 }
                 unconvertible_expr@ (
                     TokomakLogicalPlan::AggregateBuiltin(_)|
@@ -1583,53 +1888,68 @@ impl<'a> TokomakPlanConverter<'a>{
         Ok(expr)
     }
 
-    fn extract_plan_list(&self, id: Id, parent: &'static str)->Result<Vec<LogicalPlanBuilder> , DataFusionError>{
-        let list = match self.get_ref(id){
-            TokomakLogicalPlan::PList(plans)=>plans,
+    fn extract_plan_list(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<Vec<LogicalPlanBuilder>, DataFusionError> {
+        let list = match self.get_ref(id) {
+            TokomakLogicalPlan::PList(plans) => plans,
             plan => return Err(unexpected_node(parent, plan, "PList")),
         };
-        if list.is_empty(){
-            return Ok(Vec::new())
+        if list.is_empty() {
+            return Ok(Vec::new());
         }
         let mut plans = Vec::with_capacity(list.len());
-        for id in list.iter(){
+        for id in list.iter() {
             plans.push(self.convert_to_builder(*id)?);
         }
         Ok(plans)
     }
 
-    fn extract_expr_list(&self, id: Id, parent: &'static str)->Result<Vec<Expr>, DataFusionError>{
-        
-        let exprs = match self.get_ref(id){
-            TokomakLogicalPlan::EList(list)=>{
-                if parent == "Projection.expr"{
+    fn extract_expr_list(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<Vec<Expr>, DataFusionError> {
+        let exprs = match self.get_ref(id) {
+            TokomakLogicalPlan::EList(list) => {
+                if parent == "Projection.expr" {
                     let mut conv_list = Vec::with_capacity(list.len());
-                    for i in list.iter(){
-                        let idx :usize= (*i).into();
-                        let eclass_id=self.eclasses[idx];
+                    for i in list.iter() {
+                        let idx: usize = (*i).into();
+                        let eclass_id = self.eclasses[idx];
                         conv_list.push(eclass_id);
                     }
-                }   
-                list.iter().map(|i| self.convert_to_expr(*i)).collect::<Result<Vec<_>,_>>()?
-            },
-            plan =>return Err( unexpected_node(parent, plan, "EList"))
+                }
+                list.iter()
+                    .map(|i| self.convert_to_expr(*i))
+                    .collect::<Result<Vec<_>, _>>()?
+            }
+            plan => return Err(unexpected_node(parent, plan, "EList")),
         };
         Ok(exprs)
     }
-    fn extract_column(&self,id: Id, parent: &'static str)->Result<Column, DataFusionError>{
-        let col = match self.get_ref(id){
-            TokomakLogicalPlan::Column(c)=>{
-                Column{
-                    relation: c.relation.as_ref().map(ToString::to_string),
-                    name: c.name.to_string(),
-                }
-            }
-            plan => return Err(unexpected_node(parent, plan, "TokomakExpr::Column"))
+    fn extract_column(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<Column, DataFusionError> {
+        let col = match self.get_ref(id) {
+            TokomakLogicalPlan::Column(c) => Column {
+                relation: c.relation.as_ref().map(ToString::to_string),
+                name: c.name.to_string(),
+            },
+            plan => return Err(unexpected_node(parent, plan, "TokomakExpr::Column")),
         };
         Ok(col)
     }
-    fn convert_to_join(&self, join_type: JoinType, [left, right, on, null_equals_null]: &[Id;4])->Result<LogicalPlanBuilder, DataFusionError>{
-        let plan_name = match join_type{
+    fn convert_to_join(
+        &self,
+        join_type: JoinType,
+        [left, right, on, null_equals_null]: &[Id; 4],
+    ) -> Result<LogicalPlanBuilder, DataFusionError> {
+        let plan_name = match join_type {
             JoinType::Inner => "JoinType::Inner",
             JoinType::Left => "JoinType::Left",
             JoinType::Right => "JoinType::Right",
@@ -1639,27 +1959,49 @@ impl<'a> TokomakPlanConverter<'a>{
         };
         let left = self.convert_to_builder(*left)?;
         let right = self.convert_to_builder(*right)?;
-        let join_keys = match self.get_ref(*on){
-            TokomakLogicalPlan::JoinKeys(keys)=>keys,
-            plan => return Err(DataFusionError::Internal(format!("The join of type {:?} expected a node of type JoinKeys, found {:?}", join_type, plan))),
+        let join_keys = match self.get_ref(*on) {
+            TokomakLogicalPlan::JoinKeys(keys) => keys,
+            plan => {
+                return Err(DataFusionError::Internal(format!(
+                    "The join of type {:?} expected a node of type JoinKeys, found {:?}",
+                    join_type, plan
+                )))
+            }
         };
-        let mut left_join_keys = Vec::with_capacity(join_keys.len()/2);
-        let mut right_join_keys = Vec::with_capacity(join_keys.len()/2);
-        assert!(join_keys.len() %2 ==0, "Found JoinKeys with odd number of keys, this should never happen"); 
-        for keys in join_keys.as_slice().chunks_exact(2){
+        let mut left_join_keys = Vec::with_capacity(join_keys.len() / 2);
+        let mut right_join_keys = Vec::with_capacity(join_keys.len() / 2);
+        assert!(
+            join_keys.len() % 2 == 0,
+            "Found JoinKeys with odd number of keys, this should never happen"
+        );
+        for keys in join_keys.as_slice().chunks_exact(2) {
             let left_key = keys[0];
             let right_key = keys[1];
             left_join_keys.push(self.extract_column(left_key, plan_name)?);
             right_join_keys.push(self.extract_column(right_key, plan_name)?)
         }
-        let null_equals_null = match self.get_ref(*null_equals_null){
-            TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(b)))=>*b,
-            p => return Err(DataFusionError::Internal(format!("The join of type {:?} expexted a non-null scalar boolean, found: {:?}", join_type, p)))
+        let null_equals_null = match self.get_ref(*null_equals_null) {
+            TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(b))) => *b,
+            p => {
+                return Err(DataFusionError::Internal(format!(
+                "The join of type {:?} expexted a non-null scalar boolean, found: {:?}",
+                join_type, p
+            )))
+            }
         };
-        left.join_detailed(&right.build()?, join_type, (left_join_keys, right_join_keys), null_equals_null)
+        left.join_detailed(
+            &right.build()?,
+            join_type,
+            (left_join_keys, right_join_keys),
+            null_equals_null,
+        )
     }
-    fn extract_alias(&self, id: Id, parent: &'static str)->Result<Option<String>, DataFusionError>{
-        let alias = match self.get_ref(id){
+    fn extract_alias(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<Option<String>, DataFusionError> {
+        let alias = match self.get_ref(id) {
             TokomakLogicalPlan::Str(sym) => Some(sym.to_string()),
             TokomakLogicalPlan::None => None,
             plan => return Err(unexpected_node(parent, plan, "Str or None")),
@@ -1667,235 +2009,306 @@ impl<'a> TokomakPlanConverter<'a>{
         Ok(alias)
     }
 
-    fn convert_to_builder(&self, id: Id)->Result<LogicalPlanBuilder, DataFusionError>{
+    fn convert_to_builder(&self, id: Id) -> Result<LogicalPlanBuilder, DataFusionError> {
         let res = Ok(self.convert_to_builder_inner(id).unwrap());
         res
     }
 
-    fn get_schema(&self, id: Id)->Option<&DFSchema>{
-        let eclass_idx : usize = id.into();
+    fn get_schema(&self, id: Id) -> Option<&DFSchema> {
+        let eclass_idx: usize = id.into();
         let eclass_id = self.eclasses[eclass_idx];
-        match &self.egraph[eclass_id].data{
+        match &self.egraph[eclass_id].data {
             TData::Schema(s) => Some(s),
-            _=>None,
+            _ => None,
         }
     }
-    fn get_eclass_id(&self, id: Id)->Id{
+    fn get_eclass_id(&self, id: Id) -> Id {
         let eclass_idx: usize = id.into();
         let eclass_id = self.eclasses[eclass_idx];
         eclass_id
     }
 
-    
-
-
-    fn convert_to_builder_inner(&self, id: Id)->Result<LogicalPlanBuilder, DataFusionError>{
+    fn convert_to_builder_inner(
+        &self,
+        id: Id,
+    ) -> Result<LogicalPlanBuilder, DataFusionError> {
         let plan = self.get_ref(id);
-        let builder: LogicalPlanBuilder = match plan{
+        let builder: LogicalPlanBuilder = match plan {
             TokomakLogicalPlan::Filter([input, predicate]) => {
-
                 let predicate = self.convert_to_expr(*predicate)?;
                 let input = self.convert_to_builder(*input)?;
                 input.filter(predicate)?
-            },
-            TokomakLogicalPlan::Projection([input, exprs, alias]) =>{
+            }
+            TokomakLogicalPlan::Projection([input, exprs, alias]) => {
                 let input = self.convert_to_builder(*input)?;
                 let alias = self.extract_alias(*alias, "Projection")?;
                 let exprs = self.extract_expr_list(*exprs, "Projection.expr")?;
-               let builder = input.project_with_alias(exprs, alias)? ;
-               builder
-            },
-            TokomakLogicalPlan::InnerJoin(join) => self.convert_to_join(JoinType::Inner, join)?,
-            TokomakLogicalPlan::LeftJoin(join) => self.convert_to_join(JoinType::Left, join)?,
-            TokomakLogicalPlan::RightJoin(join) => self.convert_to_join(JoinType::Right, join)?,
-            TokomakLogicalPlan::FullJoin(join) => self.convert_to_join(JoinType::Full, join)?,
-            TokomakLogicalPlan::SemiJoin(join) => self.convert_to_join(JoinType::Semi, join)?,
-            TokomakLogicalPlan::AntiJoin(join) => self.convert_to_join(JoinType::Anti, join)?,
-            TokomakLogicalPlan::Extension(_) => return Err(DataFusionError::NotImplemented(String::from("TokomakOptimizer does not support extension nodes yet"))),
+                let builder = input.project_with_alias(exprs, alias)?;
+                builder
+            }
+            TokomakLogicalPlan::InnerJoin(join) => {
+                self.convert_to_join(JoinType::Inner, join)?
+            }
+            TokomakLogicalPlan::LeftJoin(join) => {
+                self.convert_to_join(JoinType::Left, join)?
+            }
+            TokomakLogicalPlan::RightJoin(join) => {
+                self.convert_to_join(JoinType::Right, join)?
+            }
+            TokomakLogicalPlan::FullJoin(join) => {
+                self.convert_to_join(JoinType::Full, join)?
+            }
+            TokomakLogicalPlan::SemiJoin(join) => {
+                self.convert_to_join(JoinType::Semi, join)?
+            }
+            TokomakLogicalPlan::AntiJoin(join) => {
+                self.convert_to_join(JoinType::Anti, join)?
+            }
+            TokomakLogicalPlan::Extension(_) => {
+                return Err(DataFusionError::NotImplemented(String::from(
+                    "TokomakOptimizer does not support extension nodes yet",
+                )))
+            }
             TokomakLogicalPlan::CrossJoin([left, right]) => {
                 let left = self.convert_to_builder(*left)?;
                 let right = self.convert_to_builder(*right)?.build()?;
                 left.cross_join(&right)?
-            },
+            }
             TokomakLogicalPlan::Limit(l) => {
                 let input = self.convert_to_builder(l[1])?;
                 let limit = self.extract_usize(l[1], "Limit")?;
                 input.limit(limit)?
-            },
+            }
             TokomakLogicalPlan::EmptyRelation(produce_one_row) => {
                 let produce_one_row = match self.get_ref(produce_one_row[0]){
                     TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(val)))=>* val,
                     TokomakLogicalPlan::Scalar(non_boolean) => return Err(DataFusionError::Internal(format!("Expected a boolean scalar for EmptyRelation.produce_one_row found {:?}", non_boolean))),
                     plan =>return Err(unexpected_node("EmptyRelation.produce_one_row", plan, "Scalar"))
                 };
-                let schema = self.get_schema(id).ok_or_else(|| DataFusionError::Plan(format!("Could not find schema for empty relation")))?;
-                LogicalPlanBuilder::from(LogicalPlan::EmptyRelation(plan::EmptyRelation{
-                    produce_one_row,
-                    schema: Arc::new(schema.clone())
-                }))
-            },
+                let schema = self.get_schema(id).ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Could not find schema for empty relation"
+                    ))
+                })?;
+                LogicalPlanBuilder::from(LogicalPlan::EmptyRelation(
+                    plan::EmptyRelation {
+                        produce_one_row,
+                        schema: Arc::new(schema.clone()),
+                    },
+                ))
+            }
             TokomakLogicalPlan::TableScan(s) => {
-                let name = match self.get_ref(s.name()){
+                let name = match self.get_ref(s.name()) {
                     TokomakLogicalPlan::Str(sym) => sym.to_string(),
-                    unexpected_plan=> return Err(unexpected_node("TableScan.name", unexpected_plan, "Str")),
+                    unexpected_plan => {
+                        return Err(unexpected_node(
+                            "TableScan.name",
+                            unexpected_plan,
+                            "Str",
+                        ))
+                    }
                 };
-                let limit = match self.get_ref(s.limit()){
-                    TokomakLogicalPlan::Scalar(s)=>Some(self.extract_usize_from_scalar(s, "TableScan.limit")?),
+                let limit = match self.get_ref(s.limit()) {
+                    TokomakLogicalPlan::Scalar(s) => {
+                        Some(self.extract_usize_from_scalar(s, "TableScan.limit")?)
+                    }
                     TokomakLogicalPlan::None => None,
-                    unexpected_plan => return Err(unexpected_node("TableScan.limit", unexpected_plan, "LimitCount or None ")),
+                    unexpected_plan => {
+                        return Err(unexpected_node(
+                            "TableScan.limit",
+                            unexpected_plan,
+                            "LimitCount or None ",
+                        ))
+                    }
                 };
-                let source = match self.get_ref(s.source()){
-                    TokomakLogicalPlan::Table(t)=> t.0.clone(),
-                    unexpected_plan => return Err(unexpected_node("TableScan.provider", unexpected_plan,"Table")),
+                let source = match self.get_ref(s.source()) {
+                    TokomakLogicalPlan::Table(t) => t.0.clone(),
+                    unexpected_plan => {
+                        return Err(unexpected_node(
+                            "TableScan.provider",
+                            unexpected_plan,
+                            "Table",
+                        ))
+                    }
                 };
-                let projection = match self.get_ref(s.projection()){
+                let projection = match self.get_ref(s.projection()) {
                     TokomakLogicalPlan::None => None,
-                    TokomakLogicalPlan::TableProject(proj)=>Some(proj.0.as_ref().clone()),
-                    unexpected_plan => return Err(unexpected_node("TableScan.projection", unexpected_plan, "TableProject or None")),
+                    TokomakLogicalPlan::TableProject(proj) => {
+                        Some(proj.0.as_ref().clone())
+                    }
+                    unexpected_plan => {
+                        return Err(unexpected_node(
+                            "TableScan.projection",
+                            unexpected_plan,
+                            "TableProject or None",
+                        ))
+                    }
                 };
                 let filters = self.extract_expr_list(s.filters(), "TableScan.filters")?;
-                let builder = LogicalPlanBuilder::scan_with_limit_and_filters(name, source, projection, limit, filters)?;
+                let builder = LogicalPlanBuilder::scan_with_limit_and_filters(
+                    name, source, projection, limit, filters,
+                )?;
                 builder
-            },
-            TokomakLogicalPlan::Hash([input, exprs, size])=>{
+            }
+            TokomakLogicalPlan::Hash([input, exprs, size]) => {
                 let input = self.convert_to_builder(*input)?;
                 let exprs = self.extract_expr_list(*exprs, "Repartition<Hash>.exprs")?;
                 let size = self.extract_usize(*size, "Repartition<Hash>.size")?;
                 input.repartition(Partitioning::Hash(exprs, size))?
             }
-            TokomakLogicalPlan::RoundRobinBatch([input,size])=>{
+            TokomakLogicalPlan::RoundRobinBatch([input, size]) => {
                 let input = self.convert_to_builder(*input)?;
                 let size = self.extract_usize(*size, "Repartition<RoundRobin>.size")?;
                 input.repartition(Partitioning::RoundRobinBatch(size))?
             }
             TokomakLogicalPlan::Union([inputs, alias]) => {
                 let mut builders = self.extract_plan_list(*inputs, "Union.inputs")?;
-                if builders.is_empty(){
-                    return Err(DataFusionError::Internal(format!("Union requires at least a single child plan, found 0")));
-                }else if builders.len() == 1{
-                    return Ok(builders.pop().unwrap())
+                if builders.is_empty() {
+                    return Err(DataFusionError::Internal(format!(
+                        "Union requires at least a single child plan, found 0"
+                    )));
+                } else if builders.len() == 1 {
+                    return Ok(builders.pop().unwrap());
                 }
                 let alias = self.extract_alias(*alias, "Union.alias")?;
                 let mut builder = builders.pop().unwrap();
-                let apply_alias =builders.pop().unwrap().build()?;
-                for other in builders{
-                    builder = builder.union(other.build()?)?;                    
+                let apply_alias = builders.pop().unwrap().build()?;
+                for other in builders {
+                    builder = builder.union(other.build()?)?;
                 }
                 builder.union_with_alias(apply_alias, alias)?
-            },
+            }
             TokomakLogicalPlan::Window([input, window_exprs]) => {
                 let input = self.convert_to_builder(*input)?;
-                let window_expr = self.extract_expr_list(*window_exprs, "Window.window_expr")?;
+                let window_expr =
+                    self.extract_expr_list(*window_exprs, "Window.window_expr")?;
                 input.window(window_expr)?
-            },
-            TokomakLogicalPlan::Aggregate([input, aggr_expr, group_expr]) =>{
-                let aggr_expr = self.extract_expr_list(*aggr_expr, "Aggregate.aggr_expr")?;
-                let group_expr = self.extract_expr_list(*group_expr, "Aggregate.group_expr")?;
+            }
+            TokomakLogicalPlan::Aggregate([input, aggr_expr, group_expr]) => {
+                let aggr_expr =
+                    self.extract_expr_list(*aggr_expr, "Aggregate.aggr_expr")?;
+                let group_expr =
+                    self.extract_expr_list(*group_expr, "Aggregate.group_expr")?;
                 let input = self.convert_to_builder(*input)?;
                 let p = input.build()?;
                 let input = LogicalPlanBuilder::from(p);
                 input.aggregate(group_expr, aggr_expr)?
-            },
+            }
             TokomakLogicalPlan::Sort([input, sort_exprs]) => {
                 let input = self.convert_to_builder(*input)?;
                 let exprs = self.extract_expr_list(*sort_exprs, "Sort.exprs")?;
-                input.sort(exprs)?                
-            },
-        handle_elsewhere@(TokomakLogicalPlan::Table(_)|
-            TokomakLogicalPlan::Values(_) |
-            TokomakLogicalPlan::TableProject(_)|
-            TokomakLogicalPlan::Str(_) |
-            TokomakLogicalPlan::None |
-            TokomakLogicalPlan::JoinKeys(_) |
-            TokomakLogicalPlan::PList(_)|
-            TokomakLogicalPlan::Schema(_) |
-            TokomakLogicalPlan::Type(_)) => return Err(DataFusionError::Internal(format!("Found unhandled node type {:?}", handle_elsewhere))),
+                input.sort(exprs)?
+            }
+            handle_elsewhere
+            @
+            (TokomakLogicalPlan::Table(_)
+            | TokomakLogicalPlan::Values(_)
+            | TokomakLogicalPlan::TableProject(_)
+            | TokomakLogicalPlan::Str(_)
+            | TokomakLogicalPlan::None
+            | TokomakLogicalPlan::JoinKeys(_)
+            | TokomakLogicalPlan::PList(_)
+            | TokomakLogicalPlan::Schema(_)
+            | TokomakLogicalPlan::Type(_)) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Found unhandled node type {:?}",
+                    handle_elsewhere
+                )))
+            }
 
-        expr @(
-            TokomakLogicalPlan::ExprAlias(_)|
-            TokomakLogicalPlan::Plus(_)|
-            TokomakLogicalPlan::Minus(_)|
-            TokomakLogicalPlan::Multiply(_)|
-            TokomakLogicalPlan::Divide(_)|
-            TokomakLogicalPlan::Modulus(_)|
-            TokomakLogicalPlan::Or(_)|
-            TokomakLogicalPlan::And(_)|
-            TokomakLogicalPlan::Eq(_)|
-            TokomakLogicalPlan::NotEq(_)|
-            TokomakLogicalPlan::Lt(_)|
-            TokomakLogicalPlan::LtEq(_)|
-            TokomakLogicalPlan::Gt(_)|
-            TokomakLogicalPlan::GtEq(_)|
-            TokomakLogicalPlan::RegexMatch(_)|
-            TokomakLogicalPlan::RegexIMatch(_)|
-            TokomakLogicalPlan::RegexNotMatch(_)|
-            TokomakLogicalPlan::RegexNotIMatch(_)|
-            TokomakLogicalPlan::IsDistinctFrom(_)|
-            TokomakLogicalPlan::IsNotDistinctFrom(_)|
-            TokomakLogicalPlan::Not(_)|
-            TokomakLogicalPlan::IsNotNull(_)|
-            TokomakLogicalPlan::IsNull(_)|
-            TokomakLogicalPlan::Negative(_)|
-            TokomakLogicalPlan::Between(_)|
-            TokomakLogicalPlan::BetweenInverted(_)|
-            TokomakLogicalPlan::Like(_)|
-            TokomakLogicalPlan::NotLike(_)|
-            TokomakLogicalPlan::InList(_)|
-            TokomakLogicalPlan::NotInList(_)|
-            TokomakLogicalPlan::EList(_)|
-            TokomakLogicalPlan::ScalarBuiltin(_)|
-            TokomakLogicalPlan::AggregateBuiltin(_)|
-            TokomakLogicalPlan::WindowBuiltin(_)|
-            TokomakLogicalPlan::Scalar(_)|
-            TokomakLogicalPlan::ScalarBuiltinCall(_)|
-            TokomakLogicalPlan::ScalarUDFCall(_)|
-            TokomakLogicalPlan::AggregateBuiltinCall(_)|
-            TokomakLogicalPlan::AggregateBuiltinDistinctCall(_)|
-            TokomakLogicalPlan::AggregateUDFCall(_)|
-            TokomakLogicalPlan::WindowBuiltinCallUnframed(_)|
-            TokomakLogicalPlan::WindowBuiltinCallFramed(_)|
-            TokomakLogicalPlan::SortExpr(_)|
-            TokomakLogicalPlan::SortSpec(_)|
-            TokomakLogicalPlan::ScalarUDF(_)|
-            TokomakLogicalPlan::AggregateUDF(_)|
-            TokomakLogicalPlan::Column(_)|
-            TokomakLogicalPlan::WindowFrame(_)|
-            TokomakLogicalPlan::Cast(_)|
-            TokomakLogicalPlan::TryCast(_)|
-            TokomakLogicalPlan::CaseLit(_)|
-            TokomakLogicalPlan::CaseIf(_))=> return Err(DataFusionError::Internal(format!("Expected plan found expression: {}", expr)))  
+            expr
+            @
+            (TokomakLogicalPlan::ExprAlias(_)
+            | TokomakLogicalPlan::Plus(_)
+            | TokomakLogicalPlan::Minus(_)
+            | TokomakLogicalPlan::Multiply(_)
+            | TokomakLogicalPlan::Divide(_)
+            | TokomakLogicalPlan::Modulus(_)
+            | TokomakLogicalPlan::Or(_)
+            | TokomakLogicalPlan::And(_)
+            | TokomakLogicalPlan::Eq(_)
+            | TokomakLogicalPlan::NotEq(_)
+            | TokomakLogicalPlan::Lt(_)
+            | TokomakLogicalPlan::LtEq(_)
+            | TokomakLogicalPlan::Gt(_)
+            | TokomakLogicalPlan::GtEq(_)
+            | TokomakLogicalPlan::RegexMatch(_)
+            | TokomakLogicalPlan::RegexIMatch(_)
+            | TokomakLogicalPlan::RegexNotMatch(_)
+            | TokomakLogicalPlan::RegexNotIMatch(_)
+            | TokomakLogicalPlan::IsDistinctFrom(_)
+            | TokomakLogicalPlan::IsNotDistinctFrom(_)
+            | TokomakLogicalPlan::Not(_)
+            | TokomakLogicalPlan::IsNotNull(_)
+            | TokomakLogicalPlan::IsNull(_)
+            | TokomakLogicalPlan::Negative(_)
+            | TokomakLogicalPlan::Between(_)
+            | TokomakLogicalPlan::BetweenInverted(_)
+            | TokomakLogicalPlan::Like(_)
+            | TokomakLogicalPlan::NotLike(_)
+            | TokomakLogicalPlan::InList(_)
+            | TokomakLogicalPlan::NotInList(_)
+            | TokomakLogicalPlan::EList(_)
+            | TokomakLogicalPlan::ScalarBuiltin(_)
+            | TokomakLogicalPlan::AggregateBuiltin(_)
+            | TokomakLogicalPlan::WindowBuiltin(_)
+            | TokomakLogicalPlan::Scalar(_)
+            | TokomakLogicalPlan::ScalarBuiltinCall(_)
+            | TokomakLogicalPlan::ScalarUDFCall(_)
+            | TokomakLogicalPlan::AggregateBuiltinCall(_)
+            | TokomakLogicalPlan::AggregateBuiltinDistinctCall(_)
+            | TokomakLogicalPlan::AggregateUDFCall(_)
+            | TokomakLogicalPlan::WindowBuiltinCallUnframed(_)
+            | TokomakLogicalPlan::WindowBuiltinCallFramed(_)
+            | TokomakLogicalPlan::SortExpr(_)
+            | TokomakLogicalPlan::SortSpec(_)
+            | TokomakLogicalPlan::ScalarUDF(_)
+            | TokomakLogicalPlan::AggregateUDF(_)
+            | TokomakLogicalPlan::Column(_)
+            | TokomakLogicalPlan::WindowFrame(_)
+            | TokomakLogicalPlan::Cast(_)
+            | TokomakLogicalPlan::TryCast(_)
+            | TokomakLogicalPlan::CaseLit(_)
+            | TokomakLogicalPlan::CaseIf(_)) => {
+                return Err(DataFusionError::Internal(format!(
+                    "Expected plan found expression: {}",
+                    expr
+                )))
+            }
         };
         Ok(builder)
     }
-
 }
 
-
-pub fn convert_to_df_plan(plan: &RecExpr<TokomakLogicalPlan>, analysis: &TokomakAnalysis, eclasses: &[Id], egraph: &EGraph<TokomakLogicalPlan, TokomakAnalysis>)->Result<LogicalPlan, DataFusionError>{
-    let converter = TokomakPlanConverter::new( plan, analysis, eclasses, egraph);
+pub fn convert_to_df_plan(
+    plan: &RecExpr<TokomakLogicalPlan>,
+    analysis: &TokomakAnalysis,
+    eclasses: &[Id],
+    egraph: &EGraph<TokomakLogicalPlan, TokomakAnalysis>,
+) -> Result<LogicalPlan, DataFusionError> {
+    let converter = TokomakPlanConverter::new(plan, analysis, eclasses, egraph);
     let start = plan.as_ref().len() - 1;
     converter.convert_to_builder(start.into())?.build()
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Window([Id;3]);
-impl Window{
-    pub fn new(input: Id, window_expr: Id, schema: Id)->Self{
+pub struct Window([Id; 3]);
+impl Window {
+    pub fn new(input: Id, window_expr: Id, schema: Id) -> Self {
         Self([input, window_expr, schema])
     }
 
-    pub fn input(&self)->Id{
+    pub fn input(&self) -> Id {
         self.0[0]
     }
-    pub fn window_expr(&self)->Id{
+    pub fn window_expr(&self) -> Id {
         self.0[1]
     }
-    pub fn schema(&self)->Id{
+    pub fn schema(&self) -> Id {
         self.0[2]
     }
 }
-impl LanguageChildren for Window{
+impl LanguageChildren for Window {
     fn len(&self) -> usize {
         3
     }
@@ -1905,7 +2318,7 @@ impl LanguageChildren for Window{
     }
 
     fn from_vec(v: Vec<Id>) -> Self {
-        Self([v[0], v[1],v[2]])
+        Self([v[0], v[1], v[2]])
     }
 
     fn as_slice(&self) -> &[Id] {
@@ -1917,27 +2330,27 @@ impl LanguageChildren for Window{
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Aggregate([Id;4]);
+pub struct Aggregate([Id; 4]);
 
-impl Aggregate{
-    pub fn new(input: Id, group_expr: Id, aggr_expr: Id, schema: Id)->Self{
-        Self([input,group_expr, aggr_expr, schema])
+impl Aggregate {
+    pub fn new(input: Id, group_expr: Id, aggr_expr: Id, schema: Id) -> Self {
+        Self([input, group_expr, aggr_expr, schema])
     }
-    pub fn input(&self)->Id{
+    pub fn input(&self) -> Id {
         self.0[0]
     }
-    pub fn group_expr(&self)->Id{
+    pub fn group_expr(&self) -> Id {
         self.0[1]
     }
-    pub fn aggr_expr(&self)->Id{
+    pub fn aggr_expr(&self) -> Id {
         self.0[2]
     }
-    pub fn schema(&self)->Id{
+    pub fn schema(&self) -> Id {
         self.0[3]
     }
 }
 
-impl LanguageChildren for Aggregate{
+impl LanguageChildren for Aggregate {
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -1959,19 +2372,14 @@ impl LanguageChildren for Aggregate{
     }
 }
 
-
-
-
-
-
 #[derive(Debug, Clone)]
 pub struct SharedValues(Arc<Vec<Vec<Expr>>>);
-impl Eq for SharedValues{}
-impl PartialEq for SharedValues{
+impl Eq for SharedValues {}
+impl PartialEq for SharedValues {
     fn eq(&self, other: &Self) -> bool {
-        for (srow, orow) in self.0.iter().zip(other.0.as_slice()){
-            for (sc, oc) in srow.iter().zip(orow){
-                if sc != oc{
+        for (srow, orow) in self.0.iter().zip(other.0.as_slice()) {
+            for (sc, oc) in srow.iter().zip(orow) {
+                if sc != oc {
                     return false;
                 }
             }
@@ -1980,10 +2388,10 @@ impl PartialEq for SharedValues{
     }
 }
 
-impl Hash for SharedValues{
+impl Hash for SharedValues {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let mut buf = String::with_capacity(1024);
-        for e in self.0.iter().flatten(){
+        for e in self.0.iter().flatten() {
             buf.clear();
             write!(buf, "{:?}", e).unwrap();
             buf.hash(state);
@@ -1991,24 +2399,26 @@ impl Hash for SharedValues{
     }
 }
 
-impl FromStr for SharedValues{
-    type Err=DataFusionError;
+impl FromStr for SharedValues {
+    type Err = DataFusionError;
 
     fn from_str(_s: &str) -> Result<Self, Self::Err> {
-        Err(DataFusionError::NotImplemented("Parsing shared values is not supported for SharedValues".to_owned()))
+        Err(DataFusionError::NotImplemented(
+            "Parsing shared values is not supported for SharedValues".to_owned(),
+        ))
     }
 }
-impl Ord for SharedValues{
+impl Ord for SharedValues {
     fn cmp(&self, other: &Self) -> Ordering {
         self.partial_cmp(other).unwrap()
     }
 }
-impl PartialOrd for SharedValues{
+impl PartialOrd for SharedValues {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        for (srow, orow) in self.0.iter().zip(other.0.as_slice()){
-            for (sc, oc) in srow.iter().zip(orow){
-                if let Some(ord) = sc.partial_cmp(oc){
-                    if  Ordering::Equal != ord{    
+        for (srow, orow) in self.0.iter().zip(other.0.as_slice()) {
+            for (sc, oc) in srow.iter().zip(orow) {
+                if let Some(ord) = sc.partial_cmp(oc) {
+                    if Ordering::Equal != ord {
                         return Some(ord);
                     }
                 }
@@ -2018,18 +2428,16 @@ impl PartialOrd for SharedValues{
     }
 }
 
-impl std::fmt::Display for SharedValues{
+impl std::fmt::Display for SharedValues {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "VALUES({})", self.0.len())
     }
 }
 pub struct ExtNode(Arc<dyn UserDefinedLogicalNode + Send + Sync>);
 
-
 //"(filter (and (= ?a:col ?b:col) ?x) (cross_join ?table_a ?table_b))" => "(filter ?x (inner_join ?table_a ?table_b) )"
 
-
-/* 
+/*
 #[cfg(test)]
 mod tests{
     use datafusion::{arrow::datatypes::{DataType, Field, Schema}, datasource::empty::EmptyTable, logical_plan::{LogicalPlanBuilder, col, lit}};

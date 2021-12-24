@@ -43,7 +43,6 @@ impl Debug for TestUserDefinedPlanNode {
 }
 
 impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
-    
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -76,7 +75,7 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
         })
     }
 
-    fn name(&self)->&'static str {
+    fn name(&self) -> &'static str {
         "TestUserDefined"
     }
 }

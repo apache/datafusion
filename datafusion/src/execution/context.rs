@@ -39,7 +39,6 @@ use crate::{
     },
 };
 use log::debug;
-use std::{fs, time::Instant};
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
@@ -47,6 +46,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
 };
+use std::{fs, time::Instant};
 
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
@@ -803,11 +803,11 @@ impl ExecutionContext {
             let start = Instant::now();
             new_plan = optimizer.optimize(&new_plan, execution_props)?;
             let duration = start.elapsed();
-            execution_times.push(( optimizer.name(), duration));
+            execution_times.push((optimizer.name(), duration));
             observer(&new_plan, optimizer.as_ref());
         }
 
-        for (name, duration) in &execution_times{
+        for (name, duration) in &execution_times {
             debug!("[{}]={}us", name, duration.as_micros());
         }
         debug!("Optimized logical plan:\n {:?}", new_plan);

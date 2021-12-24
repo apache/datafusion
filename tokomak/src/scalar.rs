@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 use datafusion::{error::DataFusionError, scalar::ScalarValue};
-use datafusion::arrow::datatypes::{DataType, Field, TimeUnit, IntervalUnit};
 use ordered_float::OrderedFloat;
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum TokomakScalar {
@@ -131,10 +131,14 @@ impl From<ScalarValue> for TokomakScalar {
             ScalarValue::UInt16(v) => TokomakScalar::UInt16(v),
             ScalarValue::UInt32(v) => TokomakScalar::UInt32(v),
             ScalarValue::UInt64(v) => TokomakScalar::UInt64(v),
-            ScalarValue::Utf8(v) => TokomakScalar::Utf8(v.map( String::into_boxed_str)),
-            ScalarValue::LargeUtf8(v) => TokomakScalar::LargeUtf8(v.map(String::into_boxed_str)),
+            ScalarValue::Utf8(v) => TokomakScalar::Utf8(v.map(String::into_boxed_str)),
+            ScalarValue::LargeUtf8(v) => {
+                TokomakScalar::LargeUtf8(v.map(String::into_boxed_str))
+            }
             ScalarValue::Binary(v) => TokomakScalar::Binary(v.map(Vec::into_boxed_slice)),
-            ScalarValue::LargeBinary(v) => TokomakScalar::LargeBinary(v.map(Vec::into_boxed_slice)),
+            ScalarValue::LargeBinary(v) => {
+                TokomakScalar::LargeBinary(v.map(Vec::into_boxed_slice))
+            }
             ScalarValue::List(v, d) => TokomakScalar::List(
                 v.map(|list| {
                     Box::new(list.into_iter().map(|item| item.into()).collect())
@@ -154,16 +158,18 @@ impl From<ScalarValue> for TokomakScalar {
             ScalarValue::IntervalYearMonth(v) => TokomakScalar::IntervalYearMonth(v),
             ScalarValue::IntervalDayTime(v) => TokomakScalar::IntervalDayTime(v),
             ScalarValue::Struct(fields, datatypes) => {
-                let fields = fields.map(|f|Box::new( f.into_iter().map(TokomakScalar::from).collect()));
+                let fields = fields
+                    .map(|f| Box::new(f.into_iter().map(TokomakScalar::from).collect()));
                 TokomakScalar::Struct(fields, datatypes)
-            },
-            ScalarValue::Decimal128(v, scale, precision) => TokomakScalar::Decimal128(v, scale,precision),
-            
+            }
+            ScalarValue::Decimal128(v, scale, precision) => {
+                TokomakScalar::Decimal128(v, scale, precision)
+            }
         }
     }
 }
-impl From<&TokomakScalar> for ScalarValue{
-    fn from(val: &TokomakScalar) -> Self { 
+impl From<&TokomakScalar> for ScalarValue {
+    fn from(val: &TokomakScalar) -> Self {
         val.clone().into()
     }
 }
@@ -185,7 +191,9 @@ impl From<TokomakScalar> for ScalarValue {
             TokomakScalar::Utf8(v) => ScalarValue::Utf8(v.map(|bs| bs.into())),
             TokomakScalar::LargeUtf8(v) => ScalarValue::LargeUtf8(v.map(|bs| bs.into())),
             TokomakScalar::Binary(v) => ScalarValue::Binary(v.map(|bs| bs.into())),
-            TokomakScalar::LargeBinary(v) => ScalarValue::LargeBinary(v.map(|bs| bs.into())),
+            TokomakScalar::LargeBinary(v) => {
+                ScalarValue::LargeBinary(v.map(|bs| bs.into()))
+            }
             TokomakScalar::List(v, d) => ScalarValue::List(
                 v.map(|list| {
                     Box::new(list.into_iter().map(|item| item.into()).collect())
@@ -205,10 +213,11 @@ impl From<TokomakScalar> for ScalarValue {
             TokomakScalar::IntervalYearMonth(v) => ScalarValue::IntervalYearMonth(v),
             TokomakScalar::IntervalDayTime(v) => ScalarValue::IntervalDayTime(v),
             TokomakScalar::Struct(fields, datatypes) => {
-                let fields = fields.map(|f| Box::new(f.into_iter().map(ScalarValue::from).collect()));
+                let fields = fields
+                    .map(|f| Box::new(f.into_iter().map(ScalarValue::from).collect()));
                 ScalarValue::Struct(fields, datatypes)
-            },
-            TokomakScalar::Decimal128(v,s,p)=>ScalarValue::Decimal128(v,s,p),
+            }
+            TokomakScalar::Decimal128(v, s, p) => ScalarValue::Decimal128(v, s, p),
         }
     }
 }
@@ -222,40 +231,40 @@ macro_rules! format_option {
     }};
 }
 
-impl TokomakScalar{
-    pub fn is_null(&self)->bool{
-        match self{
-            TokomakScalar::Boolean(None)|
-            TokomakScalar::Float32(None)|
-            TokomakScalar::Float64(None)|
-            TokomakScalar::Int8(None)|
-            TokomakScalar::Int16(None)|
-            TokomakScalar::Int32(None)|
-            TokomakScalar::Int64(None)|
-            TokomakScalar::UInt8(None)|
-            TokomakScalar::UInt16(None)|
-            TokomakScalar::UInt32(None)|
-            TokomakScalar::UInt64(None)|
-            TokomakScalar::Utf8(None)|
-            TokomakScalar::LargeUtf8(None)|
-            TokomakScalar::Binary(None)|
-            TokomakScalar::LargeBinary(None)|
-            TokomakScalar::List(None, _)|
-            TokomakScalar::Date32(None)|
-            TokomakScalar::Date64(None) |
-            TokomakScalar::TimestampSecond(None)|
-            TokomakScalar::TimestampMillisecond(None)|
-            TokomakScalar::TimestampMicrosecond(None) |
-            TokomakScalar::TimestampNanosecond(None) |
-            TokomakScalar::IntervalYearMonth(None) |
-            TokomakScalar::IntervalDayTime(None) |
-            TokomakScalar::Struct(None, _) |
-            TokomakScalar::Decimal128(None, _, _)=>true,
-            _=>false,
+impl TokomakScalar {
+    pub fn is_null(&self) -> bool {
+        match self {
+            TokomakScalar::Boolean(None)
+            | TokomakScalar::Float32(None)
+            | TokomakScalar::Float64(None)
+            | TokomakScalar::Int8(None)
+            | TokomakScalar::Int16(None)
+            | TokomakScalar::Int32(None)
+            | TokomakScalar::Int64(None)
+            | TokomakScalar::UInt8(None)
+            | TokomakScalar::UInt16(None)
+            | TokomakScalar::UInt32(None)
+            | TokomakScalar::UInt64(None)
+            | TokomakScalar::Utf8(None)
+            | TokomakScalar::LargeUtf8(None)
+            | TokomakScalar::Binary(None)
+            | TokomakScalar::LargeBinary(None)
+            | TokomakScalar::List(None, _)
+            | TokomakScalar::Date32(None)
+            | TokomakScalar::Date64(None)
+            | TokomakScalar::TimestampSecond(None)
+            | TokomakScalar::TimestampMillisecond(None)
+            | TokomakScalar::TimestampMicrosecond(None)
+            | TokomakScalar::TimestampNanosecond(None)
+            | TokomakScalar::IntervalYearMonth(None)
+            | TokomakScalar::IntervalDayTime(None)
+            | TokomakScalar::Struct(None, _)
+            | TokomakScalar::Decimal128(None, _, _) => true,
+            _ => false,
         }
     }
-    pub fn datatype(&self)->DataType{
-        match self{
+    pub fn datatype(&self) -> DataType {
+        match self {
             TokomakScalar::Boolean(_) => DataType::Boolean,
             TokomakScalar::Float32(_) => DataType::Float32,
             TokomakScalar::Float64(_) => DataType::Float64,
@@ -271,24 +280,38 @@ impl TokomakScalar{
             TokomakScalar::LargeUtf8(_) => DataType::LargeUtf8,
             TokomakScalar::Binary(_) => DataType::Binary,
             TokomakScalar::LargeBinary(_) => DataType::LargeBinary,
-            TokomakScalar::List(v,dt) => {
-                let contains_null = v.as_ref().map(|l| l.iter().any(|i| i.is_null())).unwrap_or(true);
+            TokomakScalar::List(v, dt) => {
+                let contains_null = v
+                    .as_ref()
+                    .map(|l| l.iter().any(|i| i.is_null()))
+                    .unwrap_or(true);
                 DataType::List(Field::new("", dt.as_ref().clone(), contains_null).into())
-            },
+            }
             TokomakScalar::Date32(_) => DataType::Date32,
             TokomakScalar::Date64(_) => DataType::Date64,
-            TokomakScalar::TimestampSecond(_) => DataType::Timestamp(TimeUnit::Second, None),
-            TokomakScalar::TimestampMillisecond(_) => DataType::Timestamp(TimeUnit::Millisecond, None),
-            TokomakScalar::TimestampMicrosecond(_) => DataType::Timestamp(TimeUnit::Microsecond, None),
-            TokomakScalar::TimestampNanosecond(_) => DataType::Timestamp(TimeUnit::Nanosecond, None),
-            TokomakScalar::IntervalYearMonth(_) => DataType::Interval(IntervalUnit::YearMonth),
-            TokomakScalar::IntervalDayTime(_) => DataType::Interval(IntervalUnit::DayTime),
+            TokomakScalar::TimestampSecond(_) => {
+                DataType::Timestamp(TimeUnit::Second, None)
+            }
+            TokomakScalar::TimestampMillisecond(_) => {
+                DataType::Timestamp(TimeUnit::Millisecond, None)
+            }
+            TokomakScalar::TimestampMicrosecond(_) => {
+                DataType::Timestamp(TimeUnit::Microsecond, None)
+            }
+            TokomakScalar::TimestampNanosecond(_) => {
+                DataType::Timestamp(TimeUnit::Nanosecond, None)
+            }
+            TokomakScalar::IntervalYearMonth(_) => {
+                DataType::Interval(IntervalUnit::YearMonth)
+            }
+            TokomakScalar::IntervalDayTime(_) => {
+                DataType::Interval(IntervalUnit::DayTime)
+            }
             TokomakScalar::Struct(_, dt) => DataType::Struct(dt.clone().to_vec()),
-            &TokomakScalar::Decimal128(_,s,p)=>DataType::Decimal(s,p),
+            &TokomakScalar::Decimal128(_, s, p) => DataType::Decimal(s, p),
         }
-    } 
+    }
 }
-
 
 impl std::fmt::Display for TokomakScalar {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
