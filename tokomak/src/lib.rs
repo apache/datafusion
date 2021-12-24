@@ -90,8 +90,7 @@ type RefCount<T> = Arc<T>;
 
 impl TokomakAnalysis{
     fn get_boolean(egraph: &EGraph<TokomakLogicalPlan, Self>)->TData{
-        let dt = egraph.analysis.datatype_cache.get(&DataType::Boolean).unwrap().clone();
-        TData::DataType(dt)
+        TData::DataType(egraph.analysis.boolean_dt.clone())
     }
     fn get_data(egraph: &EGraph<TokomakLogicalPlan, Self>, id: &Id)->TData{
         egraph[*id].data.clone()
@@ -110,12 +109,12 @@ impl TokomakAnalysis{
         }
     }
     fn get_projection(egraph: &EGraph<TokomakLogicalPlan, Self>, [_input, exprs, alias]: &[Id;3])->TData{
-        assert!(egraph[*exprs].nodes.len() == 1);
+        assert!(egraph[*exprs].nodes.len() == 1, "EList must have a single representation found {}", egraph[*exprs].nodes.len());
         let elist = match &egraph[*exprs].nodes[0]{
             TokomakLogicalPlan::EList(list)=>list,
             p => panic!("Projection expected EList found {}", p),
         };
-        assert!(egraph[*alias].nodes.len() == 1, "Projection found alias with multiple representations");
+        assert!(egraph[*alias].nodes.len() == 1, "Alias must have a sinlge representation, found: {}",egraph[*alias].nodes.len());
         let alias = match &egraph[*alias].nodes[0]{
             TokomakLogicalPlan::Str(s)=>Some(s.as_str()),
             TokomakLogicalPlan::None=>None,
@@ -216,7 +215,7 @@ impl TokomakAnalysis{
         Some(dt_list)
     }
 
-    fn make_join(egraph: &EGraph<TokomakLogicalPlan, Self>, l: &Id, r: &Id, join_type: JoinType)->TData{
+    fn make_join(egraph: &EGraph<TokomakLogicalPlan, Self>, [l,r,_keys, _null_equals_null]: &[Id;4], join_type: JoinType)->TData{
         let lschema = Self::get_schema(egraph, *l).unwrap();
         let rschema = Self::get_schema(egraph, *r).unwrap();
         let s = build_join_schema(&lschema, &rschema, &join_type).unwrap();
@@ -278,12 +277,12 @@ impl TokomakAnalysis{
         let  data = match enode{
             TokomakLogicalPlan::Filter([input,_]) => Self::get_data(egraph, input),
             TokomakLogicalPlan::Projection(projection) => Self::get_projection(egraph, projection),
-            TokomakLogicalPlan::InnerJoin([l,r, _keys]) => Self::make_join(egraph, l, r,JoinType::Inner),
-            TokomakLogicalPlan::LeftJoin([l,r, _keys]) => Self::make_join(egraph, l, r,JoinType::Left),
-            TokomakLogicalPlan::RightJoin([l,r, _keys]) => Self::make_join(egraph, l, r,JoinType::Right),
-            TokomakLogicalPlan::FullJoin([l,r, _keys]) => Self::make_join(egraph, l, r,JoinType::Full),
-            TokomakLogicalPlan::SemiJoin([l,r, _keys]) => Self::make_join(egraph, l, r,JoinType::Semi),
-            TokomakLogicalPlan::AntiJoin([l,r, _keys]) => Self::make_join(egraph, l, r,JoinType::Anti),
+            TokomakLogicalPlan::InnerJoin(j) => Self::make_join(egraph, j, JoinType::Inner),
+            TokomakLogicalPlan::LeftJoin(j) => Self::make_join(egraph,j, JoinType::Left),
+            TokomakLogicalPlan::RightJoin(j) => Self::make_join(egraph, j, JoinType::Right),
+            TokomakLogicalPlan::FullJoin(j) => Self::make_join(egraph, j, JoinType::Full),
+            TokomakLogicalPlan::SemiJoin(j) => Self::make_join(egraph, j, JoinType::Semi),
+            TokomakLogicalPlan::AntiJoin(j) => Self::make_join(egraph, j, JoinType::Anti),
             TokomakLogicalPlan::Extension(_) => todo!(),
             TokomakLogicalPlan::CrossJoin([l,r]) => {
                 let lschema = Self::get_schema(egraph, *l).unwrap();
@@ -371,7 +370,7 @@ impl TokomakAnalysis{
                 let dt = match dt{
                     Ok(dt)=>dt,
                     Err(e)=>{
-                        println!("Could not get ouput datatype for {} and args {:?}: {}", builtin, arg_datatypes, e);
+                        info!("Could not get ouput datatype for {} and args {:?}: {}", builtin, arg_datatypes, e);
                         return TData::None;
                     }
                 };
@@ -482,7 +481,6 @@ impl TokomakAnalysis{
             TokomakLogicalPlan::AggregateBuiltin(_) |
             TokomakLogicalPlan::WindowBuiltin(_) |
             TokomakLogicalPlan::TableProject(_) |
-            TokomakLogicalPlan::LimitCount(_)|
             TokomakLogicalPlan::Table(_)|
             TokomakLogicalPlan::SortSpec(_)|
             TokomakLogicalPlan::ScalarUDF(_)|
@@ -515,7 +513,6 @@ impl Analysis<TokomakLogicalPlan> for TokomakAnalysis{
         Self::make_impl(egraph, enode)
     }
     fn merge(&mut self, a: &mut Self::Data, b: Self::Data) -> DidMerge {
-            //println!("Always merge: {}", self.always_merge);
             if self.always_merge{
                 *a = b;
                 return DidMerge(true, false);
@@ -835,25 +832,26 @@ impl RunnerSettings{
         
         runner = runner.run(rules.iter());
         let elapsed = start.elapsed();
-        println!("Took {:.2}s optimizing the plan", elapsed.as_secs_f64());
+        info!("Took {:.2}s optimizing the plan", elapsed.as_secs_f64());
         for (idx,iter) in runner.iterations.iter().enumerate(){    
-            println!("The iteration {} had {:#?}", idx, iter);
+            info!("The iteration {} had {:#?}", idx, iter);
         }
         
-        runner.print_report();
         //let mut d = runner.egraph.dot();
         //d.use_anchors = false;
         //d.to_dot("/home/patrick/Documents/query.dot").unwrap();
         let ex = Extractor::new(&runner.egraph, cost_func);
+        
         let start = Instant::now();
-        let (cost,plan, eclasses) = ex.find_best_with_ids(root);
+        let (cost,plan) = ex.find_best(root);
+        let eclass_ids = runner.egraph.lookup_expr_ids(&plan).ok_or_else(|| DataFusionError::Internal(String::from("TokomakOptimizer could not extract plan from egraph.")))?;
         let elapsed = start.elapsed();
-        println!("Took {:.2}s selecting the best plan", elapsed.as_secs_f64());
-        println!("The lowest cost was {:?}", cost);
+        info!("Took {:.2}s selecting the best plan", elapsed.as_secs_f64());
+        info!("The lowest cost was {:?}", cost);
         let start = Instant::now();
-        let plan = convert_to_df_plan(&plan, &runner.egraph.analysis, &eclasses, &runner.egraph).unwrap();
+        let plan = convert_to_df_plan(&plan, &runner.egraph.analysis, &eclass_ids,&runner.egraph).unwrap();
         let elapsed = start.elapsed();
-        println!("Took {:.2}s converting back to datafusion logical plan", elapsed.as_secs_f64());
+        info!("Took {:.2}s converting back to datafusion logical plan", elapsed.as_secs_f64());
         Ok(plan)
 
     }
@@ -884,7 +882,7 @@ impl OptimizerRule for Tokomak{
         let start = Instant::now();
         let root = plan::to_tokomak_plan(plan, &mut egraph).unwrap();
         let elapsed = start.elapsed();
-        println!("It took {:.2}s to convert to tokomak plan", elapsed.as_secs_f64());
+        info!("It took {:.2}s to convert to tokomak plan", elapsed.as_secs_f64());
         egraph.analysis.always_merge = false;
         let optimized_plan = self.runner_settings.optimize_plan( root, egraph, &self.rules,DefaultCostFunc )?;
         Ok(optimized_plan)   
@@ -1008,7 +1006,7 @@ impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc{
             TokomakLogicalPlan::Schema(_)|
             TokomakLogicalPlan::Values(_) |
             TokomakLogicalPlan::TableProject(_)|
-            TokomakLogicalPlan::LimitCount(_) |
+
             
             TokomakLogicalPlan::Str(_)|
             TokomakLogicalPlan::ExprAlias(_)|
@@ -1143,16 +1141,11 @@ impl FromStr for UDFName {
         let first_char = s.chars().next().ok_or_else(|| DataFusionError::Internal(
             "Zero length udf name".to_string(),
         ))?;
-        //for (pos, c) in s.chars().enumerate(){
-        //    println!("{} - {}", pos, c);
-        //}
-        //println!("The first char was of the string '{}' was '{}'",s, first_char);
         if first_char == '?'
             || first_char.is_numeric()
             || first_char == '"'
             || first_char == '\''
         {
-            //println!("Could not parse {} as udf name ", s);
             return Err(DataFusionError::Internal(
                 "Found ? or number as first char".to_string(),
             ));

@@ -1,6 +1,7 @@
 
 use datafusion::{arrow::datatypes::DataType, error::DataFusionError};
 use egg::{Analysis, Applier, EClass, EGraph, FromOp, Id, Language, LanguageChildren, RecExpr, RecExprParseError, SearchMatches, Searcher, Subst, Var, Rewrite, Condition, ConditionalApplier};
+use log::debug;
 use std::{cmp::Ordering, collections::{BinaryHeap, HashSet}, mem::{Discriminant, discriminant}, str::FromStr, marker::PhantomData};
 use crate::{Tokomak, plan::TokomakLogicalPlan, TokomakAnalysis};
 
@@ -72,7 +73,6 @@ TR: Fn(& mut EGraph<TokomakLogicalPlan, A>, & mut Subst)->Option<()>{
         for i in (0..inner_bound_vars.len()).rev(){
             let var = inner_bound_vars[i];
             if let Some(bound)= bound_set.get_mut(&var){
-                println!("[{}] bound {}", rule_name, var);
                 *bound = true;
                 inner_bound_vars.swap_remove(i);
             }

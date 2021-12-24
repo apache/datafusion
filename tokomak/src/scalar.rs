@@ -99,7 +99,6 @@ impl std::str::FromStr for TokomakScalar {
                 && (first_char.is_ascii_punctuation()
                     && !(first_char == '\'' || first_char == '"'))
             {
-                //println!("Could not parse: {}",first_char.is_ascii_punctuation() && !(first_char == '\'' || first_char == '"'));
                 return Err(DataFusionError::Internal(String::new()));
             }
             let mut str_in = s;

@@ -78,17 +78,17 @@ define_language! {
         //input, expressions, alias schema
         "project"=Projection([Id; 3]),
         //left right on  schema
-        "inner_join"=InnerJoin([Id;3]),
+        "inner_join"=InnerJoin([Id;4]),
         //left right on  schema
-        "left_join"=LeftJoin([Id;3]),
+        "left_join"=LeftJoin([Id;4]),
         //left right on schema
-        "right_join"=RightJoin([Id;3]),
+        "right_join"=RightJoin([Id;4]),
         //left right on schema
-        "full_join"=FullJoin([Id;3]),
+        "full_join"=FullJoin([Id;4]),
         //left right on schema
-        "semi_join"=SemiJoin([Id;3]),
+        "semi_join"=SemiJoin([Id;4]),
         //left right on schema
-        "anti_join"=AntiJoin([Id;3]),
+        "anti_join"=AntiJoin([Id;4]),
         "ext"=Extension(UDLN),
         //left right schema
         "cross_join"=CrossJoin([Id;2]),
@@ -188,7 +188,6 @@ define_language! {
         Table(Table),
         Values(SharedValues),
         TableProject(TableProject),
-        LimitCount(usize),
         Schema(TokomakSchema),
         Type(TokomakDataType),
         "keys"=JoinKeys(JoinKeys),
@@ -660,13 +659,16 @@ pub struct PlanConverter<'a>{
 
 impl<'a> PlanConverter<'a>{
     fn add_udf(&mut self, key:Symbol, udf:Arc<ScalarUDF>)->DFResult<()>{
-        //TODO: Check for overwritten values
-        self.egraph.analysis.sudf_registry.insert(key, udf);
+        if let Some(existing_udf) =  self.egraph.analysis.sudf_registry.insert(key, udf){
+            return Err(DataFusionError::Plan(format!("Found 2 udfs with the same name in the plan: '{}'", key)));
+        }
         Ok(())
     }
 
     fn add_udaf(&mut self, key:Symbol, udaf: Arc<AggregateUDF>)->DFResult<()>{
-        self.egraph.analysis.udaf_registry.insert(key, udaf);
+        if let Some(existing_udaf) = self.egraph.analysis.udaf_registry.insert(key, udaf){
+            return Err(DataFusionError::Plan(format!("Found 2 udafs with the same name: '{}'", key)));
+        }
         Ok(())
     }
 
@@ -793,7 +795,6 @@ impl<'a> PlanConverter<'a>{
                 TokomakLogicalPlan::Cast([e, dt])
             }
             Expr::TryCast { expr, data_type } => {
-                //TODO: implment datatype conversion
                 let e = self.to_tokomak_expr_inner(expr, schema)?;
                 let tdt: TokomakDataType = data_type.clone().try_into()?;
                 let dt = self.egraph.add(TokomakLogicalPlan::Type(tdt));
@@ -872,9 +873,8 @@ impl<'a> PlanConverter<'a>{
                 TokomakLogicalPlan::SortExpr(SortExpr::new(expr_id, spec_id))
             }
             Expr::ScalarUDF { fun, args } => {
-                //TODO: Function registry
-                //self.udf_registry.add_sudf(fun.clone());
                 let fun_name: Symbol = fun.name.clone().into();
+                self.add_udf(fun_name , fun.clone())?;
                 let func = self
                     .egraph
                     .add(TokomakLogicalPlan::ScalarUDF(ScalarUDFName(fun_name)));
@@ -1040,10 +1040,11 @@ impl<'a> PlanConverter<'a>{
 
     fn convert_join(&mut self, join: &plan::Join)->DFResult<TokomakLogicalPlan>{
         //TODO: handle null_equals_null
-        let plan::Join{left, right, on, join_type, join_constraint:_join_constraint, schema: _schema, null_equals_null:_null_equals_null } = join;
+        let plan::Join{left, right, on, join_type, join_constraint:_join_constraint, schema: _schema, null_equals_null } = join;
         let on = self.as_join_keys(&on, left.schema(), right.schema())?;
         let left = self.as_tokomak_plan(left)?;
         let right = self.as_tokomak_plan(right)?;
+        let null_equals_null = self.egraph.add(TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(*null_equals_null))));
         Ok((match join_type{
             datafusion::logical_plan::JoinType::Inner => TokomakLogicalPlan::InnerJoin,
             datafusion::logical_plan::JoinType::Left => TokomakLogicalPlan::LeftJoin,
@@ -1051,7 +1052,7 @@ impl<'a> PlanConverter<'a>{
             datafusion::logical_plan::JoinType::Full => TokomakLogicalPlan::FullJoin,
             datafusion::logical_plan::JoinType::Semi => TokomakLogicalPlan::SemiJoin,
             datafusion::logical_plan::JoinType::Anti => TokomakLogicalPlan::AntiJoin,
-        })([left, right, on]))
+        })([left, right, on, null_equals_null]))
     }
 
     fn convert_crossjoin(&mut self, cross: &plan::CrossJoin)->DFResult<TokomakLogicalPlan>{
@@ -1081,7 +1082,7 @@ impl<'a> PlanConverter<'a>{
             None => self.egraph.add(TokomakLogicalPlan::None),
         };
         let limit =  self.egraph.add(match limit{
-            Some(lim) => TokomakLogicalPlan::LimitCount(*lim),
+            Some(lim) => TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(*lim as u64))),
             None => TokomakLogicalPlan::None,
         });
         Ok(TokomakLogicalPlan::TableScan(TableScan::new(table_name, source, projection, filters, limit)))
@@ -1095,21 +1096,21 @@ impl<'a> PlanConverter<'a>{
     }
     fn convert_limit(&mut self, limit: &plan::Limit)->DFResult<TokomakLogicalPlan>{
         let plan::Limit{n , input} = limit;
-        let n = self.egraph.add(TokomakLogicalPlan::LimitCount(*n));
+        let n = self.egraph.add(TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(*n as u64))));
         let input = self.as_tokomak_plan(input)?;
         Ok(TokomakLogicalPlan::Limit([input, n]))  
     }
 
     fn convert_extension(&mut self, ext: &plan::Extension)->DFResult<TokomakLogicalPlan>{
-        let plan::Extension{node} = ext;
-        let name = node.name();
-        let inputs = node.inputs().into_iter().map(|l| l.clone()).collect::<Vec<_>>();
-        let exprs = node.expressions();
-        let plist = self.as_tokomak_plan_list(&inputs)?;
+        return Err(DataFusionError::NotImplemented(String::from("The tokomak optimizer does not support logical extension plan nodes yet")));
+        //let plan::Extension{node} = ext;
+        //let name = node.name();
+        //let inputs = node.inputs().into_iter().map(|l| l.clone()).collect::<Vec<_>>();
+        //let exprs = node.expressions();
+        //let plist = self.as_tokomak_plan_list(&inputs)?;
         //let elist = self.as_tokomak_expr_list(&exprs, schema)?;
         //let name_id = self.as_tokomak_str(name);
         //Ok(TokomakLogicalPlan::Extension(UDLN::new(name_id, plist, elist)))
-        todo!()
     }
 
     fn as_tokomak_plan(&mut self, plan: &LogicalPlan)->Result<Id, DataFusionError>{
@@ -1263,16 +1264,10 @@ impl<'a> TokomakPlanConverter<'a>{
     fn to_binary_op(&self, [left, right]: &[Id;2], op: Operator)->Result<Expr, DataFusionError>{
         let left = self.convert_to_expr(*left)?;
         let right = self.convert_to_expr(*right)?;
-        //println!("{:?} {:?} {:?}", left, op, right);
         Ok(datafusion::logical_plan::binary_expr(left, op, right))
     }
-
-    fn extract_usize(&self, id: Id, parent: &'static str)->Result<usize, DataFusionError>{
-        let scalar = match self.get_ref(id){
-            TokomakLogicalPlan::Scalar(s)=>s,
-            p=>return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected scalar usize, found {:?}", parent, p))),
-        };
-        let ret_val = match scalar{
+    fn extract_usize_from_scalar(&self, s: &TokomakScalar, parent: &'static str)->Result<usize, DataFusionError>{
+        let ret_val = match s{
             TokomakScalar::Int8(Some(v))=>if *v <=0{
               return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found negative value: {}", parent, v)));  
             }else{
@@ -1300,6 +1295,13 @@ impl<'a> TokomakPlanConverter<'a>{
             v=>return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected usize found scalar value {}",parent, v))),
         };
         Ok(ret_val)
+    }
+    fn extract_usize(&self, id: Id, parent: &'static str)->Result<usize, DataFusionError>{
+        let scalar = match self.get_ref(id){
+            TokomakLogicalPlan::Scalar(s)=>s,
+            p=>return Err(DataFusionError::Plan(format!("TokomakOptimizer {} expected scalar usize, found {:?}", parent, p))),
+        };
+        self.extract_usize_from_scalar(scalar, parent)
     }
     fn extract_datatype(&self, id: Id, parent: &'static str)->Result<DataType, DataFusionError>{
         let dt = match self.get_ref(id) {
@@ -1574,7 +1576,6 @@ impl<'a> TokomakPlanConverter<'a>{
                 TokomakLogicalPlan::Table(_)|
                 TokomakLogicalPlan::Values(_)|
                 TokomakLogicalPlan::TableProject(_)|
-                TokomakLogicalPlan::LimitCount(_)|
                 TokomakLogicalPlan::JoinKeys(_)|
                 TokomakLogicalPlan::Str(_)|
                 TokomakLogicalPlan::None )=> return Err(DataFusionError::Internal(format!("Expected expression found plan: {}", plan)))
@@ -1608,7 +1609,6 @@ impl<'a> TokomakPlanConverter<'a>{
                         let eclass_id=self.eclasses[idx];
                         conv_list.push(eclass_id);
                     }
-                    println!("{:?}", conv_list);
                 }   
                 list.iter().map(|i| self.convert_to_expr(*i)).collect::<Result<Vec<_>,_>>()?
             },
@@ -1628,7 +1628,7 @@ impl<'a> TokomakPlanConverter<'a>{
         };
         Ok(col)
     }
-    fn convert_to_join(&self, join_type: JoinType, [left, right, on]: &[Id;3])->Result<LogicalPlanBuilder, DataFusionError>{
+    fn convert_to_join(&self, join_type: JoinType, [left, right, on, null_equals_null]: &[Id;4])->Result<LogicalPlanBuilder, DataFusionError>{
         let plan_name = match join_type{
             JoinType::Inner => "JoinType::Inner",
             JoinType::Left => "JoinType::Left",
@@ -1652,7 +1652,11 @@ impl<'a> TokomakPlanConverter<'a>{
             left_join_keys.push(self.extract_column(left_key, plan_name)?);
             right_join_keys.push(self.extract_column(right_key, plan_name)?)
         }
-        left.join(&right.build()?, join_type, (left_join_keys, right_join_keys))
+        let null_equals_null = match self.get_ref(*null_equals_null){
+            TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(b)))=>*b,
+            p => return Err(DataFusionError::Internal(format!("The join of type {:?} expexted a non-null scalar boolean, found: {:?}", join_type, p)))
+        };
+        left.join_detailed(&right.build()?, join_type, (left_join_keys, right_join_keys), null_equals_null)
     }
     fn extract_alias(&self, id: Id, parent: &'static str)->Result<Option<String>, DataFusionError>{
         let alias = match self.get_ref(id){
@@ -1707,7 +1711,7 @@ impl<'a> TokomakPlanConverter<'a>{
             TokomakLogicalPlan::FullJoin(join) => self.convert_to_join(JoinType::Full, join)?,
             TokomakLogicalPlan::SemiJoin(join) => self.convert_to_join(JoinType::Semi, join)?,
             TokomakLogicalPlan::AntiJoin(join) => self.convert_to_join(JoinType::Anti, join)?,
-            TokomakLogicalPlan::Extension(_) => todo!(),
+            TokomakLogicalPlan::Extension(_) => return Err(DataFusionError::NotImplemented(String::from("TokomakOptimizer does not support extension nodes yet"))),
             TokomakLogicalPlan::CrossJoin([left, right]) => {
                 let left = self.convert_to_builder(*left)?;
                 let right = self.convert_to_builder(*right)?.build()?;
@@ -1736,7 +1740,7 @@ impl<'a> TokomakPlanConverter<'a>{
                     unexpected_plan=> return Err(unexpected_node("TableScan.name", unexpected_plan, "Str")),
                 };
                 let limit = match self.get_ref(s.limit()){
-                    TokomakLogicalPlan::LimitCount(lim)=>Some(*lim),
+                    TokomakLogicalPlan::Scalar(s)=>Some(self.extract_usize_from_scalar(s, "TableScan.limit")?),
                     TokomakLogicalPlan::None => None,
                     unexpected_plan => return Err(unexpected_node("TableScan.limit", unexpected_plan, "LimitCount or None ")),
                 };
@@ -1789,7 +1793,6 @@ impl<'a> TokomakPlanConverter<'a>{
                 let group_expr = self.extract_expr_list(*group_expr, "Aggregate.group_expr")?;
                 let input = self.convert_to_builder(*input)?;
                 let p = input.build()?;
-                println!("Input: {:?}", p);
                 let input = LogicalPlanBuilder::from(p);
                 input.aggregate(group_expr, aggr_expr)?
             },
@@ -1801,7 +1804,6 @@ impl<'a> TokomakPlanConverter<'a>{
         handle_elsewhere@(TokomakLogicalPlan::Table(_)|
             TokomakLogicalPlan::Values(_) |
             TokomakLogicalPlan::TableProject(_)|
-            TokomakLogicalPlan::LimitCount(_)|
             TokomakLogicalPlan::Str(_) |
             TokomakLogicalPlan::None |
             TokomakLogicalPlan::JoinKeys(_) |

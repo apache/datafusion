@@ -808,7 +808,7 @@ impl ExecutionContext {
         }
 
         for (name, duration) in &execution_times{
-            println!("[{}]={}us", name, duration.as_micros());
+            debug!("[{}]={}us", name, duration.as_micros());
         }
         debug!("Optimized logical plan:\n {:?}", new_plan);
         Ok(new_plan)

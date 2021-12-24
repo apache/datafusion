@@ -4,6 +4,7 @@ use crate::{ EXPR_SIMPLIFICATION_RULES, Tokomak, pattern::{pattern, twoway_patte
 
 use datafusion::error::DataFusionError;
 use egg::{rewrite as rw, *};
+use log::info;
 use super::utils::*;
 
 fn generate_simplification_rules<A: Analysis<TokomakLogicalPlan> +'static>()->Result<Vec<Rewrite<TokomakLogicalPlan, A>>, DataFusionError>{
@@ -206,7 +207,7 @@ impl Tokomak{
     pub(crate) fn add_expr_simplification_rules(&mut self){
         let rules = generate_simplification_rules().unwrap();
         self.rules.extend(rules);
-        println!("There are now {} rules", self.rules.len());
+        info!("There are now {} rules", self.rules.len());
         self.added_builtins |= EXPR_SIMPLIFICATION_RULES;
     }
 }

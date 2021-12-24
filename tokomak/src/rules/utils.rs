@@ -102,7 +102,6 @@ pub fn get_plan_schema<'a>(egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysi
     match &egraph[subst[plan]].data{
         crate::TData::Schema(s) => Some(s),
         _=>{
-            println!("Could not find the schema of {:?}", egraph[subst[plan]]);
             None
         },
     }
@@ -118,9 +117,7 @@ pub fn get_column(egraph: &EGraph<TokomakLogicalPlan, TokomakAnalysis>,subst: &S
         _ => None
     };
     assert!(eclass.nodes.len()==1);
-    //if column.is_none(){
-    //    println!("Could not retrieve column");
-    //}
+
 
     Some(column?.clone())
 }
@@ -138,9 +135,8 @@ pub fn col_from_plan(schema: &DFSchema, col: &TokomakColumn)->bool{
 
 
 
-pub fn is_column_from_plan(col: Var, plan: Var, log: bool)->impl Fn(&mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, Id, &Subst) -> bool{
+pub fn is_column_from_plan(col: Var, plan: Var)->impl Fn(&mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, Id, &Subst) -> bool{
     move |egraph: &mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, _id:Id,subst: &Subst|{
-        //println!("Evaluated column_from_plan");
         let plan_schema = get_plan_schema(egraph, subst, plan);
         let plan_schema= match plan_schema{
             Some(s)=>s,
@@ -156,9 +152,6 @@ pub fn is_column_from_plan(col: Var, plan: Var, log: bool)->impl Fn(&mut EGraph<
         let column = match column{
             Some(c) =>c,
             None => {
-                if log{
-                    println!("No column representation of eclass");
-                }
                 return false
             },
         };
@@ -167,9 +160,7 @@ pub fn is_column_from_plan(col: Var, plan: Var, log: bool)->impl Fn(&mut EGraph<
             Some(q) => plan_schema.field_with_qualified_name(q.as_str(),column.name.as_str()),
             None => plan_schema.field_with_unqualified_name(column.name.as_str()),
         };
-        if !field.is_ok() && log{
-            println!("No field found for column: {}", column);
-        }
+        
         field.is_ok()
     }
 }
@@ -195,22 +186,17 @@ pub fn log_success(name: String, c: impl Condition<TokomakLogicalPlan, TokomakAn
 
 pub fn add_to_keys(left_table: Var, right_table: Var, left_col: Var,right_col:Var, join_keys: Var, output: Var)->impl Fn(&mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, &mut Subst)->Option<()>{
     move |eg: &mut EGraph<TokomakLogicalPlan, TokomakAnalysis>, substs: &mut Subst|->Option<()>{
-        //println!("Adding columns to keys");
         let lschema = get_plan_schema(eg, substs, left_table)?;
         let rschema = get_plan_schema(eg, substs, right_table)?;
         let mut lcol = get_column(eg, substs, left_col)?;
         let mut rcol = get_column(eg, substs, right_col)?;
-        //println!("Lschema: '{}' lcol {}", lschema, lcol);
-        //println!("Rschema: '{}' rcol {}", rschema, rcol);
 
         let (l,r) = if let (Some(_), Some(_)) = (get_field(&lschema, &lcol), get_field(&rschema, &rcol)){
             (left_col, right_col)
         }else if let (Some(_), Some(_)) = (get_field(&lschema, &rcol), get_field(&rschema, &lcol)){
             std::mem::swap(&mut lcol, &mut rcol);
             (right_col, left_col)
-            
         }else{
-            println!("Could not determine if columns were from both tables");
             return None;
         };
         let keys =match eg[substs[join_keys]].nodes.iter().flat_map(|p| match p{
@@ -219,7 +205,6 @@ pub fn add_to_keys(left_table: Var, right_table: Var, left_col: Var,right_col:Va
         }).next(){
             Some(k)=>k,
             None => {
-                println!("Could not find join key form for join_keys var");
                 return None;
             }
         };
@@ -233,7 +218,6 @@ pub fn add_to_keys(left_table: Var, right_table: Var, left_col: Var,right_col:Va
         let keys = if JoinKeys::can_be_length(new_keys.len()){
             JoinKeys::from_vec(new_keys)
         }else{
-            println!("Join keys were the wrong length");
             return None;
         };
         let id = eg.add(TokomakLogicalPlan::JoinKeys(keys));
