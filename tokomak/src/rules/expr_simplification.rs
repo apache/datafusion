@@ -136,9 +136,7 @@ pub(crate) fn generate_expr_simplification_rules<
         pattern("expr-and-same", "(and ?x ?x)", "?x")?,
         pattern("expr-and-true", "(and true ?x)", "?x")?,
         pattern("expr-0-minus", "(- 0 ?x)", "(negative ?x)")?,
-        pattern("expr-and-false", "(and false ?x)", "false")?,
         pattern("expr-or-false", "(or false ?x)", "?x")?,
-        pattern("expr-or-true", "(or true ?x)", "true")?,
         pattern(
             "expr-or-to-inlist",
             "(or (= ?x ?a) (= ?x ?b))",
@@ -162,13 +160,6 @@ pub(crate) fn generate_expr_simplification_rules<
             "(between_inverted ?e ?a ?b)",
             "(not (between ?e ?a ?b))",
         )?,
-        //rw!("between-or-union"; "(or (between ?x ?a ?b) (between ?x ?c ?d))" , { BetweenMergeApplier{
-        //    common_comparison: x,
-        //    lhs_lower: a,
-        //    lhs_upper: b,
-        //    rhs_upper: d,
-        //    rhs_lower: c,
-        //}})?,
     ];
     //Two way rules
     rules.extend(twoway_pattern(
