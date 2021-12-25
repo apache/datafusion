@@ -27,19 +27,12 @@ use super::utils::*;
 
 pub(crate) fn generate_plan_simplification_rules(
 ) -> Result<Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>, DataFusionError> {
-    let _predicate: Var = "?pred".parse().unwrap();
-    //let col: Var = "?col".parse().unwrap();
     let l: Var = "?l".parse().unwrap();
     let r: Var = "?r".parse().unwrap();
     let lcol: Var = "?lcol".parse().unwrap();
     let rcol: Var = "?rcol".parse().unwrap();
-    //let val: Var = "?val".parse().unwrap();
-    let _t1: Var = "?t1".parse().unwrap();
-    let _t2: Var = "?t2".parse().unwrap();
-    let _t3: Var = "?t3".parse().unwrap();
     let c1: Var = "?c1".parse().unwrap();
     let c2: Var = "?c2".parse().unwrap();
-    let _c3: Var = "?c3".parse().unwrap();
 
     let newkeys = "?newkeys".parse().unwrap();
 
@@ -56,7 +49,7 @@ pub(crate) fn generate_plan_simplification_rules(
                     ?pred \
                 ) \
             )",
-            "(filter (inner_join ?l ?r (keys ?lcol ?rcol) false) ?pred)",
+            "(filter (inner_join ?l ?r (keys (elist ?lcol) (elist ?rcol)) false) ?pred)",
             and(is_column_from_plan(lcol, l), is_column_from_plan(rcol, r)),
         )?,
         transforming_pattern(

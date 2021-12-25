@@ -26,13 +26,15 @@ homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.57"
 
+[features]
+expiramental-tokomak=["tokomak"]
+
 [dependencies]
 clap = "2.33"
 rustyline = "9.0"
-tokio = { version = "1.15", features = ["macros", "rt", "rt-multi-thread", "sync", "tracing"] }
-tokomak = {path="../tokomak", version="0.0.1"}
+tokio = { version = "1.15", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokomak = {path="../tokomak", optional=true}
 datafusion = { path = "../datafusion", version = "6.0.0" }
 arrow = { version = "6.3.0" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0" }
 
-console-subscriber = "0.1.0"

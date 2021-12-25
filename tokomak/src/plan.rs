@@ -1828,8 +1828,7 @@ impl<'a> TokomakPlanConverter<'a> {
                 )))
             }
         };
-        let mut left_join_keys = Vec::with_capacity(join_keys.len() / 2);
-        let mut right_join_keys = Vec::with_capacity(join_keys.len() / 2);
+
         let left_keys = match self.get_ref(join_keys[0]){
             TokomakLogicalPlan::EList(l)=> l,
             p => return Err(DataFusionError::Internal(format!("The join of type {:?} expected a node of type elist for the left join keys, found {:?}", join_type, p))),
@@ -1838,6 +1837,8 @@ impl<'a> TokomakPlanConverter<'a> {
             TokomakLogicalPlan::EList(l)=> l,
             p => return Err(DataFusionError::Internal(format!("The join of type {:?} expected a node of type elist for the right join keys, found {:?}", join_type, p))),
         };
+        let mut left_join_keys = Vec::with_capacity(left_keys.len());
+        let mut right_join_keys = Vec::with_capacity(right_keys.len());
         for (left_key, right_key) in left_keys.iter().zip(right_keys.iter()) {
             left_join_keys.push(self.extract_column(*left_key, plan_name)?);
             right_join_keys.push(self.extract_column(*right_key, plan_name)?)

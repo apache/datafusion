@@ -30,6 +30,7 @@ rust-version = "1.57"
 [features]
 simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
+expiramental-tokomak=["tokomak"]
 
 [dependencies]
 datafusion = { path = "../datafusion" }
@@ -40,7 +41,7 @@ futures = "0.3"
 env_logger = "0.9"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 snmalloc-rs = {version = "0.2", optional = true, features= ["cache-friendly"] }
-tokomak={path="../tokomak"}
+tokomak={path="../tokomak", optional=true}
 
 [dev-dependencies]
 ballista-core = { path = "../ballista/rust/core" }

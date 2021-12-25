@@ -22,13 +22,13 @@ use std::{
     iter::Iterator,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Instant},
 };
 
 use ballista::context::BallistaContext;
 use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
 
-use datafusion::error::{DataFusionError, Result};
+use datafusion::{error::{DataFusionError, Result}};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
@@ -49,16 +49,9 @@ use datafusion::{
         object_store::local::LocalFileSystem,
     },
 };
-use datafusion::{
-    datasource::{MemTable, TableProvider},
-    optimizer::{
-        common_subexpr_eliminate::CommonSubexprEliminate,
-        filter_push_down::FilterPushDown, projection_push_down::ProjectionPushDown,
-    },
-};
+use datafusion::datasource::{MemTable, TableProvider};
 
 use structopt::StructOpt;
-use tokomak::{RunnerSettings, Tokomak, ALL_RULES};
 
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
@@ -132,7 +125,7 @@ struct DataFusionBenchmarkOpt {
     batch_size: usize,
 
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, long = "data")]
+    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
 
     /// File format: `csv` or `parquet`
@@ -143,7 +136,8 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    #[structopt(short = "t", long = "tokomak")]
+    ///Whether or not to enable to expiramental tokomak optimizer
+    #[structopt(short = "t", long = "expiramental-tokomak")]
     tokomak: bool,
 }
 
@@ -209,40 +203,89 @@ async fn main() -> Result<()> {
         TpchOpt::Convert(opt) => convert_tbl(opt).await,
     }
 }
-
+#[cfg(feature="expiramental-tokomak")]
 fn get_tokomak_opt_seconds() -> f64 {
     const DEFAULT_TIME: f64 = 0.5;
     let str_time =
         std::env::var("TOKOMAK_OPT_TIME").unwrap_or_else(|_| format!("{}", DEFAULT_TIME));
     let opt_seconds: f64 = str_time.parse().unwrap_or(DEFAULT_TIME);
-    println!("Tokomak optimizer will run for {}s", opt_seconds);
+    println!("Tokomak will limit itself to {}s", opt_seconds);
     opt_seconds
 }
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_node_limit()->usize{
+    const DEFAULT_NODE_LIMIT: usize = 1_000_000;
+    let str_lim = std::env::var("TOKOMAK_NODE_LIMIT").unwrap_or_else(|_| format!("{}",DEFAULT_NODE_LIMIT));
+    let lim: usize = str_lim.parse().unwrap_or(DEFAULT_NODE_LIMIT);
+    println!("Tokomak optimizer will limit itself to {} nodes", lim);
+    lim
+}
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_iter_limit()->usize{
+    const DEFAULT_ITER_LIMIT: usize = 1000;
+    let str_lim = std::env::var("TOKOMAK_ITER_LIMIT").unwrap_or_else(|_| format!("{}", DEFAULT_ITER_LIMIT));
+    let lim: usize = str_lim.parse().unwrap_or(DEFAULT_ITER_LIMIT);
+    println!("Tokomak optimizer wil limit itself to {} iterations", lim);
+    lim
+}
+
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_optimizers()->Vec<Arc<dyn datafusion::optimizer::optimizer::OptimizerRule + Send + Sync + 'static>>{
+    use datafusion::optimizer::{
+        common_subexpr_eliminate::CommonSubexprEliminate,
+        filter_push_down::FilterPushDown, 
+        projection_push_down::ProjectionPushDown,
+        single_distinct_to_groupby::SingleDistinctToGroupBy,
+        simplify_expressions::SimplifyExpressions,
+        eliminate_limit::EliminateLimit,
+        limit_push_down::LimitPushDown,
+    };
+    let mut settings = tokomak::RunnerSettings::new();
+    settings
+        .with_iter_limit(get_tokomak_iter_limit())
+        .with_node_limit(get_tokomak_node_limit())
+        .with_time_limit(std::time::Duration::from_secs_f64(get_tokomak_opt_seconds()));
+
+    let tokomak_optimizer = tokomak::Tokomak::with_builtin_rules(settings, tokomak::ALL_RULES);
+    vec![           
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(tokomak_optimizer),
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(CommonSubexprEliminate::new()),
+        Arc::new(EliminateLimit::new()),
+        Arc::new(ProjectionPushDown::new()),
+        Arc::new(FilterPushDown::new()),
+        Arc::new(LimitPushDown::new()),
+        Arc::new(SingleDistinctToGroupBy::new())
+    ]
+    
+}
+
+#[cfg(not(feature = "expiramental-tokomak"))]
+fn with_optimizers_datafusion(config: ExecutionConfig, opt: &DataFusionBenchmarkOpt)->ExecutionConfig{
+    if opt.tokomak{
+        panic!("To enable the tokomak optimizer the benchmarks must be compiled with the 'expiramental-tokomak' feature");
+    }
+    return config;
+}
+
+
+#[cfg(feature="expiramental-tokomak")]
+fn with_optimizers_datafusion(mut config: ExecutionConfig, opt: &DataFusionBenchmarkOpt)->ExecutionConfig{
+    if opt.tokomak{
+        config = config.with_optimizer_rules(get_tokomak_optimizers());
+    }
+    config
+}
+
 
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
-    let mut settings = RunnerSettings::new();
-    println!("Setup up runner settings");
-    settings
-        .with_iter_limit(1000)
-        .with_node_limit(1_000_000)
-        .with_time_limit(Duration::from_secs_f64(get_tokomak_opt_seconds()));
-    let tokomak_optimizer = Tokomak::with_builtin_rules(settings, ALL_RULES);
+    
     let mut config = ExecutionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
-    if opt.tokomak {
-        println!("Adding tokomak optimizer");
-        config = config.with_optimizer_rules(vec![
-            Arc::new(tokomak_optimizer),
-            Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(ProjectionPushDown::new()),
-            Arc::new(FilterPushDown::new()),
-        ]);
-    } else {
-        println!("Did not add tokomak optimizer");
-    }
-
+    config = with_optimizers_datafusion(config, &opt);
     let mut ctx = ExecutionContext::with_config(config);
 
     // register tables
@@ -302,6 +345,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         )
         .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
+    
 
     let ctx =
         BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
@@ -375,10 +419,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
 
 fn get_query_sql(query: usize) -> Result<String> {
     if query > 0 && query < 23 {
-        let filename = format!(
-            "queries/q{}.sql",
-            query
-        );
+        let filename = format!("queries/q{}.sql", query);
         Ok(fs::read_to_string(&filename).expect("failed to read query"))
     } else {
         Err(DataFusionError::Plan(

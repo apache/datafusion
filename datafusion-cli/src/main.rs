@@ -17,11 +17,7 @@
 
 use clap::{crate_version, App, Arg};
 use datafusion::execution::context::ExecutionConfig;
-use datafusion::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
-use datafusion::optimizer::filter_push_down::FilterPushDown;
-use datafusion::optimizer::projection_push_down::ProjectionPushDown;
-use datafusion::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use datafusion::{error::Result, optimizer::simplify_expressions::SimplifyExpressions};
+use datafusion::error::Result;
 use datafusion_cli::{
     context::Context,
     exec,
@@ -32,21 +28,16 @@ use datafusion_cli::{
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::time::Duration;
-use std::{env, sync::Arc};
-
-fn get_tokomak_opt_seconds() -> f64 {
-    const DEFAULT_TIME: f64 = 0.5;
-    let str_time =
-        std::env::var("TOKOMAK_OPT_TIME").unwrap_or_else(|_| format!("{}", DEFAULT_TIME));
-    let opt_seconds: f64 = str_time.parse().unwrap_or(DEFAULT_TIME);
-    println!("Tokomak optimizer will run for {}s", opt_seconds);
-    opt_seconds
-}
+use std::{env};
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let matches = App::new("DataFusion")
+    let owned_print_formats = all_print_formats()
+    .iter()
+    .map(|format| format.to_string())
+    .collect::<Vec<_>>();
+    let all_print_formats = owned_print_formats.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let mut app = App::new("DataFusion")
         .version(crate_version!())
         .about(
             "DataFusion is an in-memory query engine that uses Apache Arrow \
@@ -84,13 +75,7 @@ pub async fn main() -> Result<()> {
                 .long("format")
                 .default_value("table")
                 .possible_values(
-                    &all_print_formats()
-                        .iter()
-                        .map(|format| format.to_string())
-                        .collect::<Vec<_>>()
-                        .iter()
-                        .map(|i| i.as_str())
-                        .collect::<Vec<_>>(),
+                    &all_print_formats
                 )
                 .takes_value(true),
         )
@@ -112,24 +97,21 @@ pub async fn main() -> Result<()> {
                 .short("q")
                 .long("quiet")
                 .takes_value(false),
-        )
-        .arg(
-            Arg::with_name("trace")
-                .help("Enables tokio event tracing")
-                .takes_value(false)
-                .long("trace")
-        )
-        .get_matches();
+        );
+        if cfg!(feature="expiramental-tokomak"){
+            app = app.arg(
+                Arg::with_name("tokomak")
+                    .help("Enables the expiramental tokomak optimizer")
+                    .short("t")
+                    .long("tokomak")
+                    .takes_value(false)
+            );
+        }
+    let matches= app.get_matches();
 
     let quiet = matches.is_present("quiet");
-    let enable_tracing = matches.is_present("trace");
-    if enable_tracing{
-        println!("Tracing has been enabled");
-        console_subscriber::ConsoleLayer::builder()
-            .retention(Duration::from_secs(60))
-            .server_addr(([127, 0, 0, 1], 5555))
-            .init();
-    }
+    let tokomak = matches.is_present("tokomak");
+    
 
     if !quiet {
         println!("DataFusion CLI v{}\n", DATAFUSION_CLI_VERSION);
@@ -145,24 +127,8 @@ pub async fn main() -> Result<()> {
         env::set_current_dir(&p).unwrap();
     };
 
-    let mut settings = tokomak::RunnerSettings::new();
-    settings
-        .with_iter_limit(1000)
-        .with_node_limit(1_000_000)
-        .with_time_limit(std::time::Duration::from_secs_f64(get_tokomak_opt_seconds()));
-    let tokomak_optimizer =
-        tokomak::Tokomak::with_builtin_rules(settings, tokomak::ALL_RULES);
-
-    let mut execution_config = ExecutionConfig::new()
-        .with_information_schema(true)
-        .with_optimizer_rules(vec![
-            Arc::new(SimplifyExpressions::new()),
-            Arc::new(tokomak_optimizer),
-            Arc::new(CommonSubexprEliminate::new()),
-            Arc::new(ProjectionPushDown::new()),
-            Arc::new(FilterPushDown::new()),
-            Arc::new(SingleDistinctToGroupBy::new()),
-        ]);
+    
+    let mut execution_config = exec_context(tokomak);
 
     if let Some(batch_size) = matches
         .value_of("batch-size")
@@ -198,6 +164,82 @@ pub async fn main() -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_optimizers()->Vec<std::sync::Arc<dyn datafusion::optimizer::optimizer::OptimizerRule + Send + Sync + 'static>>{
+    use datafusion::optimizer::{
+        common_subexpr_eliminate::CommonSubexprEliminate,
+        filter_push_down::FilterPushDown, 
+        projection_push_down::ProjectionPushDown,
+        single_distinct_to_groupby::SingleDistinctToGroupBy,
+        simplify_expressions::SimplifyExpressions,
+        eliminate_limit::EliminateLimit,
+        limit_push_down::LimitPushDown,
+    };
+    use std::sync::Arc;
+    let mut settings = tokomak::RunnerSettings::new();
+    settings
+        .with_iter_limit(get_tokomak_iter_limit())
+        .with_node_limit(get_tokomak_node_limit())
+        .with_time_limit(std::time::Duration::from_secs_f64(get_tokomak_opt_seconds()));
+
+    let tokomak_optimizer = tokomak::Tokomak::with_builtin_rules(settings, tokomak::ALL_RULES);
+    vec![           
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(tokomak_optimizer),
+        Arc::new(SimplifyExpressions::new()),
+        Arc::new(CommonSubexprEliminate::new()),
+        Arc::new(EliminateLimit::new()),
+        Arc::new(ProjectionPushDown::new()),
+        Arc::new(FilterPushDown::new()),
+        Arc::new(LimitPushDown::new()),
+        Arc::new(SingleDistinctToGroupBy::new())
+    ]
+    
+}
+
+
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_opt_seconds() -> f64 {
+    const DEFAULT_TIME: f64 = 0.5;
+    let str_time =
+        std::env::var("TOKOMAK_OPT_TIME").unwrap_or_else(|_| format!("{}", DEFAULT_TIME));
+    let opt_seconds: f64 = str_time.parse().unwrap_or(DEFAULT_TIME);
+    opt_seconds
+}
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_node_limit()->usize{
+    const DEFAULT_NODE_LIMIT: usize = 1_000_000;
+    let str_lim = std::env::var("TOKOMAK_NODE_LIMIT").unwrap_or_else(|_| format!("{}",DEFAULT_NODE_LIMIT));
+    let lim: usize = str_lim.parse().unwrap_or(DEFAULT_NODE_LIMIT);
+    lim
+}
+#[cfg(feature="expiramental-tokomak")]
+fn get_tokomak_iter_limit()->usize{
+    const DEFAULT_ITER_LIMIT: usize = 1000;
+    let str_lim = std::env::var("TOKOMAK_ITER_LIMIT").unwrap_or_else(|_| format!("{}", DEFAULT_ITER_LIMIT));
+    let lim: usize = str_lim.parse().unwrap_or(DEFAULT_ITER_LIMIT);
+    lim
+}
+
+
+#[cfg(feature="expiramental-tokomak")]
+fn exec_context(tokomak: bool)->ExecutionConfig{
+    let mut execution_config = ExecutionConfig::new()
+        .with_information_schema(true);
+    if tokomak{
+        execution_config = execution_config.with_optimizer_rules(get_tokomak_optimizers());
+    }
+    execution_config
+}
+
+
+#[cfg(not(feature="expiramental-tokomak"))]
+fn exec_context(_tokomak: bool)->ExecutionConfig{
+    ExecutionConfig::new()
+        .with_information_schema(true)
+}
+
 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {
     if Path::new(&dir).is_file() {

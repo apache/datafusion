@@ -19,3 +19,6 @@
 # Tokomak Optimizer
 
 Expiramental equality graph based optimizer. Uses [egg](https://github.com/egraphs-good/egg) for the equality graph implementation.
+
+## Potentially interesting things
+1. Sketch based equality saturation. Useful for when long rewrite chains are required. May not be applicable to this use case: https://arxiv.org/pdf/2111.13040.pdf.
