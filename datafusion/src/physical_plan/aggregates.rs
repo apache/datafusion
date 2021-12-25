@@ -426,7 +426,7 @@ mod tests {
                             | DataType::Int16
                             | DataType::Int32
                             | DataType::Int64 => DataType::Int64,
-                            DataType::Float32 | DataType::Float64 => data_type.clone(),
+                            DataType::Float32 | DataType::Float64 => DataType::Float64,
                             _ => data_type.clone(),
                         };
 
@@ -471,6 +471,29 @@ mod tests {
     }
 
     #[test]
+    fn test_sum_return_type() -> Result<()> {
+        let observed = return_type(&AggregateFunction::Sum, &[DataType::Int32])?;
+        assert_eq!(DataType::Int64, observed);
+
+        let observed = return_type(&AggregateFunction::Sum, &[DataType::UInt8])?;
+        assert_eq!(DataType::UInt64, observed);
+
+        let observed = return_type(&AggregateFunction::Sum, &[DataType::Float32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Sum, &[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Sum, &[DataType::Decimal(10, 5)])?;
+        assert_eq!(DataType::Decimal(20, 5), observed);
+
+        let observed = return_type(&AggregateFunction::Sum, &[DataType::Decimal(35, 5)])?;
+        assert_eq!(DataType::Decimal(38, 5), observed);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_sum_no_utf8() {
         let observed = return_type(&AggregateFunction::Sum, &[DataType::Utf8]);
         assert!(observed.is_err());
@@ -504,6 +527,15 @@ mod tests {
 
         let observed = return_type(&AggregateFunction::Avg, &[DataType::Float64])?;
         assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Avg, &[DataType::Int32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Avg, &[DataType::Decimal(10, 6)])?;
+        assert_eq!(DataType::Decimal(14, 10), observed);
+
+        let observed = return_type(&AggregateFunction::Avg, &[DataType::Decimal(36, 6)])?;
+        assert_eq!(DataType::Decimal(38, 10), observed);
         Ok(())
     }
 

@@ -17,8 +17,10 @@
 
 //! SQL Utility Functions
 
+use arrow::datatypes::DataType;
+
 use crate::logical_plan::{Expr, LogicalPlan};
-use crate::scalar::ScalarValue;
+use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
@@ -501,6 +503,33 @@ pub(crate) fn group_window_expr_by_sort_keys(
         ))),
     })?;
     Ok(result)
+}
+
+/// Returns a validated `DataType` for the specified precision and
+/// scale
+pub(crate) fn make_decimal_type(
+    precision: Option<u64>,
+    scale: Option<u64>,
+) -> Result<DataType> {
+    match (precision, scale) {
+        (None, _) | (_, None) => {
+            return Err(DataFusionError::Internal(format!(
+                "Decimal(precision, scale) must both be specified, got ({:?}, {:?})",
+                precision, scale
+            )));
+        }
+        (Some(p), Some(s)) => {
+            // Arrow decimal is i128 meaning 38 maximum decimal digits
+            if (p as usize) > MAX_PRECISION_FOR_DECIMAL128 || s > p {
+                return Err(DataFusionError::Internal(format!(
+                    "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
+                    p, s
+                )));
+            } else {
+                Ok(DataType::Decimal(p as usize, s as usize))
+            }
+        }
+    }
 }
 
 #[cfg(test)]

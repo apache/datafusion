@@ -25,8 +25,8 @@ use arrow::compute::kernels::arithmetic::{
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::compute::kernels::comparison::{
-    eq_bool, eq_bool_scalar, gt_bool, gt_eq_bool, lt_bool, lt_eq_bool, neq_bool,
-    neq_bool_scalar,
+    eq_bool, eq_bool_scalar, gt_bool, gt_bool_scalar, gt_eq_bool, gt_eq_bool_scalar,
+    lt_bool, lt_bool_scalar, lt_eq_bool, lt_eq_bool_scalar, neq_bool, neq_bool_scalar,
 };
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
@@ -76,38 +76,6 @@ fn is_not_distinct_from_bool(
         .iter()
         .zip(right.iter())
         .map(|(left, right)| Some(left == right))
-        .collect())
-}
-
-// TODO use arrow-rs kernels when available. See
-// https://github.com/apache/arrow-rs/issues/959
-#[allow(clippy::bool_comparison)]
-fn lt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left < right))
-        .collect())
-}
-
-fn lt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left <= right))
-        .collect())
-}
-
-#[allow(clippy::bool_comparison)]
-fn gt_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left > right))
-        .collect())
-}
-
-fn gt_eq_bool_scalar(left: &BooleanArray, right: bool) -> Result<BooleanArray> {
-    Ok(left
-        .iter()
-        .map(|left| left.map(|left| left >= right))
         .collect())
 }
 
@@ -361,16 +329,16 @@ macro_rules! binary_array_op_scalar {
             DataType::Float32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op_scalar!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
             }
-            DataType::Timestamp(TimeUnit::Second, None) => {
+            DataType::Timestamp(TimeUnit::Second, _) => {
                 compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray)
             }
             DataType::Date32 => {
@@ -406,16 +374,16 @@ macro_rules! binary_array_op {
             DataType::Float32 => compute_op!($LEFT, $RIGHT, $OP, Float32Array),
             DataType::Float64 => compute_op!($LEFT, $RIGHT, $OP, Float64Array),
             DataType::Utf8 => compute_utf8_op!($LEFT, $RIGHT, $OP, StringArray),
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
             }
-            DataType::Timestamp(TimeUnit::Millisecond, None) => {
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
             }
-            DataType::Timestamp(TimeUnit::Second, None) => {
+            DataType::Timestamp(TimeUnit::Second, _) => {
                 compute_op!($LEFT, $RIGHT, $OP, TimestampSecondArray)
             }
             DataType::Date32 => {
@@ -573,12 +541,14 @@ fn common_binary_type(
 
     // re-write the error message of failed coercions to include the operator's information
     match result {
-        None => Err(DataFusionError::Plan(
+        None => {
+            Err(DataFusionError::Plan(
             format!(
                 "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
                 lhs_type, op, rhs_type
             ),
-        )),
+        ))
+        },
         Some(t) => Ok(t)
     }
 }

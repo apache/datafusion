@@ -36,6 +36,7 @@ use crate::logical_plan::{
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
+use crate::sql::utils::make_decimal_type;
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::udaf::AggregateUDF,
@@ -372,25 +373,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Utf8)
             }
             SQLDataType::Decimal(precision, scale) => {
-                match (precision, scale) {
-                    (None, _) | (_, None) => {
-                        return Err(DataFusionError::Internal(format!(
-                            "Invalid Decimal type ({:?}), precision or scale can't be empty.",
-                            sql_type
-                        )));
-                    }
-                    (Some(p), Some(s)) => {
-                        // TODO add bound checker in some utils file or function
-                        if *p > 38 || *s > *p {
-                            return Err(DataFusionError::Internal(format!(
-                                "Error Decimal Type ({:?}), precision must be less than or equal to 38 and scale can't be greater than precision",
-                                sql_type
-                            )));
-                        } else {
-                            Ok(DataType::Decimal(*p as usize, *s as usize))
-                        }
-                    }
-                }
+                make_decimal_type(*precision, *scale)
             }
             SQLDataType::Float(_) => Ok(DataType::Float32),
             SQLDataType::Real => Ok(DataType::Float32),
@@ -1079,8 +1062,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
 
                 let field = schema.field(field_index - 1);
-                let col_ident = SQLExpr::Identifier(Ident::new(field.qualified_name()));
-                self.sql_expr_to_logical_expr(&col_ident, schema)?
+                Expr::Column(field.qualified_column())
             }
             e => self.sql_expr_to_logical_expr(e, schema)?,
         };
@@ -1340,9 +1322,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
-                    // create a column expression based on raw user input, this column will be
-                    // normalized with qualifer later by the SQL planner.
-                    Ok(col(&id.value))
+                    // Don't use `col()` here because it will try to
+                    // interpret names with '.' as if they were
+                    // compound indenfiers, but this is not a compound
+                    // identifier. (e.g. it is "foo.bar" not foo.bar)
+                    Ok(Expr::Column(Column {
+                        relation: None,
+                        name: id.value.clone(),
+                    }))
                 }
             }
 
@@ -1358,22 +1345,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names = vec![];
-                for id in ids {
-                    var_names.push(id.value.clone());
-                }
+                let mut var_names: Vec<_> =
+                    ids.iter().map(|id| id.value.clone()).collect();
+
                 if &var_names[0][0..1] == "@" {
                     Ok(Expr::ScalarVariable(var_names))
-                } else if var_names.len() == 2 {
-                    // table.column identifier
-                    let name = var_names.pop().unwrap();
-                    let relation = Some(var_names.pop().unwrap());
-                    Ok(Expr::Column(Column { relation, name }))
                 } else {
-                    Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported compound identifier '{:?}'",
-                        var_names,
-                    )))
+                    match (var_names.pop(), var_names.pop()) {
+                        (Some(name), Some(relation)) if var_names.is_empty() => {
+                            // table.column identifier
+                            Ok(Expr::Column(Column {
+                                relation: Some(relation),
+                                name,
+                            }))
+                        }
+                        _ => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported compound identifier '{:?}'",
+                            var_names,
+                        ))),
+                    }
                 }
             }
 
@@ -2054,27 +2044,7 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
-        SQLDataType::Decimal(precision, scale) => {
-            match (precision, scale) {
-                (None, _) | (_, None) => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Invalid Decimal type ({:?}), precision or scale can't be empty.",
-                        sql_type
-                    )));
-                }
-                (Some(p), Some(s)) => {
-                    // TODO add bound checker in some utils file or function
-                    if *p > 38 || *s > *p {
-                        return Err(DataFusionError::Internal(format!(
-                            "Error Decimal Type ({:?})",
-                            sql_type
-                        )));
-                    } else {
-                        Ok(DataType::Decimal(*p as usize, *s as usize))
-                    }
-                }
-            }
-        }
+        SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
         other => Err(DataFusionError::NotImplemented(format!(
             "Unsupported SQL type {:?}",
             other

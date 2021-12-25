@@ -100,11 +100,48 @@ pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
 /// casted to for the purpose of a date computation
 pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
+    use arrow::datatypes::TimeUnit;
     match (lhs_type, rhs_type) {
         (Utf8, Date32) => Some(Date32),
         (Date32, Utf8) => Some(Date32),
         (Utf8, Date64) => Some(Date64),
         (Date64, Utf8) => Some(Date64),
+        (Timestamp(lhs_unit, lhs_tz), Timestamp(rhs_unit, rhs_tz)) => {
+            let tz = match (lhs_tz, rhs_tz) {
+                // can't cast across timezones
+                (Some(lhs_tz), Some(rhs_tz)) => {
+                    if lhs_tz != rhs_tz {
+                        return None;
+                    } else {
+                        Some(lhs_tz.clone())
+                    }
+                }
+                (Some(lhs_tz), None) => Some(lhs_tz.clone()),
+                (None, Some(rhs_tz)) => Some(rhs_tz.clone()),
+                (None, None) => None,
+            };
+
+            let unit = match (lhs_unit, rhs_unit) {
+                (TimeUnit::Second, TimeUnit::Millisecond) => TimeUnit::Second,
+                (TimeUnit::Second, TimeUnit::Microsecond) => TimeUnit::Second,
+                (TimeUnit::Second, TimeUnit::Nanosecond) => TimeUnit::Second,
+                (TimeUnit::Millisecond, TimeUnit::Second) => TimeUnit::Second,
+                (TimeUnit::Millisecond, TimeUnit::Microsecond) => TimeUnit::Millisecond,
+                (TimeUnit::Millisecond, TimeUnit::Nanosecond) => TimeUnit::Millisecond,
+                (TimeUnit::Microsecond, TimeUnit::Second) => TimeUnit::Second,
+                (TimeUnit::Microsecond, TimeUnit::Millisecond) => TimeUnit::Millisecond,
+                (TimeUnit::Microsecond, TimeUnit::Nanosecond) => TimeUnit::Microsecond,
+                (TimeUnit::Nanosecond, TimeUnit::Second) => TimeUnit::Second,
+                (TimeUnit::Nanosecond, TimeUnit::Millisecond) => TimeUnit::Millisecond,
+                (TimeUnit::Nanosecond, TimeUnit::Microsecond) => TimeUnit::Microsecond,
+                (l, r) => {
+                    assert_eq!(l, r);
+                    l.clone()
+                }
+            };
+
+            Some(Timestamp(unit, tz))
+        }
         _ => None,
     }
 }
