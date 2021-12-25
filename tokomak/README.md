@@ -1,16 +1,21 @@
+<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
 
-# Tokomak Optimizer roadmap
+    http://www.apache.org/licenses/LICENSE-2.0
 
-## Extend to plan optimization
-Currently the optimizer only applies to expression. It should be possible to extend this to be used for rewriting logical plans. This would require a couple different modifications to the current optimizer.
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+# Tokomak Optimizer
 
-* Special rule syntax for logical plan rewrites, I'm thinking something along the lines of:
-```
-(FilterPlan predicate: ?table1.?key_col = ?table2.?key_col AND ?predicates], input: (CrossJoin left: ?table1 right:?table2))
-
-(FilterPlan predicates:  ?predicates input: (InnerJoin
-left: ?table1 right: ?table2 on:[]
-))
-```
-
-* t
+Expiramental equality graph based optimizer. Uses [egg](https://github.com/egraphs-good/egg) for the equality graph implementation.
