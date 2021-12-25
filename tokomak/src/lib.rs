@@ -888,6 +888,11 @@ impl Tokomak {
             }
         }
     }
+    ///Adds custom rules to the tokomak optmizer
+    pub fn add_custom_rules(&mut self, custom_rules: Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>){
+        self.rules.extend(custom_rules.into_iter());
+    }
+
     ///Adds builtin rules to the optimizer only if the filter Fn returns true.
     pub fn add_filtered_builtin_rules<
         F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>) -> bool,
