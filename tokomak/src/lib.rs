@@ -889,7 +889,10 @@ impl Tokomak {
         }
     }
     ///Adds custom rules to the tokomak optmizer
-    pub fn add_custom_rules(&mut self, custom_rules: Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>){
+    pub fn add_custom_rules(
+        &mut self,
+        custom_rules: Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>,
+    ) {
         self.rules.extend(custom_rules.into_iter());
     }
 
