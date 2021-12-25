@@ -27,7 +27,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.57"
 
 [features]
-expiramental-tokomak=["tokomak"]
+experimental-tokomak=["tokomak"]
 
 [dependencies]
 clap = "2.33"

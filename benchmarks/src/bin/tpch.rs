@@ -79,7 +79,7 @@ struct BallistaBenchmarkOpt {
     // #[structopt(short = "s", long = "batch-size", default_value = "8192")]
     // batch_size: usize,
     /// Path to data files
-    #[structopt(parse(from_os_str), required = true, short = "z", long = "data")]
+    #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
 
     /// File format: `csv` or `parquet`
@@ -136,8 +136,8 @@ struct DataFusionBenchmarkOpt {
     #[structopt(short = "m", long = "mem-table")]
     mem_table: bool,
 
-    ///Whether or not to enable to expiramental tokomak optimizer
-    #[structopt(short = "t", long = "expiramental-tokomak")]
+    ///Whether or not to enable to experimental tokomak optimizer
+    #[structopt(short = "t", long = "experimental-tokomak")]
     tokomak: bool,
 }
 
@@ -203,7 +203,7 @@ async fn main() -> Result<()> {
         TpchOpt::Convert(opt) => convert_tbl(opt).await,
     }
 }
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_opt_seconds() -> f64 {
     const DEFAULT_TIME: f64 = 0.5;
     let str_time =
@@ -212,7 +212,7 @@ fn get_tokomak_opt_seconds() -> f64 {
     println!("Tokomak will limit itself to {}s", opt_seconds);
     opt_seconds
 }
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_node_limit() -> usize {
     const DEFAULT_NODE_LIMIT: usize = 1_000_000;
     let str_lim = std::env::var("TOKOMAK_NODE_LIMIT")
@@ -221,7 +221,7 @@ fn get_tokomak_node_limit() -> usize {
     println!("Tokomak optimizer will limit itself to {} nodes", lim);
     lim
 }
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_iter_limit() -> usize {
     const DEFAULT_ITER_LIMIT: usize = 1000;
     let str_lim = std::env::var("TOKOMAK_ITER_LIMIT")
@@ -231,7 +231,7 @@ fn get_tokomak_iter_limit() -> usize {
     lim
 }
 
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_optimizers(
 ) -> Vec<Arc<dyn datafusion::optimizer::optimizer::OptimizerRule + Send + Sync + 'static>>
 {
@@ -263,18 +263,18 @@ fn get_tokomak_optimizers(
     ]
 }
 
-#[cfg(not(feature = "expiramental-tokomak"))]
+#[cfg(not(feature = "experimental-tokomak"))]
 fn with_optimizers_datafusion(
     config: ExecutionConfig,
     opt: &DataFusionBenchmarkOpt,
 ) -> ExecutionConfig {
     if opt.tokomak {
-        panic!("To enable the tokomak optimizer the benchmarks must be compiled with the 'expiramental-tokomak' feature");
+        panic!("To enable the tokomak optimizer tpch must be compiled with the 'experimental-tokomak' feature");
     }
     config
 }
 
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn with_optimizers_datafusion(
     mut config: ExecutionConfig,
     opt: &DataFusionBenchmarkOpt,

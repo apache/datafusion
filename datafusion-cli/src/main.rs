@@ -99,10 +99,10 @@ pub async fn main() -> Result<()> {
                 .long("quiet")
                 .takes_value(false),
         );
-    if cfg!(feature = "expiramental-tokomak") {
+    if cfg!(feature = "experimental-tokomak") {
         app = app.arg(
             Arg::with_name("tokomak")
-                .help("Enables the expiramental tokomak optimizer")
+                .help("Enables the experimental tokomak optimizer")
                 .short("t")
                 .long("tokomak")
                 .takes_value(false),
@@ -164,7 +164,7 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_optimizers() -> Vec<
     std::sync::Arc<
         dyn datafusion::optimizer::optimizer::OptimizerRule + Send + Sync + 'static,
@@ -199,7 +199,7 @@ fn get_tokomak_optimizers() -> Vec<
     ]
 }
 
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_opt_seconds() -> f64 {
     const DEFAULT_TIME: f64 = 0.5;
     let str_time =
@@ -207,7 +207,7 @@ fn get_tokomak_opt_seconds() -> f64 {
     let opt_seconds: f64 = str_time.parse().unwrap_or(DEFAULT_TIME);
     opt_seconds
 }
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_node_limit() -> usize {
     const DEFAULT_NODE_LIMIT: usize = 1_000_000;
     let str_lim = std::env::var("TOKOMAK_NODE_LIMIT")
@@ -215,7 +215,7 @@ fn get_tokomak_node_limit() -> usize {
     let lim: usize = str_lim.parse().unwrap_or(DEFAULT_NODE_LIMIT);
     lim
 }
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn get_tokomak_iter_limit() -> usize {
     const DEFAULT_ITER_LIMIT: usize = 1000;
     let str_lim = std::env::var("TOKOMAK_ITER_LIMIT")
@@ -224,7 +224,7 @@ fn get_tokomak_iter_limit() -> usize {
     lim
 }
 
-#[cfg(feature = "expiramental-tokomak")]
+#[cfg(feature = "experimental-tokomak")]
 fn exec_context(tokomak: bool) -> ExecutionConfig {
     let mut execution_config = ExecutionConfig::new().with_information_schema(true);
     if tokomak {
@@ -234,11 +234,11 @@ fn exec_context(tokomak: bool) -> ExecutionConfig {
     execution_config
 }
 
-#[cfg(not(feature = "expiramental-tokomak"))]
+#[cfg(not(feature = "experimental-tokomak"))]
 fn exec_context(_tokomak: bool) -> ExecutionConfig {
     ExecutionConfig::new().with_information_schema(true)
 }
-
+ 
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {
     if Path::new(&dir).is_file() {
         Ok(())

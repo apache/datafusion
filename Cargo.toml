@@ -32,10 +32,7 @@ members = [
 exclude = ["python"]
 
 
-#[profile.release]
-#opt-level=2
-#lto=false
 
 [profile.release]
-lto = "fat"
+lto = true
 codegen-units = 1

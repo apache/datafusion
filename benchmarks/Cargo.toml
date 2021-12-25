@@ -30,7 +30,8 @@ rust-version = "1.57"
 [features]
 simd = ["datafusion/simd"]
 snmalloc = ["snmalloc-rs"]
-expiramental-tokomak=["tokomak"]
+experimental-tokomak=["tokomak"]
+default=["experimental-tokomak"]
 
 [dependencies]
 datafusion = { path = "../datafusion" }
