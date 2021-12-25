@@ -74,5 +74,4 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
             input: inputs[0].clone(),
         })
     }
-
 }

@@ -238,7 +238,7 @@ fn exec_context(tokomak: bool) -> ExecutionConfig {
 fn exec_context(_tokomak: bool) -> ExecutionConfig {
     ExecutionConfig::new().with_information_schema(true)
 }
- 
+
 fn is_valid_file(dir: String) -> std::result::Result<(), String> {
     if Path::new(&dir).is_file() {
         Ok(())
