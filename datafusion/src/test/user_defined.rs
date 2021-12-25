@@ -75,7 +75,4 @@ impl UserDefinedLogicalNode for TestUserDefinedPlanNode {
         })
     }
 
-    fn name(&self) -> &'static str {
-        "TestUserDefined"
-    }
 }

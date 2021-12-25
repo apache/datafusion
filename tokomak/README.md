@@ -18,7 +18,10 @@
 -->
 # Tokomak Optimizer
 
-Experimental equality graph based optimizer. Uses [egg](https://github.com/egraphs-good/egg) for the equality graph implementation.
+Experimental equality graph based optimizer. Uses [egg](https://github.com/egraphs-good/egg).
 
 ## Potentially interesting things
 1. Sketch based equality saturation. Useful for when long rewrite chains are required. May not be applicable to this use case: https://arxiv.org/pdf/2111.13040.pdf.
+2. The paper 'Caviar: An E-graph Based TRS for Automatic Code Optimization' has a section on optimizing execution speed, may not be applicable. https://arxiv.org/pdf/2111.12116.pdf
+3. An E-Graph Based Term Rewriting System for Automatic Code Optimization. Contains quite a bit of general info on egraphs and term rewriting systems. https://www.researchgate.net/profile/Smail-Kourta/publication/353403145_An_E-Graph_Based_Term_Rewriting_System_for_Automatic_Code_Optimization/links/60fa8acc1e95fe241a817529/An-E-Graph-Based-Term-Rewriting-System-for-Automatic-Code-Optimization.pdf
+4. Programming Language Tools and Techniques for Computational Fabrication contains some material on multi-objective cost functions and egraphs. https://digital.lib.washington.edu/researchworks/handle/1773/47996
