@@ -22,9 +22,10 @@ Experimental equality graph based optimizer. Uses [egg](https://github.com/egrap
 ## Todo list
 1. Add round trip test for expressions and plans.
 2. Ensure that invariants, such as expression naming, are preserved by the optimizer.
-3. Add support for UserDefinedLogicalPlans.
-4. Add support for plans containing Values. 
-5. Experiment with adding PhysicalPlan egg based optimizer.
+3. Add support for timezones in TokomakScalar.
+4. Add support for UserDefinedLogicalPlans.
+5. Add support for plans containing Values. 
+6. Experiment with adding PhysicalPlan egg based optimizer.
 
 
 ## Potentially interesting things

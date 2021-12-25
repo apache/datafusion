@@ -715,7 +715,7 @@ impl<'a> PlanConverter<'a> {
                 })([left, right])
             }
             Expr::Column(c) => TokomakLogicalPlan::Column(c.clone().into()),
-            Expr::Literal(s) => TokomakLogicalPlan::Scalar(s.clone().into()),
+            Expr::Literal(s) => TokomakLogicalPlan::Scalar(s.clone().try_into()?),
             Expr::Not(expr) => {
                 let e = self.as_tokomak_expr(expr, schema)?;
                 TokomakLogicalPlan::Not([e])
