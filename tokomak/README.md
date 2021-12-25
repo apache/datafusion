@@ -19,6 +19,13 @@
 # Tokomak Optimizer
 
 Experimental equality graph based optimizer. Uses [egg](https://github.com/egraphs-good/egg).
+## Todo list
+1. Add round trip test for expressions and plans.
+2. Ensure that invariants, such as expression naming, are preserved by the optimizer.
+3. Add support for UserDefinedLogicalPlans.
+4. Add support for plans containing Values. 
+5. Experiment with adding PhysicalPlan egg based optimizer.
+
 
 ## Potentially interesting things
 1. Sketch based equality saturation. Useful for when long rewrite chains are required. May not be applicable to this use case: https://arxiv.org/pdf/2111.13040.pdf.
