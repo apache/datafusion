@@ -97,6 +97,7 @@ pub(crate) fn from_proto_binary_op(op: &str) -> Result<Operator, BallistaError> 
         "Minus" => Ok(Operator::Minus),
         "Multiply" => Ok(Operator::Multiply),
         "Divide" => Ok(Operator::Divide),
+        "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
         other => Err(proto_error(format!(
