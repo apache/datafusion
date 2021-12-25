@@ -16,8 +16,12 @@
 // under the License.
 
 use clap::{crate_version, App, Arg};
-use datafusion::error::Result;
 use datafusion::execution::context::ExecutionConfig;
+use datafusion::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
+use datafusion::optimizer::filter_push_down::FilterPushDown;
+use datafusion::optimizer::projection_push_down::ProjectionPushDown;
+use datafusion::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
+use datafusion::{error::Result, optimizer::simplify_expressions::SimplifyExpressions};
 use datafusion_cli::{
     context::Context,
     exec,
@@ -25,10 +29,19 @@ use datafusion_cli::{
     print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
 };
-use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::{env, sync::Arc};
+
+fn get_tokomak_opt_seconds() -> f64 {
+    const DEFAULT_TIME: f64 = 0.5;
+    let str_time =
+        std::env::var("TOKOMAK_OPT_TIME").unwrap_or_else(|_| format!("{}", DEFAULT_TIME));
+    let opt_seconds: f64 = str_time.parse().unwrap_or(DEFAULT_TIME);
+    println!("Tokomak optimizer will run for {}s", opt_seconds);
+    opt_seconds
+}
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
@@ -117,7 +130,24 @@ pub async fn main() -> Result<()> {
         env::set_current_dir(&p).unwrap();
     };
 
-    let mut execution_config = ExecutionConfig::new().with_information_schema(true);
+    let mut settings = tokomak::RunnerSettings::new();
+    settings
+        .with_iter_limit(1000)
+        .with_node_limit(1_000_000)
+        .with_time_limit(std::time::Duration::from_secs_f64(get_tokomak_opt_seconds()));
+    let tokomak_optimizer =
+        tokomak::Tokomak::with_builtin_rules(settings, tokomak::ALL_RULES);
+
+    let mut execution_config = ExecutionConfig::new()
+        .with_information_schema(true)
+        .with_optimizer_rules(vec![
+            Arc::new(SimplifyExpressions::new()),
+            Arc::new(tokomak_optimizer),
+            Arc::new(CommonSubexprEliminate::new()),
+            Arc::new(ProjectionPushDown::new()),
+            Arc::new(FilterPushDown::new()),
+            Arc::new(SingleDistinctToGroupBy::new()),
+        ]);
 
     if let Some(batch_size) = matches
         .value_of("batch-size")

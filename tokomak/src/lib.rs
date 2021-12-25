@@ -2,7 +2,6 @@
 
 //! This crate contains the equality graph optimizer Tokomak. It uses [egg](https://github.com/egraphs-good/egg).
 
-
 use datafusion::arrow::datatypes::DataType;
 
 use datafusion::physical_plan::aggregates::return_type as aggregate_return_type;
@@ -37,7 +36,7 @@ pub mod expr;
 pub mod pattern;
 pub mod plan;
 mod rules;
-pub use rules::utils as utils;
+pub use rules::utils;
 pub mod scalar;
 
 use datatype::TokomakDataType;
@@ -69,7 +68,7 @@ impl Default for TokomakAnalysis {
 }
 
 //TODO: Check if Rc would work instead of Arc
-type RefCount<T> = Arc<T>; 
+type RefCount<T> = Arc<T>;
 
 #[derive(Debug, Clone)]
 ///Each EClass in the EGraph is assigned a TData. Only supporting nodes such as EList should be marked as None.
@@ -80,10 +79,9 @@ pub enum TData {
     ///Reference counted schema with the fields sorted by name. Never use the column index from these schemas and never use the nullability information
     /// in the schema in an optimization rule as it is unsound.
     Schema(RefCount<DFSchema>),
-    ///This should only be assigned to supporting nodes such as EList or PList. 
+    ///This should only be assigned to supporting nodes such as EList or PList.
     None,
 }
-
 
 impl TokomakAnalysis {
     fn get_boolean(egraph: &EGraph<TokomakLogicalPlan, Self>) -> TData {
@@ -809,7 +807,7 @@ pub struct RunnerSettings {
     pub iter_limit: Option<usize>,
     ///The maximum allowed number of nodes in the egraph. Defaults to 10,000
     pub node_limit: Option<usize>,
-    ///The maximum time that each full run is allowed to take. Note that this is checked at the end of an iteration so the optimizer can exceed this by the 
+    ///The maximum time that each full run is allowed to take. Note that this is checked at the end of an iteration so the optimizer can exceed this by the
     /// length of a full iteration. Defaults to 5 seconds.
     pub time_limit: Option<Duration>,
 }
@@ -916,7 +914,7 @@ impl OptimizerRule for Tokomak {
         let analysis = TokomakAnalysis::default();
         let mut egraph = EGraph::new(analysis);
         let start = Instant::now();
-        let root = plan::to_tokomak_plan(plan, &mut egraph).unwrap();
+        let root = plan::to_tokomak_plan(plan, &mut egraph)?;
         let elapsed = start.elapsed();
         info!(
             "It took {:.2}s to convert to tokomak plan",
@@ -971,13 +969,23 @@ impl Tokomak {
         }
     }
     ///Adds builtin rules to the optimizer only if the filter Fn returns true.
-    pub fn add_filtered_builtin_rules<F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>)->bool>(&mut self, builtin_rules: BuiltinRulesFlag, filter: F){
+    pub fn add_filtered_builtin_rules<
+        F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>) -> bool,
+    >(
+        &mut self,
+        builtin_rules: BuiltinRulesFlag,
+        filter: F,
+    ) {
         for rule in ALL_BUILTIN_RULES {
             //If the current flag is set and the ruleset has not been added to optimizer already
             if builtin_rules.is_set(rule) && !self.added_builtins.is_set(rule) {
                 match rule {
-                    EXPR_SIMPLIFICATION_RULES => self.add_filtered_expr_simplification_rules(&filter),
-                    PLAN_SIMPLIFICATION_RULES => self.add_filtered_plan_simplification_rules(&filter),
+                    EXPR_SIMPLIFICATION_RULES => {
+                        self.add_filtered_expr_simplification_rules(&filter)
+                    }
+                    PLAN_SIMPLIFICATION_RULES => {
+                        self.add_filtered_plan_simplification_rules(&filter)
+                    }
                     _ => panic!("Found invalid rule flag"),
                 }
             }
@@ -1180,10 +1188,8 @@ impl Display for SortSpec {
     }
 }
 
-
-
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
-///Name of UDF. 
+///Name of UDF.
 pub struct UDFName(pub Symbol);
 
 impl Display for UDFName {

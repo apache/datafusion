@@ -1,7 +1,5 @@
 //! This module contains TokomakDataType and the conversion functions TokomakDatType<->DataType
 
-
-
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use datafusion::error::DataFusionError;
 use egg::*;

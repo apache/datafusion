@@ -1,6 +1,6 @@
 use crate::{
     pattern::{conditional_rule, pattern, transforming_pattern, twoway_pattern},
-    plan::{JoinKeys, TokomakLogicalPlan},
+    plan::TokomakLogicalPlan,
     Tokomak, TokomakAnalysis, PLAN_SIMPLIFICATION_RULES,
 };
 use datafusion::error::DataFusionError;
@@ -8,8 +8,8 @@ use egg::*;
 use log::info;
 
 use super::utils::*;
- 
-pub(crate)fn generate_plan_simplification_rules(
+
+pub(crate) fn generate_plan_simplification_rules(
 ) -> Result<Vec<Rewrite<TokomakLogicalPlan, TokomakAnalysis>>, DataFusionError> {
     let _predicate: Var = "?pred".parse().unwrap();
     //let col: Var = "?col".parse().unwrap();
@@ -28,7 +28,6 @@ pub(crate)fn generate_plan_simplification_rules(
     let newkeys = "?newkeys".parse().unwrap();
 
     let keys: Var = "?keys".parse().unwrap();
-    let reversed_keys = "?reversed_keys".parse().unwrap();
     let inner_keys = "?inner_keys".parse().unwrap();
     let outer_keys = "?outer_keys".parse().unwrap();
     let mut rules = vec![
@@ -74,12 +73,10 @@ pub(crate)fn generate_plan_simplification_rules(
             "(cross_join ?l ?r)",
             "(cross_join ?r ?l)",
         )?,
-        transforming_pattern(
+        pattern(
             "plan-innerjoin-commutative",
-            "(inner_join ?l ?r ?keys ?n_eq_n)",
-            "(inner_join ?r ?l ?reversed_keys ?n_eq_n)",
-            revers_keys(keys, reversed_keys),
-            &[reversed_keys],
+            "(inner_join ?l ?r (keys ?lkeys ?rkeys) ?n_eq_n)",
+            "(inner_join ?r ?l (keys ?rkeys ?lkeys) ?n_eq_n)",
         )?,
         pattern(
             "plan-raise-filter",
@@ -139,21 +136,20 @@ fn inner_join_cross_join_through(
           subst: &mut Subst|
           -> Option<()> {
         assert!(egraph[subst[keys]].nodes.len() == 1);
-        let join_keys = &get_join_keys(egraph, subst[keys])?.0;
+        let (left_keys, right_keys) = get_join_keys(egraph, subst[keys])?;
         let cross1_schema = get_plan_schema(egraph, subst, c1)?;
         let cross2_schema = get_plan_schema(egraph, subst, c2)?;
         let rschema = get_plan_schema(egraph, subst, r)?;
-        let mut c1_r_keys = Vec::new();
-        let mut inner_join_c2_keys = Vec::new();
-        assert!(join_keys.len() % 2 == 0);
-        for win in join_keys.chunks_exact(2) {
-            let lkey = win[0];
-            let rkey = win[1];
-            let lcol = match &egraph[lkey].nodes[0] {
+        let mut c1_r_right_keys = Vec::new();
+        let mut c1_r_left_keys = Vec::new();
+        let mut inner_join_c2_left_keys = Vec::new();
+        let mut inner_join_c2_right_keys = Vec::new();
+        for (lkey, rkey) in left_keys.iter().zip(right_keys.iter()) {
+            let lcol = match &egraph[*lkey].nodes[0] {
                 TokomakLogicalPlan::Column(c) => c,
                 p => panic!("Found non-column value in inner join keys: {:?}", p),
             };
-            let rcol = match &egraph[rkey].nodes[0] {
+            let rcol = match &egraph[*rkey].nodes[0] {
                 TokomakLogicalPlan::Column(c) => c,
                 p => panic!("Found non-column value in inner join keys: {:?}", p),
             };
@@ -162,20 +158,34 @@ fn inner_join_cross_join_through(
                 "Found right join key that was not in plan"
             );
             if col_from_plan(cross1_schema, lcol) {
-                c1_r_keys.push(lkey);
-                c1_r_keys.push(rkey);
+                c1_r_left_keys.push(*lkey);
+                c1_r_right_keys.push(*rkey);
             } else if col_from_plan(cross2_schema, lcol) {
-                inner_join_c2_keys.push(lkey);
-                inner_join_c2_keys.push(rkey);
+                inner_join_c2_left_keys.push(*lkey);
+                inner_join_c2_right_keys.push(*rkey);
             } else {
                 return None;
             }
         }
-        let c1_r_keys = JoinKeys::new(c1_r_keys)?;
-        let inner_join_c2_keys = JoinKeys::new(inner_join_c2_keys)?;
-        let c1_r_id = egraph.add(TokomakLogicalPlan::JoinKeys(c1_r_keys));
-        let inner_join_c2_id =
-            egraph.add(TokomakLogicalPlan::JoinKeys(inner_join_c2_keys));
+        let c1_r_lkeys_id =
+            egraph.add(TokomakLogicalPlan::EList(c1_r_left_keys.into_boxed_slice()));
+        let c1_r_rkeys_id = egraph.add(TokomakLogicalPlan::EList(
+            c1_r_right_keys.into_boxed_slice(),
+        ));
+        let c1_r_id =
+            egraph.add(TokomakLogicalPlan::JoinKeys([c1_r_lkeys_id, c1_r_rkeys_id]));
+
+        let inner_join_c2_lkeys_id = egraph.add(TokomakLogicalPlan::EList(
+            inner_join_c2_left_keys.into_boxed_slice(),
+        ));
+        let inner_join_c2_rkeys_id = egraph.add(TokomakLogicalPlan::EList(
+            inner_join_c2_right_keys.into_boxed_slice(),
+        ));
+        let inner_join_c2_id = egraph.add(TokomakLogicalPlan::JoinKeys([
+            inner_join_c2_lkeys_id,
+            inner_join_c2_rkeys_id,
+        ]));
+
         subst.insert(inner_keys, c1_r_id);
         subst.insert(outer_keys, inner_join_c2_id);
         Some(())
@@ -190,7 +200,12 @@ impl Tokomak {
         self.added_builtins |= PLAN_SIMPLIFICATION_RULES;
     }
 
-    pub(crate) fn add_filtered_plan_simplification_rules<F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>)->bool>(&mut self, filter: &F){
+    pub(crate) fn add_filtered_plan_simplification_rules<
+        F: Fn(&Rewrite<TokomakLogicalPlan, TokomakAnalysis>) -> bool,
+    >(
+        &mut self,
+        filter: &F,
+    ) {
         let rules = generate_plan_simplification_rules().unwrap();
         self.rules.extend(rules.into_iter().filter(|f| (filter)(f)));
         info!("There are now {} rules", self.rules.len());

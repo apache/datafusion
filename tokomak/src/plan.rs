@@ -19,7 +19,7 @@ use datafusion::logical_plan::plan;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::logical_plan::Column;
 use datafusion::logical_plan::DFField;
-use datafusion::logical_plan::DFSchema; 
+use datafusion::logical_plan::DFSchema;
 
 use datafusion::logical_plan::Expr;
 use datafusion::logical_plan::JoinType;
@@ -60,10 +60,9 @@ use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
 use datafusion::physical_plan::window_functions::WindowFunction;
 
-
 define_language! {
     /// Representation of datafusion's LogicalPlan and Expr. Note that some of these nodes may be split into multiple nodes.
-    /// An example of this is [datafusion::logical_plan::plan::Repartition] which has two variants Hash and RoundRobin.  
+    /// An example of this is [datafusion::logical_plan::plan::Repartition] which has two variants Hash and RoundRobin.
     #[allow(missing_docs)]
     pub enum TokomakLogicalPlan{
         //Logical plan nodes
@@ -183,7 +182,7 @@ define_language! {
         Values(SharedValues),
         TableProject(TableProject),
         Type(TokomakDataType),
-        "keys"=JoinKeys(JoinKeys),
+        "keys"=JoinKeys([Id;2]),
 
         Str(Symbol),
         "None"=None,
@@ -317,7 +316,6 @@ impl CaseLit {
         }
     }
 }
-
 
 #[derive(Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Clone)]
 ///Projection of a TableScan. wrapper around Arc<Vec<usize>>
@@ -577,47 +575,6 @@ impl LanguageChildren for TableScan {
         &mut self.0[..]
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-///Keys that a join is done on
-pub struct JoinKeys(pub Box<[Id]>);
-impl LanguageChildren for JoinKeys {
-    fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    fn can_be_length(n: usize) -> bool {
-        //JoinKeys must be even in length
-        n & 0x1 == 0
-    }
-
-    fn from_vec(v: Vec<Id>) -> Self {
-        Self(v.into_boxed_slice())
-    }
-
-    fn as_slice(&self) -> &[Id] {
-        &self.0[..]
-    }
-
-    fn as_mut_slice(&mut self) -> &mut [Id] {
-        &mut self.0[..]
-    }
-}
-impl JoinKeys {
-    /// v must be even in length
-    pub fn new(v: Vec<Id>) -> Option<Self> {
-        if Self::can_be_length(v.len()) {
-            Some(Self::from_vec(v))
-        } else {
-            None
-        }
-    }
-}
-impl fmt::Display for JoinKeys {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "JoinKeys({:?})", self.0)
-    }
-}
-
 struct PlanConverter<'a> {
     egraph: &'a mut EGraph<TokomakLogicalPlan, TokomakAnalysis>,
 }
@@ -859,8 +816,8 @@ impl<'a> PlanConverter<'a> {
                 let sort_spec = match (asc, nulls_first) {
                     (true, true) => SortSpec::AscNullsFirst,
                     (true, false) => SortSpec::Asc,
-                    (false, true) => SortSpec::Desc,
-                    (false, false) => SortSpec::DescNullsFirst,
+                    (false, true) => SortSpec::DescNullsFirst,
+                    (false, false) => SortSpec::Desc,
                 };
                 let expr_id = self.as_tokomak_expr(expr, schema)?;
                 let spec_id = self.egraph.add(TokomakLogicalPlan::SortSpec(sort_spec));
@@ -1023,7 +980,8 @@ impl<'a> PlanConverter<'a> {
         lschema: &Arc<DFSchema>,
         rschema: &Arc<DFSchema>,
     ) -> Result<Id, DataFusionError> {
-        let mut ids = Vec::with_capacity(on.len() * 2);
+        let mut left_ids = Vec::with_capacity(on.len());
+        let mut right_ids = Vec::with_capacity(on.len());
         for (l, r) in on {
             let lid = self.egraph.add(TokomakLogicalPlan::Column(l.into()));
             let rid = self.egraph.add(TokomakLogicalPlan::Column(r.into()));
@@ -1031,13 +989,16 @@ impl<'a> PlanConverter<'a> {
             let rfield = rschema.field_from_column(r)?;
             self.set_datatype(lid, lfield.data_type().clone())?;
             self.set_datatype(rid, rfield.data_type().clone())?;
-            ids.push(lid);
-            ids.push(rid);
+            left_ids.push(lid);
+            right_ids.push(rid);
         }
-        assert!(ids.len() % 2 == 0, "JoinKeys length must be even");
-        Ok(self
-            .egraph
-            .add(TokomakLogicalPlan::JoinKeys(JoinKeys::from_vec(ids))))
+
+        let l = left_ids.into_boxed_slice();
+        let l = self.egraph.add(TokomakLogicalPlan::EList(l));
+        let r = right_ids.into_boxed_slice();
+        let r = self.egraph.add(TokomakLogicalPlan::EList(r));
+
+        Ok(self.egraph.add(TokomakLogicalPlan::JoinKeys([l, r])))
     }
 
     fn convert_projection(
@@ -1106,7 +1067,6 @@ impl<'a> PlanConverter<'a> {
     }
 
     fn convert_join(&mut self, join: &plan::Join) -> DFResult<TokomakLogicalPlan> {
-        //TODO: handle null_equals_null
         let plan::Join {
             left,
             right,
@@ -1284,7 +1244,6 @@ impl<'a> PlanConverter<'a> {
         Ok(id)
     }
 }
-
 
 pub(crate) fn to_tokomak_plan(
     plan: &LogicalPlan,
@@ -1756,6 +1715,41 @@ impl<'a> TokomakPlanConverter<'a> {
         Ok(plans)
     }
 
+    fn extract_expr_list_remove_uneccesary_aliases(
+        &self,
+        id: Id,
+        input_schema: &DFSchema,
+        parent: &'static str,
+    ) -> Result<Vec<Expr>, DataFusionError> {
+        let mut exprs = self.extract_expr_list(id, parent)?;
+        for expr in exprs.iter_mut() {
+            if let Expr::Alias(e, s) = expr {
+                if *s == e.name(input_schema)? {
+                    let mut expr_swap = Expr::Wildcard;
+                    std::mem::swap(&mut expr_swap, e.as_mut());
+                    *expr = expr_swap;
+                }
+            }
+        }
+        Ok(exprs)
+    }
+
+    fn extract_expr_list_remove_aliases(
+        &self,
+        id: Id,
+        parent: &'static str,
+    ) -> Result<Vec<Expr>, DataFusionError> {
+        let mut exprs = self.extract_expr_list(id, parent)?;
+        for expr in exprs.iter_mut() {
+            if let Expr::Alias(e, _) = expr {
+                let mut expr_swap = Expr::Wildcard;
+                std::mem::swap(&mut expr_swap, e.as_mut());
+                *expr = expr_swap;
+            }
+        }
+        Ok(exprs)
+    }
+
     fn extract_expr_list(
         &self,
         id: Id,
@@ -1819,15 +1813,17 @@ impl<'a> TokomakPlanConverter<'a> {
         };
         let mut left_join_keys = Vec::with_capacity(join_keys.len() / 2);
         let mut right_join_keys = Vec::with_capacity(join_keys.len() / 2);
-        assert!(
-            join_keys.len() % 2 == 0,
-            "Found JoinKeys with odd number of keys, this should never happen"
-        );
-        for keys in join_keys.as_slice().chunks_exact(2) {
-            let left_key = keys[0];
-            let right_key = keys[1];
-            left_join_keys.push(self.extract_column(left_key, plan_name)?);
-            right_join_keys.push(self.extract_column(right_key, plan_name)?)
+        let left_keys = match self.get_ref(join_keys[0]){
+            TokomakLogicalPlan::EList(l)=> l,
+            p => return Err(DataFusionError::Internal(format!("The join of type {:?} expected a node of type elist for the left join keys, found {:?}", join_type, p))),
+        };
+        let right_keys = match self.get_ref(join_keys[1]){
+            TokomakLogicalPlan::EList(l)=> l,
+            p => return Err(DataFusionError::Internal(format!("The join of type {:?} expected a node of type elist for the right join keys, found {:?}", join_type, p))),
+        };
+        for (left_key, right_key) in left_keys.iter().zip(right_keys.iter()) {
+            left_join_keys.push(self.extract_column(*left_key, plan_name)?);
+            right_join_keys.push(self.extract_column(*right_key, plan_name)?)
         }
         let null_equals_null = match self.get_ref(*null_equals_null) {
             TokomakLogicalPlan::Scalar(TokomakScalar::Boolean(Some(b))) => *b,
@@ -1889,7 +1885,11 @@ impl<'a> TokomakPlanConverter<'a> {
             TokomakLogicalPlan::Projection([input, exprs, alias]) => {
                 let input = self.convert_to_builder(*input)?;
                 let alias = self.extract_alias(*alias, "Projection")?;
-                let exprs = self.extract_expr_list(*exprs, "Projection.expr")?;
+                let exprs = self.extract_expr_list_remove_uneccesary_aliases(
+                    *exprs,
+                    input.schema(),
+                    "Projection.expr",
+                )?;
 
                 input.project_with_alias(exprs, alias)?
             }
@@ -2028,13 +2028,17 @@ impl<'a> TokomakPlanConverter<'a> {
             }
             TokomakLogicalPlan::Window([input, window_exprs]) => {
                 let input = self.convert_to_builder(*input)?;
-                let window_expr =
-                    self.extract_expr_list(*window_exprs, "Window.window_expr")?;
+                let window_expr = self.extract_expr_list_remove_aliases(
+                    *window_exprs,
+                    "Window.window_expr",
+                )?;
                 input.window(window_expr)?
             }
             TokomakLogicalPlan::Aggregate([input, aggr_expr, group_expr]) => {
-                let aggr_expr =
-                    self.extract_expr_list(*aggr_expr, "Aggregate.aggr_expr")?;
+                let aggr_expr = self.extract_expr_list_remove_aliases(
+                    *aggr_expr,
+                    "Aggregate.aggr_expr",
+                )?;
                 let group_expr =
                     self.extract_expr_list(*group_expr, "Aggregate.group_expr")?;
                 let input = self.convert_to_builder(*input)?;
@@ -2137,7 +2141,7 @@ pub(crate) fn convert_to_df_plan(
     converter.convert_to_builder(start.into())?.build()
 }
 #[derive(Debug, Clone)]
-///Tokomak compatible wrapper around Values 
+///Tokomak compatible wrapper around Values
 pub struct SharedValues(pub Arc<Vec<Vec<Expr>>>);
 impl Eq for SharedValues {}
 impl PartialEq for SharedValues {
@@ -2198,51 +2202,3 @@ impl std::fmt::Display for SharedValues {
         write!(f, "VALUES({})", self.0.len())
     }
 }
-
-//"(filter (and (= ?a:col ?b:col) ?x) (cross_join ?table_a ?table_b))" => "(filter ?x (inner_join ?table_a ?table_b) )"
-
-/*
-#[cfg(test)]
-mod tests{
-    use datafusion::{arrow::datatypes::{DataType, Field, Schema}, datasource::empty::EmptyTable, logical_plan::{LogicalPlanBuilder, col, lit}};
-
-    use super::*;
-    fn test_schema()->Schema{
-        Schema::new(vec![Field::new("a", DataType::Float32, false),Field::new("b", DataType::Float32, true), Field::new("string_ver", DataType::Utf8, false)])
-    }
-
-    fn test_tables()->(Arc<dyn TableProvider>, Arc<dyn TableProvider>){
-        (
-            Arc::new(EmptyTable::new(Arc::new(Schema::new(
-                vec![Field::new("a", DataType::Int32, false), Field::new("b", DataType::Utf8, false), Field::new("c", DataType::Int32, false)]
-            )))),
-            Arc::new(EmptyTable::new(Arc::new(Schema::new(
-                vec![Field::new("d", DataType::Int32, false), Field::new("e", DataType::Utf8, false), Field::new("f", DataType::Int32, false)]
-            ))))
-        )
-    }
-
-    #[test]
-    fn round_trip_plan()->Result<(), Box<dyn std::error::Error>>{
-        let schema = test_schema();
-        let (table_one, table_two) = test_tables();
-        let input_plans = vec![
-            LogicalPlanBuilder::scan("one", table_one.clone(), None)?.build()?,
-            LogicalPlanBuilder::scan_with_limit_and_filters("one", table_one.clone(), None, Some(200), vec![ col("a").eq(lit(1))])?.build()?,
-
-            LogicalPlanBuilder::scan_empty(Some("input"), &schema, None)?.build()?,
-            LogicalPlanBuilder::scan_empty(Some("input"), &schema, Some(vec![1]))?.build()?
-        ];
-
-        let dummy_reg = HashMap::new();
-        for plan in input_plans {
-            let tokomak_plan = to_tokomak_plan(&plan, )?;
-            let round_tripped_plan = convert_to_df_plan(&tokomak_plan, &dummy_reg)?;
-            let input_plan_str = format!("{:?}", plan);
-            let round_tripped_plan_str = format!("{:?}", round_tripped_plan);
-            assert_eq!(input_plan_str, round_tripped_plan_str);
-        }
-        Ok(())
-    }
-}
-*/

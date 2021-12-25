@@ -1,10 +1,6 @@
 //! Contains utilities for writing rewrites that require more complex conditions
 
-use crate::{
-    expr::TokomakColumn,
-    plan::{JoinKeys, TokomakLogicalPlan},
-    TokomakAnalysis,
-};
+use crate::{expr::TokomakColumn, plan::TokomakLogicalPlan, TokomakAnalysis};
 
 use datafusion::logical_plan::{DFField, DFSchema};
 
@@ -43,66 +39,48 @@ pub fn or<A: Analysis<TokomakLogicalPlan>>(
 pub fn get_join_keys<A: Analysis<TokomakLogicalPlan>>(
     egraph: &EGraph<TokomakLogicalPlan, A>,
     keys: Id,
-) -> Option<&JoinKeys> {
-    match &egraph[keys].nodes[0] {
-        TokomakLogicalPlan::JoinKeys(k) => Some(k),
+) -> Option<(&[Id], &[Id])> {
+    if egraph[keys].nodes.len() != 1 {
+        return None;
+    }
+
+    let [l, r] = match &egraph[keys].nodes[0] {
+        TokomakLogicalPlan::JoinKeys(k) => Some([k[0], k[1]]),
+        _ => None,
+    }?;
+
+    let left = get_expr_list(egraph, l)?;
+    let right = get_expr_list(egraph, r)?;
+    Some((left, right))
+}
+
+/// Returns the EList for the id if the EClass is a EList, otherwise returns none
+pub fn get_expr_list<A: Analysis<TokomakLogicalPlan>>(
+    egraph: &EGraph<TokomakLogicalPlan, A>,
+    list_id: Id,
+) -> Option<&[Id]> {
+    match &egraph[list_id].nodes[0] {
+        TokomakLogicalPlan::EList(l) => {
+            assert!(egraph[list_id].nodes.len() == 1);
+            Some(&l[..])
+        }
         _ => None,
     }
 }
-///Swaps the order of keys from left,right -> right,left and binds the results to output
-pub fn revers_keys<A: Analysis<TokomakLogicalPlan>>(
-    join_keys: Var,
-    output: Var,
-) -> impl Fn(&mut EGraph<TokomakLogicalPlan, A>, &mut Subst) -> Option<()> {
-    move |egraph: &mut EGraph<TokomakLogicalPlan, A>, subst: &mut Subst| -> Option<()> {
-        let keys = egraph[subst[join_keys]]
-            .nodes
-            .iter()
-            .flat_map(|f| match f {
-                TokomakLogicalPlan::JoinKeys(keys) => Some(keys),
-                _ => None,
-            })
-            .next()?
-            .as_slice();
-        if keys.is_empty() {
-            return None;
-        }
-        let mut new_keys = Vec::with_capacity(keys.len());
-        for chunk in keys.chunks_exact(2) {
-            let l = chunk[0];
-            let r = chunk[1];
-            new_keys.push(r);
-            new_keys.push(l);
-        }
-        let id = egraph.add(TokomakLogicalPlan::JoinKeys(JoinKeys(
-            new_keys.into_boxed_slice(),
-        )));
-        subst.insert(output, id);
-        Some(())
-    }
-}
+
 ///Converts TokomakLogicalPlan::JoinKeys to a filter predicate
 pub fn keys_to_predicate<A: Analysis<TokomakLogicalPlan>>(
     join_keys: Var,
 ) -> impl Fn(&mut EGraph<TokomakLogicalPlan, A>, &Subst) -> Option<Id> {
     move |egraph: &mut EGraph<TokomakLogicalPlan, A>, subst: &Subst| -> Option<Id> {
-        let keys = egraph[subst[join_keys]]
-            .nodes
-            .iter()
-            .flat_map(|f| match f {
-                TokomakLogicalPlan::JoinKeys(keys) => Some(keys),
-                _ => None,
-            })
-            .next()?;
-        if keys.is_empty() {
-            return None;
-        }
-        let keys = keys.0.clone();
-        let mut predicate = egraph.add(TokomakLogicalPlan::Eq([keys[0], keys[1]]));
-        for chunk in keys.chunks_exact(2).skip(1) {
-            let l = chunk[0];
-            let r = chunk[1];
-            let other = egraph.add(TokomakLogicalPlan::Eq([l, r]));
+        let (left, right) = get_join_keys(egraph, subst[join_keys])?;
+        assert!(left.len() == right.len());
+        //TODO: Determine if there is an allocation free way to do this.
+        let (left, right) = (left.to_vec(), right.to_vec());
+
+        let mut predicate = egraph.add(TokomakLogicalPlan::Eq([left[0], right[0]]));
+        for (l, r) in left.iter().zip(right.iter()).skip(1) {
+            let other = egraph.add(TokomakLogicalPlan::Eq([*l, *r]));
             predicate = egraph.add(TokomakLogicalPlan::And([predicate, other]));
         }
         Some(predicate)
@@ -156,7 +134,7 @@ pub fn get_column(
 
     Some(column?.clone())
 }
-///Gets the field from the schema that corresponds to the column or returns None if it could not be found. 
+///Gets the field from the schema that corresponds to the column or returns None if it could not be found.
 pub fn get_field<'a>(schema: &'a DFSchema, col: &TokomakColumn) -> Option<&'a DFField> {
     match col.relation {
         Some(q) => schema
@@ -264,38 +242,17 @@ pub fn add_to_keys(
         } else {
             return None;
         };
-        let keys = match eg[substs[join_keys]]
-            .nodes
-            .iter()
-            .flat_map(|p| match p {
-                TokomakLogicalPlan::JoinKeys(keys) => Some(keys),
-                _ => None,
-            })
-            .next()
-        {
-            Some(k) => k,
-            None => {
-                return None;
-            }
-        };
-        let mut new_keys = Vec::with_capacity(keys.0.len());
-        for id in keys.0.iter() {
-            new_keys.push(*id);
-        }
-
-        new_keys.push(substs[l]);
-        new_keys.push(substs[r]);
-        let keys = if JoinKeys::can_be_length(new_keys.len()) {
-            JoinKeys::from_vec(new_keys)
-        } else {
-            return None;
-        };
-        let id = eg.add(TokomakLogicalPlan::JoinKeys(keys));
+        let (left_keys, right_keys) = get_join_keys(eg, substs[join_keys])?;
+        let (mut left_keys, mut right_keys) = (left_keys.to_vec(), right_keys.to_vec());
+        left_keys.push(substs[l]);
+        right_keys.push(substs[r]);
+        let lkeys_id = eg.add(TokomakLogicalPlan::EList(left_keys.into_boxed_slice()));
+        let rkeys_id = eg.add(TokomakLogicalPlan::EList(right_keys.into_boxed_slice()));
+        let id = eg.add(TokomakLogicalPlan::JoinKeys([lkeys_id, rkeys_id]));
         substs.insert(output, id);
         Some(())
     }
 }
-
 
 ///Appends a scalar value to EList
 pub fn append_in_list<A: Analysis<TokomakLogicalPlan> + 'static>(
@@ -317,11 +274,10 @@ pub fn append_in_list<A: Analysis<TokomakLogicalPlan> + 'static>(
         }
         assert!(eg[substs[item_var]].nodes.len() == 1);
         //Check if it has a scalar representation
-        match &eg[substs[item_var]].nodes[0]{
-            TokomakLogicalPlan::Scalar(_)=>(),
-            _=>return None,
+        match &eg[substs[item_var]].nodes[0] {
+            TokomakLogicalPlan::Scalar(_) => (),
+            _ => return None,
         }
-
 
         lists.sort_by_key(|l| l.len());
         let longest = lists.last().unwrap();
@@ -359,7 +315,6 @@ pub fn append_to_elist<A: Analysis<TokomakLogicalPlan> + 'static>(
     }
 }
 
-
 ///Appends the id bound to item_var to list_var. item_var must be a plan
 pub fn append_to_plist<A: Analysis<TokomakLogicalPlan> + 'static>(
     list_var: Var,
@@ -385,4 +340,3 @@ pub fn append_to_plist<A: Analysis<TokomakLogicalPlan> + 'static>(
         Some(eg.add(TokomakLogicalPlan::PList(new_list.into_boxed_slice())))
     }
 }
-

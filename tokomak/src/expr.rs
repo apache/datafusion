@@ -63,7 +63,7 @@ impl LanguageChildren for FunctionCall{
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug)]
 
-///Counterpart to datafusion's column type with egg::Symbols to decrease size of Column and reduce heap allocations. 
+///Counterpart to datafusion's column type with egg::Symbols to decrease size of Column and reduce heap allocations.
 pub struct TokomakColumn {
     ///Relation name
     pub relation: Option<Symbol>,
@@ -84,10 +84,7 @@ impl TokomakColumn {
     pub fn new(relation: Option<impl Into<Symbol>>, name: impl Into<Symbol>) -> Self {
         let relation = relation.map(|r| r.into());
         let name = name.into();
-        TokomakColumn {
-            relation,
-            name,
-        }
+        TokomakColumn { relation, name }
     }
 }
 
