@@ -376,7 +376,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
 fn get_query_sql(query: usize) -> Result<String> {
     if query > 0 && query < 23 {
         let filename = format!(
-            "/home/patrick/dev/rust/arrow-datafusion/benchmarks/queries/q{}.sql",
+            "queries/q{}.sql",
             query
         );
         Ok(fs::read_to_string(&filename).expect("failed to read query"))

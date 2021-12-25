@@ -32,6 +32,7 @@ use datafusion_cli::{
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::time::Duration;
 use std::{env, sync::Arc};
 
 fn get_tokomak_opt_seconds() -> f64 {
@@ -112,9 +113,23 @@ pub async fn main() -> Result<()> {
                 .long("quiet")
                 .takes_value(false),
         )
+        .arg(
+            Arg::with_name("trace")
+                .help("Enables tokio event tracing")
+                .takes_value(false)
+                .long("trace")
+        )
         .get_matches();
 
     let quiet = matches.is_present("quiet");
+    let enable_tracing = matches.is_present("trace");
+    if enable_tracing{
+        println!("Tracing has been enabled");
+        console_subscriber::ConsoleLayer::builder()
+            .retention(Duration::from_secs(60))
+            .server_addr(([127, 0, 0, 1], 5555))
+            .init();
+    }
 
     if !quiet {
         println!("DataFusion CLI v{}\n", DATAFUSION_CLI_VERSION);
