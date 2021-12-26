@@ -325,9 +325,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     let mut result: Vec<RecordBatch> = Vec::with_capacity(1);
 
     for i in 0..opt.iterations {
-        println!("Startin iteration {}", i);
         let plan = create_logical_plan(&mut ctx, opt.query)?;
-
         let start = Instant::now();
         result = execute_query(&mut ctx, &plan, opt.debug).await?;
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
@@ -449,11 +447,10 @@ async fn execute_query(
     let start = Instant::now();
     let plan = ctx.optimize(plan)?;
     let elapsed = start.elapsed().as_secs_f64() * 1000.0;
-    println!("Spent {:.2} ms optimizing", elapsed);
     if debug {
+        println!("Spent {:.2} ms optimizing\n", elapsed);
         println!("=== Optimized logical plan ===\n{:?}\n", plan);
     }
-    //std::process::exit(0);
     let physical_plan = ctx.create_physical_plan(&plan).await?;
     if debug {
         println!(
