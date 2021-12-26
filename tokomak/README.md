@@ -21,13 +21,14 @@
 Experimental e-graph based optimizer. Uses [egg](https://github.com/egraphs-good/egg).
 ## Todo list
 1. Add round trip test for expressions and plans.
-2. Ensure that invariants, such as expression naming, are preserved by the optimizer. Add tests to ensure they are upheld.
-3. Write invariant checking functionality
-4. Add support for timezones in TokomakScalar for timestamp types.
-5. Add support for UserDefinedLogicalPlans.
-6. Add support for plans containing Values. 
-7. Replace Symbol uses with another type. Symbol uses a global mutex protected cache for storing the value of symbol, could cause heavy contention on lock if optimizer is run from multiple threads at once.
-8. Experiment with adding PhysicalPlan egg based optimizer.
+2. Improve documentation
+3. Ensure that invariants, such as expression naming, are preserved by the optimizer. Add tests to ensure they are upheld.
+4. Write invariant checking functionality
+5. Add support for timezones in TokomakScalar for timestamp types.
+6. Add support for UserDefinedLogicalPlans.
+7. Add support for plans containing Values. 
+8. Replace Symbol uses with another type. Symbol uses a global mutex protected cache for storing the value of symbol, could cause heavy contention on lock if optimizer is run from multiple threads at once.
+9. Add custom DSL with some conveniences such as specifying the type of node that will be matched.
 
 
 ## Potentially interesting things
