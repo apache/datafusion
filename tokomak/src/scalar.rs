@@ -136,9 +136,9 @@ impl std::str::FromStr for TokomakScalar {
 }
 
 impl TryFrom<ScalarValue> for TokomakScalar {
-    type Error =  DataFusionError;
+    type Error = DataFusionError;
     fn try_from(val: ScalarValue) -> Result<Self, Self::Error> {
-       let v= match val {
+        let v = match val {
             ScalarValue::Boolean(v) => TokomakScalar::Boolean(v),
             ScalarValue::Float32(v) => TokomakScalar::Float32(v.map(OrderedFloat::from)),
             ScalarValue::Float64(v) => TokomakScalar::Float64(v.map(OrderedFloat::from)),
@@ -159,15 +159,13 @@ impl TryFrom<ScalarValue> for TokomakScalar {
                 TokomakScalar::LargeBinary(v.map(Vec::into_boxed_slice))
             }
             ScalarValue::List(v, d) => TokomakScalar::List(
-                match v{
-                    Some(l)=>{
-                        Some(Box::new(
-                            l.into_iter()
-                                .map(|item| item.try_into())
-                                .collect::<Result<Vec<_>, _>>()?
-                        ))
-                    },
-                    None => None
+                match v {
+                    Some(l) => Some(Box::new(
+                        l.into_iter()
+                            .map(|item| item.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    None => None,
                 },
                 d,
             ),
@@ -180,20 +178,31 @@ impl TryFrom<ScalarValue> for TokomakScalar {
             ScalarValue::TimestampMicrosecond(v, None) => {
                 TokomakScalar::TimestampMicrosecond(v)
             }
-            ScalarValue::TimestampNanosecond(v, None) => TokomakScalar::TimestampNanosecond(v),
+            ScalarValue::TimestampNanosecond(v, None) => {
+                TokomakScalar::TimestampNanosecond(v)
+            }
             ScalarValue::IntervalYearMonth(v) => TokomakScalar::IntervalYearMonth(v),
             ScalarValue::IntervalDayTime(v) => TokomakScalar::IntervalDayTime(v),
             ScalarValue::Struct(fields, datatypes) => {
-                let fields = match fields{
-                    Some(f)=>Some( Box::new(f.into_iter().map(TokomakScalar::try_from).collect::<Result<Vec<_>, _>>()?)),
-                    None => None
+                let fields = match fields {
+                    Some(f) => Some(Box::new(
+                        f.into_iter()
+                            .map(TokomakScalar::try_from)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    None => None,
                 };
                 TokomakScalar::Struct(fields, datatypes)
             }
             ScalarValue::Decimal128(v, scale, precision) => {
                 TokomakScalar::Decimal128(v, scale, precision)
             }
-            p=> return Err(DataFusionError::NotImplemented(format!("Could not convert {:?} to TokomakScalarValue", p))),
+            p => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Could not convert {:?} to TokomakScalarValue",
+                    p
+                )))
+            }
         };
         Ok(v)
     }
@@ -239,7 +248,9 @@ impl From<TokomakScalar> for ScalarValue {
             TokomakScalar::TimestampMicrosecond(v) => {
                 ScalarValue::TimestampMicrosecond(v, None)
             }
-            TokomakScalar::TimestampNanosecond(v) => ScalarValue::TimestampNanosecond(v, None),
+            TokomakScalar::TimestampNanosecond(v) => {
+                ScalarValue::TimestampNanosecond(v, None)
+            }
             TokomakScalar::IntervalYearMonth(v) => ScalarValue::IntervalYearMonth(v),
             TokomakScalar::IntervalDayTime(v) => ScalarValue::IntervalDayTime(v),
             TokomakScalar::Struct(fields, datatypes) => {
