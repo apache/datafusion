@@ -325,8 +325,8 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     let mut result: Vec<RecordBatch> = Vec::with_capacity(1);
 
     for i in 0..opt.iterations {
-        let plan = create_logical_plan(&mut ctx, opt.query)?;
         let start = Instant::now();
+        let plan = create_logical_plan(&mut ctx, opt.query)?;
         result = execute_query(&mut ctx, &plan, opt.debug).await?;
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         millis.push(elapsed as f64);
