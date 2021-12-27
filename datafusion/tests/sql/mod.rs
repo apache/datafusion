@@ -71,8 +71,6 @@ macro_rules! test_expression {
     };
 }
 
-use assert_metrics;
-use test_expression;
 pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
