@@ -71,8 +71,8 @@ macro_rules! test_expression {
     };
 }
 
-pub(crate) use assert_metrics;
-pub(crate) use test_expression;
+use assert_metrics;
+use test_expression;
 pub mod aggregates;
 #[cfg(feature = "avro")]
 pub mod avro;
