@@ -64,6 +64,8 @@ pub enum AggregateFunction {
     ApproxDistinct,
     /// array_agg
     ArrayAgg,
+    /// set_agg
+    SetAgg,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -84,6 +86,7 @@ impl FromStr for AggregateFunction {
             "sum" => AggregateFunction::Sum,
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "array_agg" => AggregateFunction::ArrayAgg,
+            "set_agg" => AggregateFunction::SetAgg,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
@@ -118,6 +121,11 @@ pub fn return_type(
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
         AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
+            "item",
+            coerced_data_types[0].clone(),
+            true,
+        )))),
+        AggregateFunction::SetAgg => Ok(DataType::List(Box::new(Field::new(
             "item",
             coerced_data_types[0].clone(),
             true,
@@ -192,6 +200,11 @@ pub fn create_aggregate_expr(
             name,
             coerced_exprs_types[0].clone(),
         )),
+        (AggregateFunction::SetAgg, _) => Arc::new(expressions::SetAgg::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            coerced_exprs_types[0].clone(),
+        )),
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             coerced_phy_exprs[0].clone(),
             name,
@@ -245,7 +258,8 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
     match fun {
         AggregateFunction::Count
         | AggregateFunction::ApproxDistinct
-        | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
+        | AggregateFunction::ArrayAgg
+        | AggregateFunction::SetAgg => Signature::any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {
             let valid = STRINGS
                 .iter()

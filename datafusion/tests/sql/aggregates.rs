@@ -219,3 +219,36 @@ async fn csv_query_array_agg_one() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn csv_query_set_agg() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT set_agg(c2) FROM aggregate_test_100";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    // Since set_agg ordering is nondeterministic, check the schema and contents.
+    assert_eq!(
+        *actual[0].schema(),
+        Schema::new(vec![Field::new(
+            "SETAGG(aggregate_test_100.c2)",
+            DataType::List(Box::new(Field::new("item", DataType::UInt32, true))),
+            false
+        ),])
+    );
+
+    // Extract the underlying array buffer data and sort it to check correctness. `Buffer.typed_data`
+    // is unsafe so this must be wrapped in an unsafe block.
+    unsafe {
+        let data =
+            actual[0].column(0).data().child_data()[0].buffers()[0].typed_data::<u32>();
+
+        let mut sorted_data: Vec<u32> = vec![0; 5];
+        sorted_data[..5].clone_from_slice(data);
+        sorted_data.sort_unstable();
+
+        assert_eq!(sorted_data, &[1, 2, 3, 4, 5]);
+    }
+
+    Ok(())
+}

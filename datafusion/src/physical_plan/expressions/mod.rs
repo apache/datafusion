@@ -50,6 +50,7 @@ mod nth_value;
 mod nullif;
 mod rank;
 mod row_number;
+mod set_agg;
 mod sum;
 mod try_cast;
 
@@ -84,6 +85,7 @@ pub use nth_value::NthValue;
 pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
 pub use rank::{dense_rank, percent_rank, rank};
 pub use row_number::RowNumber;
+pub use set_agg::SetAgg;
 pub(crate) use sum::is_sum_support_arg_type;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};

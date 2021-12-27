@@ -59,6 +59,7 @@ pub(crate) fn coerce_types(
             Ok(input_types.to_vec())
         }
         AggregateFunction::ArrayAgg => Ok(input_types.to_vec()),
+        AggregateFunction::SetAgg => Ok(input_types.to_vec()),
         AggregateFunction::Min | AggregateFunction::Max => {
             // min and max support the dictionary data type
             // unpack the dictionary to get the value

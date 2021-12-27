@@ -1129,6 +1129,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                         protobuf::AggregateFunction::ApproxDistinct
                     }
                     AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
+                    AggregateFunction::SetAgg => protobuf::AggregateFunction::SetAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
                     AggregateFunction::Sum => protobuf::AggregateFunction::Sum,
@@ -1364,6 +1365,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Count => Self::Count,
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
+            AggregateFunction::SetAgg => Self::SetAgg,
         }
     }
 }
