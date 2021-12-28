@@ -38,7 +38,7 @@ use async_trait::async_trait;
 
 use futures::stream::Stream;
 use futures::StreamExt;
-use hashbrown::HashMap;
+use hashbrown::{HashMap, HashSet};
 use tokio::sync::{
     mpsc::{self, UnboundedReceiver, UnboundedSender},
     Mutex,
@@ -57,6 +57,8 @@ struct RepartitionExecState {
 
     /// Helper that ensures that that background job is killed once it is no longer needed.
     abort_helper: Arc<AbortOnDropMany<()>>,
+    /// Helper map, mapping position of a partition into a value
+    partition_map: Arc<Mutex<HashMap<usize, usize>>>,
 }
 
 /// The repartition operator maps N input partitions to M output partitions based on a
@@ -207,6 +209,7 @@ impl ExecutionPlan for RepartitionExec {
                         txs.clone(),
                         self.partitioning.clone(),
                         r_metrics,
+                        state.partition_map.clone(),
                     ));
 
                 // In a separate task, wait for each input to be done
@@ -267,6 +270,7 @@ impl RepartitionExec {
             state: Arc::new(Mutex::new(RepartitionExecState {
                 channels: HashMap::new(),
                 abort_helper: Arc::new(AbortOnDropMany::<()>(vec![])),
+                partition_map: Arc::new(Mutex::new(HashMap::new())),
             })),
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -285,6 +289,7 @@ impl RepartitionExec {
         mut txs: HashMap<usize, UnboundedSender<Option<ArrowResult<RecordBatch>>>>,
         partitioning: Partitioning,
         r_metrics: RepartitionMetrics,
+        partition_map: Arc<Mutex<HashMap<usize, usize>>>,
     ) -> Result<()> {
         let num_output_partitions = txs.len();
 
@@ -348,6 +353,92 @@ impl RepartitionExec {
                     for (num_output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
+                        if partition_indices.is_empty() {
+                            continue;
+                        }
+                        let timer = r_metrics.repart_time.timer();
+                        let indices = partition_indices.into();
+                        // Produce batches based on indices
+                        let columns = input_batch
+                            .columns()
+                            .iter()
+                            .map(|c| {
+                                take(c.as_ref(), &indices, None).map_err(|e| {
+                                    DataFusionError::Execution(e.to_string())
+                                })
+                            })
+                            .collect::<Result<Vec<Arc<dyn Array>>>>()?;
+                        let output_batch =
+                            RecordBatch::try_new(input_batch.schema(), columns);
+                        timer.done();
+
+                        let timer = r_metrics.send_time.timer();
+                        // if there is still a receiver, send to it
+                        if let Some(tx) = txs.get_mut(&num_output_partition) {
+                            if tx.send(Some(output_batch)).is_err() {
+                                // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
+                                txs.remove(&num_output_partition);
+                            }
+                        }
+                        timer.done();
+                    }
+                }
+                Partitioning::PartitionBy(exprs, _) => {
+                    fn find_first_empty_index(vals: &HashMap<usize, usize>) -> usize {
+                        let mut v = HashSet::new();
+                        for (_, idx) in vals {
+                            v.insert(*idx);
+                        }
+                        let mut uniques: Vec<usize> = v.into_iter().collect();
+                        uniques.sort();
+                        let mut next_suitable_value: i32 = -1;
+                        for i in 0..vals.len() {
+                            if !uniques.contains(&i) {
+                                next_suitable_value = i as i32;
+                                break;
+                            }
+                        }
+                        if next_suitable_value == -1 {
+                            next_suitable_value = vals.len() as i32;
+                        }
+                        next_suitable_value as usize
+                    }
+
+                    let timer = r_metrics.repart_time.timer();
+                    let input_batch = result?;
+                    let arrays = exprs
+                        .iter()
+                        .map(|expr| {
+                            Ok(expr
+                                .evaluate(&input_batch)?
+                                .into_array(input_batch.num_rows()))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    hashes_buf.clear();
+                    hashes_buf.resize(arrays[0].len(), 0);
+                    // Hash arrays and compute buckets based on number of partitions
+                    let hashes = create_hashes(&arrays, &random_state, hashes_buf)?;
+                    // Number of unique hash values
+                    let mut indices: HashMap<usize, Vec<u64>> =
+                        HashMap::with_capacity(num_output_partitions);
+                    for i in 0..num_output_partitions {
+                        let _ = &indices.insert(i, vec![]);
+                    }
+                    for (index, hash) in hashes.iter().enumerate() {
+                        let h = *hash as usize;
+                        let mut p_map = partition_map.lock().await;
+                        let idx = if p_map.contains_key(&h) {
+                            *p_map.get(&h).unwrap()
+                        } else {
+                            let next_idx = find_first_empty_index(&p_map);
+                            p_map.insert(h, next_idx);
+                            next_idx
+                        };
+                        indices.entry(idx).or_insert(vec![]).push(index as u64);
+                    }
+                    timer.done();
+
+                    for (num_output_partition, partition_indices) in indices.into_iter() {
                         if partition_indices.is_empty() {
                             continue;
                         }
@@ -981,6 +1072,261 @@ mod tests {
             .await
             .unwrap();
         assert!(batch0.is_empty() || batch1.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hashmap_repartition() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "c1",
+                Arc::new(StringArray::from(vec![
+                    "foo", "bar", "bar", "bar", "other", "other",
+                ])) as ArrayRef,
+            ),
+            (
+                "c2",
+                Arc::new(StringArray::from(vec![
+                    "id1", "id2", "id3", "id4", "id5", "id6",
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let partitioning = Partitioning::PartitionBy(
+            vec![Arc::new(crate::physical_plan::expressions::Column::new(
+                "c1", 0,
+            ))],
+            Some(3),
+        );
+        let schema = batch.schema();
+        let input = MockExec::new(vec![Ok(batch)], schema);
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
+        let output_stream0 = exec.execute(0).await.unwrap();
+        let batch0 = crate::physical_plan::common::collect(output_stream0)
+            .await
+            .unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+        let batch1 = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
+        let output_stream2 = exec.execute(2).await.unwrap();
+        let batch2 = crate::physical_plan::common::collect(output_stream2)
+            .await
+            .unwrap();
+        assert!(!batch0.is_empty() && !batch1.is_empty() && !batch2.is_empty());
+        assert!(batch0.len() == 1 && batch1.len() == 1 && batch2.len() == 1);
+        assert!(batch0[0].num_rows() + batch1[0].num_rows() + batch2[0].num_rows() == 6);
+        assert!(
+            batch0[0].num_rows() > 0
+                && batch1[0].num_rows() > 0
+                && batch2[0].num_rows() > 0
+        );
+        assert!(
+            batch0[0].num_rows() == 1
+                || batch1[0].num_rows() == 1
+                || batch2[0].num_rows() == 1
+        );
+        assert!(
+            batch0[0].num_rows() == 3
+                || batch1[0].num_rows() == 3
+                || batch2[0].num_rows() == 3
+        );
+        assert!(
+            batch0[0].num_rows() == 2
+                || batch1[0].num_rows() == 2
+                || batch2[0].num_rows() == 2
+        );
+
+        let expected0 = vec![
+            "+-----+-----+",
+            "| c1  | c2  |",
+            "+-----+-----+",
+            "| foo | id1 |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected0, &batch0);
+
+        let expected1 = vec![
+            "+-----+-----+",
+            "| c1  | c2  |",
+            "+-----+-----+",
+            "| bar | id2 |",
+            "| bar | id3 |",
+            "| bar | id4 |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected1, &batch1);
+
+        let expected2 = vec![
+            "+-------+-----+",
+            "| c1    | c2  |",
+            "+-------+-----+",
+            "| other | id5 |",
+            "| other | id6 |",
+            "+-------+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected2, &batch2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hashmap_repartition_bigger_partition_number() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "c1",
+                Arc::new(StringArray::from(vec![
+                    "foo", "bar", "bar", "bar", "other", "other",
+                ])) as ArrayRef,
+            ),
+            (
+                "c2",
+                Arc::new(StringArray::from(vec![
+                    "id1", "id2", "id3", "id4", "id5", "id6",
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let partitioning = Partitioning::PartitionBy(
+            vec![Arc::new(crate::physical_plan::expressions::Column::new(
+                "c1", 0,
+            ))],
+            None,
+        );
+        let schema = batch.schema();
+        let input = MockExec::new(vec![Ok(batch)], schema);
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
+        let output_stream0 = exec.execute(0).await.unwrap();
+        let batch0 = crate::physical_plan::common::collect(output_stream0)
+            .await
+            .unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+        let batch1 = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
+        let output_stream2 = exec.execute(2).await.unwrap();
+        let batch2 = crate::physical_plan::common::collect(output_stream2)
+            .await
+            .unwrap();
+        assert!(!batch0.is_empty() && !batch1.is_empty() && !batch2.is_empty());
+        assert!(batch0.len() == 1 && batch1.len() == 1 && batch2.len() == 1);
+        assert!(batch0[0].num_rows() + batch1[0].num_rows() + batch2[0].num_rows() == 6);
+        assert!(
+            batch0[0].num_rows() > 0
+                && batch1[0].num_rows() > 0
+                && batch2[0].num_rows() > 0
+        );
+        assert!(
+            batch0[0].num_rows() == 1
+                || batch1[0].num_rows() == 1
+                || batch2[0].num_rows() == 1
+        );
+        assert!(
+            batch0[0].num_rows() == 3
+                || batch1[0].num_rows() == 3
+                || batch2[0].num_rows() == 3
+        );
+        assert!(
+            batch0[0].num_rows() == 2
+                || batch1[0].num_rows() == 2
+                || batch2[0].num_rows() == 2
+        );
+
+        let expected0 = vec![
+            "+-----+-----+",
+            "| c1  | c2  |",
+            "+-----+-----+",
+            "| foo | id1 |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected0, &batch0);
+
+        let expected1 = vec![
+            "+-----+-----+",
+            "| c1  | c2  |",
+            "+-----+-----+",
+            "| bar | id2 |",
+            "| bar | id3 |",
+            "| bar | id4 |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected1, &batch1);
+
+        let expected2 = vec![
+            "+-------+-----+",
+            "| c1    | c2  |",
+            "+-------+-----+",
+            "| other | id5 |",
+            "| other | id6 |",
+            "+-------+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected2, &batch2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hashmap_repartition_smaller_partition_number_will_drop() -> Result<()> {
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "c1",
+                Arc::new(StringArray::from(vec![
+                    "foo", "bar", "bar", "bar", "other", "other",
+                ])) as ArrayRef,
+            ),
+            (
+                "c2",
+                Arc::new(StringArray::from(vec![
+                    "id1", "id2", "id3", "id4", "id5", "id6",
+                ])) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let partitioning = Partitioning::PartitionBy(
+            vec![Arc::new(crate::physical_plan::expressions::Column::new(
+                "c1", 0,
+            ))],
+            Some(2),
+        );
+        let schema = batch.schema();
+        let input = MockExec::new(vec![Ok(batch)], schema);
+        let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
+        let output_stream0 = exec.execute(0).await.unwrap();
+        let batch0 = crate::physical_plan::common::collect(output_stream0)
+            .await
+            .unwrap();
+        let output_stream1 = exec.execute(1).await.unwrap();
+        let batch1 = crate::physical_plan::common::collect(output_stream1)
+            .await
+            .unwrap();
+
+        assert!(!batch0.is_empty() && !batch1.is_empty());
+        assert!(batch0.len() == 1 && batch1.len() == 1);
+        assert!(batch0[0].num_rows() + batch1[0].num_rows() == 4);
+        assert!(batch0[0].num_rows() > 0 && batch1[0].num_rows() > 0);
+        assert!(batch0[0].num_rows() == 1 || batch1[0].num_rows() == 1);
+        assert!(batch0[0].num_rows() == 3 || batch1[0].num_rows() == 3);
+
+        let expected0 = vec![
+            "+-----+-----+",
+            "| c1  | c2  |",
+            "+-----+-----+",
+            "| foo | id1 |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected0, &batch0);
+
+        let expected1 = vec![
+            "+-----+-----+",
+            "| c1  | c2  |",
+            "+-----+-----+",
+            "| bar | id2 |",
+            "| bar | id3 |",
+            "| bar | id4 |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(&expected1, &batch1);
+
         Ok(())
     }
 }

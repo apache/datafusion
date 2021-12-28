@@ -451,6 +451,7 @@ impl LogicalPlan {
                 ..
             }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) => expr.clone(),
+                Partitioning::PartitionBy(expr, _) => expr.clone(),
                 _ => vec![],
             },
             LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
@@ -555,6 +556,13 @@ pub enum Partitioning {
     /// of partitions.
     /// This partitioning scheme is not yet fully supported. See <https://issues.apache.org/jira/browse/ARROW-11011>
     Hash(Vec<Expr>, usize),
+    /// Allocate rows based on a hash of one or more expressions. It is desired to know the
+    /// number of unique partitioning values to have a good performace. If the specified
+    /// number of partitions is less than the unique partitioning values partitions will be
+    /// dropped to the given number of partitions. If not specified it will start from
+    /// 32767 partitions and slim down to the number of partitioning values. If there are more
+    /// than 32767 partition values some partitions will be dropped.
+    PartitionBy(Vec<Expr>, Option<usize>),
 }
 
 /// Trait that implements the [Visitor
@@ -965,6 +973,16 @@ impl LogicalPlan {
                             write!(
                                 f,
                                 "Repartition: Hash({}) partition_count={}",
+                                hash_expr.join(", "),
+                                n
+                            )
+                        }
+                        Partitioning::PartitionBy(expr, n) => {
+                            let hash_expr: Vec<String> =
+                                expr.iter().map(|e| format!("{:?}", e)).collect();
+                            write!(
+                                f,
+                                "Repartition: HashMap({}) partition_count={:?}",
                                 hash_expr.join(", "),
                                 n
                             )

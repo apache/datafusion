@@ -165,6 +165,25 @@ impl TryInto<Arc<dyn ExecutionPlan>> for &protobuf::PhysicalPlanNode {
                             ),
                         )?))
                     }
+                    Some(PartitionMethod::PartitionBy(ref hash_part)) => {
+                        let expr = hash_part
+                            .hash_expr
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
+
+                        Ok(Arc::new(RepartitionExec::try_new(
+                            input,
+                            Partitioning::PartitionBy(
+                                expr,
+                                hash_part.optional_partition_count.as_ref().map(|o| match o {
+                                    protobuf::physical_partition_by_repartition::OptionalPartitionCount::PartitionCount(cnt) => {
+                                        *cnt as usize
+                                    }
+                                }),
+                            ),
+                        )?))
+                    }
                     Some(PartitionMethod::RoundRobin(partition_count)) => {
                         Ok(Arc::new(RepartitionExec::try_new(
                             input,

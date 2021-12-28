@@ -313,6 +313,16 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                         partition_count: *partition_count as u64,
                     })
                 }
+                Partitioning::PartitionBy(exprs, optional_partition_count) => {
+                    PartitionMethod::PartitionBy(protobuf::PhysicalPartitionByRepartition {
+                        hash_expr: exprs
+                            .iter()
+                            .map(|expr| expr.clone().try_into())
+                            .collect::<Result<Vec<_>, BallistaError>>()?,
+                        optional_partition_count: optional_partition_count.clone()
+                            .map(|o| protobuf::physical_partition_by_repartition::OptionalPartitionCount::PartitionCount(o as u64)),
+                    })
+                }
                 Partitioning::RoundRobinBatch(partition_count) => {
                     PartitionMethod::RoundRobin(*partition_count as u64)
                 }

@@ -329,12 +329,20 @@ message RepartitionNode {
   oneof partition_method {
     uint64 round_robin = 2;
     HashRepartition hash = 3;
+    PartitionByRepartition partition_by = 4;
   }
 }
 
 message HashRepartition {
   repeated LogicalExprNode hash_expr = 1;
   uint64 partition_count = 2;
+}
+
+message PartitionByRepartition {
+  repeated LogicalExprNode hash_expr = 1;
+  oneof optional_partition_count {
+    uint64 partition_count = 2;
+  }
 }
 
 message EmptyRelationNode {
@@ -752,12 +760,20 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
-message RepartitionExecNode{
+message PhysicalPartitionByRepartition {
+  repeated PhysicalExprNode hash_expr = 1;
+  oneof optional_partition_count {
+    uint64 partition_count = 2;
+  }
+}
+
+message RepartitionExecNode {
   PhysicalPlanNode input = 1;
   oneof partition_method {
     uint64 round_robin = 2;
     PhysicalHashRepartition hash = 3;
-    uint64 unknown = 4;
+    PhysicalPartitionByRepartition partition_by = 4;
+    uint64 unknown = 5;
   }
 }
 

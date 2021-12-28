@@ -673,6 +673,20 @@ impl DefaultPhysicalPlanner {
                                 .collect::<Result<Vec<_>>>()?;
                             Partitioning::Hash(runtime_expr, *n)
                         }
+                        LogicalPartitioning::PartitionBy(expr, n) => {
+                            let runtime_expr = expr
+                                .iter()
+                                .map(|e| {
+                                    self.create_physical_expr(
+                                        e,
+                                        input_dfschema,
+                                        &input_schema,
+                                        ctx_state,
+                                    )
+                                })
+                                .collect::<Result<Vec<_>>>()?;
+                            Partitioning::PartitionBy(runtime_expr, *n)
+                        }
                     };
                     Ok(Arc::new(RepartitionExec::try_new(
                         physical_input,

@@ -70,6 +70,7 @@ fn optimize_partitions(
         // we don't want to introduce partitioning after hash partitioning
         // as the plan will likely depend on this
         Hash(_, _) => false,
+        PartitionBy(_, _) => false,
     };
 
     // TODO: EmptyExec causes failures with RepartitionExec

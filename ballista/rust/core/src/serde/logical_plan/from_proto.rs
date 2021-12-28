@@ -246,6 +246,20 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                             .collect::<Result<Vec<_>, _>>()?,
                         partition_count as usize,
                     ),
+                    PartitionMethod::PartitionBy(protobuf::PartitionByRepartition {
+                        hash_expr: pb_hash_expr,
+                        optional_partition_count,
+                    }) => Partitioning::PartitionBy(
+                        pb_hash_expr
+                            .iter()
+                            .map(|pb_expr| pb_expr.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                        optional_partition_count.as_ref().map(|o| match o {
+                            protobuf::partition_by_repartition::OptionalPartitionCount::PartitionCount(cnt) => {
+                                *cnt as usize
+                            }
+                        }),
+                    ),
                     PartitionMethod::RoundRobin(batch_size) => {
                         Partitioning::RoundRobinBatch(batch_size as usize)
                     }

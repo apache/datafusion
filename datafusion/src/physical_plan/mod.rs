@@ -361,9 +361,16 @@ pub async fn execute_stream_partitioned(
 pub enum Partitioning {
     /// Allocate batches using a round-robin algorithm and the specified number of partitions
     RoundRobinBatch(usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified number of
+    /// Allocate rows based on a hash of one or more expressions and the specified number of
     /// partitions
     Hash(Vec<Arc<dyn PhysicalExpr>>, usize),
+    /// Allocate rows based on a hash of one or more expressions. It is desired to know the
+    /// number of unique partitioning values to have a good performace. If the specified
+    /// number of partitions is less than the unique partitioning values partitions will be
+    /// dropped to the given number of partitions. If not specified it will start from
+    /// 32767 partitions and slim down to the number of partitioning values. If there are more
+    /// than 32767 partition values some partitions will be dropped.
+    PartitionBy(Vec<Arc<dyn PhysicalExpr>>, Option<usize>),
     /// Unknown partitioning scheme with a known number of partitions
     UnknownPartitioning(usize),
 }
@@ -375,6 +382,7 @@ impl Partitioning {
         match self {
             RoundRobinBatch(n) => *n,
             Hash(_, n) => *n,
+            PartitionBy(_, n) => n.unwrap_or(i16::MAX as usize),
             UnknownPartitioning(n) => *n,
         }
     }

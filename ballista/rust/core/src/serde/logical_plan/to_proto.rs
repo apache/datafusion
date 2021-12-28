@@ -925,6 +925,16 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             partition_count: *partition_count as u64,
                         })
                     }
+                    Partitioning::PartitionBy(exprs, optional_partition_count) => {
+                        PartitionMethod::PartitionBy(protobuf::PartitionByRepartition {
+                            hash_expr: exprs
+                                .iter()
+                                .map(|expr| expr.try_into())
+                                .collect::<Result<Vec<_>, BallistaError>>()?,
+                            optional_partition_count: optional_partition_count.clone()
+                                .map(|o| protobuf::partition_by_repartition::OptionalPartitionCount::PartitionCount(o as u64)),
+                        })
+                    }
                     Partitioning::RoundRobinBatch(batch_size) => {
                         PartitionMethod::RoundRobin(*batch_size as u64)
                     }
