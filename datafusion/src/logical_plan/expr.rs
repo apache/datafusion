@@ -1356,17 +1356,40 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
             aggr_expr,
             schema: _,
         }) => {
-            let normalized_expr = normalize_col(expr.clone(), plan)?;
-            let found_agg = aggr_expr.into_iter().find(|a| (**a) == normalized_expr);
-            if found_agg.is_some() {
-                let agg = normalize_col(found_agg.unwrap().clone(), plan)?;
-                let col = Expr::Column(
-                    agg.to_field(input.schema()).map(|f| f.qualified_column())?,
-                );
-                Ok(col)
-            } else {
-                Ok(expr)
+            struct Rewriter<'a> {
+                plan: &'a LogicalPlan,
+                input: &'a LogicalPlan,
+                aggr_expr: &'a Vec<Expr>,
             }
+
+            impl<'a> ExprRewriter for Rewriter<'a> {
+                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+                    let normalized_expr = normalize_col(expr.clone(), self.plan);
+                    if normalized_expr.is_err() {
+                        // The expr is not based on Aggregate plan output. Skip it.
+                        return Ok(expr);
+                    }
+                    let normalized_expr = normalized_expr.unwrap();
+                    let found_agg =
+                        self.aggr_expr.iter().find(|a| (**a) == normalized_expr);
+                    if found_agg.is_some() {
+                        let agg = normalize_col(found_agg.unwrap().clone(), self.plan)?;
+                        let col = Expr::Column(
+                            agg.to_field(self.input.schema())
+                                .map(|f| f.qualified_column())?,
+                        );
+                        Ok(col)
+                    } else {
+                        Ok(expr)
+                    }
+                }
+            }
+
+            expr.rewrite(&mut Rewriter {
+                plan,
+                input,
+                aggr_expr,
+            })
         }
         LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
         _ => Ok(expr),

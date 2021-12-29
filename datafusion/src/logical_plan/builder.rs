@@ -532,7 +532,7 @@ impl LogicalPlanBuilder {
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
                 let mut columns: HashSet<Column> = HashSet::new();
-                utils::expr_to_columns(&expr.into(), &mut columns)?;
+                utils::expr_to_columns(&expr, &mut columns)?;
 
                 columns.into_iter().for_each(|c| {
                     if schema.field_from_column(&c).is_err() {

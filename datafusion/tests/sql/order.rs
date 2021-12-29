@@ -46,6 +46,10 @@ async fn test_order_by_agg_expr() -> Result<()> {
         "+-----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12) + 0.1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
