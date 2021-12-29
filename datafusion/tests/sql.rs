@@ -392,6 +392,23 @@ async fn csv_query_with_is_null_predicate() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_order_by_agg_expr() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------+",
+        "| MIN(aggregate_test_100.c12) |",
+        "+-----------------------------+",
+        "| 0.01479305307777301         |",
+        "+-----------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_int_min_max() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;

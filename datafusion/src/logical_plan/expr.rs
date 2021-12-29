@@ -21,7 +21,9 @@
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
 use crate::field_util::get_indexed_field;
-use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
+use crate::logical_plan::{
+    plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
+};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
@@ -1315,6 +1317,60 @@ pub fn normalize_cols(
         .into_iter()
         .map(|e| normalize_col(e.into(), plan))
         .collect()
+}
+
+/// Rewrite sort on aggregate expressions to sort on the column of aggregate output
+#[inline]
+pub fn rewrite_sort_cols_by_aggs(
+    exprs: impl IntoIterator<Item = impl Into<Expr>>,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .map(|e| {
+            let expr = e.into();
+            match expr.clone() {
+                Expr::Sort {
+                    expr,
+                    asc,
+                    nulls_first,
+                } => {
+                    let sort = Expr::Sort {
+                        expr: Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
+                        asc,
+                        nulls_first,
+                    };
+                    Ok(sort)
+                }
+                _ => Ok(expr),
+            }
+        })
+        .collect()
+}
+
+fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    match plan {
+        LogicalPlan::Aggregate(Aggregate {
+            input,
+            group_expr: _,
+            aggr_expr,
+            schema: _,
+        }) => {
+            let normalized_expr = normalize_col(expr.clone(), plan)?;
+            let found_agg = aggr_expr.into_iter().find(|a| (**a) == normalized_expr);
+            if found_agg.is_some() {
+                let agg = normalize_col(found_agg.unwrap().clone(), plan)?;
+                let col = Expr::Column(
+                    agg.to_field(input.schema()).map(|f| f.qualified_column())?,
+                );
+                Ok(col)
+            } else {
+                Ok(expr)
+            }
+        }
+        LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
+        _ => Ok(expr),
+    }
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
