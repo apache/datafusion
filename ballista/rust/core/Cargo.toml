@@ -43,8 +43,8 @@ tonic = "0.5"
 uuid = { version = "0.8", features = ["v4"] }
 chrono = { version = "0.4", default-features = false }
 
-arrow-flight = { version = "6.4.0"  }
-
+#arrow-flight = { version = "6.4.0"  }
+arrow-flight = { path = "/Users/kliu3/Documents/github/arrow-rs/arrow-flight" }
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
 [dev-dependencies]

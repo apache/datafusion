@@ -34,8 +34,9 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow-flight = { version = "6.4.0" }
+#arrow-flight = { version = "6.4.0" }
 datafusion = { path = "../datafusion" }
+arrow-flight = { path = "/Users/kliu3/Documents/github/arrow-rs/arrow-flight" }
 prost = "0.8"
 tonic = "0.5"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }

@@ -60,6 +60,7 @@ impl protobuf::IntervalUnit {
         match interval_unit {
             IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
             IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
+            IntervalUnit::MonthDayNano =>  protobuf::IntervalUnit::MonthDayNano,
         }
     }
 
@@ -71,6 +72,7 @@ impl protobuf::IntervalUnit {
             Some(interval_unit) => Ok(match interval_unit {
                 protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
                 protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
+                protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
             }),
             None => Err(proto_error(
                 "Error converting i32 to DateUnit: Passed invalid variant",
