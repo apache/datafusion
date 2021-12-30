@@ -77,6 +77,9 @@ jobs:
       - name: Build Python package
         run: maturin build --release --no-sdist --strip
 
+      - name: Check that the lock file is up to date
+        run: git diff --exit-code Cargo.lock
+
       - name: List Windows wheels
         if: matrix.os == 'windows-latest'
         run: dir target\wheels\
@@ -111,6 +114,10 @@ jobs:
             --workdir /io/python \
             konstin2/maturin:v0.11.2 \
             build --release --manylinux 2010
+
+      - name: Check that the lock file is up to date
+        run: git diff --exit-code Cargo.lock
+
       - name: Archive wheels
         uses: actions/upload-artifact@v2
         with:
