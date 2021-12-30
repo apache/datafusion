@@ -189,6 +189,8 @@ pub enum BuiltinScalarFunction {
     Digest,
     /// exp
     Exp,
+    /// Factorial
+    Factorial,
     /// floor
     Floor,
     /// ln, Natural logarithm
@@ -328,6 +330,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Log => Volatility::Immutable,
             BuiltinScalarFunction::Log10 => Volatility::Immutable,
             BuiltinScalarFunction::Log2 => Volatility::Immutable,
+            BuiltinScalarFunction::Factorial => Volatility::Immutable,
             BuiltinScalarFunction::Round => Volatility::Immutable,
             BuiltinScalarFunction::Signum => Volatility::Immutable,
             BuiltinScalarFunction::Sin => Volatility::Immutable,
@@ -406,6 +409,7 @@ impl FromStr for BuiltinScalarFunction {
             "ceil" => BuiltinScalarFunction::Ceil,
             "cos" => BuiltinScalarFunction::Cos,
             "exp" => BuiltinScalarFunction::Exp,
+            "factorial" => BuiltinScalarFunction::Factorial,
             "floor" => BuiltinScalarFunction::Floor,
             "ln" => BuiltinScalarFunction::Ln,
             "log" => BuiltinScalarFunction::Log,
@@ -546,6 +550,7 @@ pub fn return_type(
         BuiltinScalarFunction::Lpad => utf8_to_str_type(&input_expr_types[0], "lpad"),
         BuiltinScalarFunction::Ltrim => utf8_to_str_type(&input_expr_types[0], "ltrim"),
         BuiltinScalarFunction::MD5 => utf8_to_str_type(&input_expr_types[0], "md5"),
+        BuiltinScalarFunction::Factorial => Ok(DataType::Float64),
         BuiltinScalarFunction::NullIf => {
             // NULLIF has two args and they might get coerced, get a preview of this
             let coerced_types = data_types(input_expr_types, &signature(fun));
@@ -734,6 +739,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Ceil => Arc::new(math_expressions::ceil),
         BuiltinScalarFunction::Cos => Arc::new(math_expressions::cos),
         BuiltinScalarFunction::Exp => Arc::new(math_expressions::exp),
+        BuiltinScalarFunction::Factorial => Arc::new(math_expressions::factorial),
         BuiltinScalarFunction::Floor => Arc::new(math_expressions::floor),
         BuiltinScalarFunction::Log => Arc::new(math_expressions::log10),
         BuiltinScalarFunction::Ln => Arc::new(math_expressions::ln),

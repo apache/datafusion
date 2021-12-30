@@ -21,6 +21,7 @@ use crate::error::{DataFusionError, Result};
 use arrow::array::{Float32Array, Float64Array};
 use arrow::datatypes::DataType;
 use rand::{thread_rng, Rng};
+use statrs::function::factorial;
 use std::iter;
 use std::sync::Arc;
 
@@ -101,6 +102,33 @@ math_unary_function!("exp", exp);
 math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
+
+/// factorial SQL function
+pub fn factorial(args: &[ColumnarValue]) -> Result<ColumnarValue> {
+    match &args[0] {
+        ColumnarValue::Array(array) => {
+            let x1 = array.as_any().downcast_ref::<Float64Array>();
+            match x1 {
+                Some(array) => {
+                    let res: Float64Array =
+                        arrow::compute::kernels::arity::unary(array, |x| {
+                            factorial::factorial(x as u64)
+                        });
+                    let arc1 = Arc::new(res);
+                    Ok(ColumnarValue::Array(arc1))
+                }
+                _ => Err(DataFusionError::Internal(
+                    format!("Invalid data type for ",),
+                )),
+            }
+        }
+        _ => {
+            return Err(DataFusionError::Internal(
+                "Expect factorial function to take some params".to_string(),
+            ))
+        }
+    }
+}
 
 /// random SQL function
 pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {

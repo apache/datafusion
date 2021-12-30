@@ -17,6 +17,40 @@
 
 use super::*;
 
+#[tokio::test]
+async fn factorial() -> Result<()> {
+    let schema = Arc::new(
+        Schema::new(vec![
+            Field::new("c1", DataType::Float64, true)]
+        ));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(Float64Array::from(vec![
+            Some(4.0),
+            Some(0.0),
+            Some(5.0),
+        ]))],
+    )?;
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT factorial(c1) FROM test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------+",
+        "| factorial(test.c1) |",
+        "+--------------------+",
+        "| 24                 |",
+        "| 1                  |",
+        "| 120                |",
+        "+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
 /// sqrt(f32) is slightly different than sqrt(CAST(f32 AS double)))
 #[tokio::test]
 async fn sqrt_f32_vs_f64() -> Result<()> {
