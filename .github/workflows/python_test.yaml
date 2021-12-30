@@ -56,6 +56,7 @@ jobs:
           source venv/bin/activate
           cd python
           maturin develop
+          git diff --exit-code Cargo.lock
           RUST_BACKTRACE=1 pytest -v .
         env:
           CARGO_HOME: "/home/runner/.cargo"
