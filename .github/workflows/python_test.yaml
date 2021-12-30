@@ -53,6 +53,8 @@ jobs:
           black --line-length 79 --diff --check python
       - name: Run tests
         run: |
+          set -euo pipefail
+
           source venv/bin/activate
           cd python
           maturin develop
