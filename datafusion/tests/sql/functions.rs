@@ -19,10 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn factorial() -> Result<()> {
-    let schema = Arc::new(
-        Schema::new(vec![
-            Field::new("c1", DataType::Float64, true)]
-        ));
+    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Float64, true)]));
 
     let data = RecordBatch::try_new(
         schema.clone(),

@@ -118,15 +118,13 @@ pub fn factorial(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     Ok(ColumnarValue::Array(arc1))
                 }
                 _ => Err(DataFusionError::Internal(
-                    format!("Invalid data type for ",),
+                    "Invalid data type for factorial function".to_string(),
                 )),
             }
         }
-        _ => {
-            return Err(DataFusionError::Internal(
-                "Expect factorial function to take some params".to_string(),
-            ))
-        }
+        _ => Err(DataFusionError::Internal(
+            "Expect factorial function to take some params".to_string(),
+        )),
     }
 }
 
