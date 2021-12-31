@@ -1366,10 +1366,8 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
                         return Ok(expr);
                     }
                     let normalized_expr = normalized_expr.unwrap();
-                    let found_agg =
-                        self.aggr_expr.iter().find(|a| (**a) == normalized_expr);
-                    if found_agg.is_some() {
-                        let agg = normalize_col(found_agg.unwrap().clone(), self.plan)?;
+                    if let Some(found_agg) = self.aggr_expr.iter().find(|a| (**a) == normalized_expr) {
+                        let agg = normalize_col(found_agg, self.plan)?;
                         let col = Expr::Column(
                             agg.to_field(self.input.schema())
                                 .map(|f| f.qualified_column())?,
