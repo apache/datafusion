@@ -1327,7 +1327,7 @@ pub fn rewrite_sort_cols_by_aggs(
         .into_iter()
         .map(|e| {
             let expr = e.into();
-            match expr.clone() {
+            match expr {
                 Expr::Sort {
                     expr,
                     asc,
@@ -1340,7 +1340,7 @@ pub fn rewrite_sort_cols_by_aggs(
                     };
                     Ok(sort)
                 }
-                _ => Ok(expr),
+                expr => Ok(expr),
             }
         })
         .collect()
