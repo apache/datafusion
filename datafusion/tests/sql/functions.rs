@@ -26,7 +26,9 @@ async fn factorial() -> Result<()> {
         vec![Arc::new(Float64Array::from(vec![
             Some(4.0),
             Some(0.0),
-            Some(5.0),
+            Some(1.5),
+            Some(-1.0),
+            Some(10000000000.0),
         ]))],
     )?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
@@ -41,7 +43,9 @@ async fn factorial() -> Result<()> {
         "+--------------------+",
         "| 24                 |",
         "| 1                  |",
-        "| 120                |",
+        "| 1                  |",
+        "| 1                  |",
+        "| inf                |",
         "+--------------------+",
     ];
     assert_batches_eq!(expected, &actual);
