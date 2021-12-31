@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use pyo3::PyMappingProtocol;
 use pyo3::{basic::CompareOp, prelude::*, PyNumberProtocol, PyObjectProtocol};
 use std::convert::{From, Into};
 
@@ -131,5 +132,16 @@ impl PyExpr {
             data_type: to,
         };
         expr.into()
+    }
+}
+
+#[pyproto]
+impl PyMappingProtocol for PyExpr {
+    fn __getitem__(&self, key: &str) -> PyResult<PyExpr> {
+        Ok(Expr::GetIndexedField {
+            expr: Box::new(self.expr.clone()),
+            key: ScalarValue::Utf8(Some(key.to_string()).to_owned()),
+        }
+        .into())
     }
 }
