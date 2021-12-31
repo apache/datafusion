@@ -1308,7 +1308,6 @@ fn normalize_col_with_schemas(
 }
 
 /// Recursively normalize all Column expressions in a list of expression trees
-#[inline]
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -1320,7 +1319,6 @@ pub fn normalize_cols(
 }
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-#[inline]
 pub fn rewrite_sort_cols_by_aggs(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -1351,10 +1349,7 @@ pub fn rewrite_sort_cols_by_aggs(
 fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     match plan {
         LogicalPlan::Aggregate(Aggregate {
-            input,
-            group_expr: _,
-            aggr_expr,
-            schema: _,
+            input, aggr_expr, ..
         }) => {
             struct Rewriter<'a> {
                 plan: &'a LogicalPlan,
