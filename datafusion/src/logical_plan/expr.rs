@@ -1319,7 +1319,7 @@ pub fn normalize_cols(
 }
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
-/// For example, `max(x)` is written to `col("MAX(x)")` 
+/// For example, `max(x)` is written to `col("MAX(x)")`
 pub fn rewrite_sort_cols_by_aggs(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -1366,8 +1366,10 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
                         return Ok(expr);
                     }
                     let normalized_expr = normalized_expr.unwrap();
-                    if let Some(found_agg) = self.aggr_expr.iter().find(|a| (**a) == normalized_expr) {
-                        let agg = normalize_col(found_agg, self.plan)?;
+                    if let Some(found_agg) =
+                        self.aggr_expr.iter().find(|a| (**a) == normalized_expr)
+                    {
+                        let agg = normalize_col(found_agg.clone(), self.plan)?;
                         let col = Expr::Column(
                             agg.to_field(self.input.schema())
                                 .map(|f| f.qualified_column())?,
