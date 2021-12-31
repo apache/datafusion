@@ -1319,6 +1319,7 @@ pub fn normalize_cols(
 }
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
+/// For example, `max(x)` is written to `col("MAX(x)")` 
 pub fn rewrite_sort_cols_by_aggs(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
