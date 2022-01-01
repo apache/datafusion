@@ -19,6 +19,7 @@ from abc import ABCMeta, abstractmethod
 from typing import List
 
 import pyarrow as pa
+import importlib.metadata
 
 from ._internal import (
     AggregateUDF,
@@ -28,6 +29,8 @@ from ._internal import (
     ScalarUDF,
 )
 
+
+__version__ = importlib.metadata.version("datafusion")
 
 __all__ = [
     "DataFrame",
