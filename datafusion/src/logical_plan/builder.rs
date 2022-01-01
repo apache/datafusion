@@ -46,8 +46,8 @@ use std::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, Column, CrossJoin, DFField, DFSchema,
-    DFSchemaRef, Limit, Partitioning, Repartition, Values,
+    columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column,
+    CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -521,6 +521,8 @@ impl LogicalPlanBuilder {
         &self,
         exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
     ) -> Result<Self> {
+        let exprs = rewrite_sort_cols_by_aggs(exprs, &self.plan)?;
+
         let schema = self.plan.schema();
 
         // Collect sort columns that are missing in the input plan's schema
@@ -530,7 +532,7 @@ impl LogicalPlanBuilder {
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
                 let mut columns: HashSet<Column> = HashSet::new();
-                utils::expr_to_columns(&expr.into(), &mut columns)?;
+                utils::expr_to_columns(&expr, &mut columns)?;
 
                 columns.into_iter().for_each(|c| {
                     if schema.field_from_column(&c).is_err() {
