@@ -33,6 +33,27 @@ async fn test_sort_unprojected_col() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_order_by_agg_expr() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------+",
+        "| MIN(aggregate_test_100.c12) |",
+        "+-----------------------------+",
+        "| 0.01479305307777301         |",
+        "+-----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12) + 0.1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_nulls_first_asc() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num";
