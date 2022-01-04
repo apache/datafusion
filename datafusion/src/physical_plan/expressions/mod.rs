@@ -28,6 +28,8 @@ use arrow::record_batch::RecordBatch;
 mod approx_distinct;
 mod array_agg;
 mod average;
+mod stddev;
+mod variance;
 #[macro_use]
 mod binary;
 mod case;
