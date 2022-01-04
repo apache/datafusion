@@ -158,8 +158,8 @@ impl VarianceAccumulator {
     /// Creates a new `VarianceAccumulator`
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            m2: ScalarValue::try_from(datatype)?,
-            mean: ScalarValue::try_from(datatype)?,
+            m2: ScalarValue::from(0 as f64),
+            mean: ScalarValue::from(0 as f64),
             count: 0,
         })
     }
@@ -203,10 +203,14 @@ impl Accumulator for VarianceAccumulator {
         let is_empty = values.is_null();
 
         if !is_empty {
+            let new_count = self.count + 1;
             let delta1 = sum::sum(values, &self.mean.arithmetic_negate())?;
             let sum = sum::sum(&self.mean, values)?;
-            let new_mean = VarianceAccumulator::div(&sum, 2)?;
-            let delta2 = sum::sum(values, &self.mean.arithmetic_negate())?;
+            let new_mean = sum::sum(
+                &VarianceAccumulator::div(&delta1, new_count)?,
+                &self.mean)?;
+            //let new_mean = VarianceAccumulator::div(&sum, 2)?;
+            let delta2 = sum::sum(values, &new_mean.arithmetic_negate())?;
             let tmp = VarianceAccumulator::mul(&delta1, &delta2)?;
             let new_m2 = sum::sum(&self.m2, &tmp)?;
             self.count += 1;
@@ -276,6 +280,45 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
+
+    #[test]
+    fn variance_f64_1() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Variance,
+            ScalarValue::from(0.25_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Variance,
+            ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_i32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Int32,
+            Variance,
+            ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
     #[test]
     fn test_variance_return_data_type() -> Result<()> {
         let data_type = DataType::Decimal(10, 5);
@@ -344,18 +387,6 @@ mod tests {
     }
 
     #[test]
-    fn variance_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            Variance,
-            ScalarValue::from(3_f64),
-            DataType::Float64
-        )
-    }
-
-    #[test]
     fn variance_i32_with_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -405,19 +436,6 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float32,
-            Variance,
-            ScalarValue::from(3_f64),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn variance_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
             Variance,
             ScalarValue::from(3_f64),
             DataType::Float64
