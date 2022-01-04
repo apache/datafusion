@@ -23,6 +23,7 @@ use std::task::{Context, Poll};
 use std::vec;
 
 use ahash::RandomState;
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use futures::{
     stream::{Stream, StreamExt},
     Future,
@@ -344,15 +345,15 @@ pin_project! {
     }
 }
 
-fn group_aggregate_batch(
+fn group_aggregate_batch<'a>(
     mode: &AggregateMode,
     random_state: &RandomState,
     group_expr: &[Arc<dyn PhysicalExpr>],
     aggr_expr: &[Arc<dyn AggregateExpr>],
     batch: RecordBatch,
-    mut accumulators: Accumulators,
+    mut accumulators: Accumulators<'a>,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-) -> Result<Accumulators> {
+) -> Result<Accumulators<'a>> {
     // evaluate the grouping expressions
     let group_values = evaluate(group_expr, &batch)?;
 
@@ -517,7 +518,12 @@ async fn compute_grouped_hash_aggregate(
     let random_state = RandomState::new();
 
     // iterate over all input batches and update the accumulators
-    let mut accumulators = Accumulators::default();
+    let bump = Bump::new();
+    let mut accumulators = Accumulators {
+        map: Default::default(),
+        group_states: BumpVec::new_in(&bump),
+    };
+
     timer.done();
     while let Some(batch) = input.next().await {
         let batch = batch?;
@@ -598,8 +604,7 @@ struct GroupState {
 }
 
 /// The state of all the groups
-#[derive(Default)]
-struct Accumulators {
+struct Accumulators<'a> {
     /// Logically maps group values to an index in `group_states`
     ///
     /// Uses the raw API of hashbrown to avoid actually storing the
@@ -610,10 +615,14 @@ struct Accumulators {
     map: RawTable<(u64, usize)>,
 
     /// State for each group
-    group_states: Vec<GroupState>,
+    //group_states: Vec<GroupState>,
+    group_states: BumpVec<'a, GroupState>,
 }
 
-impl std::fmt::Debug for Accumulators {
+// will not be used multiple async, so Accumulators is Send
+unsafe impl Send for Accumulators<'_> {}
+
+impl std::fmt::Debug for Accumulators<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
         let map_string = "RawTable";
