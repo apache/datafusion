@@ -60,7 +60,7 @@ impl protobuf::IntervalUnit {
         match interval_unit {
             IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
             IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
-            IntervalUnit::MonthDayNano =>  protobuf::IntervalUnit::MonthDayNano,
+            IntervalUnit::MonthDayNano => protobuf::IntervalUnit::MonthDayNano,
         }
     }
 
