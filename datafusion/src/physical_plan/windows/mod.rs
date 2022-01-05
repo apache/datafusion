@@ -185,6 +185,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
+    use crate::execution::runtime_env::RuntimeEnv;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test_util::aggr_test_schema();
@@ -211,6 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn window_function() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let (input, schema) = create_test_schema(1)?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
@@ -247,7 +249,7 @@ mod tests {
             schema.clone(),
         )?);
 
-        let result: Vec<RecordBatch> = collect(window_exec).await?;
+        let result: Vec<RecordBatch> = collect(window_exec, runtime).await?;
         assert_eq!(result.len(), 1);
 
         let columns = result[0].columns();
@@ -271,6 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -290,7 +293,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = collect(window_agg_exec);
+        let fut = collect(window_agg_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

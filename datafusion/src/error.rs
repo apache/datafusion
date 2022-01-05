@@ -61,6 +61,9 @@ pub enum DataFusionError {
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
+    /// This error is thrown when a consumer cannot acquire memory from the Memory Manager
+    /// we can just cancel the execution of the partition.
+    ResourcesExhausted(String),
 }
 
 impl DataFusionError {
@@ -128,6 +131,9 @@ impl Display for DataFusionError {
             }
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
+            }
+            DataFusionError::ResourcesExhausted(ref desc) => {
+                write!(f, "Resources exhausted: {}", desc)
             }
         }
     }

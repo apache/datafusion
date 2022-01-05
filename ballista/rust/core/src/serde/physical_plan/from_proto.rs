@@ -41,6 +41,7 @@ use datafusion::datasource::PartitionedFile;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::{
     window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
 };
@@ -626,6 +627,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
                     object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+                    runtime_env: Arc::new(RuntimeEnv::default()),
                 };
 
                 let fun_expr = functions::create_physical_fun(

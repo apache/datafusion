@@ -33,6 +33,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion::execution::runtime_env::RuntimeEnv;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -144,7 +145,11 @@ impl ExecutionPlan for StatisticsValidation {
         }
     }
 
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
 

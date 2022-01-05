@@ -41,7 +41,8 @@ async fn explain_analyze_baseline_metrics() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let results = collect(physical_plan.clone()).await.unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(physical_plan.clone(), runtime).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
     println!("Query Output:\n\n{}", formatted);
 
@@ -325,7 +326,8 @@ async fn csv_explain_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let results = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -522,7 +524,8 @@ async fn csv_explain_verbose_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let results = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
