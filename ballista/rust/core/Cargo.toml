@@ -43,10 +43,7 @@ tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
 chrono = { version = "0.4", default-features = false }
 
-# workaround for https://github.com/apache/arrow-datafusion/issues/1498
-# should be able to remove when we update arrow-flight
-quote = "=1.0.10"
-arrow-flight = { version = "6.4.0"  }
+arrow-flight = { version = "7.0.0-SNAPSHOT"  }
 
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
