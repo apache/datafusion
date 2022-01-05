@@ -31,7 +31,7 @@ use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 
-use super::{format_state_name, sum};
+use super::format_state_name;
 
 /// STDDEV (standard deviation) aggregate expression
 #[derive(Debug)]
@@ -163,34 +163,6 @@ impl VarianceAccumulator {
             count: 0,
         })
     }
-
-    // TODO: There should be a generic implementation of ScalarValue arithmetic somewhere
-    // There is also a similar function in averate.rs
-    fn div(lhs: &ScalarValue, rhs: u64) -> Result<ScalarValue> {
-        match lhs {
-            ScalarValue::Float64(e) => {
-                Ok(ScalarValue::Float64(e.map(|f| f / rhs as f64)))
-            }
-            _ => Err(DataFusionError::Internal(
-                "Numerator should be f64 to calculate variance".to_string(),
-            )),
-        }
-    }
-
-    // TODO: There should be a generic implementation of ScalarValue arithmetic somewhere
-    // This is only used to calculate multiplications of deltas which are guarenteed to be f64
-    // Assumption in this function is lhs and rhs are not none values and are the same data type
-    fn mul(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-        match (lhs, rhs) {
-            (ScalarValue::Float64(f1),  
-                ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() * f2.unwrap())))
-            }
-            _ => Err(DataFusionError::Internal(
-                "Delta should be f64 to calculate variance".to_string(),
-            )),
-        }
-    }
 }
 
 impl Accumulator for VarianceAccumulator {
@@ -204,15 +176,14 @@ impl Accumulator for VarianceAccumulator {
 
         if !is_empty {
             let new_count = self.count + 1;
-            let delta1 = sum::sum(values, &self.mean.arithmetic_negate())?;
-            let sum = sum::sum(&self.mean, values)?;
-            let new_mean = sum::sum(
-                &VarianceAccumulator::div(&delta1, new_count)?,
+            let delta1 = ScalarValue::add(values, &self.mean.arithmetic_negate())?;
+            let new_mean = ScalarValue::add(
+                &ScalarValue::div(&delta1, &ScalarValue::from(new_count as f64))?,
                 &self.mean)?;
-            //let new_mean = VarianceAccumulator::div(&sum, 2)?;
-            let delta2 = sum::sum(values, &new_mean.arithmetic_negate())?;
-            let tmp = VarianceAccumulator::mul(&delta1, &delta2)?;
-            let new_m2 = sum::sum(&self.m2, &tmp)?;
+            let delta2 = ScalarValue::add(values, &new_mean.arithmetic_negate())?;
+            let tmp = ScalarValue::mul(&delta1, &delta2)?;
+
+            let new_m2 = ScalarValue::add(&self.m2, &tmp)?;
             self.count += 1;
             self.mean = new_mean;
             self.m2 = new_m2;
@@ -233,23 +204,23 @@ impl Accumulator for VarianceAccumulator {
             unreachable!()
         };
         let new_mean = 
-            VarianceAccumulator::div(
-                &sum::sum(
+            ScalarValue::div(
+                &ScalarValue::add(
                     &self.mean, 
                     mean)?,
-                2)?;
-        let delta = sum::sum(&mean.arithmetic_negate(), &self.mean)?;
-        let delta_sqrt = VarianceAccumulator::mul(&delta, &delta)?;
+                    &ScalarValue::from(2 as f64))?;
+        let delta = ScalarValue::add(&mean.arithmetic_negate(), &self.mean)?;
+        let delta_sqrt = ScalarValue::mul(&delta, &delta)?;
         let new_m2 = 
-            sum::sum(
-                &sum::sum(
-                    &VarianceAccumulator::mul(
+            ScalarValue::add(
+                &ScalarValue::add(
+                    &ScalarValue::mul(
                         &delta_sqrt,
-                        &VarianceAccumulator::div(
-                            &VarianceAccumulator::mul(
+                        &ScalarValue::div(
+                            &ScalarValue::mul(
                                     &ScalarValue::from(self.count), 
                                     count)?,
-                                new_count)?)?,
+                            &ScalarValue::from(new_count as f64))?)?,
                     &self.m2)?,
                 &m2)?;
 
@@ -295,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn variance_f64() -> Result<()> {
+    fn variance_f64_2() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(
@@ -313,6 +284,32 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
+            Variance,
+            ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_u32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        generic_test_op!(
+            a,
+            DataType::UInt32,
+            Variance,
+            ScalarValue::from(2.0f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        generic_test_op!(
+            a,
+            DataType::Float32,
             Variance,
             ScalarValue::from(2_f64),
             DataType::Float64
@@ -412,32 +409,6 @@ mod tests {
             DataType::Int32,
             Variance,
             ScalarValue::Float64(None),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn variance_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(
-            a,
-            DataType::UInt32,
-            Variance,
-            ScalarValue::from(3.0f64),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn variance_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(
-            a,
-            DataType::Float32,
-            Variance,
-            ScalarValue::from(3_f64),
             DataType::Float64
         )
     }

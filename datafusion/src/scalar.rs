@@ -526,6 +526,283 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
+
+    /// Return true if the value is numeric
+    pub fn is_numeric(&self) -> bool {
+        match self {
+            ScalarValue::Float32(_) |
+            ScalarValue::Float64(_) | 
+            ScalarValue::Decimal128(_, _, _) | 
+            ScalarValue::Int8(_) | 
+            ScalarValue::Int16(_) | 
+            ScalarValue::Int32(_) | 
+            ScalarValue::Int64(_) | 
+            ScalarValue::UInt8(_) |
+            ScalarValue::UInt16(_) | 
+            ScalarValue::UInt32(_) | 
+            ScalarValue::UInt64(_) => {
+                true
+            } 
+            _ => false
+        }
+    } 
+
+    /// Add two numeric ScalarValues
+    pub fn add(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+        if !lhs.is_numeric() || !rhs.is_numeric() {
+            return Err(DataFusionError::Internal(
+                format!(
+                    "Division is only supported on numeric types, \
+                    here has  {:?} and {:?}",
+                    lhs.get_datatype(), rhs.get_datatype()
+            )));
+        }
+
+        // TODO: Finding a good way to support operation between different types without
+        // writing a hige match block. 
+        match (lhs, rhs) {
+            (ScalarValue::Decimal128(v1, u1, s1), _) | 
+            (_, ScalarValue::Decimal128(v1, u1, s1)) => {
+                Err(DataFusionError::Internal(
+                    format!(
+                    "Division with Decimals are not supported for now"
+                )))
+            },
+            // f64 / _
+            (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() + f2.unwrap())))
+            },
+            // f32 / _
+            (ScalarValue::Float32(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::Float32(f1), ScalarValue::Float32(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap() as f64)))
+            },
+            // i64 / _
+            (ScalarValue::Int64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::Int64(f1), ScalarValue::Int64(f2)) => {
+                Ok(ScalarValue::Int64(Some(f1.unwrap() + f2.unwrap())))
+            },
+            // i32 / _
+            (ScalarValue::Int32(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::Int32(f1), ScalarValue::Int32(f2)) => {
+                Ok(ScalarValue::Int64(Some(f1.unwrap() as i64 + f2.unwrap() as i64)))
+            },
+            // i16 / _
+            (ScalarValue::Int16(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::Int16(f1), ScalarValue::Int16(f2)) => {
+                Ok(ScalarValue::Int32(Some(f1.unwrap() as i32 + f2.unwrap() as i32)))
+            },
+            // i8 / _
+            (ScalarValue::Int8(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::Int8(f1), ScalarValue::Int8(f2)) => {
+                Ok(ScalarValue::Int16(Some(f1.unwrap() as i16 + f2.unwrap() as i16)))
+            },
+            // u64 / _
+            (ScalarValue::UInt64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::UInt64(f1), ScalarValue::UInt64(f2)) => {
+                Ok(ScalarValue::UInt64(Some(f1.unwrap() as u64 + f2.unwrap() as u64)))
+            },
+            // u32 / _
+            (ScalarValue::UInt32(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::UInt32(f1), ScalarValue::UInt32(f2)) => {
+                Ok(ScalarValue::UInt64(Some(f1.unwrap() as u64 + f2.unwrap() as u64)))
+            },
+            // u16 / _
+            (ScalarValue::UInt16(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::UInt16(f1), ScalarValue::UInt16(f2)) => {
+                Ok(ScalarValue::UInt32(Some(f1.unwrap() as u32 + f2.unwrap() as u32)))
+            },
+            // u8 / _
+            (ScalarValue::UInt8(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
+            },
+            (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => {
+                Ok(ScalarValue::UInt16(Some(f1.unwrap() as u16 / f2.unwrap() as u16)))
+            },
+      
+            _ => Err(DataFusionError::Internal(
+                format!(
+                "Addition only support calculation with the same type or f64 as one of the numbers for now, here has {:?} and {:?}",
+                lhs.get_datatype(), rhs.get_datatype()
+            ))),
+        }
+    }
+
+    /// Multiply two numeric ScalarValues
+    pub fn mul(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+        if !lhs.is_numeric() || !rhs.is_numeric() {
+            return Err(DataFusionError::Internal(
+                format!(
+                    "Multiplication is only supported on numeric types, \
+                    here has  {:?} and {:?}",
+                    lhs.get_datatype(), rhs.get_datatype()
+            )));
+        }
+
+        // TODO: Finding a good way to support operation between different types without
+        // writing a hige match block. 
+        match (lhs, rhs) {
+            // f64 / _
+            (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() * f2.unwrap())))
+            },
+            // f32 / _
+            (ScalarValue::Float32(f1), ScalarValue::Float32(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 * f2.unwrap() as f64)))
+            },
+            // i64 / _
+            (ScalarValue::Int64(f1), ScalarValue::Int64(f2)) => {
+                Ok(ScalarValue::Int64(Some(f1.unwrap() * f2.unwrap())))
+            },
+            // i32 / _
+            (ScalarValue::Int32(f1), ScalarValue::Int32(f2)) => {
+                Ok(ScalarValue::Int64(Some(f1.unwrap() as i64 * f2.unwrap() as i64)))
+            },
+            // i16 / _
+            (ScalarValue::Int16(f1), ScalarValue::Int16(f2)) => {
+                Ok(ScalarValue::Int32(Some(f1.unwrap() as i32 * f2.unwrap() as i32)))
+            },
+            // i8 / _
+            (ScalarValue::Int8(f1), ScalarValue::Int8(f2)) => {
+                Ok(ScalarValue::Int16(Some(f1.unwrap() as i16 * f2.unwrap() as i16)))
+            },
+            // u64 / _
+            (ScalarValue::UInt64(f1), ScalarValue::UInt64(f2)) => {
+                Ok(ScalarValue::UInt64(Some(f1.unwrap() as u64 * f2.unwrap() as u64)))
+            },
+            // u32 / _
+            (ScalarValue::UInt32(f1), ScalarValue::UInt32(f2)) => {
+                Ok(ScalarValue::UInt64(Some(f1.unwrap() as u64 * f2.unwrap() as u64)))
+            },
+            // u16 / _
+            (ScalarValue::UInt16(f1), ScalarValue::UInt16(f2)) => {
+                Ok(ScalarValue::UInt32(Some(f1.unwrap() as u32 * f2.unwrap() as u32)))
+            },
+            // u8 / _
+            (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => {
+                Ok(ScalarValue::UInt16(Some(f1.unwrap() as u16 * f2.unwrap() as u16)))
+            },
+            _ => Err(DataFusionError::Internal(
+                format!(
+                "Multiplication only support f64 for now, here has {:?} and {:?}",
+                lhs.get_datatype(), rhs.get_datatype()
+            ))),
+        }
+    }
+
+    /// Division between two numeric ScalarValues
+    pub fn div(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+        if !lhs.is_numeric() || !rhs.is_numeric() {
+            return Err(DataFusionError::Internal(
+                format!(
+                    "Division is only supported on numeric types, \
+                    here has  {:?} and {:?}",
+                    lhs.get_datatype(), rhs.get_datatype()
+            )));
+        }
+
+        // TODO: Finding a good way to support operation between different types without
+        // writing a hige match block. 
+        match (lhs, rhs) {
+            (ScalarValue::Decimal128(v1, u1, s1), _) | 
+            (_, ScalarValue::Decimal128(v1, u1, s1)) => {
+                Err(DataFusionError::Internal(
+                    format!(
+                    "Division with Decimals are not supported for now"
+                )))
+            },
+            // f64 / _
+            (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() / f2.unwrap())))
+            },
+            // f32 / _
+            (ScalarValue::Float32(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64/ f2.unwrap())))
+            },
+            (ScalarValue::Float32(f1), ScalarValue::Float32(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64/ f2.unwrap() as f64)))
+            },
+            // i64 / _
+            (ScalarValue::Int64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::Int64(f1), ScalarValue::Int64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // i32 / _
+            (ScalarValue::Int32(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::Int32(f1), ScalarValue::Int32(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // i16 / _
+            (ScalarValue::Int16(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::Int16(f1), ScalarValue::Int16(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // i8 / _
+            (ScalarValue::Int8(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::Int8(f1), ScalarValue::Int8(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // u64 / _
+            (ScalarValue::UInt64(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::UInt64(f1), ScalarValue::UInt64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // u32 / _
+            (ScalarValue::UInt32(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::UInt32(f1), ScalarValue::UInt32(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // u16 / _
+            (ScalarValue::UInt16(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::UInt16(f1), ScalarValue::UInt16(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+            // u8 / _
+            (ScalarValue::UInt8(f1), ScalarValue::Float64(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
+            },
+            (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => {
+                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
+            },
+      
+            _ => Err(DataFusionError::Internal(
+                format!(
+                "Division only support calculation with the same type or f64 as denominator for now, here has {:?} and {:?}",
+                lhs.get_datatype(), rhs.get_datatype()
+            ))),
+        }
+    }
+
     /// Create a decimal Scalar from value/precision and scale.
     pub fn try_new_decimal128(
         value: i128,
