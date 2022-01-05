@@ -18,7 +18,6 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
@@ -26,8 +25,6 @@ use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::{
     ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
 };
-use arrow::array::*;
-use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 

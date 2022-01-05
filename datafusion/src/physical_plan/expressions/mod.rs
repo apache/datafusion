@@ -28,8 +28,6 @@ use arrow::record_batch::RecordBatch;
 mod approx_distinct;
 mod array_agg;
 mod average;
-mod stddev;
-mod variance;
 #[macro_use]
 mod binary;
 mod case;
@@ -54,6 +52,8 @@ mod rank;
 mod row_number;
 mod sum;
 mod try_cast;
+mod stddev;
+mod variance;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -88,6 +88,8 @@ pub use rank::{dense_rank, percent_rank, rank};
 pub use row_number::RowNumber;
 pub(crate) use sum::is_sum_support_arg_type;
 pub use sum::{sum_return_type, Sum};
+pub(crate) use variance::is_variance_support_arg_type;
+pub use variance::{variance_return_type, Variance};
 pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state

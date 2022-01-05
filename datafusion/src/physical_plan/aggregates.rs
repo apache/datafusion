@@ -35,7 +35,7 @@ use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_t
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use expressions::{avg_return_type, sum_return_type};
+use expressions::{avg_return_type, sum_return_type, variance_return_type, Variance};
 use std::{fmt, str::FromStr, sync::Arc};
 
 /// the implementation of an aggregate function
@@ -64,6 +64,8 @@ pub enum AggregateFunction {
     ApproxDistinct,
     /// array_agg
     ArrayAgg,
+    /// Variance (Population)
+    Variance,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -84,6 +86,7 @@ impl FromStr for AggregateFunction {
             "sum" => AggregateFunction::Sum,
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "array_agg" => AggregateFunction::ArrayAgg,
+            "variance" => AggregateFunction::Variance,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
@@ -116,6 +119,7 @@ pub fn return_type(
             Ok(coerced_data_types[0].clone())
         }
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
+        AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
         AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
             "item",
@@ -211,6 +215,16 @@ pub fn create_aggregate_expr(
             return Err(DataFusionError::NotImplemented(
                 "AVG(DISTINCT) aggregations are not available".to_string(),
             ));
+        },
+        (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::Variance, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "VARIANCE(DISTINCT) aggregations are not available".to_string(),
+            ));
         }
     })
 }
@@ -256,7 +270,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .collect::<Vec<_>>();
             Signature::uniform(1, valid, Volatility::Immutable)
         }
-        AggregateFunction::Avg | AggregateFunction::Sum => {
+        AggregateFunction::Avg | AggregateFunction::Sum | AggregateFunction::Variance => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }
@@ -451,6 +465,47 @@ mod tests {
     }
 
     #[test]
+    fn test_variance_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::Variance];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                match fun {
+                    AggregateFunction::Variance => {
+                        assert!(result_agg_phy_exprs.as_any().is::<Variance>());
+                        assert_eq!("c1", result_agg_phy_exprs.name());
+                        assert_eq!(
+                            Field::new("c1", DataType::Float64, true),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
+                    _ => {}
+                };
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_min_max() -> Result<()> {
         let observed = return_type(&AggregateFunction::Min, &[DataType::Utf8])?;
         assert_eq!(DataType::Utf8, observed);
@@ -542,6 +597,32 @@ mod tests {
     #[test]
     fn test_avg_no_utf8() {
         let observed = return_type(&AggregateFunction::Avg, &[DataType::Utf8]);
+        assert!(observed.is_err());
+    }
+
+    #[test]
+    fn test_variance_return_type() -> Result<()> {
+        let observed = return_type(&AggregateFunction::Variance, &[DataType::Float32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Variance, &[DataType::Float64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Variance, &[DataType::Int32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Variance, &[DataType::UInt32])?;
+        assert_eq!(DataType::Float64, observed);
+
+        let observed = return_type(&AggregateFunction::Variance, &[DataType::Int64])?;
+        assert_eq!(DataType::Float64, observed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variance_no_utf8() {
+        let observed = return_type(&AggregateFunction::Variance, &[DataType::Utf8]);
         assert!(observed.is_err());
     }
 }
