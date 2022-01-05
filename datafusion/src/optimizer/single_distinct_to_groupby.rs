@@ -71,7 +71,8 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                             if group_fields_set
                                 .insert(args[0].name(input.schema()).unwrap())
                             {
-                                all_group_args.push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
+                                all_group_args
+                                    .push(args[0].clone().alias(SINGLE_DISTINCT_ALIAS));
                             }
                             Expr::AggregateFunction {
                                 fun: fun.clone(),
@@ -192,7 +193,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logical_plan::{col, count, count_distinct, max, LogicalPlanBuilder, lit};
+    use crate::logical_plan::{col, count, count_distinct, lit, max, LogicalPlanBuilder};
     use crate::physical_plan::aggregates;
     use crate::test::*;
 
