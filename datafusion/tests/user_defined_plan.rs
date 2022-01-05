@@ -94,7 +94,9 @@ use datafusion::logical_plan::{DFSchemaRef, Limit};
 async fn exec_sql(ctx: &mut ExecutionContext, sql: &str) -> Result<String> {
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
-    pretty_format_batches(&batches).map_err(DataFusionError::ArrowError)
+    pretty_format_batches(&batches)
+        .map_err(DataFusionError::ArrowError)
+        .map(|d| d.to_string())
 }
 
 /// Create a test table.
