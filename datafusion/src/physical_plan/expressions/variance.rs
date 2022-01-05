@@ -59,7 +59,7 @@ pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "STDDEV does not support {:?}",
+            "VARIANCE does not support {:?}",
             other
         ))),
     }
@@ -127,7 +127,12 @@ impl AggregateExpr for Variance {
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "sum"),
+                &format_state_name(&self.name, "mean"),
+                self.data_type.clone(),
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "m2"),
                 self.data_type.clone(),
                 true,
             ),
