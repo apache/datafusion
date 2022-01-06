@@ -236,7 +236,11 @@ impl Accumulator for VarianceAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         match self.m2 {
             ScalarValue::Float64(e) => {
-                Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
+                if self.count == 0 {
+                    Ok(ScalarValue::Float64(None))
+                } else {
+                    Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
+                }
             }
             _ => Err(DataFusionError::Internal(
                 "M2 should be f64 for variance".to_string(),
@@ -331,61 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn variance_decimal() -> Result<()> {
-        // test agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
-        for i in 1..7 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-
-        generic_test_op!(
-            array,
-            DataType::Decimal(10, 0),
-            Variance,
-            ScalarValue::Decimal128(Some(35000), 14, 4),
-            DataType::Decimal(14, 4)
-        )
-    }
-
-    #[test]
-    fn variance_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-        generic_test_op!(
-            array,
-            DataType::Decimal(10, 0),
-            Variance,
-            ScalarValue::Decimal128(Some(32500), 14, 4),
-            DataType::Decimal(14, 4)
-        )
-    }
-
-    #[test]
-    fn variance_decimal_all_nulls() -> Result<()> {
-        // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-        generic_test_op!(
-            array,
-            DataType::Decimal(10, 0),
-            Variance,
-            ScalarValue::Decimal128(None, 14, 4),
-            DataType::Decimal(14, 4)
-        )
-    }
-
-    #[test]
     fn variance_i32_with_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
@@ -398,7 +347,7 @@ mod tests {
             a,
             DataType::Int32,
             Variance,
-            ScalarValue::from(3.25f64),
+            ScalarValue::from(2.1875f64),
             DataType::Float64
         )
     }
