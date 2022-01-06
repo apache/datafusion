@@ -552,7 +552,7 @@ impl ScalarValue {
         if !lhs.is_numeric() || !rhs.is_numeric() {
             return Err(DataFusionError::Internal(
                 format!(
-                    "Division is only supported on numeric types, \
+                    "Addition only supports numeric types, \
                     here has  {:?} and {:?}",
                     lhs.get_datatype(), rhs.get_datatype()
             )));
@@ -560,12 +560,13 @@ impl ScalarValue {
 
         // TODO: Finding a good way to support operation between different types without
         // writing a hige match block. 
+        // TODO: Add support for decimal types
         match (lhs, rhs) {
-            (ScalarValue::Decimal128(v1, u1, s1), _) | 
-            (_, ScalarValue::Decimal128(v1, u1, s1)) => {
+            (ScalarValue::Decimal128(_, _, _), _) | 
+            (_, ScalarValue::Decimal128(_, _, _)) => {
                 Err(DataFusionError::Internal(
                     format!(
-                    "Division with Decimals are not supported for now"
+                    "Addition with Decimals are not supported for now"
                 )))
             },
             // f64 / _
@@ -633,7 +634,7 @@ impl ScalarValue {
                 Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
             },
             (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => {
-                Ok(ScalarValue::UInt16(Some(f1.unwrap() as u16 / f2.unwrap() as u16)))
+                Ok(ScalarValue::UInt16(Some(f1.unwrap() as u16 + f2.unwrap() as u16)))
             },
       
             _ => Err(DataFusionError::Internal(
@@ -657,7 +658,15 @@ impl ScalarValue {
 
         // TODO: Finding a good way to support operation between different types without
         // writing a hige match block. 
+        // TODO: Add support for decimal type
         match (lhs, rhs) {
+            (ScalarValue::Decimal128(_, _, _), _) | 
+            (_, ScalarValue::Decimal128(_, _, _)) => {
+                Err(DataFusionError::Internal(
+                    format!(
+                    "Multiplication with Decimals are not supported for now"
+                )))
+            },
             // f64 / _
             (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
                 Ok(ScalarValue::Float64(Some(f1.unwrap() * f2.unwrap())))
@@ -718,10 +727,11 @@ impl ScalarValue {
         }
 
         // TODO: Finding a good way to support operation between different types without
-        // writing a hige match block. 
+        // writing a hige match block.
+        // TODO: Add support for decimal types 
         match (lhs, rhs) {
-            (ScalarValue::Decimal128(v1, u1, s1), _) | 
-            (_, ScalarValue::Decimal128(v1, u1, s1)) => {
+            (ScalarValue::Decimal128(_, _, _), _) | 
+            (_, ScalarValue::Decimal128(_, _, _)) => {
                 Err(DataFusionError::Internal(
                     format!(
                     "Division with Decimals are not supported for now"
@@ -3359,3 +3369,85 @@ mod tests {
         );
     }
 }
+
+#[test]
+    fn scalar_addition() {
+        let v1 = &ScalarValue::from(1 as i64);
+        let v2 = &ScalarValue::from(2 as i64);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i64));
+
+        let v1 = &ScalarValue::from(100 as i64);
+        let v2 = &ScalarValue::from(-32 as i64);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(68 as i64));
+
+        let v1 = &ScalarValue::from(-102 as i64);
+        let v2 = &ScalarValue::from(32 as i64);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(-70 as i64));
+
+        let v1 = &ScalarValue::from(1);
+        let v2 = &ScalarValue::from(2);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i64));
+
+        let v1 = &ScalarValue::from(std::i32::MAX);
+        let v2 = &ScalarValue::from(std::i32::MAX);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::i32::MAX as i64 * 2));
+
+        let v1 = &ScalarValue::from(1 as i16);
+        let v2 = &ScalarValue::from(2 as i16);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i32));
+
+        let v1 = &ScalarValue::from(std::i16::MAX);
+        let v2 = &ScalarValue::from(std::i16::MAX);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::i16::MAX as i32 * 2));
+
+        let v1 = &ScalarValue::from(1 as i8);
+        let v2 = &ScalarValue::from(2 as i8);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i16));
+
+        let v1 = &ScalarValue::from(std::i8::MAX);
+        let v2 = &ScalarValue::from(std::i8::MAX);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::i8::MAX as i16 * 2));
+
+        let v1 = &ScalarValue::from(1 as u64);
+        let v2 = &ScalarValue::from(2 as u64);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u64));
+
+        let v1 = &ScalarValue::from(1 as u32);
+        let v2 = &ScalarValue::from(2 as u32);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u64));
+
+        let v1 = &ScalarValue::from(std::u32::MAX);
+        let v2 = &ScalarValue::from(std::u32::MAX);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::u32::MAX as u64 * 2));
+
+        let v1 = &ScalarValue::from(1 as u16);
+        let v2 = &ScalarValue::from(2 as u16);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u32));
+
+        let v1 = &ScalarValue::from(std::u16::MAX);
+        let v2 = &ScalarValue::from(std::u16::MAX);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::u16::MAX as u32 * 2));
+
+        let v1 = &ScalarValue::from(1 as u8);
+        let v2 = &ScalarValue::from(2 as u8);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u16));
+
+        let v1 = &ScalarValue::from(std::u8::MAX);
+        let v2 = &ScalarValue::from(std::u8::MAX);
+        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::u8::MAX as u16 * 2));
+
+        let v1 = &ScalarValue::from(1);
+        let v2 = &ScalarValue::from(2 as u16);
+        let actual = ScalarValue::add(v1, v2).is_err();
+        assert_eq!(actual, true);
+
+        let v1 = &ScalarValue::from(1);
+        let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
+        let actual = ScalarValue::add(v1, v2).is_err();
+        assert_eq!(actual, true);
+
+        let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
+        let v2 = &ScalarValue::from(2);
+        let actual = ScalarValue::add(v1, v2).is_err();
+        assert_eq!(actual, true);
+    }
