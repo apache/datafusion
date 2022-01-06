@@ -35,7 +35,7 @@ use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_t
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use expressions::{avg_return_type, sum_return_type, variance_return_type, Variance};
+use expressions::{avg_return_type, sum_return_type, variance_return_type};
 use std::{fmt, str::FromStr, sync::Arc};
 
 /// the implementation of an aggregate function
@@ -281,7 +281,7 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::physical_plan::expressions::{
-        ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Sum,
+        ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Sum, Variance,
     };
 
     #[test]

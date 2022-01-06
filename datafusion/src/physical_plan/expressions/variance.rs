@@ -113,10 +113,7 @@ impl AggregateExpr for Variance {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new(
-            // variance is f64 or decimal
-            &self.data_type,
-        )?))
+        Ok(Box::new(VarianceAccumulator::try_new()?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -158,7 +155,7 @@ pub struct VarianceAccumulator {
 
 impl VarianceAccumulator {
     /// Creates a new `VarianceAccumulator`
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new() -> Result<Self> {
         Ok(Self {
             m2: ScalarValue::from(0 as f64),
             mean: ScalarValue::from(0 as f64),
