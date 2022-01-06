@@ -22,32 +22,22 @@ use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::{
-    ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
-};
+use crate::scalar::ScalarValue;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 
 use super::format_state_name;
 
-/// STDDEV (standard deviation) aggregate expression
+/// VARIANCE aggregate expression
 #[derive(Debug)]
 pub struct Variance {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
-    data_type: DataType,
 }
 
-/// function return type of an standard deviation
+/// function return type of variance
 pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        DataType::Decimal(precision, scale) => {
-            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
-            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
-            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 4);
-            let new_scale = MAX_SCALE_FOR_DECIMAL128.min(*scale + 4);
-            Ok(DataType::Decimal(new_precision, new_scale))
-        }
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -78,26 +68,24 @@ pub(crate) fn is_variance_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
-            | DataType::Decimal(_, _)
     )
 }
 
 impl Variance {
-    /// Create a new STDDEV aggregate function
+    /// Create a new VARIANCE aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        // the result of variance just support FLOAT64 and Decimal data type.
+        // the result of variance just support FLOAT64 data type.
         assert!(matches!(
             data_type,
-            DataType::Float64 | DataType::Decimal(_, _)
+            DataType::Float64
         ));
         Self {
             name: name.into(),
             expr,
-            data_type,
         }
     }
 }
@@ -109,7 +97,7 @@ impl AggregateExpr for Variance {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(&self.name, DataType::Float64,true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -125,12 +113,12 @@ impl AggregateExpr for Variance {
             ),
             Field::new(
                 &format_state_name(&self.name, "mean"),
-                self.data_type.clone(),
+                DataType::Float64,
                 true,
             ),
             Field::new(
                 &format_state_name(&self.name, "m2"),
-                self.data_type.clone(),
+                DataType::Float64,
                 true,
             ),
         ])
@@ -161,6 +149,18 @@ impl VarianceAccumulator {
             mean: ScalarValue::from(0 as f64),
             count: 0,
         })
+    }
+
+    pub fn get_count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn get_mean(&self) -> ScalarValue {
+        self.mean.clone()
+    }
+
+    pub fn get_m2(&self) -> ScalarValue {
+        self.m2.clone()
     }
 }
 
@@ -321,13 +321,13 @@ mod tests {
 
     #[test]
     fn test_variance_return_data_type() -> Result<()> {
-        let data_type = DataType::Decimal(10, 5);
+        let data_type = DataType::Float64;
         let result_type = variance_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(14, 9), result_type);
+        assert_eq!(DataType::Float64, result_type);
 
         let data_type = DataType::Decimal(36, 10);
-        let result_type = variance_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(38, 14), result_type);
+        let result_type = variance_return_type(&data_type).is_err();
+        assert_eq!(true, result_type);
         Ok(())
     }
 

@@ -18,22 +18,15 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::{
-    ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
-};
-use arrow::compute;
+use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr, expressions::variance::VarianceAccumulator};
+use crate::scalar::ScalarValue;
 use arrow::datatypes::DataType;
-use arrow::{
-    array::{ArrayRef, UInt64Array},
-    datatypes::Field,
-};
+use arrow::datatypes::Field;
 
-use super::{format_state_name, sum};
+use super::format_state_name;
 
 /// STDDEV (standard deviation) aggregate expression
 #[derive(Debug)]
@@ -43,16 +36,9 @@ pub struct Stddev {
     data_type: DataType,
 }
 
-/// function return type of an standard deviation
+/// function return type of standard deviation
 pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
-        DataType::Decimal(precision, scale) => {
-            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
-            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
-            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 4);
-            let new_scale = MAX_SCALE_FOR_DECIMAL128.min(*scale + 4);
-            Ok(DataType::Decimal(new_precision, new_scale))
-        }
         DataType::Int8
         | DataType::Int16
         | DataType::Int32
@@ -83,7 +69,6 @@ pub(crate) fn is_stddev_support_arg_type(arg_type: &DataType) -> bool {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64
-            | DataType::Decimal(_, _)
     )
 }
 
@@ -97,7 +82,7 @@ impl Stddev {
         // the result of stddev just support FLOAT64 and Decimal data type.
         assert!(matches!(
             data_type,
-            DataType::Float64 | DataType::Decimal(_, _)
+            DataType::Float64
         ));
         Self {
             name: name.into(),
@@ -118,10 +103,7 @@ impl AggregateExpr for Stddev {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(StddevAccumulator::try_new(
-            // stddev is f64 or decimal
-            &self.data_type,
-        )?))
+        Ok(Box::new(StddevAccumulator::try_new()?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -132,8 +114,13 @@ impl AggregateExpr for Stddev {
                 true,
             ),
             Field::new(
-                &format_state_name(&self.name, "sum"),
-                self.data_type.clone(),
+                &format_state_name(&self.name, "mean"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "m2"),
+                DataType::Float64,
                 true,
             ),
         ])
@@ -151,85 +138,43 @@ impl AggregateExpr for Stddev {
 /// An accumulator to compute the average
 #[derive(Debug)]
 pub struct StddevAccumulator {
-    // sum is used for null
-    sum: ScalarValue,
-    count: u64,
+    variance: VarianceAccumulator,
 }
 
 impl StddevAccumulator {
     /// Creates a new `StddevAccumulator`
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
+    pub fn try_new() -> Result<Self> {
         Ok(Self {
-            sum: ScalarValue::try_from(datatype)?,
-            count: 0,
+            variance: VarianceAccumulator::try_new()?,
         })
     }
 }
 
 impl Accumulator for StddevAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::from(self.count), self.sum.clone()])
+        Ok(vec![ScalarValue::from(self.variance.get_count()), self.variance.get_mean(), self.variance.get_m2()])
     }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let values = &values[0];
-
-        self.count += (!values.is_null()) as u64;
-        self.sum = sum::sum(&self.sum, values)?;
-
-        Ok(())
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values = &values[0];
-
-        self.count += (values.len() - values.data().null_count()) as u64;
-        self.sum = sum::sum(&self.sum, &sum::sum_batch(values)?)?;
-        Ok(())
+        self.variance.update(values)
     }
 
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count = &states[0];
-        // counts are summed
-        if let ScalarValue::UInt64(Some(c)) = count {
-            self.count += c
-        } else {
-            unreachable!()
-        };
-
-        // sums are summed
-        self.sum = sum::sum(&self.sum, &states[1])?;
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        // counts are summed
-        self.count += compute::sum(counts).unwrap_or(0);
-
-        // sums are summed
-        self.sum = sum::sum(&self.sum, &sum::sum_batch(&states[1])?)?;
-        Ok(())
+        self.variance.merge(states)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        match self.sum {
+        let variance = self.variance.evaluate()?;
+        match variance {
             ScalarValue::Float64(e) => {
-                Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
-            }
-            ScalarValue::Decimal128(value, precision, scale) => {
-                Ok(match value {
-                    None => ScalarValue::Decimal128(None, precision, scale),
-                    // TODO add the checker for overflow the precision
-                    Some(v) => ScalarValue::Decimal128(
-                        Some(v / self.count as i128),
-                        precision,
-                        scale,
-                    ),
-                })
+                if e == None {
+                    Ok(ScalarValue::Float64(None))
+                } else {
+                    Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
+                }
             }
             _ => Err(DataFusionError::Internal(
-                "Sum should be f64 on average".to_string(),
+                "Variance should be f64".to_string(),
             )),
         }
     }
@@ -244,69 +189,28 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     #[test]
-    fn test_stddev_return_data_type() -> Result<()> {
-        let data_type = DataType::Decimal(10, 5);
-        let result_type = stddev_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(14, 9), result_type);
-
-        let data_type = DataType::Decimal(36, 10);
-        let result_type = stddev_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(38, 14), result_type);
-        Ok(())
-    }
-
-    #[test]
-    fn stddev_decimal() -> Result<()> {
-        // test agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
-        for i in 1..7 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-
+    fn stddev_f64_1() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
         generic_test_op!(
-            array,
-            DataType::Decimal(10, 0),
+            a,
+            DataType::Float64,
             Stddev,
-            ScalarValue::Decimal128(Some(35000), 14, 4),
-            DataType::Decimal(14, 4)
+            ScalarValue::from(0.5_f64),
+            DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+    fn stddev_f64_2() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(
-            array,
-            DataType::Decimal(10, 0),
+            a,
+            DataType::Float64,
             Stddev,
-            ScalarValue::Decimal128(Some(32500), 14, 4),
-            DataType::Decimal(14, 4)
-        )
-    }
-
-    #[test]
-    fn stddev_decimal_all_nulls() -> Result<()> {
-        // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-        generic_test_op!(
-            array,
-            DataType::Decimal(10, 0),
-            Stddev,
-            ScalarValue::Decimal128(None, 14, 4),
-            DataType::Decimal(14, 4)
+            ScalarValue::from(1.4142135623730951_f64),
+            DataType::Float64
         )
     }
 
@@ -317,9 +221,47 @@ mod tests {
             a,
             DataType::Int32,
             Stddev,
-            ScalarValue::from(3_f64),
+            ScalarValue::from(1.4142135623730951_f64),
             DataType::Float64
         )
+    }
+
+    #[test]
+    fn stddev_u32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        generic_test_op!(
+            a,
+            DataType::UInt32,
+            Stddev,
+            ScalarValue::from(1.4142135623730951f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn stddev_f32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        generic_test_op!(
+            a,
+            DataType::Float32,
+            Stddev,
+            ScalarValue::from(1.4142135623730951_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn test_stddev_return_data_type() -> Result<()> {
+        let data_type = DataType::Float64;
+        let result_type = stddev_return_type(&data_type)?;
+        assert_eq!(DataType::Float64, result_type);
+
+        let data_type = DataType::Decimal(36, 10);
+        let result_type = stddev_return_type(&data_type).is_err();
+        assert_eq!(true, result_type);
+        Ok(())
     }
 
     #[test]
@@ -335,7 +277,7 @@ mod tests {
             a,
             DataType::Int32,
             Stddev,
-            ScalarValue::from(3.25f64),
+            ScalarValue::from(1.479019945774904),
             DataType::Float64
         )
     }
@@ -348,45 +290,6 @@ mod tests {
             DataType::Int32,
             Stddev,
             ScalarValue::Float64(None),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn stddev_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(
-            a,
-            DataType::UInt32,
-            Stddev,
-            ScalarValue::from(3.0f64),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn stddev_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(
-            a,
-            DataType::Float32,
-            Stddev,
-            ScalarValue::from(3_f64),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn stddev_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            Stddev,
-            ScalarValue::from(3_f64),
             DataType::Float64
         )
     }
