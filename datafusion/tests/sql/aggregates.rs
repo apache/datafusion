@@ -50,13 +50,37 @@ async fn csv_query_avg() -> Result<()> {
 }
 
 #[tokio::test]
-async fn csv_query_variance() -> Result<()> {
+async fn csv_query_variance_1() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT variance(c2) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.8675"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_variance_2() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT variance(c6) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["26156334342021890000000000000000000000"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_variance_3() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT variance(c12) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["0.09234223721582163"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }
