@@ -1135,7 +1135,7 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
                     AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
-
+                    AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
                 };
 
                 let arg = &args[0];
@@ -1367,6 +1367,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ApproxDistinct => Self::ApproxDistinct,
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Variance => Self::Variance,
+            AggregateFunction::Stddev => Self::Stddev,
         }
     }
 }

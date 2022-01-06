@@ -21,7 +21,11 @@ use crate::arrow::datatypes::Schema;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::aggregates::AggregateFunction;
 use crate::physical_plan::expressions::{
-    is_avg_support_arg_type, is_sum_support_arg_type, is_variance_support_arg_type, try_cast,
+    is_avg_support_arg_type, 
+    is_sum_support_arg_type, 
+    is_variance_support_arg_type, 
+    try_cast,
+    is_stddev_support_arg_type,
 };
 use crate::physical_plan::functions::{Signature, TypeSignature};
 use crate::physical_plan::PhysicalExpr;
@@ -87,9 +91,16 @@ pub(crate) fn coerce_types(
             Ok(input_types.to_vec())
         }
         AggregateFunction::Variance => {
-            // Refer to https://www.postgresql.org/docs/8.2/functions-aggregate.html doc
-            // smallint, int, bigint, real, double precision, decimal, or interval
             if !is_variance_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::Stddev => {
+            if !is_stddev_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]

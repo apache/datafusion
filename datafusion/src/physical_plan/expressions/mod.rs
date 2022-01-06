@@ -90,6 +90,8 @@ pub(crate) use sum::is_sum_support_arg_type;
 pub use sum::{sum_return_type, Sum};
 pub(crate) use variance::is_variance_support_arg_type;
 pub use variance::{variance_return_type, Variance};
+pub(crate) use stddev::is_stddev_support_arg_type;
+pub use stddev::{stddev_return_type, Stddev};
 pub use try_cast::{try_cast, TryCastExpr};
 
 /// returns the name of the state

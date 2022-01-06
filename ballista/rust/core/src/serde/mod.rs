@@ -120,6 +120,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             }
             protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
             protobuf::AggregateFunction::Variance => AggregateFunction::Variance,
+            protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
         }
     }
 }
