@@ -3368,78 +3368,47 @@ mod tests {
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
         );
     }
-}
 
-#[test]
+    macro_rules! test_scalar_op {
+        ($OP:ident, $LHS:expr, $LHS_TYPE:ident, $RHS:expr, $RHS_TYPE:ident, $RESULT:expr, $RESULT_TYPE:ident) => {{
+            let v1 = &ScalarValue::from($LHS as $LHS_TYPE);
+            let v2 = &ScalarValue::from($RHS as $RHS_TYPE);
+            assert_eq!(ScalarValue::$OP(v1, v2).unwrap(), ScalarValue::from($RESULT as $RESULT_TYPE));
+        }};
+    }
+
+    macro_rules! test_scalar_op_err {
+        ($OP:ident, $LHS:expr, $LHS_TYPE:ident, $RHS:expr, $RHS_TYPE:ident) => {{
+            let v1 = &ScalarValue::from($LHS as $LHS_TYPE);
+            let v2 = &ScalarValue::from($RHS as $RHS_TYPE);
+            let actual = ScalarValue::add(v1, v2).is_err();
+            assert_eq!(actual, true);
+        }};
+    }
+
+    #[test]
     fn scalar_addition() {
-        let v1 = &ScalarValue::from(1 as i64);
-        let v2 = &ScalarValue::from(2 as i64);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i64));
 
-        let v1 = &ScalarValue::from(100 as i64);
-        let v2 = &ScalarValue::from(-32 as i64);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(68 as i64));
-
-        let v1 = &ScalarValue::from(-102 as i64);
-        let v2 = &ScalarValue::from(32 as i64);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(-70 as i64));
-
-        let v1 = &ScalarValue::from(1);
-        let v2 = &ScalarValue::from(2);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i64));
-
-        let v1 = &ScalarValue::from(std::i32::MAX);
-        let v2 = &ScalarValue::from(std::i32::MAX);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::i32::MAX as i64 * 2));
-
-        let v1 = &ScalarValue::from(1 as i16);
-        let v2 = &ScalarValue::from(2 as i16);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i32));
-
-        let v1 = &ScalarValue::from(std::i16::MAX);
-        let v2 = &ScalarValue::from(std::i16::MAX);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::i16::MAX as i32 * 2));
-
-        let v1 = &ScalarValue::from(1 as i8);
-        let v2 = &ScalarValue::from(2 as i8);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as i16));
-
-        let v1 = &ScalarValue::from(std::i8::MAX);
-        let v2 = &ScalarValue::from(std::i8::MAX);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::i8::MAX as i16 * 2));
-
-        let v1 = &ScalarValue::from(1 as u64);
-        let v2 = &ScalarValue::from(2 as u64);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u64));
-
-        let v1 = &ScalarValue::from(1 as u32);
-        let v2 = &ScalarValue::from(2 as u32);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u64));
-
-        let v1 = &ScalarValue::from(std::u32::MAX);
-        let v2 = &ScalarValue::from(std::u32::MAX);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::u32::MAX as u64 * 2));
-
-        let v1 = &ScalarValue::from(1 as u16);
-        let v2 = &ScalarValue::from(2 as u16);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u32));
-
-        let v1 = &ScalarValue::from(std::u16::MAX);
-        let v2 = &ScalarValue::from(std::u16::MAX);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::u16::MAX as u32 * 2));
-
-        let v1 = &ScalarValue::from(1 as u8);
-        let v2 = &ScalarValue::from(2 as u8);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(3 as u16));
-
-        let v1 = &ScalarValue::from(std::u8::MAX);
-        let v2 = &ScalarValue::from(std::u8::MAX);
-        assert_eq!(ScalarValue::add(v1, v2).unwrap(), ScalarValue::from(std::u8::MAX as u16 * 2));
-
-        let v1 = &ScalarValue::from(1);
-        let v2 = &ScalarValue::from(2 as u16);
-        let actual = ScalarValue::add(v1, v2).is_err();
-        assert_eq!(actual, true);
+        test_scalar_op!(add, 1, f64, 2, f64, 3, f64);
+        test_scalar_op!(add, 1, f32, 2, f32, 3, f64);
+        test_scalar_op!(add, 1, i64, 2, i64, 3, i64);
+        test_scalar_op!(add, 100, i64, -32, i64, 68, i64);
+        test_scalar_op!(add, -102, i64, 32, i64, -70, i64);
+        test_scalar_op!(add, 1, i32, 2, i32, 3, i64);
+        test_scalar_op!(add, std::i32::MAX, i32, std::i32::MAX, i32, std::i32::MAX as i64 * 2, i64);
+        test_scalar_op!(add, 1, i16, 2, i16, 3, i32);
+        test_scalar_op!(add, std::i16::MAX, i16, std::i16::MAX, i16, std::i16::MAX as i32 * 2, i32);
+        test_scalar_op!(add, 1, i8, 2, i8, 3, i16);
+        test_scalar_op!(add, std::i8::MAX, i8, std::i8::MAX, i8, std::i8::MAX as i16 * 2, i16);
+        test_scalar_op!(add, 1, u64, 2, u64, 3, u64);
+        test_scalar_op!(add, 1, u32, 2, u32, 3, u64);
+        test_scalar_op!(add, std::u32::MAX, u32, std::u32::MAX, u32, std::u32::MAX as u64 * 2, u64);
+        test_scalar_op!(add, 1, u16, 2, u16, 3, u32);
+        test_scalar_op!(add, std::u16::MAX, u16, std::u16::MAX, u16, std::u16::MAX as u32 * 2, u32);
+        test_scalar_op!(add, 1, u8, 2, u8, 3, u16);
+        test_scalar_op!(add, std::u8::MAX, u8, std::u8::MAX, u8, std::u8::MAX as u16 * 2, u16);
+        test_scalar_op_err!(add, 1, i32, 2, u16);
+        test_scalar_op_err!(add, 1, i32, 2, u16);
 
         let v1 = &ScalarValue::from(1);
         let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
@@ -3451,3 +3420,67 @@ mod tests {
         let actual = ScalarValue::add(v1, v2).is_err();
         assert_eq!(actual, true);
     }
+
+    #[test]
+    fn scalar_multiplication() {
+
+        test_scalar_op!(mul, 1, f64, 2, f64, 2, f64);
+        test_scalar_op!(mul, 1, f32, 2, f32, 2, f64);
+        test_scalar_op!(mul, 15, i64, 2, i64, 30, i64);
+        test_scalar_op!(mul, 100, i64, -32, i64, -3200, i64);
+        test_scalar_op!(mul, -1.1, f64, 2, f64, -2.2, f64);
+        test_scalar_op!(mul, 1, i32, 2, i32, 2, i64);
+        test_scalar_op!(mul, std::i32::MAX, i32, std::i32::MAX, i32, std::i32::MAX as i64 * std::i32::MAX as i64, i64);
+        test_scalar_op!(mul, 1, i16, 2, i16, 2, i32);
+        test_scalar_op!(mul, std::i16::MAX, i16, std::i16::MAX, i16, std::i16::MAX as i32 * std::i16::MAX as i32, i32);
+        test_scalar_op!(mul, 1, i8, 2, i8, 2, i16);
+        test_scalar_op!(mul, std::i8::MAX, i8, std::i8::MAX, i8, std::i8::MAX as i16 * std::i8::MAX as i16, i16);
+        test_scalar_op!(mul, 1, u64, 2, u64, 2, u64);
+        test_scalar_op!(mul, 1, u32, 2, u32, 2, u64);
+        test_scalar_op!(mul, std::u32::MAX, u32, std::u32::MAX, u32, std::u32::MAX as u64 * std::u32::MAX as u64, u64);
+        test_scalar_op!(mul, 1, u16, 2, u16, 2, u32);
+        test_scalar_op!(mul, std::u16::MAX, u16, std::u16::MAX, u16, std::u16::MAX as u32 * std::u16::MAX as u32, u32);
+        test_scalar_op!(mul, 1, u8, 2, u8, 2, u16);
+        test_scalar_op!(mul, std::u8::MAX, u8, std::u8::MAX, u8, std::u8::MAX as u16 * std::u8::MAX as u16, u16);
+        test_scalar_op_err!(mul, 1, i32, 2, u16);
+        test_scalar_op_err!(mul, 1, i32, 2, u16);
+
+        let v1 = &ScalarValue::from(1);
+        let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
+        let actual = ScalarValue::mul(v1, v2).is_err();
+        assert_eq!(actual, true);
+
+        let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
+        let v2 = &ScalarValue::from(2);
+        let actual = ScalarValue::mul(v1, v2).is_err();
+        assert_eq!(actual, true);
+    }
+
+    #[test]
+    fn scalar_division() {
+
+        test_scalar_op!(div, 1, f64, 2, f64, 0.5, f64);
+        test_scalar_op!(div, 1, f32, 2, f32, 0.5, f64);
+        test_scalar_op!(div, 15, i64, 2, i64, 7.5, f64);
+        test_scalar_op!(div, 100, i64, -2, i64, -50, f64);
+        test_scalar_op!(div, 1, i32, 2, i32, 0.5, f64);
+        test_scalar_op!(div, 1, i16, 2, i16, 0.5, f64);
+        test_scalar_op!(div, 1, i8, 2, i8, 0.5, f64);
+        test_scalar_op!(div, 1, u64, 2, u64, 0.5, f64);
+        test_scalar_op!(div, 1, u32, 2, u32, 0.5, f64);
+        test_scalar_op!(div, 1, u16, 2, u16, 0.5, f64);
+        test_scalar_op!(div, 1, u8, 2, u8, 0.5, f64);
+        test_scalar_op_err!(div, 1, i32, 2, u16);
+        test_scalar_op_err!(div, 1, i32, 2, u16);
+
+        let v1 = &ScalarValue::from(1);
+        let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
+        let actual = ScalarValue::div(v1, v2).is_err();
+        assert_eq!(actual, true);
+
+        let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
+        let v2 = &ScalarValue::from(2);
+        let actual = ScalarValue::div(v1, v2).is_err();
+        assert_eq!(actual, true);
+    }
+}
