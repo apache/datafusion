@@ -72,7 +72,8 @@ impl Executor {
             ))
         }?;
 
-        let runtime_config = RuntimeConfig::new().with_local_dirs(vec![self.work_dir.clone()]);
+        let runtime_config =
+            RuntimeConfig::new().with_local_dirs(vec![self.work_dir.clone()]);
         let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
 
         let partitions = exec.execute_shuffle_write(part, runtime).await?;

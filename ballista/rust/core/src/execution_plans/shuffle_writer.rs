@@ -45,6 +45,7 @@ use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -200,7 +201,7 @@ impl ShuffleWriterExec {
 
                 // we won't necessary produce output for every possible partition, so we
                 // create writers on demand
-                let mut writers: Vec<Option<ShuffleWriter>> = vec![];
+                let mut writers: Vec<Option<IPCWriter>> = vec![];
                 for _ in 0..num_output_partitions {
                     writers.push(None);
                 }
@@ -268,7 +269,7 @@ impl ShuffleWriterExec {
                                 info!("Writing results to {}", path);
 
                                 let mut writer =
-                                    ShuffleWriter::new(path, stream.schema().as_ref())?;
+                                    IPCWriter::new(path, stream.schema().as_ref())?;
 
                                 writer.write(&output_batch)?;
                                 writers[output_partition] = Some(writer);
@@ -434,55 +435,6 @@ fn result_schema() -> SchemaRef {
         Field::new("path", DataType::Utf8, false),
         stats.arrow_struct_repr(),
     ]))
-}
-
-struct ShuffleWriter {
-    path: String,
-    writer: FileWriter<File>,
-    num_batches: u64,
-    num_rows: u64,
-    num_bytes: u64,
-}
-
-impl ShuffleWriter {
-    fn new(path: &str, schema: &Schema) -> Result<Self> {
-        let file = File::create(path)
-            .map_err(|e| {
-                BallistaError::General(format!(
-                    "Failed to create partition file at {}: {:?}",
-                    path, e
-                ))
-            })
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            path: path.to_owned(),
-            writer: FileWriter::try_new(file, schema)?,
-        })
-    }
-
-    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
-        self.num_batches += 1;
-        self.num_rows += batch.num_rows() as u64;
-        let num_bytes: usize = batch
-            .columns()
-            .iter()
-            .map(|array| array.get_array_memory_size())
-            .sum();
-        self.num_bytes += num_bytes as u64;
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(DataFusionError::ArrowError)
-    }
-
-    fn path(&self) -> &str {
-        &self.path
-    }
 }
 
 #[cfg(test)]

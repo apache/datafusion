@@ -174,6 +174,7 @@ pub(crate) fn find_ranges_in_range<'a>(
 mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
@@ -185,7 +186,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
-    use crate::execution::runtime_env::RuntimeEnv;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test_util::aggr_test_schema();

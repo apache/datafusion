@@ -104,8 +104,9 @@ async fn explain_analyze_baseline_metrics() {
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
+        use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<physical_plan::sort::SortExec>().is_some()
+        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
             // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()

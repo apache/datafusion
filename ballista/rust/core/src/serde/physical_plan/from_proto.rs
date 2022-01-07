@@ -54,6 +54,7 @@ use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec
 use datafusion::physical_plan::hash_join::PartitionMode;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
+use datafusion::physical_plan::sorts::sort::{SortExec, SortOptions};
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
@@ -73,7 +74,6 @@ use datafusion::physical_plan::{
     limit::{GlobalLimitExec, LocalLimitExec},
     projection::ProjectionExec,
     repartition::RepartitionExec,
-    sort::{SortExec, SortOptions},
     Partitioning,
 };
 use datafusion::physical_plan::{

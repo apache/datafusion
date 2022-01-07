@@ -17,18 +17,22 @@
 
 //! Defines the sort preserving merge plan
 
-use super::common::AbortOnDropMany;
-use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::physical_plan::common::AbortOnDropMany;
+use crate::physical_plan::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+};
+use futures::lock::Mutex;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow::array::DynComparator;
 use arrow::{
-    array::{make_array as make_arrow_array, ArrayRef, MutableArrayData},
+    array::{make_array as make_arrow_array, MutableArrayData},
     compute::SortOptions,
     datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
@@ -38,10 +42,13 @@ use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
-use hashbrown::HashMap;
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::memory_manager::{
+    ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
+};
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream, StreamWrapper};
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
     Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,
@@ -171,14 +178,19 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     })
                     .unzip();
 
-                Ok(Box::pin(SortPreservingMergeStream::new(
-                    receivers,
-                    AbortOnDropMany(join_handles),
-                    self.schema(),
-                    &self.expr,
-                    self.target_batch_size,
-                    baseline_metrics,
-                )))
+                Ok(Box::pin(
+                    SortPreservingMergeStream::new_from_receiver(
+                        receivers,
+                        AbortOnDropMany(join_handles),
+                        self.schema(),
+                        &self.expr,
+                        self.target_batch_size,
+                        baseline_metrics,
+                        partition,
+                        runtime.clone(),
+                    )
+                    .await,
+                ))
             }
         }
     }
@@ -205,154 +217,76 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 }
 
-/// A `SortKeyCursor` is created from a `RecordBatch`, and a set of
-/// `PhysicalExpr` that when evaluated on the `RecordBatch` yield the sort keys.
-///
-/// Additionally it maintains a row cursor that can be advanced through the rows
-/// of the provided `RecordBatch`
-///
-/// `SortKeyCursor::compare` can then be used to compare the sort key pointed to
-/// by this row cursor, with that of another `SortKeyCursor`. A cursor stores
-/// a row comparator for each other cursor that it is compared to.
-struct SortKeyCursor {
-    columns: Vec<ArrayRef>,
-    cur_row: usize,
-    num_rows: usize,
-
-    // An index uniquely identifying the record batch scanned by this cursor.
-    batch_idx: usize,
-    batch: RecordBatch,
-
-    // A collection of comparators that compare rows in this cursor's batch to
-    // the cursors in other batches. Other batches are uniquely identified by
-    // their batch_idx.
-    batch_comparators: HashMap<usize, Vec<DynComparator>>,
+struct MergingStreams {
+    /// ConsumerId
+    id: MemoryConsumerId,
+    /// The sorted input streams to merge together
+    pub(crate) streams: Mutex<Vec<StreamWrapper>>,
+    /// Runtime
+    runtime: Arc<RuntimeEnv>,
 }
 
-impl<'a> std::fmt::Debug for SortKeyCursor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SortKeyCursor")
-            .field("columns", &self.columns)
-            .field("cur_row", &self.cur_row)
-            .field("num_rows", &self.num_rows)
-            .field("batch_idx", &self.batch_idx)
-            .field("batch", &self.batch)
-            .field("batch_comparators", &"<FUNC>")
+impl Debug for MergingStreams {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MergingStreams")
+            .field("id", &self.id())
             .finish()
     }
 }
 
-impl SortKeyCursor {
-    fn new(
-        batch_idx: usize,
-        batch: RecordBatch,
-        sort_key: &[Arc<dyn PhysicalExpr>],
-    ) -> Result<Self> {
-        let columns = sort_key
-            .iter()
-            .map(|expr| Ok(expr.evaluate(&batch)?.into_array(batch.num_rows())))
-            .collect::<Result<_>>()?;
-        Ok(Self {
-            cur_row: 0,
-            num_rows: batch.num_rows(),
-            columns,
-            batch,
-            batch_idx,
-            batch_comparators: HashMap::new(),
-        })
-    }
-
-    fn is_finished(&self) -> bool {
-        self.num_rows == self.cur_row
-    }
-
-    fn advance(&mut self) -> usize {
-        assert!(!self.is_finished());
-        let t = self.cur_row;
-        self.cur_row += 1;
-        t
-    }
-
-    /// Compares the sort key pointed to by this instance's row cursor with that of another
-    fn compare(
-        &mut self,
-        other: &SortKeyCursor,
-        options: &[SortOptions],
-    ) -> Result<Ordering> {
-        if self.columns.len() != other.columns.len() {
-            return Err(DataFusionError::Internal(format!(
-                "SortKeyCursors had inconsistent column counts: {} vs {}",
-                self.columns.len(),
-                other.columns.len()
-            )));
+impl MergingStreams {
+    pub fn new(
+        partition: usize,
+        input_streams: Vec<StreamWrapper>,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Self {
+        Self {
+            id: MemoryConsumerId::new(partition),
+            streams: Mutex::new(input_streams),
+            runtime,
         }
-
-        if self.columns.len() != options.len() {
-            return Err(DataFusionError::Internal(format!(
-                "Incorrect number of SortOptions provided to SortKeyCursor::compare, expected {} got {}",
-                self.columns.len(),
-                options.len()
-            )));
-        }
-
-        let zipped = self
-            .columns
-            .iter()
-            .zip(other.columns.iter())
-            .zip(options.iter());
-
-        // Recall or initialise a collection of comparators for comparing
-        // columnar arrays of this cursor and "other".
-        let cmp = self
-            .batch_comparators
-            .entry(other.batch_idx)
-            .or_insert_with(|| Vec::with_capacity(other.columns.len()));
-
-        for (i, ((l, r), sort_options)) in zipped.enumerate() {
-            if i >= cmp.len() {
-                // initialise comparators as potentially needed
-                cmp.push(arrow::array::build_compare(l.as_ref(), r.as_ref())?);
-            }
-
-            match (l.is_valid(self.cur_row), r.is_valid(other.cur_row)) {
-                (false, true) if sort_options.nulls_first => return Ok(Ordering::Less),
-                (false, true) => return Ok(Ordering::Greater),
-                (true, false) if sort_options.nulls_first => {
-                    return Ok(Ordering::Greater)
-                }
-                (true, false) => return Ok(Ordering::Less),
-                (false, false) => {}
-                (true, true) => match cmp[i](self.cur_row, other.cur_row) {
-                    Ordering::Equal => {}
-                    o if sort_options.descending => return Ok(o.reverse()),
-                    o => return Ok(o),
-                },
-            }
-        }
-
-        Ok(Ordering::Equal)
     }
 }
 
-/// A `RowIndex` identifies a specific row from those buffered
-/// by a `SortPreservingMergeStream`
-#[derive(Debug, Clone)]
-struct RowIndex {
-    /// The index of the stream
-    stream_idx: usize,
-    /// The index of the cursor within the stream's VecDequeue
-    cursor_idx: usize,
-    /// The row index
-    row_idx: usize,
+#[async_trait]
+impl MemoryConsumer for MergingStreams {
+    fn name(&self) -> String {
+        "MergingStreams".to_owned()
+    }
+
+    fn id(&self) -> &MemoryConsumerId {
+        &self.id
+    }
+
+    fn memory_manager(&self) -> Arc<MemoryManager> {
+        self.runtime.memory_manager.clone()
+    }
+
+    fn type_(&self) -> &ConsumerType {
+        &ConsumerType::Tracking
+    }
+
+    async fn spill(&self) -> Result<()> {
+        return Err(DataFusionError::Internal(format!(
+            "Calling spill on a tracking only consumer {}, {}",
+            self.name(),
+            self.id,
+        )));
+    }
+
+    async fn mem_used(&self) -> usize {
+        let streams = self.streams.lock().await;
+        streams.iter().map(StreamWrapper::mem_used).sum::<usize>()
+    }
 }
 
 #[derive(Debug)]
-struct SortPreservingMergeStream {
+pub(crate) struct SortPreservingMergeStream {
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
 
     /// The sorted input streams to merge together
-    receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
+    streams: Arc<MergingStreams>,
 
     /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
     _drop_helper: AbortOnDropMany<()>,
@@ -370,7 +304,7 @@ struct SortPreservingMergeStream {
     column_expressions: Vec<Arc<dyn PhysicalExpr>>,
 
     /// The sort options for each expression
-    sort_options: Vec<SortOptions>,
+    sort_options: Arc<Vec<SortOptions>>,
 
     /// The desired RecordBatch size to yield
     target_batch_size: usize,
@@ -386,26 +320,70 @@ struct SortPreservingMergeStream {
 }
 
 impl SortPreservingMergeStream {
-    fn new(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn new_from_receiver(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
         _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         target_batch_size: usize,
         baseline_metrics: BaselineMetrics,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
     ) -> Self {
         let cursors = (0..receivers.len())
             .into_iter()
             .map(|_| VecDeque::new())
             .collect();
 
+        let wrappers = receivers.into_iter().map(StreamWrapper::Receiver).collect();
+        let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
+        runtime.register_consumer(streams.clone()).await;
+
         Self {
             schema,
             cursors,
-            receivers,
+            streams,
             _drop_helper,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
-            sort_options: expressions.iter().map(|x| x.options).collect(),
+            sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
+            target_batch_size,
+            baseline_metrics,
+            aborted: false,
+            in_progress: vec![],
+            next_batch_index: 0,
+        }
+    }
+
+    pub(crate) async fn new_from_stream(
+        streams: Vec<SortedStream>,
+        schema: SchemaRef,
+        expressions: &[PhysicalSortExpr],
+        target_batch_size: usize,
+        baseline_metrics: BaselineMetrics,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Self {
+        let cursors = (0..streams.len())
+            .into_iter()
+            .map(|_| VecDeque::new())
+            .collect();
+
+        let wrappers = streams
+            .into_iter()
+            .map(|s| StreamWrapper::Stream(Some(s)))
+            .collect::<Vec<_>>();
+
+        let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
+        runtime.register_consumer(streams.clone()).await;
+
+        Self {
+            schema,
+            cursors,
+            streams,
+            _drop_helper: AbortOnDropMany(vec![]),
+            column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
+            sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
             target_batch_size,
             baseline_metrics,
             aborted: false,
@@ -429,34 +407,44 @@ impl SortPreservingMergeStream {
             }
         }
 
-        let stream = &mut self.receivers[idx];
-        if stream.is_terminated() {
-            return Poll::Ready(Ok(()));
-        }
+        let mut streams_future = self.streams.streams.lock();
 
-        // Fetch a new input record and create a cursor from it
-        match futures::ready!(stream.poll_next_unpin(cx)) {
-            None => return Poll::Ready(Ok(())),
-            Some(Err(e)) => {
-                return Poll::Ready(Err(e));
-            }
-            Some(Ok(batch)) => {
-                let cursor = match SortKeyCursor::new(
-                    self.next_batch_index, // assign this batch an ID
-                    batch,
-                    &self.column_expressions,
-                ) {
-                    Ok(cursor) => cursor,
-                    Err(e) => {
-                        return Poll::Ready(Err(ArrowError::ExternalError(Box::new(e))));
+        match Pin::new(&mut streams_future).poll(cx) {
+            Poll::Ready(mut streams) => {
+                let stream = &mut streams[idx];
+                if stream.is_terminated() {
+                    return Poll::Ready(Ok(()));
+                }
+
+                // Fetch a new input record and create a cursor from it
+                match futures::ready!(stream.poll_next_unpin(cx)) {
+                    None => return Poll::Ready(Ok(())),
+                    Some(Err(e)) => {
+                        return Poll::Ready(Err(e));
                     }
-                };
-                self.next_batch_index += 1;
-                self.cursors[idx].push_back(cursor)
-            }
-        }
+                    Some(Ok(batch)) => {
+                        let cursor = match SortKeyCursor::new(
+                            self.next_batch_index, // assign this batch an ID
+                            Arc::new(batch),
+                            &self.column_expressions,
+                            self.sort_options.clone(),
+                        ) {
+                            Ok(cursor) => cursor,
+                            Err(e) => {
+                                return Poll::Ready(Err(ArrowError::ExternalError(
+                                    Box::new(e),
+                                )));
+                            }
+                        };
+                        self.next_batch_index += 1;
+                        self.cursors[idx].push_back(cursor)
+                    }
+                }
 
-        Poll::Ready(Ok(()))
+                Poll::Ready(Ok(()))
+            }
+            Poll::Pending => Poll::Pending,
+        }
     }
 
     /// Returns the index of the next stream to pull a row from, or None
@@ -472,9 +460,7 @@ impl SortPreservingMergeStream {
                 match min_cursor {
                     None => min_cursor = Some((idx, candidate)),
                     Some((_, ref mut min)) => {
-                        if min.compare(candidate, &self.sort_options)?
-                            == Ordering::Greater
-                        {
+                        if min.compare(candidate)? == Ordering::Greater {
                             min_cursor = Some((idx, candidate))
                         }
                     }
@@ -670,6 +656,7 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::metrics::MetricValue;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use arrow::array::ArrayRef;
     use std::iter::FromIterator;
 
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
@@ -677,7 +664,7 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::sort::SortExec;
+    use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{collect, common};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
@@ -1257,7 +1244,7 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let baseline_metrics = BaselineMetrics::new(&metrics, 0);
 
-        let merge_stream = SortPreservingMergeStream::new(
+        let merge_stream = SortPreservingMergeStream::new_from_receiver(
             receivers,
             // Use empty vector since we want to use the join handles ourselves
             AbortOnDropMany(vec![]),
@@ -1265,7 +1252,10 @@ mod tests {
             sort.as_slice(),
             1024,
             baseline_metrics,
-        );
+            0,
+            runtime.clone(),
+        )
+        .await;
 
         let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();
 

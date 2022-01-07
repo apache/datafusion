@@ -23,6 +23,7 @@ use futures::lock::Mutex;
 use futures::stream::iter;
 use futures::StreamExt;
 use hashbrown::HashMap;
+use log::info;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -31,7 +32,6 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::task;
 use tokio::task::JoinHandle;
-use log::{debug, info};
 
 static mut CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -95,23 +95,39 @@ pub trait MemoryConsumer: Send + Sync + Debug {
     /// Grow memory by `required` to buffer more data in memory,
     /// this may trigger spill before grow when the memory threshold is
     /// reached for this consumer.
-    async fn try_grow(&mut self, required: usize) -> Result<()> {
+    async fn try_grow(&self, required: usize) -> Result<()> {
         let current_usage = self.mem_used().await;
         let can_grow = self
             .memory_manager()
             .try_grow(required, current_usage, self.id())
             .await;
         if !can_grow {
+            info!(
+                "Failed to grow memory of {} from {}, spilling...",
+                human_readable_size(required),
+                self.id()
+            );
             self.spill().await?;
         }
         Ok(())
     }
 
-    /// Spill in-memory buffers to disk, free memory, and returns the written filename
-    async fn spill(&mut self) -> Result<String>;
+    /// Spill in-memory buffers to disk, free memory
+    async fn spill(&self) -> Result<()>;
 
     /// Current memory used by this consumer
     async fn mem_used(&self) -> usize;
+
+    /// Current status of the consumer
+    async fn str_repr(&self) -> String {
+        let mem = self.mem_used().await;
+        format!(
+            "{}[{}]: {}",
+            self.name(),
+            self.id(),
+            human_readable_size(mem)
+        )
+    }
 
     /// Memory usage for display / debug purpose
     fn mem_used_sync(&self) -> usize {
@@ -131,6 +147,10 @@ pub struct MemoryManager {
 impl MemoryManager {
     /// Create new memory manager based on max available pool_size
     pub fn new(pool_size: usize) -> Self {
+        info!(
+            "Creating memory manager with initial size {}",
+            human_readable_size(pool_size)
+        );
         Self {
             consumers: Arc::new(Mutex::new(HashMap::new())),
             trackers: Arc::new(Mutex::new(HashMap::new())),
@@ -187,24 +207,27 @@ impl MemoryManager {
         self: &Arc<Self>,
         required: usize,
         current: usize,
-        _consumer_id: &MemoryConsumerId,
+        consumer_id: &MemoryConsumerId,
     ) -> bool {
-
         let max_per_op = {
             let total_available =
                 self.pool_size - self.trackers_total_usage.load(Ordering::SeqCst);
             let ops = self.consumers.lock().await.len();
             (total_available / ops) as usize
         };
-        required + current < max_per_op
+        let granted = required + current < max_per_op;
+        info!(
+            "trying to acquire {} whiling holding {} from {}, got: {}",
+            human_readable_size(required),
+            human_readable_size(current),
+            consumer_id,
+            granted,
+        );
+        granted
     }
 
     /// Drop a memory consumer from memory usage tracking
-    #[allow(dead_code)]
-    async fn drop_consumer(
-        self: &Arc<Self>,
-        id: &MemoryConsumerId,
-    ) {
+    pub(crate) async fn drop_consumer(self: &Arc<Self>, id: &MemoryConsumerId) {
         // find in consumers first
         {
             let mut consumers = self.consumers.lock().await;
@@ -226,19 +249,54 @@ impl MemoryManager {
                 }
             }
         }
-
     }
 
     /// Shutdown
+    #[allow(dead_code)]
     pub(crate) async fn shutdown(self: &Arc<Self>) {
         let maybe_handle = self.join_handle.lock().await.take();
         match maybe_handle {
             None => {}
-            Some(handle) => { handle.abort() }
+            Some(handle) => handle.abort(),
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn print_memory_usage(self: &Arc<Self>) {
-
+        let consumers = iter(self.consumers.lock().await.values())
+            .fold(vec![], |mut acc, y| async move {
+                acc.push(y.str_repr().await);
+                acc
+            })
+            .await;
+        let tracker_mem = self.trackers_total_usage.load(Ordering::SeqCst);
+        info!("Memory usage statistics: total {}, tracker used {}, total {} consumers detail: \n {},",
+            human_readable_size(self.pool_size),
+            human_readable_size(tracker_mem),
+            &consumers.len(),
+            consumers.join("\n"));
     }
+}
+
+const TB: u64 = 1 << 40;
+const GB: u64 = 1 << 30;
+const MB: u64 = 1 << 20;
+const KB: u64 = 1 << 10;
+
+fn human_readable_size(size: usize) -> String {
+    let size = size as u64;
+    let (value, unit) = {
+        if size >= 2 * TB {
+            (size as f64 / TB as f64, "TB")
+        } else if size >= 2 * GB {
+            (size as f64 / GB as f64, "GB")
+        } else if size >= 2 * MB {
+            (size as f64 / MB as f64, "MB")
+        } else if size >= 2 * KB {
+            (size as f64 / KB as f64, "KB")
+        } else {
+            (size as f64, "B")
+        }
+    };
+    format!("{:.1} {}", value, unit)
 }

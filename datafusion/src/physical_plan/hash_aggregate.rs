@@ -1076,7 +1076,8 @@ mod tests {
             input_schema.clone(),
         )?);
 
-        let result = common::collect(partial_aggregate.execute(0, runtime.clone()).await?).await?;
+        let result =
+            common::collect(partial_aggregate.execute(0, runtime.clone()).await?).await?;
 
         let expected = vec![
             "+---+---------------+-------------+",
@@ -1107,7 +1108,8 @@ mod tests {
             input_schema,
         )?);
 
-        let result = common::collect(merged_aggregate.execute(0, runtime.clone()).await?).await?;
+        let result =
+            common::collect(merged_aggregate.execute(0, runtime.clone()).await?).await?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];

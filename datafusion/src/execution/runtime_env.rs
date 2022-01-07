@@ -20,9 +20,9 @@
 
 use crate::error::Result;
 use crate::execution::disk_manager::DiskManager;
-use crate::execution::memory_manager::{MemoryConsumer, MemoryManager};
+use crate::execution::memory_manager::{MemoryConsumer, MemoryConsumerId, MemoryManager};
+use futures::lock::Mutex;
 use std::sync::Arc;
-use tokio::runtime::Handle;
 
 #[derive(Clone)]
 /// Execution runtime environment
@@ -34,7 +34,7 @@ pub struct RuntimeEnv {
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
     /// If runtime env has initialized
-    initialized: bool,
+    initialized: Arc<Mutex<bool>>,
 }
 
 impl RuntimeEnv {
@@ -48,7 +48,7 @@ impl RuntimeEnv {
             config,
             memory_manager,
             disk_manager,
-            initialized: false,
+            initialized: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -58,20 +58,18 @@ impl RuntimeEnv {
     }
 
     /// Register the consumer to get it tracked
-    pub async fn register_consumer(&mut self, memory_consumer: Arc<dyn MemoryConsumer>) {
-        if !self.initialized {
+    pub async fn register_consumer(&self, memory_consumer: Arc<dyn MemoryConsumer>) {
+        let mut initialized = self.initialized.lock().await;
+        if !*initialized {
             self.memory_manager.initialize().await;
-            self.initialized = true;
+            *initialized = true;
         }
         self.memory_manager.register_consumer(memory_consumer).await;
     }
-}
 
-impl Drop for RuntimeEnv {
-    fn drop(&mut self) {
-        if self.initialized {
-            Handle::current().block_on(async { self.memory_manager.shutdown().await });
-        }
+    /// Drop the consumer from get tracked
+    pub async fn drop_consumer(&self, id: &MemoryConsumerId) {
+        self.memory_manager.drop_consumer(id).await
     }
 }
 

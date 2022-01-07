@@ -19,6 +19,7 @@
 //! hashed among the directories listed in RuntimeConfig::local_dirs.
 
 use crate::error::{DataFusionError, Result};
+use log::info;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::File;
@@ -35,9 +36,12 @@ pub struct DiskManager {
 impl DiskManager {
     /// Create local dirs inside user provided dirs through conf
     pub fn new(conf_dirs: &[String]) -> Result<Self> {
-        Ok(Self {
-            local_dirs: create_local_dirs(conf_dirs)?,
-        })
+        let local_dirs = create_local_dirs(conf_dirs)?;
+        info!(
+            "Created local dirs {:?} as DataFusion working directory",
+            local_dirs
+        );
+        Ok(Self { local_dirs })
     }
 
     /// Create a file in conf dirs in randomized manner and return the file path

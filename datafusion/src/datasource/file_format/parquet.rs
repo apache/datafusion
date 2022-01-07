@@ -341,12 +341,12 @@ mod tests {
     };
 
     use super::*;
+    use crate::execution::runtime_env::RuntimeEnv;
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampNanosecondArray,
     };
     use futures::StreamExt;
-    use crate::execution::runtime_env::RuntimeEnv;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {

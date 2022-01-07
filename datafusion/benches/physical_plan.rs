@@ -29,11 +29,11 @@ use arrow::{
 };
 use tokio::runtime::Runtime;
 
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
     memory::MemoryExec,
-    sort_preserving_merge::SortPreservingMergeExec,
 };
 
 // Initialise the operator using the provided record batches and the sort key
