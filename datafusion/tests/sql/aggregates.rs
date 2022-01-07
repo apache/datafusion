@@ -354,6 +354,95 @@ async fn csv_query_approx_count() -> Result<()> {
     Ok(())
 }
 
+// This test executes the APPROX_QUANTILE aggregation against the test data,
+// asserting the estimated quantiles are ±5% their actual values.
+//
+// Actual quantiles calculated with:
+//
+// ```r
+// read_csv("./testing/data/csv/aggregate_test_100.csv") |>
+//     select_if(is.numeric) |>
+//     summarise_all(~ quantile(., c(0.1, 0.5, 0.9)))
+// ```
+//
+// Giving:
+//
+// ```text
+//      c2    c3      c4           c5       c6    c7     c8          c9     c10   c11    c12
+//   <dbl> <dbl>   <dbl>        <dbl>    <dbl> <dbl>  <dbl>       <dbl>   <dbl> <dbl>  <dbl>
+// 1     1 -95.3 -22925. -1882606710  -7.25e18  18.9  2671.  472608672. 1.83e18 0.109 0.0714
+// 2     3  15.5   4599    377164262   1.13e18 134.  30634  2365817608. 9.30e18 0.491 0.551
+// 3     5 102.   25334.  1991374996.  7.37e18 231   57518. 3776538487. 1.61e19 0.834 0.946
+// ```
+//
+// Column `c12` is omitted due to a large relative error (~10%) due to the small
+// float values.
+#[tokio::test]
+async fn csv_query_approx_quantile() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+
+    // Generate an assertion that the estimated $quantile value for $column is
+    // within 5% of the $actual quantile value.
+    macro_rules! quantile_test {
+        ($ctx:ident, column=$column:literal, quantile=$quantile:literal, actual=$actual:literal) => {
+            let sql = format!("SELECT (ABS(1 - approx_quantile({}, {}) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $quantile, $actual);
+            let actual = execute_to_batches(&mut ctx, &sql).await;
+            //
+            //   "+------+",
+            //   "| q    |",
+            //   "+------+",
+            //   "| true |",
+            //   "+------+",
+            //
+            let want = ["+------+", "| q    |", "+------+", "| true |", "+------+"];
+            assert_batches_eq!(want, &actual);
+        };
+    }
+
+    quantile_test!(ctx, column = "c2", quantile = 0.1, actual = 1.0);
+    quantile_test!(ctx, column = "c2", quantile = 0.5, actual = 3.0);
+    quantile_test!(ctx, column = "c2", quantile = 0.9, actual = 5.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c3", quantile = 0.1, actual = -95.3);
+    quantile_test!(ctx, column = "c3", quantile = 0.5, actual = 15.5);
+    quantile_test!(ctx, column = "c3", quantile = 0.9, actual = 102.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c4", quantile = 0.1, actual = -22925.0);
+    quantile_test!(ctx, column = "c4", quantile = 0.5, actual = 4599.0);
+    quantile_test!(ctx, column = "c4", quantile = 0.9, actual = 25334.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c5", quantile = 0.1, actual = -1882606710.0);
+    quantile_test!(ctx, column = "c5", quantile = 0.5, actual = 377164262.0);
+    quantile_test!(ctx, column = "c5", quantile = 0.9, actual = 1991374996.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c6", quantile = 0.1, actual = -7.25e18);
+    quantile_test!(ctx, column = "c6", quantile = 0.5, actual = 1.13e18);
+    quantile_test!(ctx, column = "c6", quantile = 0.9, actual = 7.37e18);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c7", quantile = 0.1, actual = 18.9);
+    quantile_test!(ctx, column = "c7", quantile = 0.5, actual = 134.0);
+    quantile_test!(ctx, column = "c7", quantile = 0.9, actual = 231.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c8", quantile = 0.1, actual = 2671.0);
+    quantile_test!(ctx, column = "c8", quantile = 0.5, actual = 30634.0);
+    quantile_test!(ctx, column = "c8", quantile = 0.9, actual = 57518.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c9", quantile = 0.1, actual = 472608672.0);
+    quantile_test!(ctx, column = "c9", quantile = 0.5, actual = 2365817608.0);
+    quantile_test!(ctx, column = "c9", quantile = 0.9, actual = 3776538487.0);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c10", quantile = 0.1, actual = 1.83e18);
+    quantile_test!(ctx, column = "c10", quantile = 0.5, actual = 9.30e18);
+    quantile_test!(ctx, column = "c10", quantile = 0.9, actual = 1.61e19);
+    ////////////////////////////////////
+    quantile_test!(ctx, column = "c11", quantile = 0.1, actual = 0.109);
+    quantile_test!(ctx, column = "c11", quantile = 0.5, actual = 0.491);
+    quantile_test!(ctx, column = "c11", quantile = 0.9, actual = 0.834);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn query_count_without_from() -> Result<()> {
     let mut ctx = ExecutionContext::new();
