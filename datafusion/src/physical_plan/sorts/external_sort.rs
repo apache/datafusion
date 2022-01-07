@@ -244,7 +244,7 @@ impl MemoryConsumer for ExternalSorter {
         Ok(())
     }
 
-    async fn mem_used(&self) -> usize {
+    fn mem_used(&self) -> usize {
         self.used.load(Ordering::SeqCst)
     }
 }
@@ -463,7 +463,7 @@ impl ExecutionPlan for ExternalSortExec {
             }
         }
 
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let _baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let input = self.input.execute(partition, runtime.clone()).await?;
 
         external_sort(input, partition, self.expr.clone(), runtime).await
@@ -504,7 +504,7 @@ async fn external_sort(
         expr,
         runtime.clone(),
     ));
-    runtime.register_consumer(sorter.clone()).await;
+    runtime.register_consumer(sorter.clone());
 
     while let Some(batch) = input.next().await {
         let batch = batch?;
@@ -512,6 +512,6 @@ async fn external_sort(
     }
 
     let result = sorter.sort().await;
-    runtime.drop_consumer(sorter.id()).await;
+    runtime.drop_consumer(sorter.id());
     result
 }

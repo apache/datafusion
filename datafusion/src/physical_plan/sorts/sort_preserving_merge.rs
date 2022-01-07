@@ -21,14 +21,12 @@ use crate::physical_plan::common::AbortOnDropMany;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
-use futures::lock::Mutex;
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
-use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use arrow::{
@@ -274,8 +272,8 @@ impl MemoryConsumer for MergingStreams {
         )));
     }
 
-    async fn mem_used(&self) -> usize {
-        let streams = self.streams.lock().await;
+    fn mem_used(&self) -> usize {
+        let streams = self.streams.lock().unwrap();
         streams.iter().map(StreamWrapper::mem_used).sum::<usize>()
     }
 }
@@ -324,12 +322,7 @@ pub(crate) struct SortPreservingMergeStream {
 
 impl Drop for SortPreservingMergeStream {
     fn drop(&mut self) {
-        // let rt = tokio::runtime::Builder::new_multi_thread()
-        //     .build()
-        //     .unwrap();
-        // rt.block_on(async {
-        //     self.runtime.drop_consumer(self.streams.id()).await;
-        // })
+        self.runtime.drop_consumer(self.streams.id())
     }
 }
 
@@ -352,7 +345,7 @@ impl SortPreservingMergeStream {
 
         let wrappers = receivers.into_iter().map(StreamWrapper::Receiver).collect();
         let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(streams.clone()).await;
+        runtime.register_consumer(streams.clone());
 
         Self {
             schema,
@@ -390,7 +383,7 @@ impl SortPreservingMergeStream {
             .collect::<Vec<_>>();
 
         let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(streams.clone()).await;
+        runtime.register_consumer(streams.clone());
 
         Self {
             schema,
@@ -423,44 +416,37 @@ impl SortPreservingMergeStream {
             }
         }
 
-        let mut streams_future = self.streams.streams.lock();
+        let mut streams = self.streams.streams.lock().unwrap();
 
-        match Pin::new(&mut streams_future).poll(cx) {
-            Poll::Ready(mut streams) => {
-                let stream = &mut streams[idx];
-                if stream.is_terminated() {
-                    return Poll::Ready(Ok(()));
-                }
-
-                // Fetch a new input record and create a cursor from it
-                match futures::ready!(stream.poll_next_unpin(cx)) {
-                    None => return Poll::Ready(Ok(())),
-                    Some(Err(e)) => {
-                        return Poll::Ready(Err(e));
-                    }
-                    Some(Ok(batch)) => {
-                        let cursor = match SortKeyCursor::new(
-                            self.next_batch_index, // assign this batch an ID
-                            Arc::new(batch),
-                            &self.column_expressions,
-                            self.sort_options.clone(),
-                        ) {
-                            Ok(cursor) => cursor,
-                            Err(e) => {
-                                return Poll::Ready(Err(ArrowError::ExternalError(
-                                    Box::new(e),
-                                )));
-                            }
-                        };
-                        self.next_batch_index += 1;
-                        self.cursors[idx].push_back(cursor)
-                    }
-                }
-
-                Poll::Ready(Ok(()))
-            }
-            Poll::Pending => Poll::Pending,
+        let stream = &mut streams[idx];
+        if stream.is_terminated() {
+            return Poll::Ready(Ok(()));
         }
+
+        // Fetch a new input record and create a cursor from it
+        match futures::ready!(stream.poll_next_unpin(cx)) {
+            None => return Poll::Ready(Ok(())),
+            Some(Err(e)) => {
+                return Poll::Ready(Err(e));
+            }
+            Some(Ok(batch)) => {
+                let cursor = match SortKeyCursor::new(
+                    self.next_batch_index, // assign this batch an ID
+                    Arc::new(batch),
+                    &self.column_expressions,
+                    self.sort_options.clone(),
+                ) {
+                    Ok(cursor) => cursor,
+                    Err(e) => {
+                        return Poll::Ready(Err(ArrowError::ExternalError(Box::new(e))));
+                    }
+                };
+                self.next_batch_index += 1;
+                self.cursors[idx].push_back(cursor)
+            }
+        }
+
+        Poll::Ready(Ok(()))
     }
 
     /// Returns the index of the next stream to pull a row from, or None

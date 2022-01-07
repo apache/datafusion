@@ -19,17 +19,13 @@
 
 use crate::error::Result;
 use async_trait::async_trait;
-use futures::lock::Mutex;
-use futures::stream::iter;
-use futures::StreamExt;
 use hashbrown::HashMap;
 use log::info;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::runtime::Handle;
 use tokio::task;
 use tokio::task::JoinHandle;
 
@@ -96,7 +92,7 @@ pub trait MemoryConsumer: Send + Sync + Debug {
     /// this may trigger spill before grow when the memory threshold is
     /// reached for this consumer.
     async fn try_grow(&self, required: usize) -> Result<()> {
-        let current_usage = self.mem_used().await;
+        let current_usage = self.mem_used();
         let can_grow = self
             .memory_manager()
             .try_grow(required, current_usage, self.id())
@@ -116,11 +112,11 @@ pub trait MemoryConsumer: Send + Sync + Debug {
     async fn spill(&self) -> Result<()>;
 
     /// Current memory used by this consumer
-    async fn mem_used(&self) -> usize;
+    fn mem_used(&self) -> usize;
 
     /// Current status of the consumer
-    async fn str_repr(&self) -> String {
-        let mem = self.mem_used().await;
+    fn str_repr(&self) -> String {
+        let mem = self.mem_used();
         format!(
             "{}[{}]: {}",
             self.name(),
@@ -128,12 +124,31 @@ pub trait MemoryConsumer: Send + Sync + Debug {
             human_readable_size(mem)
         )
     }
-
-    /// Memory usage for display / debug purpose
-    fn mem_used_sync(&self) -> usize {
-        Handle::current().block_on(async { self.mem_used().await })
-    }
 }
+
+/*
+The memory management architecture is the following:
+
+1. User designates max execution memory by setting RuntimeConfig.max_memory and RuntimeConfig.memory_fraction (float64 between 0..1).
+   The actual max memory DataFusion could use `pool_size =  max_memory * memory_fraction`.
+2. The entities that take up memory during its execution are called 'Memory Consumers'. Operators or others are encouraged to
+   register themselves to the memory manager and report its usage through `mem_used()`.
+3. There are two kinds of consumers:
+   - 'Controlling' consumers that would acquire memory during its execution and release memory through `spill` if no more memory is available.
+   - 'Tracking' consumers that exist for reporting purposes to provide a more accurate memory usage estimation for memory consumers.
+4. Controlling and tracking consumers share the pool. Each controlling consumer could acquire a maximum of
+   (pool_size - all_tracking_used) / active_num_controlling_consumers.
+
+            Memory Space for the DataFusion Lib / Process of `pool_size`
+   ┌──────────────────────────────────────────────z─────────────────────────────┐
+   │                                              z                             │
+   │                                              z                             │
+   │               Controlling                    z          Tracking           │
+   │            Memory Consumers                  z       Memory Consumers      │
+   │                                              z                             │
+   │                                              z                             │
+   └──────────────────────────────────────────────z─────────────────────────────┘
+*/
 
 /// Manage memory usage during physical plan execution
 pub struct MemoryManager {
@@ -160,43 +175,38 @@ impl MemoryManager {
         }
     }
 
-    async fn update_tracker_total(self: &Arc<Self>) {
-        let trackers = self.trackers.lock().await;
+    fn update_tracker_total(self: &Arc<Self>) {
+        let trackers = self.trackers.lock().unwrap();
         if trackers.len() > 0 {
-            let sum = iter(trackers.values())
-                .fold(0usize, |acc, y| async move { acc + y.mem_used().await })
-                .await;
+            let sum = trackers.values().fold(0usize, |acc, y| acc + y.mem_used());
             drop(trackers);
             self.trackers_total_usage.store(sum, Ordering::SeqCst);
         }
     }
 
     /// Initialize
-    pub(crate) async fn initialize(self: &Arc<Self>) {
+    pub(crate) fn initialize(self: &Arc<Self>) {
         let manager = self.clone();
         let handle = task::spawn(async move {
             let mut interval_timer = tokio::time::interval(Duration::from_secs(60));
             loop {
                 interval_timer.tick().await;
-                manager.update_tracker_total().await;
+                manager.update_tracker_total();
             }
         });
-        let _ = self.join_handle.lock().await.insert(handle);
+        let _ = self.join_handle.lock().unwrap().insert(handle);
     }
 
     /// Register a new memory consumer for memory usage tracking
-    pub(crate) async fn register_consumer(
-        self: &Arc<Self>,
-        consumer: Arc<dyn MemoryConsumer>,
-    ) {
+    pub(crate) fn register_consumer(self: &Arc<Self>, consumer: Arc<dyn MemoryConsumer>) {
         let id = consumer.id().clone();
         match consumer.type_() {
             ConsumerType::Controlling => {
-                let mut consumers = self.consumers.lock().await;
+                let mut consumers = self.consumers.lock().unwrap();
                 consumers.insert(id, consumer);
             }
             ConsumerType::Tracking => {
-                let mut trackers = self.trackers.lock().await;
+                let mut trackers = self.trackers.lock().unwrap();
                 trackers.insert(id, consumer);
             }
         }
@@ -212,7 +222,7 @@ impl MemoryManager {
         let max_per_op = {
             let total_available =
                 self.pool_size - self.trackers_total_usage.load(Ordering::SeqCst);
-            let ops = self.consumers.lock().await.len();
+            let ops = self.consumers.lock().unwrap().len();
             (total_available / ops) as usize
         };
         let granted = required + current < max_per_op;
@@ -227,23 +237,23 @@ impl MemoryManager {
     }
 
     /// Drop a memory consumer from memory usage tracking
-    pub(crate) async fn drop_consumer(self: &Arc<Self>, id: &MemoryConsumerId) {
+    pub(crate) fn drop_consumer(self: &Arc<Self>, id: &MemoryConsumerId) {
         // find in consumers first
         {
-            let mut consumers = self.consumers.lock().await;
+            let mut consumers = self.consumers.lock().unwrap();
             if consumers.contains_key(id) {
                 consumers.remove(id);
                 return;
             }
         }
         {
-            let mut trackers = self.trackers.lock().await;
+            let mut trackers = self.trackers.lock().unwrap();
             if trackers.contains_key(id) {
                 let removed = trackers.remove(id);
                 match removed {
                     None => {}
                     Some(tracker) => {
-                        let usage = tracker.mem_used().await;
+                        let usage = tracker.mem_used();
                         self.trackers_total_usage.fetch_sub(usage, Ordering::SeqCst);
                     }
                 }
@@ -252,9 +262,8 @@ impl MemoryManager {
     }
 
     /// Shutdown
-    #[allow(dead_code)]
-    pub(crate) async fn shutdown(self: &Arc<Self>) {
-        let maybe_handle = self.join_handle.lock().await.take();
+    pub(crate) fn shutdown(&mut self) {
+        let maybe_handle = self.join_handle.lock().unwrap().take();
         match maybe_handle {
             None => {}
             Some(handle) => handle.abort(),
@@ -262,19 +271,28 @@ impl MemoryManager {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn print_memory_usage(self: &Arc<Self>) {
-        let consumers = iter(self.consumers.lock().await.values())
-            .fold(vec![], |mut acc, y| async move {
-                acc.push(y.str_repr().await);
-                acc
-            })
-            .await;
+    pub(crate) fn print_memory_usage(self: &Arc<Self>) {
+        let consumers =
+            self.consumers
+                .lock()
+                .unwrap()
+                .values()
+                .fold(vec![], |mut acc, y| {
+                    acc.push(y.str_repr());
+                    acc
+                });
         let tracker_mem = self.trackers_total_usage.load(Ordering::SeqCst);
         info!("Memory usage statistics: total {}, tracker used {}, total {} consumers detail: \n {},",
             human_readable_size(self.pool_size),
             human_readable_size(tracker_mem),
             &consumers.len(),
             consumers.join("\n"));
+    }
+}
+
+impl Drop for MemoryManager {
+    fn drop(&mut self) {
+        self.shutdown()
     }
 }
 

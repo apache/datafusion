@@ -18,12 +18,11 @@
 //! Execution runtime environment that tracks memory, disk and various configurations
 //! that are used during physical plan execution.
 
-use std::fmt::{Debug, Formatter};
 use crate::error::Result;
 use crate::execution::disk_manager::DiskManager;
 use crate::execution::memory_manager::{MemoryConsumer, MemoryConsumerId, MemoryManager};
-use futures::lock::Mutex;
-use std::sync::Arc;
+use std::fmt::{Debug, Formatter};
+use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 /// Execution runtime environment
@@ -46,6 +45,7 @@ impl Debug for RuntimeEnv {
 
 impl RuntimeEnv {
     /// Create env based on configuration
+    #[allow(clippy::mutex_atomic)]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         let memory_manager = Arc::new(MemoryManager::new(
             (config.max_memory as f64 * config.memory_fraction) as usize,
@@ -65,18 +65,20 @@ impl RuntimeEnv {
     }
 
     /// Register the consumer to get it tracked
-    pub async fn register_consumer(&self, memory_consumer: Arc<dyn MemoryConsumer>) {
-        let mut initialized = self.initialized.lock().await;
-        if !*initialized {
-            self.memory_manager.initialize().await;
-            *initialized = true;
+    pub fn register_consumer(&self, memory_consumer: Arc<dyn MemoryConsumer>) {
+        {
+            let mut initialized = self.initialized.lock().unwrap();
+            if !*initialized {
+                self.memory_manager.initialize();
+                *initialized = true;
+            }
         }
-        self.memory_manager.register_consumer(memory_consumer).await;
+        self.memory_manager.register_consumer(memory_consumer);
     }
 
     /// Drop the consumer from get tracked
-    pub async fn drop_consumer(&self, id: &MemoryConsumerId) {
-        self.memory_manager.drop_consumer(id).await
+    pub fn drop_consumer(&self, id: &MemoryConsumerId) {
+        self.memory_manager.drop_consumer(id)
     }
 }
 
