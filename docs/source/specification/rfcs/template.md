@@ -17,6 +17,42 @@
   under the License.
 -->
 
-# DataFusion in Python
+Feature Name:
 
-This directory is now moved to its [dedicated repository](https://github.com/datafusion-contrib/datafusion-python).
+Status: draft/in-progress/completed/
+
+Start Date: YYYY-MM-DD
+
+Authors:
+
+RFC PR: #
+
+Datafusion Issue: #
+
+---
+
+### Background
+
+---
+
+### Goals
+
+---
+
+### Non-Goals
+
+---
+
+### Survey
+
+---
+
+### General design
+
+---
+
+### Detailed design
+
+---
+
+### Others

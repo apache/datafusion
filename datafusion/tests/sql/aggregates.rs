@@ -102,6 +102,40 @@ async fn csv_query_count() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_count_distinct() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT count(distinct c2) FROM aggregate_test_100";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------+",
+        "| COUNT(DISTINCT aggregate_test_100.c2) |",
+        "+---------------------------------------+",
+        "| 5                                     |",
+        "+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_count_distinct_expr() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT count(distinct c2 % 2) FROM aggregate_test_100";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------------------------+",
+        "| COUNT(DISTINCT aggregate_test_100.c2 % Int64(2)) |",
+        "+--------------------------------------------------+",
+        "| 2                                                |",
+        "+--------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_count_star() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
