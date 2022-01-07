@@ -54,6 +54,30 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver as TKReceiver, Sender as TKSender};
 use tokio::task;
 
+/// Sort arbitrary size of data to get an total order (may spill several times during sorting based on free memory available).
+///
+/// The basic architecture of the algorithm:
+///
+/// let spills = vec![];
+/// let in_mem_batches = vec![];
+/// while (input.has_next()) {
+///     let batch = input.next();
+///     // no enough memory available, spill first.
+///     if exec_memory_available < size_of(batch) {
+///         let ordered_stream = in_mem_heap_sort(in_mem_batches.drain(..));
+///         let tmp_file = spill_write(ordered_stream);
+///         spills.push(tmp_file);
+///     }
+///     // sort the batch while it's probably still in cache and buffer it.
+///     let sorted = sort_by_key(batch);
+///     in_mem_batches.push(sorted);
+/// }
+///
+/// let partial_ordered_streams = vec![];
+/// let in_mem_stream = in_mem_heap_sort(in_mem_batches.drain(..));
+/// partial_ordered_streams.push(in_mem_stream);
+/// partial_ordered_streams.extend(spills.drain(..).map(read_as_stream));
+/// let result = sort_preserving_merge(partial_ordered_streams);
 struct ExternalSorter {
     id: MemoryConsumerId,
     schema: SchemaRef,
@@ -100,9 +124,7 @@ impl ExternalSorter {
         Ok(())
     }
 
-    /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`(SPMS).
-    /// Always put in mem batch based stream to idx 0 in SPMS so that we could spill
-    /// the stream when `spill()` is called on us.
+    /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
     async fn sort(&self) -> Result<SendableRecordBatchStream> {
         let partition = self.partition_id();
         let mut in_mem_batches = self.in_mem_batches.lock().await;
@@ -469,7 +491,6 @@ impl ExecutionPlan for ExternalSortExec {
     }
 }
 
-/// Sort based on `ExternalSorter`
 async fn external_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,

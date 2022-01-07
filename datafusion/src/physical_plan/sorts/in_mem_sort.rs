@@ -36,13 +36,14 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr, PhysicalExpr, RecordBatchStream,
 };
 
+/// Merge buffered, self-sorted record batches to get an order.
+///
+/// Internally, it uses MinHeap to reduce extra memory consumption
+/// by not concatenating all batches into one and sorting it as done by `SortExec`.
 pub(crate) struct InMemSortStream {
     /// The schema of the RecordBatches yielded by this stream
     schema: SchemaRef,
-    /// For each input stream maintain a dequeue of SortKeyCursor
-    ///
-    /// Exhausted cursors will be popped off the front once all
-    /// their rows have been yielded to the output
+    /// Self sorted batches to be merged together
     batches: Vec<Arc<RecordBatch>>,
     /// The accumulated row indexes for the next record batch
     in_progress: Vec<RowIndex>,

@@ -18,6 +18,7 @@
 //! Execution runtime environment that tracks memory, disk and various configurations
 //! that are used during physical plan execution.
 
+use std::fmt::{Debug, Formatter};
 use crate::error::Result;
 use crate::execution::disk_manager::DiskManager;
 use crate::execution::memory_manager::{MemoryConsumer, MemoryConsumerId, MemoryManager};
@@ -35,6 +36,12 @@ pub struct RuntimeEnv {
     pub disk_manager: Arc<DiskManager>,
     /// If runtime env has initialized
     initialized: Arc<Mutex<bool>>,
+}
+
+impl Debug for RuntimeEnv {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "RuntimeEnv")
+    }
 }
 
 impl RuntimeEnv {

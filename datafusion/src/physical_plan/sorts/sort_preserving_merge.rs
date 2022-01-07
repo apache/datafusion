@@ -317,6 +317,20 @@ pub(crate) struct SortPreservingMergeStream {
 
     /// An index to uniquely identify the input stream batch
     next_batch_index: usize,
+
+    /// runtime
+    runtime: Arc<RuntimeEnv>,
+}
+
+impl Drop for SortPreservingMergeStream {
+    fn drop(&mut self) {
+        // let rt = tokio::runtime::Builder::new_multi_thread()
+        //     .build()
+        //     .unwrap();
+        // rt.block_on(async {
+        //     self.runtime.drop_consumer(self.streams.id()).await;
+        // })
+    }
 }
 
 impl SortPreservingMergeStream {
@@ -352,6 +366,7 @@ impl SortPreservingMergeStream {
             aborted: false,
             in_progress: vec![],
             next_batch_index: 0,
+            runtime,
         }
     }
 
@@ -389,6 +404,7 @@ impl SortPreservingMergeStream {
             aborted: false,
             in_progress: vec![],
             next_batch_index: 0,
+            runtime,
         }
     }
 

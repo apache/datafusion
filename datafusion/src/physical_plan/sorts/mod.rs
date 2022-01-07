@@ -193,6 +193,7 @@ impl SortKeyCursor {
 }
 
 impl Ord for SortKeyCursor {
+    /// Needed by min-heap comparison in `in_mem_sort` and reverse the order at the same time.
     fn cmp(&self, other: &Self) -> Ordering {
         other.compare(self).unwrap()
     }
