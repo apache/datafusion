@@ -418,19 +418,21 @@ impl<'a> Simplifier<'a> {
 
     /// Returns true if expr is nullable
     fn nullable(&self, expr: &Expr) -> Result<bool> {
-        for schema in &self.schemas {
-            if let Ok(res) = expr.nullable(schema.as_ref()) {
-                return Ok(res);
-            }
-            // expr may be from another input, so keep trying
-        }
-
-        // This means we weren't able to compule `Expr::nullable` with
-        // any input schemas, signalling a problem
-        Err(DataFusionError::Internal(format!(
-            "Could not find find columns in '{}' during simplify",
-            expr
-        )))
+        self.schemas
+            .iter()
+            .find_map(|schema| {
+                // expr may be from another input, so ignore errors
+                // by converting to None to keep trying
+                expr.nullable(schema.as_ref()).ok()
+            })
+            .ok_or_else(|| {
+                // This means we weren't able to compute `Expr::nullable` with
+                // *any* input schemas, signalling a problem
+                DataFusionError::Internal(format!(
+                    "Could not find find columns in '{}' during simplify",
+                    expr
+                ))
+            })
     }
 }
 
