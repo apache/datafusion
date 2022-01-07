@@ -35,7 +35,9 @@ use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_t
 use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use expressions::{avg_return_type, sum_return_type, variance_return_type, stddev_return_type};
+use expressions::{
+    avg_return_type, stddev_return_type, sum_return_type, variance_return_type,
+};
 use std::{fmt, str::FromStr, sync::Arc};
 
 /// the implementation of an aggregate function
@@ -219,7 +221,7 @@ pub fn create_aggregate_expr(
             return Err(DataFusionError::NotImplemented(
                 "AVG(DISTINCT) aggregations are not available".to_string(),
             ));
-        },
+        }
         (AggregateFunction::Variance, false) => Arc::new(expressions::Variance::new(
             coerced_phy_exprs[0].clone(),
             name,
@@ -229,7 +231,7 @@ pub fn create_aggregate_expr(
             return Err(DataFusionError::NotImplemented(
                 "VARIANCE(DISTINCT) aggregations are not available".to_string(),
             ));
-        },
+        }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             coerced_phy_exprs[0].clone(),
             name,
@@ -239,7 +241,7 @@ pub fn create_aggregate_expr(
             return Err(DataFusionError::NotImplemented(
                 "VARIANCE(DISTINCT) aggregations are not available".to_string(),
             ));
-        },
+        }
     })
 }
 
@@ -284,7 +286,10 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
                 .collect::<Vec<_>>();
             Signature::uniform(1, valid, Volatility::Immutable)
         }
-        AggregateFunction::Avg | AggregateFunction::Sum | AggregateFunction::Variance | AggregateFunction::Stddev=> {
+        AggregateFunction::Avg
+        | AggregateFunction::Sum
+        | AggregateFunction::Variance
+        | AggregateFunction::Stddev => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }
@@ -295,7 +300,7 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::physical_plan::expressions::{
-        ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Sum, Variance, Stddev,
+        ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Stddev, Sum, Variance,
     };
 
     #[test]
@@ -503,17 +508,14 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::Variance => {
-                        assert!(result_agg_phy_exprs.as_any().is::<Variance>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Float64, true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::Variance {
+                    assert!(result_agg_phy_exprs.as_any().is::<Variance>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new("c1", DataType::Float64, true),
+                        result_agg_phy_exprs.field().unwrap()
+                    )
+                }
             }
         }
         Ok(())
@@ -544,17 +546,14 @@ mod tests {
                     &input_schema,
                     "c1",
                 )?;
-                match fun {
-                    AggregateFunction::Stddev => {
-                        assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
-                        assert_eq!("c1", result_agg_phy_exprs.name());
-                        assert_eq!(
-                            Field::new("c1", DataType::Float64, true),
-                            result_agg_phy_exprs.field().unwrap()
-                        );
-                    }
-                    _ => {}
-                };
+                if fun == AggregateFunction::Variance {
+                    assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new("c1", DataType::Float64, true),
+                        result_agg_phy_exprs.field().unwrap()
+                    )
+                }
             }
         }
         Ok(())

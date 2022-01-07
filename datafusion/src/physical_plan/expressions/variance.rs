@@ -79,10 +79,7 @@ impl Variance {
         data_type: DataType,
     ) -> Self {
         // the result of variance just support FLOAT64 data type.
-        assert!(matches!(
-            data_type,
-            DataType::Float64
-        ));
+        assert!(matches!(data_type, DataType::Float64));
         Self {
             name: name.into(),
             expr,
@@ -97,7 +94,7 @@ impl AggregateExpr for Variance {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, DataType::Float64,true))
+        Ok(Field::new(&self.name, DataType::Float64, true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -166,7 +163,11 @@ impl VarianceAccumulator {
 
 impl Accumulator for VarianceAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::from(self.count), self.mean.clone(), self.m2.clone()])
+        Ok(vec![
+            ScalarValue::from(self.count),
+            self.mean.clone(),
+            self.m2.clone(),
+        ])
     }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
@@ -178,7 +179,8 @@ impl Accumulator for VarianceAccumulator {
             let delta1 = ScalarValue::add(values, &self.mean.arithmetic_negate())?;
             let new_mean = ScalarValue::add(
                 &ScalarValue::div(&delta1, &ScalarValue::from(new_count as f64))?,
-                &self.mean)?;
+                &self.mean,
+            )?;
             let delta2 = ScalarValue::add(values, &new_mean.arithmetic_negate())?;
             let tmp = ScalarValue::mul(&delta1, &delta2)?;
 
@@ -187,7 +189,7 @@ impl Accumulator for VarianceAccumulator {
             self.mean = new_mean;
             self.m2 = new_m2;
         }
- 
+
         Ok(())
     }
 
@@ -202,26 +204,25 @@ impl Accumulator for VarianceAccumulator {
         } else {
             unreachable!()
         };
-        let new_mean = 
-            ScalarValue::div(
-                &ScalarValue::add(
-                    &self.mean, 
-                    mean)?,
-                    &ScalarValue::from(2 as f64))?;
+        let new_mean = ScalarValue::div(
+            &ScalarValue::add(&self.mean, mean)?,
+            &ScalarValue::from(2_f64),
+        )?;
         let delta = ScalarValue::add(&mean.arithmetic_negate(), &self.mean)?;
         let delta_sqrt = ScalarValue::mul(&delta, &delta)?;
-        let new_m2 = 
-            ScalarValue::add(
-                &ScalarValue::add(
-                    &ScalarValue::mul(
-                        &delta_sqrt,
-                        &ScalarValue::div(
-                            &ScalarValue::mul(
-                                    &ScalarValue::from(self.count), 
-                                    count)?,
-                            &ScalarValue::from(new_count as f64))?)?,
-                    &self.m2)?,
-                &m2)?;
+        let new_m2 = ScalarValue::add(
+            &ScalarValue::add(
+                &ScalarValue::mul(
+                    &delta_sqrt,
+                    &ScalarValue::div(
+                        &ScalarValue::mul(&ScalarValue::from(self.count), count)?,
+                        &ScalarValue::from(new_count as f64),
+                    )?,
+                )?,
+                &self.m2,
+            )?,
+            m2,
+        )?;
 
         self.count = new_count;
         self.mean = new_mean;
@@ -254,11 +255,9 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
-
     #[test]
     fn variance_f64_1() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -326,8 +325,7 @@ mod tests {
         assert_eq!(DataType::Float64, result_type);
 
         let data_type = DataType::Decimal(36, 10);
-        let result_type = variance_return_type(&data_type).is_err();
-        assert_eq!(true, result_type);
+        assert!(!variance_return_type(&data_type).is_err());
         Ok(())
     }
 

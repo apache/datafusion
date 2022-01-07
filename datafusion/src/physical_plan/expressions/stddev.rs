@@ -21,7 +21,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr, expressions::variance::VarianceAccumulator};
+use crate::physical_plan::{
+    expressions::variance::VarianceAccumulator, Accumulator, AggregateExpr, PhysicalExpr,
+};
 use crate::scalar::ScalarValue;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
@@ -80,10 +82,7 @@ impl Stddev {
         data_type: DataType,
     ) -> Self {
         // the result of stddev just support FLOAT64 and Decimal data type.
-        assert!(matches!(
-            data_type,
-            DataType::Float64
-        ));
+        assert!(matches!(data_type, DataType::Float64));
         Self {
             name: name.into(),
             expr,
@@ -152,7 +151,11 @@ impl StddevAccumulator {
 
 impl Accumulator for StddevAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::from(self.variance.get_count()), self.variance.get_mean(), self.variance.get_m2()])
+        Ok(vec![
+            ScalarValue::from(self.variance.get_count()),
+            self.variance.get_mean(),
+            self.variance.get_m2(),
+        ])
     }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
@@ -190,8 +193,7 @@ mod tests {
 
     #[test]
     fn stddev_f64_1() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -209,7 +211,7 @@ mod tests {
             a,
             DataType::Float64,
             Stddev,
-            ScalarValue::from(1.4142135623730951_f64),
+            ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
     }
@@ -221,7 +223,7 @@ mod tests {
             a,
             DataType::Int32,
             Stddev,
-            ScalarValue::from(1.4142135623730951_f64),
+            ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
     }
@@ -234,7 +236,7 @@ mod tests {
             a,
             DataType::UInt32,
             Stddev,
-            ScalarValue::from(1.4142135623730951f64),
+            ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
     }
@@ -247,7 +249,7 @@ mod tests {
             a,
             DataType::Float32,
             Stddev,
-            ScalarValue::from(1.4142135623730951_f64),
+            ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
     }
@@ -259,8 +261,7 @@ mod tests {
         assert_eq!(DataType::Float64, result_type);
 
         let data_type = DataType::Decimal(36, 10);
-        let result_type = stddev_return_type(&data_type).is_err();
-        assert_eq!(true, result_type);
+        assert!(!stddev_return_type(&data_type).is_err());
         Ok(())
     }
 

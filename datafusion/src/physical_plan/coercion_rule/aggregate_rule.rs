@@ -21,11 +21,8 @@ use crate::arrow::datatypes::Schema;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::aggregates::AggregateFunction;
 use crate::physical_plan::expressions::{
-    is_avg_support_arg_type, 
-    is_sum_support_arg_type, 
-    is_variance_support_arg_type, 
-    try_cast,
-    is_stddev_support_arg_type,
+    is_avg_support_arg_type, is_stddev_support_arg_type, is_sum_support_arg_type,
+    is_variance_support_arg_type, try_cast,
 };
 use crate::physical_plan::functions::{Signature, TypeSignature};
 use crate::physical_plan::PhysicalExpr;
