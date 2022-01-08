@@ -293,8 +293,7 @@ mod tests {
 
     #[test]
     fn stddev_f64_4() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -310,7 +309,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Stddev,
+            StddevPop,
             ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
@@ -323,7 +322,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::UInt32,
-            Stddev,
+            StddevPop,
             ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
@@ -336,7 +335,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float32,
-            Stddev,
+            StddevPop,
             ScalarValue::from(std::f64::consts::SQRT_2),
             DataType::Float64
         )
@@ -349,7 +348,7 @@ mod tests {
         assert_eq!(DataType::Float64, result_type);
 
         let data_type = DataType::Decimal(36, 10);
-        assert!(!stddev_return_type(&data_type).is_err());
+        assert!(stddev_return_type(&data_type).is_err());
         Ok(())
     }
 
@@ -365,7 +364,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Stddev,
+            StddevPop,
             ScalarValue::from(1.479019945774904),
             DataType::Float64
         )
@@ -377,7 +376,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Stddev,
+            StddevPop,
             ScalarValue::Float64(None),
             DataType::Float64
         )

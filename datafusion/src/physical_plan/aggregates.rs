@@ -242,11 +242,13 @@ pub fn create_aggregate_expr(
                 "VAR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::VariancePop, false) => Arc::new(expressions::VariancePop::new(
-            coerced_phy_exprs[0].clone(),
-            name,
-            return_type,
-        )),
+        (AggregateFunction::VariancePop, false) => {
+            Arc::new(expressions::VariancePop::new(
+                coerced_phy_exprs[0].clone(),
+                name,
+                return_type,
+            ))
+        }
         (AggregateFunction::VariancePop, true) => {
             return Err(DataFusionError::NotImplemented(
                 "VAR_POP(DISTINCT) aggregations are not available".to_string(),
@@ -320,7 +322,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::Sum
         | AggregateFunction::Variance
         | AggregateFunction::VariancePop
-        | AggregateFunction::Stddev 
+        | AggregateFunction::Stddev
         | AggregateFunction::StddevPop => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }

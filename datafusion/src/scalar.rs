@@ -528,18 +528,19 @@ macro_rules! eq_array_primitive {
 impl ScalarValue {
     /// Return true if the value is numeric
     pub fn is_numeric(&self) -> bool {
-        matches!(self,
+        matches!(
+            self,
             ScalarValue::Float32(_)
-            | ScalarValue::Float64(_)
-            | ScalarValue::Decimal128(_, _, _)
-            | ScalarValue::Int8(_)
-            | ScalarValue::Int16(_)
-            | ScalarValue::Int32(_)
-            | ScalarValue::Int64(_)
-            | ScalarValue::UInt8(_)
-            | ScalarValue::UInt16(_)
-            | ScalarValue::UInt32(_)
-            | ScalarValue::UInt64(_)
+                | ScalarValue::Float64(_)
+                | ScalarValue::Decimal128(_, _, _)
+                | ScalarValue::Int8(_)
+                | ScalarValue::Int16(_)
+                | ScalarValue::Int32(_)
+                | ScalarValue::Int64(_)
+                | ScalarValue::UInt8(_)
+                | ScalarValue::UInt16(_)
+                | ScalarValue::UInt32(_)
+                | ScalarValue::UInt64(_)
         )
     }
 
@@ -556,7 +557,7 @@ impl ScalarValue {
 
         if lhs.is_null() || rhs.is_null() {
             return Err(DataFusionError::Internal(
-                "Addition does not support empty values".to_string()
+                "Addition does not support empty values".to_string(),
             ));
         }
 
@@ -658,7 +659,7 @@ impl ScalarValue {
 
         if lhs.is_null() || rhs.is_null() {
             return Err(DataFusionError::Internal(
-                "Multiplication does not support empty values".to_string()
+                "Multiplication does not support empty values".to_string(),
             ));
         }
 
@@ -668,7 +669,7 @@ impl ScalarValue {
         match (lhs, rhs) {
             (ScalarValue::Decimal128(_, _, _), _)
             | (_, ScalarValue::Decimal128(_, _, _)) => Err(DataFusionError::Internal(
-                "Multiplication with Decimals are not supported for now".to_string()
+                "Multiplication with Decimals are not supported for now".to_string(),
             )),
             // f64 / _
             (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
@@ -731,7 +732,7 @@ impl ScalarValue {
 
         if lhs.is_null() || rhs.is_null() {
             return Err(DataFusionError::Internal(
-                "Division does not support empty values".to_string()
+                "Division does not support empty values".to_string(),
             ));
         }
 

@@ -164,7 +164,9 @@ impl AggregateExpr for VariancePop {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Population)?))
+        Ok(Box::new(VarianceAccumulator::try_new(
+            StatsType::Population,
+        )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -198,13 +200,12 @@ impl AggregateExpr for VariancePop {
 
 /// An accumulator to compute variance
 /// The algrithm used is an online implementation and numerically stable. It is based on this paper:
-/// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products". 
+/// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products".
 /// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
-/// 
+///
 /// The algorithm has been analyzed here:
-/// Ling, Robert F. (1974). "Comparison of Several Algorithms for Computing Sample Means and Variances". 
+/// Ling, Robert F. (1974). "Comparison of Several Algorithms for Computing Sample Means and Variances".
 /// Journal of the American Statistical Association. 69 (348): 859–866. doi:10.2307/2286154. JSTOR 2286154.
-
 
 #[derive(Debug)]
 pub struct VarianceAccumulator {
@@ -309,11 +310,10 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let count = 
-            match self.s_type {
-                StatsType::Population => self.count,
-                StatsType::Sample => self.count - 1,
-            };
+        let count = match self.s_type {
+            StatsType::Population => self.count,
+            StatsType::Sample => self.count - 1,
+        };
 
         match self.m2 {
             ScalarValue::Float64(e) => {
@@ -344,7 +344,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float64,
-            Variance,
+            VariancePop,
             ScalarValue::from(0.25_f64),
             DataType::Float64
         )
@@ -357,7 +357,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float64,
-            Variance,
+            VariancePop,
             ScalarValue::from(2_f64),
             DataType::Float64
         )
@@ -370,7 +370,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float64,
-            VariancePop,
+            Variance,
             ScalarValue::from(2.5_f64),
             DataType::Float64
         )
@@ -378,8 +378,7 @@ mod tests {
 
     #[test]
     fn variance_f64_4() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -395,7 +394,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Variance,
+            VariancePop,
             ScalarValue::from(2_f64),
             DataType::Float64
         )
@@ -408,7 +407,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::UInt32,
-            Variance,
+            VariancePop,
             ScalarValue::from(2.0f64),
             DataType::Float64
         )
@@ -421,7 +420,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float32,
-            Variance,
+            VariancePop,
             ScalarValue::from(2_f64),
             DataType::Float64
         )
@@ -434,7 +433,7 @@ mod tests {
         assert_eq!(DataType::Float64, result_type);
 
         let data_type = DataType::Decimal(36, 10);
-        assert!(!variance_return_type(&data_type).is_err());
+        assert!(variance_return_type(&data_type).is_err());
         Ok(())
     }
 
@@ -450,7 +449,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Variance,
+            VariancePop,
             ScalarValue::from(2.1875f64),
             DataType::Float64
         )
@@ -462,7 +461,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Variance,
+            VariancePop,
             ScalarValue::Float64(None),
             DataType::Float64
         )
