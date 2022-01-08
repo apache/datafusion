@@ -1647,6 +1647,15 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
+/// Calculate an approximation of the specified `quantile` for `expr`.
+pub fn approx_quantile(expr: Expr, quantile: Expr) -> Expr {
+    Expr::AggregateFunction {
+        fun: aggregates::AggregateFunction::ApproxQuantile,
+        distinct: false,
+        args: vec![expr, quantile],
+    }
+}
+
 // TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
 // varying arity functions
 /// Create an convenience function representing a unary scalar function
