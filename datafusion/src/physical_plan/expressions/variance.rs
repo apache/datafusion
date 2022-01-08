@@ -131,6 +131,15 @@ impl AggregateExpr for Variance {
 }
 
 /// An accumulator to compute variance
+/// The algrithm used is an online implementation and numerically stable. It is based on this paper:
+/// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products". 
+/// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
+/// 
+/// The algorithm has been analyzed here:
+/// Ling, Robert F. (1974). "Comparison of Several Algorithms for Computing Sample Means and Variances". 
+/// Journal of the American Statistical Association. 69 (348): 859–866. doi:10.2307/2286154. JSTOR 2286154.
+
+
 #[derive(Debug)]
 pub struct VarianceAccumulator {
     m2: ScalarValue,
