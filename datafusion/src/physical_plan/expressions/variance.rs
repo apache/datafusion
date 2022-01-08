@@ -276,12 +276,24 @@ impl Accumulator for VarianceAccumulator {
         let mean = &states[1];
         let m2 = &states[2];
         let mut new_count: u64 = self.count;
+
         // counts are summed
         if let ScalarValue::UInt64(Some(c)) = count {
+            if *c <= 0 as u64 {
+                return Ok(());
+            }
+
+            if self.count <= 0 {
+                self.count = *c;
+                self.mean = mean.clone();
+                self.m2 = m2.clone();
+                return Ok(());
+            }
             new_count += c
         } else {
             unreachable!()
         };
+
         let new_mean = ScalarValue::div(
             &ScalarValue::add(&self.mean, mean)?,
             &ScalarValue::from(2_f64),
@@ -312,13 +324,19 @@ impl Accumulator for VarianceAccumulator {
     fn evaluate(&self) -> Result<ScalarValue> {
         let count = match self.s_type {
             StatsType::Population => self.count,
-            StatsType::Sample => self.count - 1,
+            StatsType::Sample => {
+                if self.count > 0 {
+                    self.count - 1
+                } else {
+                    self.count
+                }
+            }
         };
 
-        if count <=1 {
+        if count <= 1 {
             return Err(DataFusionError::Internal(
                 "At least two values are needed to calculate variance".to_string(),
-            ))
+            ));
         }
 
         match self.m2 {
@@ -445,20 +463,19 @@ mod tests {
 
     #[test]
     fn test_variance_1_input() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
-            let agg = Arc::new(Variance::new(
-                col("a", &schema)?,
-                "bla".to_string(),
-                DataType::Float64,
-            ));
-            let actual = aggregate(&batch, agg);
-            assert!(actual.is_err());
+        let agg = Arc::new(Variance::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+        let actual = aggregate(&batch, agg);
+        assert!(actual.is_err());
 
-            Ok(())
+        Ok(())
     }
 
     #[test]
@@ -482,13 +499,18 @@ mod tests {
     #[test]
     fn variance_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            VariancePop,
-            ScalarValue::Float64(None),
-            DataType::Float64
-        )
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+        let agg = Arc::new(Variance::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+        let actual = aggregate(&batch, agg);
+        assert!(actual.is_err());
+
+        Ok(())
     }
 
     fn aggregate(
