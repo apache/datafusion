@@ -26,11 +26,18 @@ use crate::scalar::ScalarValue;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 
-use super::format_state_name;
+use super::{format_state_name, StatsType};
 
-/// VARIANCE aggregate expression
+/// VAR and VAR_SAMP aggregate expression
 #[derive(Debug)]
 pub struct Variance {
+    name: String,
+    expr: Arc<dyn PhysicalExpr>,
+}
+
+/// VAR_POP aggregate expression
+#[derive(Debug)]
+pub struct VariancePop {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
 }
@@ -98,7 +105,66 @@ impl AggregateExpr for Variance {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(VarianceAccumulator::try_new()?))
+        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        Ok(vec![
+            Field::new(
+                &format_state_name(&self.name, "count"),
+                DataType::UInt64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "mean"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "m2"),
+                DataType::Float64,
+                true,
+            ),
+        ])
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl VariancePop {
+    /// Create a new VAR_POP aggregate function
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
+        // the result of variance just support FLOAT64 data type.
+        assert!(matches!(data_type, DataType::Float64));
+        Self {
+            name: name.into(),
+            expr,
+        }
+    }
+}
+
+impl AggregateExpr for VariancePop {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(&self.name, DataType::Float64, true))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Population)?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -145,15 +211,17 @@ pub struct VarianceAccumulator {
     m2: ScalarValue,
     mean: ScalarValue,
     count: u64,
+    s_type: StatsType,
 }
 
 impl VarianceAccumulator {
     /// Creates a new `VarianceAccumulator`
-    pub fn try_new() -> Result<Self> {
+    pub fn try_new(s_type: StatsType) -> Result<Self> {
         Ok(Self {
             m2: ScalarValue::from(0 as f64),
             mean: ScalarValue::from(0 as f64),
             count: 0,
+            s_type: s_type,
         })
     }
 
@@ -241,12 +309,18 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
+        let count = 
+            match self.s_type {
+                StatsType::Population => self.count,
+                StatsType::Sample => self.count - 1,
+            };
+
         match self.m2 {
             ScalarValue::Float64(e) => {
                 if self.count == 0 {
                     Ok(ScalarValue::Float64(None))
                 } else {
-                    Ok(ScalarValue::Float64(e.map(|f| f / self.count as f64)))
+                    Ok(ScalarValue::Float64(e.map(|f| f / count as f64)))
                 }
             }
             _ => Err(DataFusionError::Internal(
@@ -285,6 +359,32 @@ mod tests {
             DataType::Float64,
             Variance,
             ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64_3() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            VariancePop,
+            ScalarValue::from(2.5_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64_4() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Variance,
+            ScalarValue::from(0.9033333333333333_f64),
             DataType::Float64
         )
     }

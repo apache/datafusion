@@ -53,7 +53,7 @@ async fn csv_query_avg() -> Result<()> {
 async fn csv_query_variance_1() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT variance(c2) FROM aggregate_test_100";
+    let sql = "SELECT var_pop(c2) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.8675"]];
@@ -65,7 +65,7 @@ async fn csv_query_variance_1() -> Result<()> {
 async fn csv_query_variance_2() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT variance(c6) FROM aggregate_test_100";
+    let sql = "SELECT var_pop(c6) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["26156334342021890000000000000000000000"]];
@@ -77,7 +77,7 @@ async fn csv_query_variance_2() -> Result<()> {
 async fn csv_query_variance_3() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT variance(c12) FROM aggregate_test_100";
+    let sql = "SELECT var_pop(c12) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.09234223721582163"]];
@@ -86,10 +86,34 @@ async fn csv_query_variance_3() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_variance_4() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT var(c2) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["1.8863636363636365"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_variance_5() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT var_samp(c2) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["1.8863636363636365"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_stddev_1() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT stddev(c2) FROM aggregate_test_100";
+    let sql = "SELECT stddev_pop(c2) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.3665650368716449"]];
@@ -101,7 +125,7 @@ async fn csv_query_stddev_1() -> Result<()> {
 async fn csv_query_stddev_2() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT stddev(c6) FROM aggregate_test_100";
+    let sql = "SELECT stddev_pop(c6) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["5114326382039172000"]];
@@ -113,10 +137,34 @@ async fn csv_query_stddev_2() -> Result<()> {
 async fn csv_query_stddev_3() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT stddev(c12) FROM aggregate_test_100";
+    let sql = "SELECT stddev_pop(c12) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.30387865541334363"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_stddev_4() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT stddev(c12) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["0.3054095399405338"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_stddev_5() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT stddev_samp(c12) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["0.3054095399405338"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }

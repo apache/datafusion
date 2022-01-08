@@ -66,10 +66,14 @@ pub enum AggregateFunction {
     ApproxDistinct,
     /// array_agg
     ArrayAgg,
-    /// Variance (Population)
+    /// Variance (Sample)
     Variance,
-    /// Standard Deviation (Population)
+    /// Variance (Population)
+    VariancePop,
+    /// Standard Deviation (Sample)
     Stddev,
+    /// Standard Deviation (Population)
+    StddevPop,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -90,8 +94,12 @@ impl FromStr for AggregateFunction {
             "sum" => AggregateFunction::Sum,
             "approx_distinct" => AggregateFunction::ApproxDistinct,
             "array_agg" => AggregateFunction::ArrayAgg,
-            "variance" => AggregateFunction::Variance,
+            "var" => AggregateFunction::Variance,
+            "var_samp" => AggregateFunction::Variance,
+            "var_pop" => AggregateFunction::VariancePop,
             "stddev" => AggregateFunction::Stddev,
+            "stddev_samp" => AggregateFunction::Stddev,
+            "stddev_pop" => AggregateFunction::StddevPop,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
@@ -125,7 +133,9 @@ pub fn return_type(
         }
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
         AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
+        AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
+        AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
         AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
             "item",
@@ -229,7 +239,17 @@ pub fn create_aggregate_expr(
         )),
         (AggregateFunction::Variance, true) => {
             return Err(DataFusionError::NotImplemented(
-                "VARIANCE(DISTINCT) aggregations are not available".to_string(),
+                "VAR(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
+        (AggregateFunction::VariancePop, false) => Arc::new(expressions::VariancePop::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::VariancePop, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "VAR_POP(DISTINCT) aggregations are not available".to_string(),
             ));
         }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
@@ -240,6 +260,16 @@ pub fn create_aggregate_expr(
         (AggregateFunction::Stddev, true) => {
             return Err(DataFusionError::NotImplemented(
                 "STDDEV(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
+        (AggregateFunction::StddevPop, false) => Arc::new(expressions::StddevPop::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::StddevPop, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "STDDEV_POP(DISTINCT) aggregations are not available".to_string(),
             ));
         }
     })
@@ -289,7 +319,9 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         AggregateFunction::Avg
         | AggregateFunction::Sum
         | AggregateFunction::Variance
-        | AggregateFunction::Stddev => {
+        | AggregateFunction::VariancePop
+        | AggregateFunction::Stddev 
+        | AggregateFunction::StddevPop => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }
@@ -522,8 +554,84 @@ mod tests {
     }
 
     #[test]
+    fn test_var_pop_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::VariancePop];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                if fun == AggregateFunction::Variance {
+                    assert!(result_agg_phy_exprs.as_any().is::<Variance>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new("c1", DataType::Float64, true),
+                        result_agg_phy_exprs.field().unwrap()
+                    )
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_stddev_expr() -> Result<()> {
         let funcs = vec![AggregateFunction::Stddev];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+                if fun == AggregateFunction::Variance {
+                    assert!(result_agg_phy_exprs.as_any().is::<Stddev>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new("c1", DataType::Float64, true),
+                        result_agg_phy_exprs.field().unwrap()
+                    )
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_stddev_pop_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::StddevPop];
         let data_types = vec![
             DataType::UInt32,
             DataType::UInt64,

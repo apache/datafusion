@@ -28,14 +28,20 @@ use crate::scalar::ScalarValue;
 use arrow::datatypes::DataType;
 use arrow::datatypes::Field;
 
-use super::format_state_name;
+use super::{format_state_name, StatsType};
 
-/// STDDEV (standard deviation) aggregate expression
+/// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
 #[derive(Debug)]
 pub struct Stddev {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
-    data_type: DataType,
+}
+
+/// STDDEV_POP population aggregate expression
+#[derive(Debug)]
+pub struct StddevPop {
+    name: String,
+    expr: Arc<dyn PhysicalExpr>,
 }
 
 /// function return type of standard deviation
@@ -86,7 +92,6 @@ impl Stddev {
         Self {
             name: name.into(),
             expr,
-            data_type,
         }
     }
 }
@@ -98,11 +103,11 @@ impl AggregateExpr for Stddev {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, self.data_type.clone(), true))
+        Ok(Field::new(&self.name, DataType::Float64, true))
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(StddevAccumulator::try_new()?))
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -134,6 +139,64 @@ impl AggregateExpr for Stddev {
     }
 }
 
+impl StddevPop {
+    /// Create a new STDDEV aggregate function
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
+        // the result of stddev just support FLOAT64 and Decimal data type.
+        assert!(matches!(data_type, DataType::Float64));
+        Self {
+            name: name.into(),
+            expr,
+        }
+    }
+}
+
+impl AggregateExpr for StddevPop {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(&self.name, DataType::Float64, true))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        Ok(vec![
+            Field::new(
+                &format_state_name(&self.name, "count"),
+                DataType::UInt64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "mean"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "m2"),
+                DataType::Float64,
+                true,
+            ),
+        ])
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
 /// An accumulator to compute the average
 #[derive(Debug)]
 pub struct StddevAccumulator {
@@ -142,9 +205,9 @@ pub struct StddevAccumulator {
 
 impl StddevAccumulator {
     /// Creates a new `StddevAccumulator`
-    pub fn try_new() -> Result<Self> {
+    pub fn try_new(s_type: StatsType) -> Result<Self> {
         Ok(Self {
-            variance: VarianceAccumulator::try_new()?,
+            variance: VarianceAccumulator::try_new(s_type)?,
         })
     }
 }
@@ -197,7 +260,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float64,
-            Stddev,
+            StddevPop,
             ScalarValue::from(0.5_f64),
             DataType::Float64
         )
@@ -209,7 +272,7 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float64,
-            Stddev,
+            StddevPop,
             ScalarValue::from(0.7760297817881877),
             DataType::Float64
         )
@@ -222,8 +285,21 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Float64,
-            Stddev,
+            StddevPop,
             ScalarValue::from(std::f64::consts::SQRT_2),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn stddev_f64_4() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Stddev,
+            ScalarValue::from(0.9504384952922168),
             DataType::Float64
         )
     }
