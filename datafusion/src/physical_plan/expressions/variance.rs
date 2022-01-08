@@ -212,7 +212,7 @@ pub struct VarianceAccumulator {
     m2: ScalarValue,
     mean: ScalarValue,
     count: u64,
-    s_type: StatsType,
+    stats_type: StatsType,
 }
 
 impl VarianceAccumulator {
@@ -222,7 +222,7 @@ impl VarianceAccumulator {
             m2: ScalarValue::from(0 as f64),
             mean: ScalarValue::from(0 as f64),
             count: 0,
-            s_type: s_type,
+            stats_type: s_type,
         })
     }
 
@@ -279,11 +279,11 @@ impl Accumulator for VarianceAccumulator {
 
         // counts are summed
         if let ScalarValue::UInt64(Some(c)) = count {
-            if *c <= 0 as u64 {
+            if *c == 0_u64 {
                 return Ok(());
             }
 
-            if self.count <= 0 {
+            if self.count == 0 {
                 self.count = *c;
                 self.mean = mean.clone();
                 self.m2 = m2.clone();
@@ -322,7 +322,7 @@ impl Accumulator for VarianceAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let count = match self.s_type {
+        let count = match self.stats_type {
             StatsType::Population => self.count,
             StatsType::Sample => {
                 if self.count > 0 {
