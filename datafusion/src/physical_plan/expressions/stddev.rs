@@ -353,6 +353,24 @@ mod tests {
     }
 
     #[test]
+    fn test_stddev_1_input() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64]));
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+            let agg = Arc::new(Stddev::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                DataType::Float64,
+            ));
+            let actual = aggregate(&batch, agg);
+            assert!(actual.is_err());
+
+            Ok(())
+    }
+
+    #[test]
     fn stddev_i32_with_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),

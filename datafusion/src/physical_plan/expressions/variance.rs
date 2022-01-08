@@ -315,6 +315,12 @@ impl Accumulator for VarianceAccumulator {
             StatsType::Sample => self.count - 1,
         };
 
+        if count <=1 {
+            return Err(DataFusionError::Internal(
+                "At least two values are needed to calculate variance".to_string(),
+            ))
+        }
+
         match self.m2 {
             ScalarValue::Float64(e) => {
                 if self.count == 0 {
@@ -435,6 +441,24 @@ mod tests {
         let data_type = DataType::Decimal(36, 10);
         assert!(variance_return_type(&data_type).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn test_variance_1_input() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64]));
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+            let agg = Arc::new(Variance::new(
+                col("a", &schema)?,
+                "bla".to_string(),
+                DataType::Float64,
+            ));
+            let actual = aggregate(&batch, agg);
+            assert!(actual.is_err());
+
+            Ok(())
     }
 
     #[test]
