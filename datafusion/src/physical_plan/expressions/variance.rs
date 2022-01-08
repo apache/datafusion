@@ -36,7 +36,7 @@ pub struct Variance {
 }
 
 /// function return type of variance
-pub fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
+pub(crate) fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
         DataType::Int8
         | DataType::Int16

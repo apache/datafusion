@@ -39,7 +39,7 @@ pub struct Stddev {
 }
 
 /// function return type of standard deviation
-pub fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
+pub(crate) fn stddev_return_type(arg_type: &DataType) -> Result<DataType> {
     match arg_type {
         DataType::Int8
         | DataType::Int16
@@ -205,6 +205,18 @@ mod tests {
 
     #[test]
     fn stddev_f64_2() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Stddev,
+            ScalarValue::from(0.7760297817881877),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn stddev_f64_3() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(

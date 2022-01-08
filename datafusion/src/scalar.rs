@@ -3373,8 +3373,8 @@ mod tests {
         ($OP:ident, $LHS:expr, $LHS_TYPE:ident, $RHS:expr, $RHS_TYPE:ident) => {{
             let v1 = &ScalarValue::from($LHS as $LHS_TYPE);
             let v2 = &ScalarValue::from($RHS as $RHS_TYPE);
-            let actual = ScalarValue::add(v1, v2).is_err();
-            assert_eq!(actual, true);
+            let actual = ScalarValue::$OP(v1, v2).is_err();
+            assert!(actual);
         }};
     }
 
@@ -3451,7 +3451,7 @@ mod tests {
 
         let v1 = &ScalarValue::from(1);
         let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
-        assert!(!ScalarValue::add(v1, v2).is_err());
+        assert!(ScalarValue::add(v1, v2).is_err());
 
         let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
         let v2 = &ScalarValue::from(2);
@@ -3531,11 +3531,11 @@ mod tests {
 
         let v1 = &ScalarValue::from(1);
         let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
-        assert!(!ScalarValue::mul(v1, v2).is_err());
+        assert!(ScalarValue::mul(v1, v2).is_err());
 
         let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
         let v2 = &ScalarValue::from(2);
-        assert!(!ScalarValue::mul(v1, v2).is_err());
+        assert!(ScalarValue::mul(v1, v2).is_err());
     }
 
     #[test]
@@ -3556,10 +3556,10 @@ mod tests {
 
         let v1 = &ScalarValue::from(1);
         let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
-        assert!(!ScalarValue::div(v1, v2).is_err());
+        assert!(ScalarValue::div(v1, v2).is_err());
 
         let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
         let v2 = &ScalarValue::from(2);
-        assert!(!ScalarValue::div(v1, v2).is_err());
+        assert!(ScalarValue::div(v1, v2).is_err());
     }
 }

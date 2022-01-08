@@ -239,7 +239,7 @@ pub fn create_aggregate_expr(
         )),
         (AggregateFunction::Stddev, true) => {
             return Err(DataFusionError::NotImplemented(
-                "VARIANCE(DISTINCT) aggregations are not available".to_string(),
+                "STDDEV(DISTINCT) aggregations are not available".to_string(),
             ));
         }
     })
