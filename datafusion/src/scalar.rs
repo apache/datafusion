@@ -554,6 +554,12 @@ impl ScalarValue {
             )));
         }
 
+        if lhs.is_null() || rhs.is_null() {
+            return Err(DataFusionError::Internal(
+                "Addition does not support empty values".to_string()
+            ));
+        }
+
         // TODO: Finding a good way to support operation between different types without
         // writing a hige match block.
         // TODO: Add support for decimal types
@@ -650,6 +656,12 @@ impl ScalarValue {
             )));
         }
 
+        if lhs.is_null() || rhs.is_null() {
+            return Err(DataFusionError::Internal(
+                "Multiplication does not support empty values".to_string()
+            ));
+        }
+
         // TODO: Finding a good way to support operation between different types without
         // writing a hige match block.
         // TODO: Add support for decimal type
@@ -715,6 +727,12 @@ impl ScalarValue {
                 lhs.get_datatype(),
                 rhs.get_datatype()
             )));
+        }
+
+        if lhs.is_null() || rhs.is_null() {
+            return Err(DataFusionError::Internal(
+                "Division does not support empty values".to_string()
+            ));
         }
 
         // TODO: Finding a good way to support operation between different types without
@@ -3456,6 +3474,18 @@ mod tests {
         let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
         let v2 = &ScalarValue::from(2);
         assert!(ScalarValue::add(v1, v2).is_err());
+
+        let v1 = &ScalarValue::Float32(None);
+        let v2 = &ScalarValue::from(2);
+        assert!(ScalarValue::add(v1, v2).is_err());
+
+        let v2 = &ScalarValue::Float32(None);
+        let v1 = &ScalarValue::from(2);
+        assert!(ScalarValue::add(v1, v2).is_err());
+
+        let v1 = &ScalarValue::Float32(None);
+        let v2 = &ScalarValue::Float32(None);
+        assert!(ScalarValue::add(v1, v2).is_err());
     }
 
     #[test]
@@ -3536,6 +3566,18 @@ mod tests {
         let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
         let v2 = &ScalarValue::from(2);
         assert!(ScalarValue::mul(v1, v2).is_err());
+
+        let v1 = &ScalarValue::Float32(None);
+        let v2 = &ScalarValue::from(2);
+        assert!(ScalarValue::mul(v1, v2).is_err());
+
+        let v2 = &ScalarValue::Float32(None);
+        let v1 = &ScalarValue::from(2);
+        assert!(ScalarValue::mul(v1, v2).is_err());
+
+        let v1 = &ScalarValue::Float32(None);
+        let v2 = &ScalarValue::Float32(None);
+        assert!(ScalarValue::mul(v1, v2).is_err());
     }
 
     #[test]
@@ -3560,6 +3602,18 @@ mod tests {
 
         let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
         let v2 = &ScalarValue::from(2);
+        assert!(ScalarValue::div(v1, v2).is_err());
+
+        let v1 = &ScalarValue::Float32(None);
+        let v2 = &ScalarValue::from(2);
+        assert!(ScalarValue::div(v1, v2).is_err());
+
+        let v2 = &ScalarValue::Float32(None);
+        let v1 = &ScalarValue::from(2);
+        assert!(ScalarValue::div(v1, v2).is_err());
+
+        let v1 = &ScalarValue::Float32(None);
+        let v2 = &ScalarValue::Float32(None);
         assert!(ScalarValue::div(v1, v2).is_err());
     }
 }

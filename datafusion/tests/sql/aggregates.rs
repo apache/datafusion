@@ -170,6 +170,18 @@ async fn csv_query_stddev_5() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_stddev_6() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["0.9504384952922168"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_external_table_count() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
