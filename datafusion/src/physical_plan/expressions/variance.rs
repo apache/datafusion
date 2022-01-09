@@ -264,7 +264,6 @@ impl Accumulator for VarianceAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &cast(&values[0], &DataType::Float64)?;
         let arr = values.as_any().downcast_ref::<Float64Array>().unwrap();
-        //.expect(format!("Function does not support {} type", values.data_type().to_string()).as_str());
 
         for i in 0..arr.len() {
             let value = arr.value(i);
