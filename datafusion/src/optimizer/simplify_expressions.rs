@@ -359,7 +359,7 @@ impl ConstEvaluator {
     }
 
     /// Internal helper to evaluates an Expr
-    fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
             return Ok(s);
         }
