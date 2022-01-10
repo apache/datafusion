@@ -119,7 +119,7 @@ impl RuntimeConfig {
 
     /// Customize exec memory fraction
     pub fn with_memory_fraction(mut self, fraction: f64) -> Self {
-        assert!(fraction > 0f64 && fraction < 1f64);
+        assert!(fraction > 0f64 && fraction <= 1f64);
         self.memory_fraction = fraction;
         self
     }

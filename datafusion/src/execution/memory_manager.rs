@@ -97,7 +97,7 @@ pub trait MemoryConsumer: Send + Sync + Debug {
             .await;
         if !can_grow {
             info!(
-                "Failed to grow memory of {} from {}, spilling...",
+                "Failed to grow memory of {} from consumer {}, spilling...",
                 human_readable_size(required),
                 self.id()
             );
@@ -215,7 +215,7 @@ impl MemoryManager {
         };
         let granted = required + current < max_per_op;
         info!(
-            "trying to acquire {} whiling holding {} from {}, got: {}",
+            "trying to acquire {} whiling holding {} from consumer {}, got: {}",
             human_readable_size(required),
             human_readable_size(current),
             consumer_id,

@@ -281,12 +281,13 @@ async fn spill_partial_sorted_stream(
     schema: SchemaRef,
 ) -> Result<usize> {
     let (sender, receiver): (
-        TKSender<ArrowResult<RecordBatch>>,
-        TKReceiver<ArrowResult<RecordBatch>>,
+        TKSender<Option<ArrowResult<RecordBatch>>>,
+        TKReceiver<Option<ArrowResult<RecordBatch>>>,
     ) = tokio::sync::mpsc::channel(2);
     while let Some(item) = in_mem_stream.next().await {
-        sender.send(item).await.ok();
+        sender.send(Some(item)).await.ok();
     }
+    sender.send(None).await.ok();
     let path_clone = path.clone();
     let res =
         task::spawn_blocking(move || write_sorted(receiver, path_clone, schema)).await;
@@ -321,12 +322,12 @@ async fn read_spill_as_stream(
 }
 
 fn write_sorted(
-    mut receiver: TKReceiver<ArrowResult<RecordBatch>>,
+    mut receiver: TKReceiver<Option<ArrowResult<RecordBatch>>>,
     path: String,
     schema: SchemaRef,
 ) -> Result<usize> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
-    while let Some(batch) = receiver.blocking_recv() {
+    while let Some(Some(batch)) = receiver.blocking_recv() {
         writer.write(&batch?)?;
     }
     writer.finish()?;
@@ -514,4 +515,148 @@ async fn external_sort(
     let result = sorter.sort().await;
     runtime.drop_consumer(sorter.id());
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::execution::runtime_env::RuntimeConfig;
+    use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::{
+        collect,
+        file_format::{CsvExec, PhysicalPlanConfig},
+    };
+    use crate::test;
+    use crate::test_util;
+    use arrow::array::*;
+    use arrow::compute::SortOptions;
+    use arrow::datatypes::*;
+
+    async fn sort_with_runtime(runtime: Arc<RuntimeEnv>) -> Result<Vec<RecordBatch>> {
+        let schema = test_util::aggr_test_schema();
+        let partitions = 4;
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+
+        let csv = CsvExec::new(
+            PhysicalPlanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                batch_size: 1024,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        );
+
+        let sort_exec = Arc::new(ExternalSortExec::try_new(
+            vec![
+                // c1 string column
+                PhysicalSortExpr {
+                    expr: col("c1", &schema)?,
+                    options: SortOptions::default(),
+                },
+                // c2 uin32 column
+                PhysicalSortExpr {
+                    expr: col("c2", &schema)?,
+                    options: SortOptions::default(),
+                },
+                // c7 uin8 column
+                PhysicalSortExpr {
+                    expr: col("c7", &schema)?,
+                    options: SortOptions::default(),
+                },
+            ],
+            Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
+        )?);
+
+        collect(sort_exec, runtime).await
+    }
+
+    #[tokio::test]
+    async fn test_in_mem_sort() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let result = sort_with_runtime(runtime).await?;
+
+        assert_eq!(result.len(), 1);
+
+        let columns = result[0].columns();
+
+        let c1 = as_string_array(&columns[0]);
+        assert_eq!(c1.value(0), "a");
+        assert_eq!(c1.value(c1.len() - 1), "e");
+
+        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        assert_eq!(c2.value(0), 1);
+        assert_eq!(c2.value(c2.len() - 1), 5,);
+
+        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        assert_eq!(c7.value(0), 15);
+        assert_eq!(c7.value(c7.len() - 1), 254,);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_spill() -> Result<()> {
+        let config = RuntimeConfig::new()
+            .with_memory_fraction(1.0)
+            // trigger spill there will be 4 batches with 5.5KB for each
+            .with_max_execution_memory(12288);
+        let runtime = Arc::new(RuntimeEnv::new(config)?);
+        let result = sort_with_runtime(runtime).await?;
+
+        assert_eq!(result.len(), 1);
+
+        let columns = result[0].columns();
+
+        let c1 = as_string_array(&columns[0]);
+        assert_eq!(c1.value(0), "a");
+        assert_eq!(c1.value(c1.len() - 1), "e");
+
+        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        assert_eq!(c2.value(0), 1);
+        assert_eq!(c2.value(c2.len() - 1), 5,);
+
+        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        assert_eq!(c7.value(0), 15);
+        assert_eq!(c7.value(c7.len() - 1), 254,);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_multi_output_batch() -> Result<()> {
+        let config = RuntimeConfig::new().with_batch_size(26);
+        let runtime = Arc::new(RuntimeEnv::new(config)?);
+        let result = sort_with_runtime(runtime).await?;
+
+        assert_eq!(result.len(), 4);
+
+        let columns_b1 = result[0].columns();
+        let columns_b3 = result[3].columns();
+
+        let c1 = as_string_array(&columns_b1[0]);
+        let c13 = as_string_array(&columns_b3[0]);
+        assert_eq!(c1.value(0), "a");
+        assert_eq!(c13.value(c13.len() - 1), "e");
+
+        let c2 = as_primitive_array::<UInt32Type>(&columns_b1[1]);
+        let c23 = as_primitive_array::<UInt32Type>(&columns_b3[1]);
+        assert_eq!(c2.value(0), 1);
+        assert_eq!(c23.value(c23.len() - 1), 5,);
+
+        let c7 = as_primitive_array::<UInt8Type>(&columns_b1[6]);
+        let c73 = as_primitive_array::<UInt8Type>(&columns_b3[6]);
+        assert_eq!(c7.value(0), 15);
+        assert_eq!(c73.value(c73.len() - 1), 254,);
+
+        Ok(())
+    }
 }

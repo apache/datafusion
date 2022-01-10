@@ -55,7 +55,7 @@ impl DiskManager {
 fn create_local_dirs(local_dir: &[String]) -> Result<Vec<TempDir>> {
     local_dir
         .iter()
-        .map(|root| create_dir(root, "datafusion"))
+        .map(|root| create_dir(root, "datafusion-"))
         .collect()
 }
 
@@ -94,4 +94,32 @@ fn rand_name() -> String {
         .take(10)
         .map(char::from)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::Result;
+    use crate::execution::disk_manager::{get_file, DiskManager};
+    use tempfile::TempDir;
+
+    #[test]
+    fn file_in_right_dir() -> Result<()> {
+        let local_dir1 = TempDir::new()?;
+        let local_dir2 = TempDir::new()?;
+        let local_dir3 = TempDir::new()?;
+        let local_dirs = vec![
+            local_dir1.path().to_str().unwrap().to_string(),
+            local_dir2.path().to_str().unwrap().to_string(),
+            local_dir3.path().to_str().unwrap().to_string(),
+        ];
+
+        let dm = DiskManager::new(&local_dirs)?;
+        let actual = dm.create_tmp_file()?;
+        let name = actual.rsplit_once(std::path::MAIN_SEPARATOR).unwrap().1;
+
+        let expected = get_file(name, &dm.local_dirs);
+        // file should be located in dir by it's name hash
+        assert_eq!(actual, expected);
+        Ok(())
+    }
 }
