@@ -38,6 +38,7 @@ mod roundtrip_tests {
         scalar::ScalarValue,
         sql::parser::FileType,
     };
+    use datafusion::{logical_plan::Repartition, physical_plan::aggregates};
     use protobuf::arrow_type;
     use std::{convert::TryInto, sync::Arc};
 
@@ -997,6 +998,19 @@ mod roundtrip_tests {
             fun: Sqrt,
             args: vec![col("col")],
         };
+        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_approx_quantile() -> Result<()> {
+        let test_expr = Expr::AggregateFunction {
+            fun: aggregates::AggregateFunction::ApproxQuantile,
+            args: vec![col("bananas"), lit(0.42)],
+            distinct: false,
+        };
+
         roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
 
         Ok(())

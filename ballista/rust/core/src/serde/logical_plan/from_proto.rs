@@ -1065,7 +1065,11 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
 
                 Ok(Expr::AggregateFunction {
                     fun,
-                    args: vec![parse_required_expr(&expr.expr)?],
+                    args: expr
+                        .expr
+                        .iter()
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
                     distinct: false, //TODO
                 })
             }
