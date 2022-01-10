@@ -266,9 +266,9 @@ This library currently supports many SQL constructs, including
 - `SELECT ... FROM ...` together with any expression
 - `ALIAS` to name an expression
 - `CAST` to change types, including e.g. `Timestamp(Nanosecond, None)`
-- most mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
+- Many mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
 - `WHERE` to filter
-- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`
+- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `VAR`, `STDDEV` (sample and population)
 - `ORDER BY` together with an expression and optional `ASC` or `DESC` and also optional `NULLS FIRST` or `NULLS LAST`
 
 ## Supported Functions
