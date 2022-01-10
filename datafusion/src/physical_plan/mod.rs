@@ -565,7 +565,17 @@ pub trait Accumulator: Send + Sync + Debug {
     // of two values, sum and n.
     fn state(&self) -> Result<Vec<ScalarValue>>;
 
-    /// updates the accumulator's state from a vector of scalars.
+    /// updates the accumulator's state from a vector of scalars
+    /// (called by default implementation of [`update_batch`])
+    ///
+    /// Note: this method is the often the simplest to implement and
+    /// is backwards compatible to help to lower the barrier to entry for
+    /// new users to write `Accumulators`
+    ///
+    /// You should always implement `update_batch` instead of this
+    /// method for production aggregators or if you find yourself
+    /// wanting mathematical kernels for `ScalarValue`s such as `add`,
+    /// `mul`, etc
     fn update(&mut self, values: &[ScalarValue]) -> Result<()>;
 
     /// updates the accumulator's state from a vector of arrays.
@@ -583,6 +593,8 @@ pub trait Accumulator: Send + Sync + Debug {
     }
 
     /// updates the accumulator's state from a vector of scalars.
+    ///
+    /// (called by default implementation of [`merge`])
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()>;
 
     /// updates the accumulator's state from a vector of states.
