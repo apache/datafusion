@@ -23,6 +23,7 @@ use futures::future::{self, Either, TryFutureExt};
 use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use std::convert::Infallible;
 use std::{net::SocketAddr, sync::Arc};
+use std::net::{IpAddr, Ipv4Addr};
 use tonic::transport::Server as TonicServer;
 use tower::Service;
 
@@ -62,14 +63,18 @@ async fn start_server(
         "Ballista v{} Scheduler listening on {:?}",
         BALLISTA_VERSION, addr
     );
+    //there should be only one SchedulerServer in process
+    let scheduler_server_without_caller_ip = SchedulerServer::new(
+        config_backend.clone(),
+        namespace.clone(),
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+    );
 
     Ok(Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {
-            let scheduler_server = SchedulerServer::new(
-                config_backend.clone(),
-                namespace.clone(),
-                request.remote_addr().ip(),
-            );
+            let mut scheduler_server = scheduler_server_without_caller_ip.clone();
+            scheduler_server.set_caller_ip(request.remote_addr().ip());
+
             let scheduler_grpc_server =
                 SchedulerGrpcServer::new(scheduler_server.clone());
 
