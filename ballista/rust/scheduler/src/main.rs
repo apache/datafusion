@@ -22,8 +22,8 @@ use ballista_scheduler::externalscaler::external_scaler_server::ExternalScalerSe
 use futures::future::{self, Either, TryFutureExt};
 use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use std::convert::Infallible;
-use std::{net::SocketAddr, sync::Arc};
 use std::net::{IpAddr, Ipv4Addr};
+use std::{net::SocketAddr, sync::Arc};
 use tonic::transport::Server as TonicServer;
 use tower::Service;
 
