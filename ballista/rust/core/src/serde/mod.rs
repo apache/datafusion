@@ -119,6 +119,10 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
                 AggregateFunction::ApproxDistinct
             }
             protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
+            protobuf::AggregateFunction::Variance => AggregateFunction::Variance,
+            protobuf::AggregateFunction::VariancePop => AggregateFunction::VariancePop,
+            protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
+            protobuf::AggregateFunction::StddevPop => AggregateFunction::StddevPop,
         }
     }
 }
