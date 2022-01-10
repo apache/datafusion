@@ -29,6 +29,7 @@ use arrow::{
 };
 use tokio::runtime::Runtime;
 
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     collect,
@@ -58,7 +59,8 @@ fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
     let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 8192));
 
     let rt = Runtime::new().unwrap();
-    rt.block_on(collect(merge)).unwrap();
+    let rt_env = Arc::new(RuntimeEnv::default());
+    rt.block_on(collect(merge, rt_env)).unwrap();
 }
 
 // Produces `n` record batches of row size `m`. Each record batch will have

@@ -20,17 +20,18 @@
 
 use crate::error::{DataFusionError, Result};
 use log::info;
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use std::collections::hash_map::DefaultHasher;
-use std::fs;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use uuid::Uuid;
+use tempfile::{Builder, TempDir};
 
 /// Manages files generated during query execution, e.g. spill files generated
 /// while processing dataset larger than available memory.
 pub struct DiskManager {
-    local_dirs: Vec<String>,
+    local_dirs: Vec<TempDir>,
 }
 
 impl DiskManager {
@@ -48,45 +49,24 @@ impl DiskManager {
     pub fn create_tmp_file(&self) -> Result<String> {
         create_tmp_file(&self.local_dirs)
     }
-
-    #[allow(dead_code)]
-    fn cleanup_resource(&mut self) -> Result<()> {
-        for dir in self.local_dirs.drain(..) {
-            fs::remove_dir(dir)?;
-        }
-        Ok(())
-    }
 }
 
 /// Setup local dirs by creating one new dir in each of the given dirs
-fn create_local_dirs(local_dir: &[String]) -> Result<Vec<String>> {
+fn create_local_dirs(local_dir: &[String]) -> Result<Vec<TempDir>> {
     local_dir
         .iter()
-        .map(|root| create_directory(root, "datafusion"))
+        .map(|root| create_dir(root, "datafusion"))
         .collect()
 }
 
-const MAX_DIR_CREATION_ATTEMPTS: i32 = 10;
-
-fn create_directory(root: &str, prefix: &str) -> Result<String> {
-    let mut attempt = 0;
-    while attempt < MAX_DIR_CREATION_ATTEMPTS {
-        let mut path = PathBuf::from(root);
-        path.push(format!("{}-{}", prefix, Uuid::new_v4().to_string()));
-        let path = path.as_path();
-        if !path.exists() {
-            fs::create_dir(path)?;
-            return Ok(path.canonicalize().unwrap().to_str().unwrap().to_string());
-        }
-        attempt += 1;
-    }
-    Err(DataFusionError::Execution(format!(
-        "Failed to create a temp dir under {} after {} attempts",
-        root, MAX_DIR_CREATION_ATTEMPTS
-    )))
+fn create_dir(root: &str, prefix: &str) -> Result<TempDir> {
+    Builder::new()
+        .prefix(prefix)
+        .tempdir_in(root)
+        .map_err(DataFusionError::IoError)
 }
 
-fn get_file(file_name: &str, local_dirs: &[String]) -> String {
+fn get_file(file_name: &str, local_dirs: &[TempDir]) -> String {
     let mut hasher = DefaultHasher::new();
     file_name.hash(&mut hasher);
     let hash = hasher.finish();
@@ -97,12 +77,21 @@ fn get_file(file_name: &str, local_dirs: &[String]) -> String {
     path.to_str().unwrap().to_string()
 }
 
-fn create_tmp_file(local_dirs: &[String]) -> Result<String> {
-    let name = Uuid::new_v4().to_string();
+fn create_tmp_file(local_dirs: &[TempDir]) -> Result<String> {
+    let name = rand_name();
     let mut path = get_file(&*name, local_dirs);
     while Path::new(path.as_str()).exists() {
-        path = get_file(&*Uuid::new_v4().to_string(), local_dirs);
+        path = get_file(&rand_name(), local_dirs);
     }
     File::create(&path)?;
     Ok(path)
+}
+
+/// Return a random string suitable for use as a database name
+fn rand_name() -> String {
+    thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(10)
+        .map(char::from)
+        .collect()
 }

@@ -345,7 +345,7 @@ impl SortPreservingMergeStream {
 
         let wrappers = receivers.into_iter().map(StreamWrapper::Receiver).collect();
         let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(streams.clone());
+        runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
 
         Self {
             schema,
@@ -383,7 +383,7 @@ impl SortPreservingMergeStream {
             .collect::<Vec<_>>();
 
         let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(streams.clone());
+        runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
 
         Self {
             schema,

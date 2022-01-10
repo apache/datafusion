@@ -22,7 +22,7 @@ use crate::error::Result;
 use crate::execution::disk_manager::DiskManager;
 use crate::execution::memory_manager::{MemoryConsumer, MemoryConsumerId, MemoryManager};
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Clone)]
 /// Execution runtime environment
@@ -33,8 +33,6 @@ pub struct RuntimeEnv {
     pub memory_manager: Arc<MemoryManager>,
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
-    /// If runtime env has initialized
-    initialized: Arc<Mutex<bool>>,
 }
 
 impl Debug for RuntimeEnv {
@@ -45,7 +43,6 @@ impl Debug for RuntimeEnv {
 
 impl RuntimeEnv {
     /// Create env based on configuration
-    #[allow(clippy::mutex_atomic)]
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         let memory_manager = Arc::new(MemoryManager::new(
             (config.max_memory as f64 * config.memory_fraction) as usize,
@@ -55,7 +52,6 @@ impl RuntimeEnv {
             config,
             memory_manager,
             disk_manager,
-            initialized: Arc::new(Mutex::new(false)),
         })
     }
 
@@ -65,14 +61,7 @@ impl RuntimeEnv {
     }
 
     /// Register the consumer to get it tracked
-    pub fn register_consumer(&self, memory_consumer: Arc<dyn MemoryConsumer>) {
-        {
-            let mut initialized = self.initialized.lock().unwrap();
-            if !*initialized {
-                self.memory_manager.initialize();
-                *initialized = true;
-            }
-        }
+    pub fn register_consumer(&self, memory_consumer: &Arc<dyn MemoryConsumer>) {
         self.memory_manager.register_consumer(memory_consumer);
     }
 
@@ -96,10 +85,12 @@ pub struct RuntimeConfig {
     /// in too much metadata memory consumption.
     pub batch_size: usize,
     /// Max execution memory allowed for DataFusion.
+    /// Defaults to `usize::MAX`
     pub max_memory: usize,
     /// The fraction of total memory used for execution.
     /// The purpose of this config is to set aside memory for untracked data structures,
     /// and imprecise size estimation during memory acquisition.
+    /// Defaults to 0.7
     pub memory_fraction: f64,
     /// Local dirs to store temporary files during execution.
     pub local_dirs: Vec<String>,
@@ -149,6 +140,7 @@ impl Default for RuntimeConfig {
 
         Self {
             batch_size: 8192,
+            // Effectively "no limit"
             max_memory: usize::MAX,
             memory_fraction: 0.7,
             local_dirs: vec![path],

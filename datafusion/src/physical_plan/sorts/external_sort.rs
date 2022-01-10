@@ -201,7 +201,7 @@ impl MemoryConsumer for ExternalSorter {
     }
 
     fn type_(&self) -> &ConsumerType {
-        &ConsumerType::Controlling
+        &ConsumerType::Requesting
     }
 
     async fn spill(&self) -> Result<()> {
@@ -504,7 +504,7 @@ async fn external_sort(
         expr,
         runtime.clone(),
     ));
-    runtime.register_consumer(sorter.clone());
+    runtime.register_consumer(&(sorter.clone() as Arc<dyn MemoryConsumer>));
 
     while let Some(batch) = input.next().await {
         let batch = batch?;
