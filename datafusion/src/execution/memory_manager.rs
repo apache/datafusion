@@ -68,7 +68,7 @@ impl Display for MemoryConsumerId {
 #[async_trait]
 /// A memory consumer that either takes up memory (of type `ConsumerType::Tracking`)
 /// or grows/shrinks memory usage based on available memory (of type `ConsumerType::Requesting`).
-pub trait MemoryConsumer: Send + Sync + Debug {
+pub trait MemoryConsumer: Send + Sync {
     /// Display name of the consumer
     fn name(&self) -> String;
 
@@ -113,7 +113,7 @@ pub trait MemoryConsumer: Send + Sync + Debug {
     fn mem_used(&self) -> usize;
 }
 
-impl Display for dyn MemoryConsumer {
+impl Debug for dyn MemoryConsumer {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -122,6 +122,12 @@ impl Display for dyn MemoryConsumer {
             self.id(),
             human_readable_size(self.mem_used())
         )
+    }
+}
+
+impl Display for dyn MemoryConsumer {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}[{}]", self.name(), self.id(),)
     }
 }
 
@@ -283,4 +289,159 @@ fn human_readable_size(size: usize) -> String {
         }
     };
     format!("{:.1} {}", value, unit)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::error::Result;
+    use crate::execution::memory_manager::{
+        ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
+    };
+    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct DummyRequester {
+        id: MemoryConsumerId,
+        runtime: Arc<RuntimeEnv>,
+        spills: AtomicUsize,
+        mem_used: AtomicUsize,
+    }
+
+    impl DummyRequester {
+        fn new(partition: usize, runtime: Arc<RuntimeEnv>) -> Self {
+            Self {
+                id: MemoryConsumerId::new(partition),
+                runtime,
+                spills: AtomicUsize::new(0),
+                mem_used: AtomicUsize::new(0),
+            }
+        }
+
+        fn set_used(&self, used: usize) {
+            self.mem_used.store(used, Ordering::SeqCst);
+        }
+
+        fn get_spills(&self) -> usize {
+            self.spills.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl MemoryConsumer for DummyRequester {
+        fn name(&self) -> String {
+            "dummy".to_owned()
+        }
+
+        fn id(&self) -> &MemoryConsumerId {
+            &self.id
+        }
+
+        fn memory_manager(&self) -> Arc<MemoryManager> {
+            self.runtime.memory_manager.clone()
+        }
+
+        fn type_(&self) -> &ConsumerType {
+            &ConsumerType::Requesting
+        }
+
+        async fn spill(&self) -> Result<()> {
+            self.spills.fetch_add(1, Ordering::SeqCst);
+            self.mem_used.store(0, Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn mem_used(&self) -> usize {
+            self.mem_used.load(Ordering::SeqCst)
+        }
+    }
+
+    struct DummyTracker {
+        id: MemoryConsumerId,
+        runtime: Arc<RuntimeEnv>,
+        mem_used: usize,
+    }
+
+    impl DummyTracker {
+        fn new(partition: usize, runtime: Arc<RuntimeEnv>, mem_used: usize) -> Self {
+            Self {
+                id: MemoryConsumerId::new(partition),
+                runtime,
+                mem_used,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MemoryConsumer for DummyTracker {
+        fn name(&self) -> String {
+            "dummy".to_owned()
+        }
+
+        fn id(&self) -> &MemoryConsumerId {
+            &self.id
+        }
+
+        fn memory_manager(&self) -> Arc<MemoryManager> {
+            self.runtime.memory_manager.clone()
+        }
+
+        fn type_(&self) -> &ConsumerType {
+            &ConsumerType::Tracking
+        }
+
+        async fn spill(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn mem_used(&self) -> usize {
+            self.mem_used
+        }
+    }
+
+    #[tokio::test]
+    async fn basic_functionalities() -> Result<()> {
+        let config = RuntimeConfig::new()
+            .with_memory_fraction(1.0)
+            .with_max_execution_memory(100);
+        let runtime = Arc::new(RuntimeEnv::new(config)?);
+
+        let tracker1 = Arc::new(DummyTracker::new(0, runtime.clone(), 5));
+        runtime.register_consumer(&(tracker1.clone() as Arc<dyn MemoryConsumer>));
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 5);
+
+        let tracker2 = Arc::new(DummyTracker::new(0, runtime.clone(), 10));
+        runtime.register_consumer(&(tracker2.clone() as Arc<dyn MemoryConsumer>));
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 15);
+
+        let tracker3 = Arc::new(DummyTracker::new(0, runtime.clone(), 15));
+        runtime.register_consumer(&(tracker3.clone() as Arc<dyn MemoryConsumer>));
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 30);
+
+        runtime.drop_consumer(tracker2.id());
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
+
+        let requester1 = Arc::new(DummyRequester::new(0, runtime.clone()));
+        runtime.register_consumer(&(requester1.clone() as Arc<dyn MemoryConsumer>));
+
+        // first requester entered, should be able to use any of the remaining 80
+        requester1.set_used(40);
+        requester1.try_grow(10).await?;
+        assert_eq!(requester1.get_spills(), 0);
+
+        let requester2 = Arc::new(DummyRequester::new(0, runtime.clone()));
+        runtime.register_consumer(&(requester2.clone() as Arc<dyn MemoryConsumer>));
+
+        requester2.set_used(20);
+        requester2.try_grow(30).await?;
+        assert_eq!(requester2.get_spills(), 1);
+        assert_eq!(requester2.mem_used(), 0);
+
+        requester1.try_grow(10).await?;
+        assert_eq!(requester1.get_spills(), 1);
+        assert_eq!(requester1.mem_used(), 0);
+
+        Ok(())
+    }
 }
