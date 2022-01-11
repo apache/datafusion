@@ -40,6 +40,7 @@ futures = "0.3"
 env_logger = "0.9"
 mimalloc = { version = "0.1", optional = true, default-features = false }
 snmalloc-rs = {version = "0.2", optional = true, features= ["cache-friendly"] }
+rand = "0.8.4"
 
 [dev-dependencies]
 ballista-core = { path = "../ballista/rust/core" }

@@ -27,6 +27,7 @@ use crate::physical_plan::{
 use crate::scalar::ScalarValue;
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
+
 use super::{format_state_name, StatsType};
 
 /// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
