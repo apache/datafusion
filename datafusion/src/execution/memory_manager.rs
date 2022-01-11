@@ -24,7 +24,7 @@ use log::info;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 
 static mut CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -91,23 +91,32 @@ pub trait MemoryConsumer: Send + Sync {
     /// reached for this consumer.
     async fn try_grow(&self, required: usize) -> Result<()> {
         let current = self.mem_used();
-        let can_grow = self
+        info!(
+            "trying to acquire {} whiling holding {} from consumer {}",
+            human_readable_size(required),
+            human_readable_size(current),
+            self.id(),
+        );
+
+        let can_grow_directly = self
             .memory_manager()
-            .can_grow(required, current, self.id())
+            .can_grow_directly(required, current)
             .await;
-        if !can_grow {
+        if !can_grow_directly {
             info!(
-                "Failed to grow memory of {} from consumer {}, spilling...",
+                "Failed to grow memory of {} directly from consumer {}, spilling first ...",
                 human_readable_size(required),
                 self.id()
             );
-            self.spill().await?;
+            let freed = self.spill().await?;
+            self.memory_manager().record_free(freed);
         }
+        self.memory_manager().record_acquire(required);
         Ok(())
     }
 
-    /// Spill in-memory buffers to disk, free memory
-    async fn spill(&self) -> Result<()>;
+    /// Spill in-memory buffers to disk, free memory, return the previous used
+    async fn spill(&self) -> Result<usize>;
 
     /// Current memory used by this consumer
     fn mem_used(&self) -> usize;
@@ -160,10 +169,13 @@ pub struct MemoryManager {
     requesters: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
     trackers: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
     pool_size: usize,
+    requesters_total: Arc<Mutex<usize>>,
+    cv: Condvar,
 }
 
 impl MemoryManager {
     /// Create new memory manager based on max available pool_size
+    #[allow(clippy::mutex_atomic)]
     pub fn new(pool_size: usize) -> Self {
         info!(
             "Creating memory manager with initial size {}",
@@ -173,6 +185,8 @@ impl MemoryManager {
             requesters: Arc::new(Mutex::new(HashMap::new())),
             trackers: Arc::new(Mutex::new(HashMap::new())),
             pool_size,
+            requesters_total: Arc::new(Mutex::new(0)),
+            cv: Condvar::new(),
         }
     }
 
@@ -189,10 +203,7 @@ impl MemoryManager {
     }
 
     /// Register a new memory consumer for memory usage tracking
-    pub(crate) fn register_consumer(
-        self: &Arc<Self>,
-        consumer: &Arc<dyn MemoryConsumer>,
-    ) {
+    pub(crate) fn register_consumer(&self, consumer: &Arc<dyn MemoryConsumer>) {
         let id = consumer.id().clone();
         match consumer.type_() {
             ConsumerType::Requesting => {
@@ -206,32 +217,58 @@ impl MemoryManager {
         }
     }
 
+    fn max_mem_for_requesters(&self) -> usize {
+        let trk_total = self.get_tracker_total();
+        self.pool_size - trk_total
+    }
+
     /// Grow memory attempt from a consumer, return if we could grant that much to it
-    async fn can_grow(
-        self: &Arc<Self>,
-        required: usize,
-        current: usize,
-        consumer_id: &MemoryConsumerId,
-    ) -> bool {
-        let tracker_total = self.get_tracker_total();
-        let max_per_op = {
-            let total_available = self.pool_size - tracker_total;
-            let ops = self.requesters.lock().unwrap().len();
-            (total_available / ops) as usize
-        };
-        let granted = required + current < max_per_op;
-        info!(
-            "trying to acquire {} whiling holding {} from consumer {}, got: {}",
-            human_readable_size(required),
-            human_readable_size(current),
-            consumer_id,
-            granted,
-        );
+    async fn can_grow_directly(&self, required: usize, current: usize) -> bool {
+        let num_rqt = self.requesters.lock().unwrap().len();
+        let mut rqt_current_used = self.requesters_total.lock().unwrap();
+        let mut rqt_max = self.max_mem_for_requesters();
+
+        let granted;
+        loop {
+            let remaining = rqt_max - *rqt_current_used;
+            let max_per_rqt = rqt_max / num_rqt;
+            let min_per_rqt = max_per_rqt / 2;
+
+            if required + current >= max_per_rqt {
+                granted = false;
+                break;
+            }
+
+            if remaining >= required {
+                granted = true;
+                break;
+            } else if current < min_per_rqt {
+                // if we cannot acquire at lease 1/2n memory, just wait for others
+                // to spill instead spill self frequently with limited total mem
+                rqt_current_used = self.cv.wait(rqt_current_used).unwrap();
+            } else {
+                granted = false;
+                break;
+            }
+
+            rqt_max = self.max_mem_for_requesters();
+        }
+
         granted
     }
 
+    fn record_free(&self, freed: usize) {
+        let mut requesters_total = self.requesters_total.lock().unwrap();
+        *requesters_total -= freed;
+        self.cv.notify_all()
+    }
+
+    fn record_acquire(&self, acquired: usize) {
+        *self.requesters_total.lock().unwrap() += acquired;
+    }
+
     /// Drop a memory consumer from memory usage tracking
-    pub(crate) fn drop_consumer(self: &Arc<Self>, id: &MemoryConsumerId) {
+    pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId) {
         // find in requesters first
         {
             let mut requesters = self.requesters.lock().unwrap();
@@ -319,8 +356,10 @@ mod tests {
             }
         }
 
-        fn set_used(&self, used: usize) {
-            self.mem_used.store(used, Ordering::SeqCst);
+        async fn do_with_mem(&self, grow: usize) -> Result<()> {
+            self.try_grow(grow).await?;
+            self.mem_used.fetch_add(grow, Ordering::SeqCst);
+            Ok(())
         }
 
         fn get_spills(&self) -> usize {
@@ -346,10 +385,10 @@ mod tests {
             &ConsumerType::Requesting
         }
 
-        async fn spill(&self) -> Result<()> {
+        async fn spill(&self) -> Result<usize> {
             self.spills.fetch_add(1, Ordering::SeqCst);
-            self.mem_used.store(0, Ordering::SeqCst);
-            Ok(())
+            let used = self.mem_used.swap(0, Ordering::SeqCst);
+            Ok(used)
         }
 
         fn mem_used(&self) -> usize {
@@ -391,8 +430,8 @@ mod tests {
             &ConsumerType::Tracking
         }
 
-        async fn spill(&self) -> Result<()> {
-            Ok(())
+        async fn spill(&self) -> Result<usize> {
+            Ok(0)
         }
 
         fn mem_used(&self) -> usize {
@@ -426,21 +465,25 @@ mod tests {
         runtime.register_consumer(&(requester1.clone() as Arc<dyn MemoryConsumer>));
 
         // first requester entered, should be able to use any of the remaining 80
-        requester1.set_used(40);
-        requester1.try_grow(10).await?;
+        requester1.do_with_mem(40).await?;
+        requester1.do_with_mem(10).await?;
         assert_eq!(requester1.get_spills(), 0);
+        assert_eq!(requester1.mem_used(), 50);
+        assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 50);
 
         let requester2 = Arc::new(DummyRequester::new(0, runtime.clone()));
         runtime.register_consumer(&(requester2.clone() as Arc<dyn MemoryConsumer>));
 
-        requester2.set_used(20);
-        requester2.try_grow(30).await?;
+        requester2.do_with_mem(20).await?;
+        requester2.do_with_mem(30).await?;
         assert_eq!(requester2.get_spills(), 1);
-        assert_eq!(requester2.mem_used(), 0);
+        assert_eq!(requester2.mem_used(), 30);
 
-        requester1.try_grow(10).await?;
+        requester1.do_with_mem(10).await?;
         assert_eq!(requester1.get_spills(), 1);
-        assert_eq!(requester1.mem_used(), 0);
+        assert_eq!(requester1.mem_used(), 10);
+
+        assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 40);
 
         Ok(())
     }

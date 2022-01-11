@@ -204,7 +204,7 @@ impl MemoryConsumer for ExternalSorter {
         &ConsumerType::Requesting
     }
 
-    async fn spill(&self) -> Result<()> {
+    async fn spill(&self) -> Result<usize> {
         info!(
             "{}[{}] spilling sort data of {} to disk while inserting ({} time(s) so far)",
             self.name(),
@@ -217,7 +217,7 @@ impl MemoryConsumer for ExternalSorter {
         let mut in_mem_batches = self.in_mem_batches.lock().await;
         // we could always get a chance to free some memory as long as we are holding some
         if in_mem_batches.len() == 0 {
-            return Ok(());
+            return Ok(0);
         }
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -237,11 +237,11 @@ impl MemoryConsumer for ExternalSorter {
                 .await?;
 
         let mut spills = self.spills.lock().await;
-        self.used.store(0, Ordering::SeqCst);
+        let used = self.used.swap(0, Ordering::SeqCst);
         self.spilled_count.fetch_add(1, Ordering::SeqCst);
         self.spilled_bytes.fetch_add(total_size, Ordering::SeqCst);
         spills.push(path);
-        Ok(())
+        Ok(used)
     }
 
     fn mem_used(&self) -> usize {

@@ -264,7 +264,7 @@ impl MemoryConsumer for MergingStreams {
         &ConsumerType::Tracking
     }
 
-    async fn spill(&self) -> Result<()> {
+    async fn spill(&self) -> Result<usize> {
         return Err(DataFusionError::Internal(format!(
             "Calling spill on a tracking only consumer {}, {}",
             self.name(),
