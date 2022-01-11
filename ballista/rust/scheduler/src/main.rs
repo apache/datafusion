@@ -63,7 +63,7 @@ async fn start_server(
         "Ballista v{} Scheduler listening on {:?}",
         BALLISTA_VERSION, addr
     );
-    //there should be only one SchedulerServer in process
+    //should only call SchedulerServer::new() once in the process
     let scheduler_server_without_caller_ip = SchedulerServer::new(
         config_backend.clone(),
         namespace.clone(),
