@@ -19,12 +19,9 @@
 
 use crate::error::{DataFusionError, Result};
 pub use ahash::{CallHasher, RandomState};
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, DictionaryArray, DictionaryKey, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array, Utf8Array,
-};
-use arrow::datatypes::{DataType, IntegerType, TimeUnit};
+use arrow::array::{Array, ArrayRef, DictionaryArray, DictionaryKey};
+#[cfg(not(feature = "force_hash_collisions"))]
+use arrow::array::{Float32Array, Float64Array};
 use std::sync::Arc;
 
 // Combines two hashes into one hash
@@ -32,136 +29,6 @@ use std::sync::Arc;
 fn combine_hashes(l: u64, r: u64) -> u64 {
     let hash = (17 * 37u64).wrapping_add(l);
     hash.wrapping_mul(37).wrapping_add(r)
-}
-
-macro_rules! hash_array {
-    ($array_type:ty, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-        if array.null_count() == 0 {
-            if $multi_col {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    *hash = combine_hashes(
-                        $ty::get_hash(&array.value(i), $random_state),
-                        *hash,
-                    );
-                }
-            } else {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    *hash = $ty::get_hash(&array.value(i), $random_state);
-                }
-            }
-        } else {
-            if $multi_col {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    if !array.is_null(i) {
-                        *hash = combine_hashes(
-                            $ty::get_hash(&array.value(i), $random_state),
-                            *hash,
-                        );
-                    }
-                }
-            } else {
-                for (i, hash) in $hashes.iter_mut().enumerate() {
-                    if !array.is_null(i) {
-                        *hash = $ty::get_hash(&array.value(i), $random_state);
-                    }
-                }
-            }
-        }
-    };
-}
-
-macro_rules! hash_array_primitive {
-    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-        let values = array.values();
-
-        if array.null_count() == 0 {
-            if $multi_col {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = combine_hashes($ty::get_hash(value, $random_state), *hash);
-                }
-            } else {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(value, $random_state)
-                }
-            }
-        } else {
-            if $multi_col {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash =
-                            combine_hashes($ty::get_hash(value, $random_state), *hash);
-                    }
-                }
-            } else {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash = $ty::get_hash(value, $random_state);
-                    }
-                }
-            }
-        }
-    };
-}
-
-macro_rules! hash_array_float {
-    ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
-        let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
-        let values = array.values();
-
-        if array.null_count() == 0 {
-            if $multi_col {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = combine_hashes(
-                        $ty::get_hash(
-                            &$ty::from_le_bytes(value.to_le_bytes()),
-                            $random_state,
-                        ),
-                        *hash,
-                    );
-                }
-            } else {
-                for (hash, value) in $hashes.iter_mut().zip(values.iter()) {
-                    *hash = $ty::get_hash(
-                        &$ty::from_le_bytes(value.to_le_bytes()),
-                        $random_state,
-                    )
-                }
-            }
-        } else {
-            if $multi_col {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash = combine_hashes(
-                            $ty::get_hash(
-                                &$ty::from_le_bytes(value.to_le_bytes()),
-                                $random_state,
-                            ),
-                            *hash,
-                        );
-                    }
-                }
-            } else {
-                for (i, (hash, value)) in
-                    $hashes.iter_mut().zip(values.iter()).enumerate()
-                {
-                    if !array.is_null(i) {
-                        *hash = $ty::get_hash(
-                            &$ty::from_le_bytes(value.to_le_bytes()),
-                            $random_state,
-                        );
-                    }
-                }
-            }
-        }
-    };
 }
 
 /// Hash the values in a dictionary array
@@ -507,8 +374,9 @@ pub fn create_hashes<'a>(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::TryExtend;
-    use arrow::array::{MutableDictionaryArray, MutableUtf8Array};
+    use arrow::array::{Float32Array, Float64Array};
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::array::{MutableDictionaryArray, MutableUtf8Array, Utf8Array};
 
     use super::*;
 

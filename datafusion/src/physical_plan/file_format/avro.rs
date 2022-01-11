@@ -234,7 +234,7 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![partitioned_file]],
-            file_schema: file_schema,
+            file_schema,
             statistics: Statistics::default(),
             batch_size: 1024,
             limit: None,
