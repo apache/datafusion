@@ -197,13 +197,11 @@
 //!
 //! cargo run --example csv_sql
 //!
-//! cargo run --example parquet_sql
+//! PARQUET_TEST_DATA=./parquet-testing/data cargo run --example parquet_sql
 //!
 //! cargo run --example dataframe
 //!
 //! cargo run --example dataframe_in_memory
-//!
-//! cargo run --example parquet_sql
 //!
 //! cargo run --example simple_udaf
 //!

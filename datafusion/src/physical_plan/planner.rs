@@ -632,6 +632,7 @@ impl DefaultPhysicalPlanner {
                     let physical_input = self.create_initial_plan(input, ctx_state).await?;
                     let input_schema = physical_input.as_ref().schema();
                     let input_dfschema = input.as_ref().schema();
+
                     let runtime_expr = self.create_physical_expr(
                         predicate,
                         input_dfschema,

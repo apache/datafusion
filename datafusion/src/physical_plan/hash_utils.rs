@@ -365,7 +365,7 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
-            DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
                 hash_array_primitive!(
                     Int64Array,
                     col,

@@ -98,6 +98,7 @@ pub(crate) fn from_proto_binary_op(op: &str) -> Result<Operator, BallistaError> 
         "Minus" => Ok(Operator::Minus),
         "Multiply" => Ok(Operator::Multiply),
         "Divide" => Ok(Operator::Divide),
+        "Modulo" => Ok(Operator::Modulo),
         "Like" => Ok(Operator::Like),
         "NotLike" => Ok(Operator::NotLike),
         other => Err(proto_error(format!(
@@ -119,6 +120,10 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
                 AggregateFunction::ApproxDistinct
             }
             protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
+            protobuf::AggregateFunction::Variance => AggregateFunction::Variance,
+            protobuf::AggregateFunction::VariancePop => AggregateFunction::VariancePop,
+            protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
+            protobuf::AggregateFunction::StddevPop => AggregateFunction::StddevPop,
         }
     }
 }

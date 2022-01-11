@@ -24,7 +24,9 @@ use arrow::{compute::cast::can_cast_types, datatypes::DataType};
 
 use crate::error::{DataFusionError, Result};
 use crate::field_util::get_indexed_field;
-use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
+use crate::logical_plan::{
+    plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
+};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
@@ -1326,7 +1328,6 @@ fn normalize_col_with_schemas(
 }
 
 /// Recursively normalize all Column expressions in a list of expression trees
-#[inline]
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -1335,6 +1336,80 @@ pub fn normalize_cols(
         .into_iter()
         .map(|e| normalize_col(e.into(), plan))
         .collect()
+}
+
+/// Rewrite sort on aggregate expressions to sort on the column of aggregate output
+/// For example, `max(x)` is written to `col("MAX(x)")`
+pub fn rewrite_sort_cols_by_aggs(
+    exprs: impl IntoIterator<Item = impl Into<Expr>>,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .map(|e| {
+            let expr = e.into();
+            match expr {
+                Expr::Sort {
+                    expr,
+                    asc,
+                    nulls_first,
+                } => {
+                    let sort = Expr::Sort {
+                        expr: Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
+                        asc,
+                        nulls_first,
+                    };
+                    Ok(sort)
+                }
+                expr => Ok(expr),
+            }
+        })
+        .collect()
+}
+
+fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    match plan {
+        LogicalPlan::Aggregate(Aggregate {
+            input, aggr_expr, ..
+        }) => {
+            struct Rewriter<'a> {
+                plan: &'a LogicalPlan,
+                input: &'a LogicalPlan,
+                aggr_expr: &'a Vec<Expr>,
+            }
+
+            impl<'a> ExprRewriter for Rewriter<'a> {
+                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+                    let normalized_expr = normalize_col(expr.clone(), self.plan);
+                    if normalized_expr.is_err() {
+                        // The expr is not based on Aggregate plan output. Skip it.
+                        return Ok(expr);
+                    }
+                    let normalized_expr = normalized_expr.unwrap();
+                    if let Some(found_agg) =
+                        self.aggr_expr.iter().find(|a| (**a) == normalized_expr)
+                    {
+                        let agg = normalize_col(found_agg.clone(), self.plan)?;
+                        let col = Expr::Column(
+                            agg.to_field(self.input.schema())
+                                .map(|f| f.qualified_column())?,
+                        );
+                        Ok(col)
+                    } else {
+                        Ok(expr)
+                    }
+                }
+            }
+
+            expr.rewrite(&mut Rewriter {
+                plan,
+                input,
+                aggr_expr,
+            })
+        }
+        LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
+        _ => Ok(expr),
+    }
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -1498,9 +1573,10 @@ macro_rules! make_timestamp_literal {
         #[doc = $DOC]
         impl TimestampLiteral for $TYPE {
             fn lit_timestamp_nano(&self) -> Expr {
-                Expr::Literal(ScalarValue::TimestampNanosecond(Some(
-                    (self.clone()).into(),
-                )))
+                Expr::Literal(ScalarValue::TimestampNanosecond(
+                    Some((self.clone()).into()),
+                    None,
+                ))
             }
         }
     };
@@ -1584,7 +1660,7 @@ pub fn approx_distinct(expr: Expr) -> Expr {
 /// Create an convenience function representing a unary scalar function
 macro_rules! unary_scalar_expr {
     ($ENUM:ident, $FUNC:ident) => {
-        #[doc = "this scalar function is not documented yet"]
+        #[doc = concat!("Unary scalar function definition for ", stringify!($FUNC) ) ]
         pub fn $FUNC(e: Expr) -> Expr {
             Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::$ENUM,
@@ -1594,14 +1670,25 @@ macro_rules! unary_scalar_expr {
     };
 }
 
-/// Create an convenience function representing a binary scalar function
-macro_rules! binary_scalar_expr {
-    ($ENUM:ident, $FUNC:ident) => {
-        #[doc = "this scalar function is not documented yet"]
-        pub fn $FUNC(arg1: Expr, arg2: Expr) -> Expr {
+macro_rules! scalar_expr {
+    ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+        #[doc = concat!("Scalar function definition for ", stringify!($FUNC) ) ]
+        pub fn $FUNC($($arg: Expr),*) -> Expr {
             Expr::ScalarFunction {
                 fun: functions::BuiltinScalarFunction::$ENUM,
-                args: vec![arg1, arg2],
+                args: vec![$($arg),*],
+            }
+        }
+    };
+}
+
+macro_rules! nary_scalar_expr {
+    ($ENUM:ident, $FUNC:ident) => {
+        #[doc = concat!("Scalar function definition for ", stringify!($FUNC) ) ]
+        pub fn $FUNC(args: Vec<Expr>) -> Expr {
+            Expr::ScalarFunction {
+                fun: functions::BuiltinScalarFunction::$ENUM,
+                args,
             }
         }
     };
@@ -1630,44 +1717,44 @@ unary_scalar_expr!(Log10, log10);
 unary_scalar_expr!(Ln, ln);
 
 // string functions
-unary_scalar_expr!(Ascii, ascii);
-unary_scalar_expr!(BitLength, bit_length);
-unary_scalar_expr!(Btrim, btrim);
-unary_scalar_expr!(CharacterLength, character_length);
-unary_scalar_expr!(CharacterLength, length);
-unary_scalar_expr!(Chr, chr);
-unary_scalar_expr!(InitCap, initcap);
-unary_scalar_expr!(Left, left);
-unary_scalar_expr!(Lower, lower);
-unary_scalar_expr!(Lpad, lpad);
-unary_scalar_expr!(Ltrim, ltrim);
-unary_scalar_expr!(MD5, md5);
-unary_scalar_expr!(OctetLength, octet_length);
-unary_scalar_expr!(RegexpMatch, regexp_match);
-unary_scalar_expr!(RegexpReplace, regexp_replace);
-unary_scalar_expr!(Replace, replace);
-unary_scalar_expr!(Repeat, repeat);
-unary_scalar_expr!(Reverse, reverse);
-unary_scalar_expr!(Right, right);
-unary_scalar_expr!(Rpad, rpad);
-unary_scalar_expr!(Rtrim, rtrim);
-unary_scalar_expr!(SHA224, sha224);
-unary_scalar_expr!(SHA256, sha256);
-unary_scalar_expr!(SHA384, sha384);
-unary_scalar_expr!(SHA512, sha512);
-unary_scalar_expr!(SplitPart, split_part);
-unary_scalar_expr!(StartsWith, starts_with);
-unary_scalar_expr!(Strpos, strpos);
-unary_scalar_expr!(Substr, substr);
-unary_scalar_expr!(ToHex, to_hex);
-unary_scalar_expr!(Translate, translate);
-unary_scalar_expr!(Trim, trim);
-unary_scalar_expr!(Upper, upper);
+scalar_expr!(Ascii, ascii, string);
+scalar_expr!(BitLength, bit_length, string);
+nary_scalar_expr!(Btrim, btrim);
+scalar_expr!(CharacterLength, character_length, string);
+scalar_expr!(CharacterLength, length, string);
+scalar_expr!(Chr, chr, string);
+scalar_expr!(Digest, digest, string, algorithm);
+scalar_expr!(InitCap, initcap, string);
+scalar_expr!(Left, left, string, count);
+scalar_expr!(Lower, lower, string);
+nary_scalar_expr!(Lpad, lpad);
+scalar_expr!(Ltrim, ltrim, string);
+scalar_expr!(MD5, md5, string);
+scalar_expr!(OctetLength, octet_length, string);
+nary_scalar_expr!(RegexpMatch, regexp_match);
+nary_scalar_expr!(RegexpReplace, regexp_replace);
+scalar_expr!(Replace, replace, string, from, to);
+scalar_expr!(Repeat, repeat, string, count);
+scalar_expr!(Reverse, reverse, string);
+scalar_expr!(Right, right, string, count);
+nary_scalar_expr!(Rpad, rpad);
+scalar_expr!(Rtrim, rtrim, string);
+scalar_expr!(SHA224, sha224, string);
+scalar_expr!(SHA256, sha256, string);
+scalar_expr!(SHA384, sha384, string);
+scalar_expr!(SHA512, sha512, string);
+scalar_expr!(SplitPart, split_part, expr, delimiter, index);
+scalar_expr!(StartsWith, starts_with, string, characters);
+scalar_expr!(Strpos, strpos, string, substring);
+scalar_expr!(Substr, substr, string, position);
+scalar_expr!(ToHex, to_hex, string);
+scalar_expr!(Translate, translate, string, from, to);
+scalar_expr!(Trim, trim, string);
+scalar_expr!(Upper, upper, string);
 
 // date functions
-binary_scalar_expr!(DatePart, date_part);
-binary_scalar_expr!(DateTrunc, date_trunc);
-binary_scalar_expr!(Digest, digest);
+scalar_expr!(DatePart, date_part, part, date);
+scalar_expr!(DateTrunc, date_trunc, part, date);
 
 /// returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
@@ -2057,7 +2144,8 @@ mod tests {
     #[test]
     fn test_lit_timestamp_nano() {
         let expr = col("time").eq(lit_timestamp_nano(10)); // 10 is an implicit i32
-        let expected = col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10))));
+        let expected =
+            col("time").eq(lit(ScalarValue::TimestampNanosecond(Some(10), None)));
         assert_eq!(expr, expected);
 
         let i: i64 = 10;
@@ -2237,6 +2325,44 @@ mod tests {
         }};
     }
 
+    macro_rules! test_scalar_expr {
+        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+            let expected = vec![$(stringify!($arg)),*];
+            let result = $FUNC(
+                $(
+                    col(stringify!($arg.to_string()))
+                ),*
+            );
+            if let Expr::ScalarFunction { fun, args } = result {
+                let name = functions::BuiltinScalarFunction::$ENUM;
+                assert_eq!(name, fun);
+                assert_eq!(expected.len(), args.len());
+            } else {
+                assert!(false, "unexpected: {:?}", result);
+            }
+        };
+    }
+
+    macro_rules! test_nary_scalar_expr {
+        ($ENUM:ident, $FUNC:ident, $($arg:ident),*) => {
+            let expected = vec![$(stringify!($arg)),*];
+            let result = $FUNC(
+                vec![
+                    $(
+                        col(stringify!($arg.to_string()))
+                    ),*
+                ]
+            );
+            if let Expr::ScalarFunction { fun, args } = result {
+                let name = functions::BuiltinScalarFunction::$ENUM;
+                assert_eq!(name, fun);
+                assert_eq!(expected.len(), args.len());
+            } else {
+                assert!(false, "unexpected: {:?}", result);
+            }
+        };
+    }
+
     #[test]
     fn digest_function_definitions() {
         if let Expr::ScalarFunction { fun, args } = digest(col("tableA.a"), lit("md5")) {
@@ -2268,39 +2394,62 @@ mod tests {
         test_unary_scalar_expr!(Log2, log2);
         test_unary_scalar_expr!(Log10, log10);
         test_unary_scalar_expr!(Ln, ln);
-        test_unary_scalar_expr!(Ascii, ascii);
-        test_unary_scalar_expr!(BitLength, bit_length);
-        test_unary_scalar_expr!(Btrim, btrim);
-        test_unary_scalar_expr!(CharacterLength, character_length);
-        test_unary_scalar_expr!(CharacterLength, length);
-        test_unary_scalar_expr!(Chr, chr);
-        test_unary_scalar_expr!(InitCap, initcap);
-        test_unary_scalar_expr!(Left, left);
-        test_unary_scalar_expr!(Lower, lower);
-        test_unary_scalar_expr!(Lpad, lpad);
-        test_unary_scalar_expr!(Ltrim, ltrim);
-        test_unary_scalar_expr!(MD5, md5);
-        test_unary_scalar_expr!(OctetLength, octet_length);
-        test_unary_scalar_expr!(RegexpMatch, regexp_match);
-        test_unary_scalar_expr!(RegexpReplace, regexp_replace);
-        test_unary_scalar_expr!(Replace, replace);
-        test_unary_scalar_expr!(Repeat, repeat);
-        test_unary_scalar_expr!(Reverse, reverse);
-        test_unary_scalar_expr!(Right, right);
-        test_unary_scalar_expr!(Rpad, rpad);
-        test_unary_scalar_expr!(Rtrim, rtrim);
-        test_unary_scalar_expr!(SHA224, sha224);
-        test_unary_scalar_expr!(SHA256, sha256);
-        test_unary_scalar_expr!(SHA384, sha384);
-        test_unary_scalar_expr!(SHA512, sha512);
-        test_unary_scalar_expr!(SplitPart, split_part);
-        test_unary_scalar_expr!(StartsWith, starts_with);
-        test_unary_scalar_expr!(Strpos, strpos);
-        test_unary_scalar_expr!(Substr, substr);
-        test_unary_scalar_expr!(ToHex, to_hex);
-        test_unary_scalar_expr!(Translate, translate);
-        test_unary_scalar_expr!(Trim, trim);
-        test_unary_scalar_expr!(Upper, upper);
+
+        test_scalar_expr!(Ascii, ascii, input);
+        test_scalar_expr!(BitLength, bit_length, string);
+        test_nary_scalar_expr!(Btrim, btrim, string);
+        test_nary_scalar_expr!(Btrim, btrim, string, characters);
+        test_scalar_expr!(CharacterLength, character_length, string);
+        test_scalar_expr!(CharacterLength, length, string);
+        test_scalar_expr!(Chr, chr, string);
+        test_scalar_expr!(Digest, digest, string, algorithm);
+        test_scalar_expr!(InitCap, initcap, string);
+        test_scalar_expr!(Left, left, string, count);
+        test_scalar_expr!(Lower, lower, string);
+        test_nary_scalar_expr!(Lpad, lpad, string, count);
+        test_nary_scalar_expr!(Lpad, lpad, string, count, characters);
+        test_scalar_expr!(Ltrim, ltrim, string);
+        test_scalar_expr!(MD5, md5, string);
+        test_scalar_expr!(OctetLength, octet_length, string);
+        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern);
+        test_nary_scalar_expr!(RegexpMatch, regexp_match, string, pattern, flags);
+        test_nary_scalar_expr!(
+            RegexpReplace,
+            regexp_replace,
+            string,
+            pattern,
+            replacement
+        );
+        test_nary_scalar_expr!(
+            RegexpReplace,
+            regexp_replace,
+            string,
+            pattern,
+            replacement,
+            flags
+        );
+        test_scalar_expr!(Replace, replace, string, from, to);
+        test_scalar_expr!(Repeat, repeat, string, count);
+        test_scalar_expr!(Reverse, reverse, string);
+        test_scalar_expr!(Right, right, string, count);
+        test_nary_scalar_expr!(Rpad, rpad, string, count);
+        test_nary_scalar_expr!(Rpad, rpad, string, count, characters);
+        test_scalar_expr!(Rtrim, rtrim, string);
+        test_scalar_expr!(SHA224, sha224, string);
+        test_scalar_expr!(SHA256, sha256, string);
+        test_scalar_expr!(SHA384, sha384, string);
+        test_scalar_expr!(SHA512, sha512, string);
+        test_scalar_expr!(SplitPart, split_part, expr, delimiter, index);
+        test_scalar_expr!(StartsWith, starts_with, string, characters);
+        test_scalar_expr!(Strpos, strpos, string, substring);
+        test_scalar_expr!(Substr, substr, string, position);
+        test_scalar_expr!(ToHex, to_hex, string);
+        test_scalar_expr!(Translate, translate, string, from, to);
+        test_scalar_expr!(Trim, trim, string);
+        test_scalar_expr!(Upper, upper, string);
+
+        test_scalar_expr!(DatePart, date_part, part, date);
+        test_scalar_expr!(DateTrunc, date_trunc, part, date);
     }
 
     #[test]

@@ -494,10 +494,10 @@ fn typechecked_scalar_value_conversion(
             ScalarValue::Date32(Some(*v))
         }
         (Value::TimeMicrosecondValue(v), PrimitiveScalarType::TimeMicrosecond) => {
-            ScalarValue::TimestampMicrosecond(Some(*v))
+            ScalarValue::TimestampMicrosecond(Some(*v), None)
         }
         (Value::TimeNanosecondValue(v), PrimitiveScalarType::TimeMicrosecond) => {
-            ScalarValue::TimestampNanosecond(Some(*v))
+            ScalarValue::TimestampNanosecond(Some(*v), None)
         }
         (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
             ScalarValue::Utf8(Some(v.to_owned()))
@@ -530,10 +530,10 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
                     PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
                     PrimitiveScalarType::TimeMicrosecond => {
-                        ScalarValue::TimestampMicrosecond(None)
+                        ScalarValue::TimestampMicrosecond(None, None)
                     }
                     PrimitiveScalarType::TimeNanosecond => {
-                        ScalarValue::TimestampNanosecond(None)
+                        ScalarValue::TimestampNanosecond(None, None)
                     }
                     PrimitiveScalarType::Null => {
                         return Err(proto_error(
@@ -593,10 +593,10 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value
                 ScalarValue::Date32(Some(*v))
             }
             protobuf::scalar_value::Value::TimeMicrosecondValue(v) => {
-                ScalarValue::TimestampMicrosecond(Some(*v))
+                ScalarValue::TimestampMicrosecond(Some(*v), None)
             }
             protobuf::scalar_value::Value::TimeNanosecondValue(v) => {
-                ScalarValue::TimestampNanosecond(Some(*v))
+                ScalarValue::TimestampNanosecond(Some(*v), None)
             }
             protobuf::scalar_value::Value::ListValue(v) => v.try_into()?,
             protobuf::scalar_value::Value::NullListValue(v) => {
@@ -758,10 +758,10 @@ impl TryInto<datafusion::scalar::ScalarValue> for protobuf::PrimitiveScalarType 
             protobuf::PrimitiveScalarType::LargeUtf8 => ScalarValue::LargeUtf8(None),
             protobuf::PrimitiveScalarType::Date32 => ScalarValue::Date32(None),
             protobuf::PrimitiveScalarType::TimeMicrosecond => {
-                ScalarValue::TimestampMicrosecond(None)
+                ScalarValue::TimestampMicrosecond(None, None)
             }
             protobuf::PrimitiveScalarType::TimeNanosecond => {
-                ScalarValue::TimestampNanosecond(None)
+                ScalarValue::TimestampNanosecond(None, None)
             }
         })
     }
@@ -811,10 +811,10 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                 ScalarValue::Date32(Some(*v))
             }
             protobuf::scalar_value::Value::TimeMicrosecondValue(v) => {
-                ScalarValue::TimestampMicrosecond(Some(*v))
+                ScalarValue::TimestampMicrosecond(Some(*v), None)
             }
             protobuf::scalar_value::Value::TimeNanosecondValue(v) => {
-                ScalarValue::TimestampNanosecond(Some(*v))
+                ScalarValue::TimestampNanosecond(Some(*v), None)
             }
             protobuf::scalar_value::Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
