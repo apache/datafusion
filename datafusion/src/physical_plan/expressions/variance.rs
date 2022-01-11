@@ -288,7 +288,7 @@ impl Accumulator for VarianceAccumulator {
                 continue;
             }
             let new_count = self.count + c;
-            let new_mean = (self.mean + means.value(i)) / (self.count + c) as f64;
+            let new_mean = (self.mean + means.value(i)) / 2 as f64;
             let delta = self.mean - means.value(i);
             let new_m2 = self.m2
                 + m2s.value(i)
