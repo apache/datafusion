@@ -362,7 +362,7 @@ impl Accumulator for CovarianceAccumulator {
 
         if count <= 1 {
             return Err(DataFusionError::Internal(
-                "At least two values are needed to calculate variance".to_string(),
+                "At least two values are needed to calculate covariance".to_string(),
             ));
         }
 
@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn variance_i32_with_nulls_1() -> Result<()> {
+    fn covariance_i32_with_nulls_1() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -532,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn variance_i32_with_nulls_2() -> Result<()> {
+    fn covariance_i32_with_nulls_2() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -544,7 +544,7 @@ mod tests {
             Some(6),
         ]));
 
-        let schema = Schema::new(vec![Field::new("b", DataType::Int32, false)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false), Field::new("b", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
 
         let agg = Arc::new(Covariance::new(
@@ -560,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn variance_i32_all_nulls() -> Result<()> {
+    fn covariance_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
         let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
 
