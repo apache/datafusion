@@ -56,7 +56,19 @@ async fn csv_query_covariance_1() -> Result<()> {
     let sql = "SELECT covar_pop(c2, c12) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
-    let expected = vec![vec!["1.8675"]];
+    let expected = vec![vec!["-0.07916932235380847"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_covariance_2() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT covar(c2, c12) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["-0.07996901247859442"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }

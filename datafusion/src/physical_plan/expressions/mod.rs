@@ -44,6 +44,7 @@ mod lead_lag;
 mod literal;
 #[macro_use]
 mod min_max;
+mod covariance;
 mod negative;
 mod not;
 mod nth_value;
@@ -55,8 +56,6 @@ mod stddev;
 mod sum;
 mod try_cast;
 mod variance;
-mod covariance;
-
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -74,6 +73,9 @@ pub use cast::{
 };
 pub use column::{col, Column};
 pub use count::Count;
+pub(crate) use covariance::{
+    covariance_return_type, is_covariance_support_arg_type, Covariance, CovariancePop,
+};
 pub use cume_dist::cume_dist;
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
@@ -98,9 +100,6 @@ pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
 pub(crate) use variance::{
     is_variance_support_arg_type, variance_return_type, Variance, VariancePop,
-};
-pub(crate) use covariance::{
-    is_covariance_support_arg_type, covariance_return_type, Covariance, CovariancePop,
 };
 
 /// returns the name of the state
@@ -181,8 +180,12 @@ mod tests {
     #[macro_export]
     macro_rules! generic_test_op2 {
         ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
-            let schema = Schema::new(vec![Field::new("a", $DATATYPE1, false), Field::new("b", $DATATYPE2, false)]);
-            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY1, $ARRAY2])?;
+            let schema = Schema::new(vec![
+                Field::new("a", $DATATYPE1, false),
+                Field::new("b", $DATATYPE2, false),
+            ]);
+            let batch =
+                RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY1, $ARRAY2])?;
 
             let agg = Arc::new(<$OP>::new(
                 col("a", &schema)?,

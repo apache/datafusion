@@ -36,7 +36,8 @@ use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use expressions::{
-    avg_return_type, stddev_return_type, sum_return_type, variance_return_type, covariance_return_type,
+    avg_return_type, covariance_return_type, stddev_return_type, sum_return_type,
+    variance_return_type,
 };
 use std::{fmt, str::FromStr, sync::Arc};
 
@@ -142,7 +143,9 @@ pub fn return_type(
         AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::Covariance => covariance_return_type(&coerced_data_types[0]),
-        AggregateFunction::CovariancePop => covariance_return_type(&coerced_data_types[0]),
+        AggregateFunction::CovariancePop => {
+            covariance_return_type(&coerced_data_types[0])
+        }
         AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
@@ -364,8 +367,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::StddevPop => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
-        AggregateFunction::Covariance
-        | AggregateFunction::CovariancePop => {
+        AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
             Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }

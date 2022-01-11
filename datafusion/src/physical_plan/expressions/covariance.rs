@@ -249,21 +249,22 @@ impl CovarianceAccumulator {
         })
     }
 
-    pub fn get_count(&self) -> u64 {
-        self.count
-    }
+    // These functions are commented out for now, they will be used in the next PR
+    // pub fn get_count(&self) -> u64 {
+    //     self.count
+    // }
 
-    pub fn get_mean1(&self) -> f64 {
-        self.mean1
-    }
+    // pub fn get_mean1(&self) -> f64 {
+    //     self.mean1
+    // }
 
-    pub fn get_mean2(&self) -> f64 {
-        self.mean2
-    }
+    // pub fn get_mean2(&self) -> f64 {
+    //     self.mean2
+    // }
 
-    pub fn get_algo_const(&self) -> f64 {
-        self.algo_const
-    }
+    // pub fn get_algo_const(&self) -> f64 {
+    //     self.algo_const
+    // }
 }
 
 impl Accumulator for CovarianceAccumulator {
@@ -283,18 +284,19 @@ impl Accumulator for CovarianceAccumulator {
         let arr1 = values1.as_any().downcast_ref::<Float64Array>().unwrap();
         let arr2 = values2.as_any().downcast_ref::<Float64Array>().unwrap();
 
-
         for i in 0..arr1.len() {
             let value1 = arr1.value(i);
             let value2 = arr2.value(i);
 
-            if (value1 == 0_f64 && values1.is_null(i)) || (value2 == 0_f64 && values2.is_null(i)) {
+            if (value1 == 0_f64 && values1.is_null(i))
+                || (value2 == 0_f64 && values2.is_null(i))
+            {
                 if values2.is_null(i) && values1.is_null(i) {
                     continue;
                 } else {
                     return Err(DataFusionError::Internal(
                         "The two columns are not aligned".to_string(),
-                    )); 
+                    ));
                 }
             }
 
@@ -326,11 +328,15 @@ impl Accumulator for CovarianceAccumulator {
                 continue;
             }
             let new_count = self.count + c;
-            let new_mean1 = self.mean1 * self.count as f64 / new_count as f64 + means1.value(i) * c as f64 / new_count as f64;
-            let new_mean2 = self.mean2 * self.count as f64 / new_count as f64 + means2.value(i) * c as f64 / new_count as f64;
+            let new_mean1 = self.mean1 * self.count as f64 / new_count as f64
+                + means1.value(i) * c as f64 / new_count as f64;
+            let new_mean2 = self.mean2 * self.count as f64 / new_count as f64
+                + means2.value(i) * c as f64 / new_count as f64;
             let delta1 = self.mean1 - means1.value(i);
             let delta2 = self.mean2 - means2.value(i);
-            let new_c = self.algo_const + cs.value(i) + delta1 * delta2 * self.count as f64 * c as f64 / new_count as f64;
+            let new_c = self.algo_const
+                + cs.value(i)
+                + delta1 * delta2 * self.count as f64 * c as f64 / new_count as f64;
 
             self.count = new_count;
             self.mean1 = new_mean1;
@@ -464,10 +470,8 @@ mod tests {
 
     #[test]
     fn covariance_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32]));
-        let b: ArrayRef =
-            Arc::new(UInt32Array::from(vec![4_u32, 5_u32, 6_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32]));
+        let b: ArrayRef = Arc::new(UInt32Array::from(vec![4_u32, 5_u32, 6_u32]));
         generic_test_op2!(
             a,
             b,
@@ -481,10 +485,8 @@ mod tests {
 
     #[test]
     fn covariance_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32]));
-        let b: ArrayRef =
-            Arc::new(Float32Array::from(vec![4_f32, 5_f32, 6_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32]));
+        let b: ArrayRef = Arc::new(Float32Array::from(vec![4_f32, 5_f32, 6_f32]));
         generic_test_op2!(
             a,
             b,
@@ -509,16 +511,8 @@ mod tests {
 
     #[test]
     fn covariance_i32_with_nulls_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            None,
-            Some(3),
-        ]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(4),
-            None,
-            Some(6),
-        ]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), None, Some(6)]));
 
         generic_test_op2!(
             a,
@@ -533,18 +527,13 @@ mod tests {
 
     #[test]
     fn covariance_i32_with_nulls_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            None,
-            Some(3),
-        ]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(4),
-            Some(5),
-            Some(6),
-        ]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5), Some(6)]));
 
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false), Field::new("b", DataType::Int32, false)]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
 
         let agg = Arc::new(Covariance::new(
@@ -564,7 +553,10 @@ mod tests {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
         let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
 
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false), Field::new("b", DataType::Int32, false)]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
 
         let agg = Arc::new(Covariance::new(
