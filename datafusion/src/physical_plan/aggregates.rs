@@ -160,7 +160,7 @@ pub fn return_type(
             coerced_data_types[0].clone(),
             true,
         )))),
-        AggregateFunction::ApproxQuantile => Ok(DataType::Float64),
+        AggregateFunction::ApproxQuantile => Ok(coerced_data_types[0].clone()),
     }
 }
 
@@ -561,7 +561,7 @@ mod tests {
             assert!(result_agg_phy_exprs.as_any().is::<ApproxQuantile>());
             assert_eq!("c1", result_agg_phy_exprs.name());
             assert_eq!(
-                Field::new("c1", DataType::Float64, false),
+                Field::new("c1", data_type.clone(), false),
                 result_agg_phy_exprs.field().unwrap()
             );
         }

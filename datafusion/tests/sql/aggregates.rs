@@ -386,7 +386,7 @@ async fn csv_query_approx_quantile() -> Result<()> {
     // within 5% of the $actual quantile value.
     macro_rules! quantile_test {
         ($ctx:ident, column=$column:literal, quantile=$quantile:literal, actual=$actual:literal) => {
-            let sql = format!("SELECT (ABS(1 - approx_quantile({}, {}) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $quantile, $actual);
+            let sql = format!("SELECT (ABS(1 - CAST(approx_quantile({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $quantile, $actual);
             let actual = execute_to_batches(&mut ctx, &sql).await;
             //
             //   "+------+",

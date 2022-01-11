@@ -105,7 +105,7 @@ impl AggregateExpr for ApproxQuantile {
     }
 
     fn field(&self) -> Result<Field> {
-        Ok(Field::new(&self.name, DataType::Float64, false))
+        Ok(Field::new(&self.name, self.input_data_type.clone(), false))
     }
 
     /// See [`TDigest::to_scalar_state()`] for a description of the serialised
@@ -151,7 +151,9 @@ impl AggregateExpr for ApproxQuantile {
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
         let accumulator: Box<dyn Accumulator> = match &self.input_data_type {
-            DataType::UInt8
+            t
+            @
+            (DataType::UInt8
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
@@ -160,8 +162,8 @@ impl AggregateExpr for ApproxQuantile {
             | DataType::Int32
             | DataType::Int64
             | DataType::Float32
-            | DataType::Float64 => {
-                Box::new(ApproxQuantileAccumulator::new(self.quantile))
+            | DataType::Float64) => {
+                Box::new(ApproxQuantileAccumulator::new(self.quantile, t.clone()))
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -182,13 +184,15 @@ impl AggregateExpr for ApproxQuantile {
 pub struct ApproxQuantileAccumulator {
     digest: TDigest,
     quantile: f64,
+    return_type: DataType,
 }
 
 impl ApproxQuantileAccumulator {
-    pub fn new(quantile: f64) -> Self {
+    pub fn new(quantile: f64, return_type: DataType) -> Self {
         Self {
             digest: TDigest::new(100),
             quantile,
+            return_type,
         }
     }
 }
@@ -283,9 +287,23 @@ impl Accumulator for ApproxQuantileAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(Some(
-            self.digest.estimate_quantile(self.quantile),
-        )))
+        let q = self.digest.estimate_quantile(self.quantile);
+
+        // These acceptable return types MUST match the validation in
+        // ApproxQuantile::create_accumulator.
+        Ok(match &self.return_type {
+            DataType::Int8 => ScalarValue::Int8(Some(q as i8)),
+            DataType::Int16 => ScalarValue::Int16(Some(q as i16)),
+            DataType::Int32 => ScalarValue::Int32(Some(q as i32)),
+            DataType::Int64 => ScalarValue::Int64(Some(q as i64)),
+            DataType::UInt8 => ScalarValue::UInt8(Some(q as u8)),
+            DataType::UInt16 => ScalarValue::UInt16(Some(q as u16)),
+            DataType::UInt32 => ScalarValue::UInt32(Some(q as u32)),
+            DataType::UInt64 => ScalarValue::UInt64(Some(q as u64)),
+            DataType::Float32 => ScalarValue::Float32(Some(q as f32)),
+            DataType::Float64 => ScalarValue::Float64(Some(q as f64)),
+            v => unreachable!("unexpected return type {:?}", v),
+        })
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
