@@ -25,8 +25,7 @@ use crate::physical_plan::{
     expressions::variance::VarianceAccumulator, Accumulator, AggregateExpr, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
+use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
 use super::{format_state_name, StatsType};
 
@@ -216,8 +215,8 @@ impl Accumulator for StddevAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.variance.get_count()),
-            self.variance.get_mean(),
-            self.variance.get_m2(),
+            ScalarValue::from(self.variance.get_mean()),
+            ScalarValue::from(self.variance.get_m2()),
         ])
     }
 
@@ -227,6 +226,14 @@ impl Accumulator for StddevAccumulator {
 
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
         self.variance.merge(states)
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.update_batch(values)
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.variance.merge_batch(states)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
