@@ -177,6 +177,28 @@ mod tests {
         }};
     }
 
+    /// macro to perform an aggregation with two inputs and verify the result.
+    #[macro_export]
+    macro_rules! generic_test_op2 {
+        ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+            let schema = Schema::new(vec![Field::new("a", $DATATYPE1, false), Field::new("b", $DATATYPE2, false)]);
+            let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY1, $ARRAY2])?;
+
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                col("b", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+            ));
+            let actual = aggregate(&batch, agg)?;
+            let expected = ScalarValue::from($EXPECTED);
+
+            assert_eq!(expected, actual);
+
+            Ok(())
+        }};
+    }
+
     pub fn aggregate(
         batch: &RecordBatch,
         agg: Arc<dyn AggregateExpr>,

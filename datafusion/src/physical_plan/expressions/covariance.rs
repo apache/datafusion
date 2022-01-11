@@ -378,162 +378,182 @@ impl Accumulator for CovarianceAccumulator {
 mod tests {
     use super::*;
     use crate::physical_plan::expressions::col;
-    use crate::{error::Result, generic_test_op};
+    use crate::{error::Result, generic_test_op2};
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     #[test]
-    fn variance_f64_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
-        generic_test_op!(
+    fn covariance_f64_1() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+
+        generic_test_op2!(
             a,
+            b,
+            DataType::Float64,
             DataType::Float64,
             CovariancePop,
-            ScalarValue::from(0.25_f64),
+            ScalarValue::from(0.6666666666666666),
             DataType::Float64
         )
     }
 
     #[test]
-    fn variance_f64_2() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            CovariancePop,
-            ScalarValue::from(2_f64),
-            DataType::Float64
-        )
-    }
+    fn covariance_f64_2() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
 
-    #[test]
-    fn variance_f64_3() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        generic_test_op!(
+        generic_test_op2!(
             a,
+            b,
+            DataType::Float64,
             DataType::Float64,
             Covariance,
-            ScalarValue::from(2.5_f64),
+            ScalarValue::from(1_f64),
             DataType::Float64
         )
     }
 
-    #[test]
-    fn variance_f64_4() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            Covariance,
-            ScalarValue::from(0.9033333333333333_f64),
-            DataType::Float64
-        )
-    }
+    // #[test]
+    // fn variance_f64_2() -> Result<()> {
+    //     let a: ArrayRef =
+    //         Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::Float64,
+    //         CovariancePop,
+    //         ScalarValue::from(2_f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-    #[test]
-    fn variance_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            CovariancePop,
-            ScalarValue::from(2_f64),
-            DataType::Float64
-        )
-    }
+    // #[test]
+    // fn variance_f64_3() -> Result<()> {
+    //     let a: ArrayRef =
+    //         Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::Float64,
+    //         Covariance,
+    //         ScalarValue::from(2.5_f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-    #[test]
-    fn variance_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(
-            a,
-            DataType::UInt32,
-            CovariancePop,
-            ScalarValue::from(2.0f64),
-            DataType::Float64
-        )
-    }
+    // #[test]
+    // fn variance_f64_4() -> Result<()> {
+    //     let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::Float64,
+    //         Covariance,
+    //         ScalarValue::from(0.9033333333333333_f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-    #[test]
-    fn variance_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
-        generic_test_op!(
-            a,
-            DataType::Float32,
-            CovariancePop,
-            ScalarValue::from(2_f64),
-            DataType::Float64
-        )
-    }
+    // #[test]
+    // fn variance_i32() -> Result<()> {
+    //     let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::Int32,
+    //         CovariancePop,
+    //         ScalarValue::from(2_f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-    #[test]
-    fn test_variance_return_data_type() -> Result<()> {
-        let data_type = DataType::Float64;
-        let result_type = covariance_return_type(&data_type)?;
-        assert_eq!(DataType::Float64, result_type);
+    // #[test]
+    // fn variance_u32() -> Result<()> {
+    //     let a: ArrayRef =
+    //         Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::UInt32,
+    //         CovariancePop,
+    //         ScalarValue::from(2.0f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-        let data_type = DataType::Decimal(36, 10);
-        assert!(covariance_return_type(&data_type).is_err());
-        Ok(())
-    }
+    // #[test]
+    // fn variance_f32() -> Result<()> {
+    //     let a: ArrayRef =
+    //         Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::Float32,
+    //         CovariancePop,
+    //         ScalarValue::from(2_f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-    #[test]
-    fn test_variance_1_input() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
-        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+    // #[test]
+    // fn test_variance_return_data_type() -> Result<()> {
+    //     let data_type = DataType::Float64;
+    //     let result_type = covariance_return_type(&data_type)?;
+    //     assert_eq!(DataType::Float64, result_type);
 
-        let agg = Arc::new(Covariance::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+    //     let data_type = DataType::Decimal(36, 10);
+    //     assert!(covariance_return_type(&data_type).is_err());
+    //     Ok(())
+    // }
 
-        Ok(())
-    }
+    // #[test]
+    // fn test_variance_1_input() -> Result<()> {
+    //     let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
+    //     let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+    //     let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
-    #[test]
-    fn variance_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
-            Some(1),
-            None,
-            Some(3),
-            Some(4),
-            Some(5),
-        ]));
-        generic_test_op!(
-            a,
-            DataType::Int32,
-            CovariancePop,
-            ScalarValue::from(2.1875f64),
-            DataType::Float64
-        )
-    }
+    //     let agg = Arc::new(Covariance::new(
+    //         col("a", &schema)?,
+    //         col("b", &schema)?,
+    //         "bla".to_string(),
+    //         DataType::Float64,
+    //     ));
+    //     let actual = aggregate(&batch, agg);
+    //     assert!(actual.is_err());
 
-    #[test]
-    fn variance_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+    //     Ok(())
+    // }
 
-        let agg = Arc::new(Covariance::new(
-            col("a", &schema)?,
-            col("b", &schema)?,
-            "bla".to_string(),
-            DataType::Float64,
-        ));
-        let actual = aggregate(&batch, agg);
-        assert!(actual.is_err());
+    // #[test]
+    // fn variance_i32_with_nulls() -> Result<()> {
+    //     let a: ArrayRef = Arc::new(Int32Array::from(vec![
+    //         Some(1),
+    //         None,
+    //         Some(3),
+    //         Some(4),
+    //         Some(5),
+    //     ]));
+    //     generic_test_op!(
+    //         a,
+    //         DataType::Int32,
+    //         CovariancePop,
+    //         ScalarValue::from(2.1875f64),
+    //         DataType::Float64
+    //     )
+    // }
 
-        Ok(())
-    }
+    // #[test]
+    // fn variance_i32_all_nulls() -> Result<()> {
+    //     let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+    //     let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    //     let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+    //     let agg = Arc::new(Covariance::new(
+    //         col("a", &schema)?,
+    //         col("b", &schema)?,
+    //         "bla".to_string(),
+    //         DataType::Float64,
+    //     ));
+    //     let actual = aggregate(&batch, agg);
+    //     assert!(actual.is_err());
+
+    //     Ok(())
+    // }
 
     fn aggregate(
         batch: &RecordBatch,
