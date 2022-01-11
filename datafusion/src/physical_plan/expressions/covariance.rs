@@ -326,25 +326,25 @@ impl Accumulator for CovarianceAccumulator {
                 continue;
             }
             let new_count = self.count + c;
-            let new_mean1 = (self.mean1 + means1.value(i)) / 2 as f64;
-            let new_mean2 = (self.mean2 + means2.value(i)) / 2 as f64;
+            let new_mean1 = self.mean1 * self.count as f64 / new_count as f64 + means1.value(i) * c as f64 / new_count as f64;
+            let new_mean2 = self.mean2 * self.count as f64 / new_count as f64 + means2.value(i) * c as f64 / new_count as f64;
             let delta1 = self.mean1 - means1.value(i);
             let delta2 = self.mean2 - means2.value(i);
             let new_c = self.algo_const + cs.value(i) + delta1 * delta2 * self.count as f64 * c as f64 / new_count as f64;
 
             self.count = new_count;
             self.mean1 = new_mean1;
-            self.mean2 = new_mean1;
+            self.mean2 = new_mean2;
             self.algo_const = new_c;
         }
         Ok(())
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
         Ok(())
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
         Ok(())
     }
 
