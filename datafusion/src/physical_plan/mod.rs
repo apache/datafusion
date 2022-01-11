@@ -568,7 +568,7 @@ pub trait Accumulator: Send + Sync + Debug {
     /// updates the accumulator's state from a vector of scalars
     /// (called by default implementation of [`update_batch`])
     ///
-    /// Note: this method is the often the simplest to implement and
+    /// Note: this method is often the simplest to implement and
     /// is backwards compatible to help to lower the barrier to entry for
     /// new users to write `Accumulators`
     ///
