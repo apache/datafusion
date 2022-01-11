@@ -48,7 +48,7 @@ pyarrow = ["pyo3"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
-avro = ["avro-rs", "num-traits"]
+avro = ["arrow/io_avro", "arrow/io_avro_async", "arrow/io_avro_compression", "num-traits", "avro-rs"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
@@ -74,9 +74,10 @@ regex = { version = "^1.4.3", optional = true }
 lazy_static = { version = "^1.4.0" }
 smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
-avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
 pyo3 = { version = "0.14", optional = true }
+
+avro-rs = { version = "0.13", optional = true }
 
 [dependencies.arrow]
 package = "arrow2"

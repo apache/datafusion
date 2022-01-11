@@ -82,8 +82,7 @@ mod tests {
 
     use super::*;
     use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-        TimestampMicrosecondArray,
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, UInt64Array,
     };
     use futures::StreamExt;
 
@@ -235,9 +234,9 @@ mod tests {
         let array = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
+            .downcast_ref::<UInt64Array>()
             .unwrap();
-        let mut values: Vec<i64> = vec![];
+        let mut values: Vec<u64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
         }
@@ -316,7 +315,7 @@ mod tests {
         let array = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<BinaryArray>()
+            .downcast_ref::<BinaryArray<i32>>()
             .unwrap();
         let mut values: Vec<&str> = vec![];
         for i in 0..batches[0].num_rows() {

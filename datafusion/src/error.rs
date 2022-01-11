@@ -23,8 +23,6 @@ use std::io;
 use std::result;
 
 use arrow::error::ArrowError;
-#[cfg(feature = "avro")]
-use avro_rs::Error as AvroError;
 use parquet::error::ParquetError;
 use sqlparser::parser::ParserError;
 
@@ -39,9 +37,6 @@ pub enum DataFusionError {
     ArrowError(ArrowError),
     /// Wraps an error from the Parquet crate
     ParquetError(ParquetError),
-    /// Wraps an error from the Avro crate
-    #[cfg(feature = "avro")]
-    AvroError(AvroError),
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
     /// Error returned when SQL is syntactically incorrect.
@@ -88,13 +83,6 @@ impl From<ParquetError> for DataFusionError {
     }
 }
 
-#[cfg(feature = "avro")]
-impl From<AvroError> for DataFusionError {
-    fn from(e: AvroError) -> Self {
-        DataFusionError::AvroError(e)
-    }
-}
-
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
         DataFusionError::SQL(e)
@@ -107,10 +95,6 @@ impl Display for DataFusionError {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
             DataFusionError::ParquetError(ref desc) => {
                 write!(f, "Parquet error: {}", desc)
-            }
-            #[cfg(feature = "avro")]
-            DataFusionError::AvroError(ref desc) => {
-                write!(f, "Avro error: {}", desc)
             }
             DataFusionError::IoError(ref desc) => write!(f, "IO error: {}", desc),
             DataFusionError::SQL(ref desc) => {
