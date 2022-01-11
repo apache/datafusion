@@ -17,28 +17,13 @@
 
 //! Avro to Arrow array readers
 
-use crate::arrow::array::{
-    make_array, Array, ArrayBuilder, ArrayData, ArrayDataBuilder, ArrayRef,
-    BooleanBuilder, LargeStringArray, ListBuilder, NullArray, OffsetSizeTrait,
-    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder,
-    StringDictionaryBuilder,
-};
 use crate::arrow::buffer::{Buffer, MutableBuffer};
-use crate::arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNumericType, ArrowPrimitiveType, DataType, Date32Type,
-    Date64Type, Field, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type,
-    Int8Type, Schema, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-    Time64NanosecondType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
-};
+use crate::arrow::datatypes::*;
 use crate::arrow::error::ArrowError;
 use crate::arrow::record_batch::RecordBatch;
-use crate::arrow::util::bit_util;
 use crate::error::{DataFusionError, Result};
-use arrow::array::{BinaryArray, GenericListArray};
+use arrow::array::BinaryArray;
 use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError::SchemaError;
 use arrow::error::Result as ArrowResult;
 use avro_rs::{
     schema::{Schema as AvroSchema, SchemaKind},

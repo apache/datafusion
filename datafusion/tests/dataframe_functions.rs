@@ -17,11 +17,9 @@
 
 use std::sync::Arc;
 
+use arrow::array::Utf8Array;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::{
-    array::{Int32Array, StringArray},
-    record_batch::RecordBatch,
-};
+use arrow::{array::Int32Array, record_batch::RecordBatch};
 
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -45,13 +43,13 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![
+            Arc::new(Utf8Array::<i32>::from_slice(vec![
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice(vec![1, 10, 10, 100])),
         ],
     )?;
 

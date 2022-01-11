@@ -32,7 +32,6 @@ use arrow::{
 
 use super::format_state_name;
 use crate::arrow::array::Array;
-use arrow::array::DecimalArray;
 
 /// SUM aggregate expression
 #[derive(Debug)]
@@ -166,7 +165,7 @@ fn sum_decimal_batch(
     precision: &usize,
     scale: &usize,
 ) -> Result<ScalarValue> {
-    let array = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = values.as_any().downcast_ref::<Int128Array>().unwrap();
 
     if array.null_count() == array.len() {
         return Ok(ScalarValue::Decimal128(None, *precision, *scale));
@@ -381,7 +380,6 @@ impl Accumulator for SumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array::DecimalBuilder;
     use crate::physical_plan::expressions::col;
     use crate::{error::Result, generic_test_op};
     use arrow::datatypes::*;
@@ -424,20 +422,20 @@ mod tests {
         );
 
         // test sum batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
+            decimal_builder.push(Some(i as i128));
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
+            decimal_builder.push(Some(i as i128));
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
 
         generic_test_op!(
             array,
@@ -457,28 +455,28 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(123), 10, 2), result);
 
         // test with batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for i in 1..6 {
             if i == 2 {
-                decimal_builder.append_null()?;
+                decimal_builder.push_null();
             } else {
-                decimal_builder.append_value(i)?;
+                decimal_builder.push(Some(i));
             }
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 35, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for i in 1..6 {
             if i == 2 {
-                decimal_builder.append_null()?;
+                decimal_builder.push_null();
             } else {
-                decimal_builder.append_value(i)?;
+                decimal_builder.push(Some(i));
             }
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
             DataType::Decimal(35, 0),
@@ -497,20 +495,20 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(None, 10, 2), result);
 
         // test with batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for _i in 1..6 {
-            decimal_builder.append_null()?;
+            decimal_builder.push_null();
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for _i in 1..6 {
-            decimal_builder.append_null()?;
+            decimal_builder.push_null();
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),

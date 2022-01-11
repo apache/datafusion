@@ -57,6 +57,7 @@ use super::{
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use arrow::bitmap::MutableBitmap;
+use arrow::buffer::Buffer;
 use log::debug;
 use std::fmt;
 
@@ -390,9 +391,9 @@ impl ExecutionPlan for HashJoinExec {
         let num_rows = left_data.1.num_rows();
         let visited_left_side = match self.join_type {
             JoinType::Left | JoinType::Full | JoinType::Semi | JoinType::Anti => {
-                MutableBuffer::from_trusted_len_iter((0..num_rows).map(|_| false))
+                MutableBitmap::from_iter((0..num_rows).map(|_| false))
             }
-            JoinType::Inner | JoinType::Right => MutableBuffer::with_capacity(0),
+            JoinType::Inner | JoinType::Right => MutableBitmap::with_capacity(0),
         };
         Ok(Box::pin(HashJoinStream::new(
             self.schema.clone(),
@@ -874,14 +875,14 @@ fn produce_from_matched(
     unmatched: bool,
 ) -> ArrowResult<RecordBatch> {
     let indices = if unmatched {
-        UInt64Array::from_iter_values(
+        Buffer::from_iter(
             (0..visited_left_side.len())
-                .filter_map(|v| (!visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (!visited_left_side.get(v)).then(|| v as u64)),
         )
     } else {
-        UInt64Array::from_iter_values(
+        Buffer::from_iter(
             (0..visited_left_side.len())
-                .filter_map(|v| (visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (visited_left_side.get(v)).then(|| v as u64)),
         )
     };
 
@@ -943,7 +944,7 @@ impl Stream for HashJoinStream {
                             | JoinType::Semi
                             | JoinType::Anti => {
                                 left_side.iter().flatten().for_each(|x| {
-                                    self.visited_left_side.set_bit(x as usize, true);
+                                    self.visited_left_side.set(*x as usize, true);
                                 });
                             }
                             JoinType::Inner | JoinType::Right => {}

@@ -966,7 +966,7 @@ mod tests {
     async fn hash_repartition_avoid_empty_batch() -> Result<()> {
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
-            Arc::new(StringArray::from(vec!["foo"])) as ArrayRef,
+            Arc::new(StringArray::from_slice(vec!["foo"])) as ArrayRef,
         )])
         .unwrap();
         let partitioning = Partitioning::Hash(
@@ -975,8 +975,8 @@ mod tests {
             ))],
             2,
         );
-        let schema = batch.schema();
-        let input = MockExec::new(vec![Ok(batch)], schema);
+        let schema = batch.schema().clone();
+        let input = MockExec::new(vec![Ok(batch)], schema.clone());
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
         let output_stream0 = exec.execute(0).await.unwrap();
         let batch0 = crate::physical_plan::common::collect(output_stream0)

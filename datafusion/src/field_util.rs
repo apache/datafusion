@@ -78,6 +78,8 @@ pub trait StructArrayExt {
     fn column_by_name(&self, column_name: &str) -> Option<&ArrayRef>;
     /// Return the number of fields in this struct array
     fn num_columns(&self) -> usize;
+    /// Return the column at the position
+    fn column(&self, pos: usize) -> ArrayRef;
 }
 
 impl StructArrayExt for StructArray {
@@ -95,4 +97,15 @@ impl StructArrayExt for StructArray {
     fn num_columns(&self) -> usize {
         self.fields().len()
     }
+
+    fn column(&self, pos: usize) -> ArrayRef {
+        self.values()[pos].clone()
+    }
+}
+
+/// Converts a list of field / array pairs to a struct array
+pub fn struct_array_from(pairs: Vec<(Field, ArrayRef)>) -> StructArray {
+    let fields: Vec<Field> = pairs.iter().map(|v| v.0.clone()).collect();
+    let values = pairs.iter().map(|v| v.1.clone()).collect();
+    StructArray::from_data(DataType::Struct(fields.clone()), values, None)
 }

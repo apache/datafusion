@@ -126,7 +126,7 @@ macro_rules! typed_min_max_batch {
 
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident, $TZ:expr) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let value = compute::$OP(array);
+        let value = $OP(array);
         ScalarValue::$SCALAR(value, $TZ.clone())
     }};
 }

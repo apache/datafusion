@@ -255,11 +255,11 @@ mod tests {
     #[test]
     fn avg_decimal() -> Result<()> {
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(6);
         for i in 1..7 {
-            decimal_builder.append_value(i as i128)?;
+            decimal_builder.push(Some(i as i128));
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array = decimal_builder.as_arc();
 
         generic_test_op!(
             array,
@@ -272,15 +272,15 @@ mod tests {
 
     #[test]
     fn avg_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for i in 1..6 {
             if i == 2 {
-                decimal_builder.append_null()?;
+                decimal_builder.push_null();
             } else {
-                decimal_builder.append_value(i)?;
+                decimal_builder.push(Some(i));
             }
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -293,11 +293,11 @@ mod tests {
     #[test]
     fn avg_decimal_all_nulls() -> Result<()> {
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
+        let mut decimal_builder = Int128Vec::with_capacity(5);
         for _i in 1..6 {
-            decimal_builder.append_null()?;
+            decimal_builder.push_null();
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),

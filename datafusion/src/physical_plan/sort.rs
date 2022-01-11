@@ -400,7 +400,7 @@ mod tests {
 
         let mut field = Field::new("field_name", DataType::UInt64, true);
         field.set_metadata(Some(field_metadata.clone()));
-        let schema = Schema::new_with_metadata(vec![field], schema_metadata.clone());
+        let schema = Schema::new_from(vec![field], schema_metadata.clone());
         let schema = Arc::new(schema);
 
         let data: ArrayRef =

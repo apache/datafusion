@@ -49,6 +49,7 @@ use datafusion::{
 };
 
 use arrow::io::parquet::write::{Compression, Version, WriteOptions};
+use arrow::io::print::print;
 use ballista::prelude::{
     BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
 };
@@ -347,7 +348,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         millis.push(elapsed as f64);
         println!("Query {} iteration {} took {:.1} ms", opt.query, i, elapsed);
         if opt.debug {
-            pretty::print_batches(&batches)?;
+            print(&batches);
         }
     }
 
@@ -440,7 +441,7 @@ async fn loadtest_ballista(opt: BallistaLoadtestOpt) -> Result<()> {
                     &client_id, &i, query_id, elapsed
                 );
                 if opt.debug {
-                    pretty::print_batches(&batches).unwrap();
+                    print(&batches);
                 }
             }
         });
