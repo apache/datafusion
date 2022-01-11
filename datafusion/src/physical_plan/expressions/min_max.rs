@@ -543,10 +543,8 @@ impl Accumulator for MinAccumulator {
         Ok(vec![self.min.clone()])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.min = min(&self.min, value)?;
-        Ok(())
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
+        unimplemented!("update_batch is implemented instead");
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -556,8 +554,8 @@ impl Accumulator for MinAccumulator {
         Ok(())
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.update(states)
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
+        unimplemented!("merge_batch is implemented instead");
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
