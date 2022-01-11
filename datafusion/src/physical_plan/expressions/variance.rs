@@ -302,122 +302,12 @@ impl Accumulator for VarianceAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let values = &values[0];
-        let is_empty = values.is_null();
-        let mean = ScalarValue::from(self.mean);
-        let m2 = ScalarValue::from(self.m2);
-
-        if !is_empty {
-            let new_count = self.count + 1;
-            let delta1 = ScalarValue::add(values, &mean.arithmetic_negate())?;
-            let new_mean = ScalarValue::add(
-                &ScalarValue::div(&delta1, &ScalarValue::from(new_count as f64))?,
-                &mean,
-            )?;
-            let delta2 = ScalarValue::add(values, &new_mean.arithmetic_negate())?;
-            let tmp = ScalarValue::mul(&delta1, &delta2)?;
-
-            let new_m2 = ScalarValue::add(&m2, &tmp)?;
-            self.count += 1;
-
-            if let ScalarValue::Float64(Some(c)) = new_mean {
-                self.mean = c;
-            } else {
-                unreachable!()
-            };
-            if let ScalarValue::Float64(Some(m)) = new_m2 {
-                self.m2 = m;
-            } else {
-                unreachable!()
-            };
-        }
-
-        Ok(())
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
+        unimplemented!("update_batch is implemented instead");
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count;
-        let mean;
-        let m2;
-        let mut new_count: u64 = self.count;
-
-        if let ScalarValue::UInt64(Some(c)) = states[0] {
-            count = c;
-        } else {
-            unreachable!()
-        };
-
-        if count == 0_u64 {
-            return Ok(());
-        }
-
-        if let ScalarValue::Float64(Some(m)) = states[1] {
-            mean = m;
-        } else {
-            unreachable!()
-        };
-        if let ScalarValue::Float64(Some(n)) = states[2] {
-            m2 = n;
-        } else {
-            unreachable!()
-        };
-
-        if self.count == 0 {
-            self.count = count;
-            self.mean = mean;
-            self.m2 = m2;
-            return Ok(());
-        }
-
-        new_count += count;
-
-        let mean1 = ScalarValue::from(self.mean);
-        let mean2 = ScalarValue::from(mean);
-
-        let new_mean = ScalarValue::add(
-            &ScalarValue::div(
-                &ScalarValue::mul(&mean1, &ScalarValue::from(self.count))?,
-                &ScalarValue::from(new_count as f64),
-            )?,
-            &ScalarValue::div(
-                &ScalarValue::mul(&mean2, &ScalarValue::from(count))?,
-                &ScalarValue::from(new_count as f64),
-            )?,
-        )?;
-
-        let delta = ScalarValue::add(&mean2.arithmetic_negate(), &mean1)?;
-        let delta_sqrt = ScalarValue::mul(&delta, &delta)?;
-        let new_m2 = ScalarValue::add(
-            &ScalarValue::add(
-                &ScalarValue::mul(
-                    &delta_sqrt,
-                    &ScalarValue::div(
-                        &ScalarValue::mul(
-                            &ScalarValue::from(self.count),
-                            &ScalarValue::from(count),
-                        )?,
-                        &ScalarValue::from(new_count as f64),
-                    )?,
-                )?,
-                &ScalarValue::from(self.m2),
-            )?,
-            &ScalarValue::from(m2),
-        )?;
-
-        self.count = new_count;
-        if let ScalarValue::Float64(Some(c)) = new_mean {
-            self.mean = c;
-        } else {
-            unreachable!()
-        };
-        if let ScalarValue::Float64(Some(m)) = new_m2 {
-            self.m2 = m;
-        } else {
-            unreachable!()
-        };
-
-        Ok(())
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
+        unimplemented!("merge_batch is implemented instead");
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

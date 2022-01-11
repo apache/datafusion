@@ -106,14 +106,14 @@ impl CountAccumulator {
 }
 
 impl Accumulator for CountAccumulator {
-    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
-        unimplemented!("update_batch is implemented instead");
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
         self.count += (array.len() - array.data().null_count()) as u64;
         Ok(())
+    }
+
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
+        unimplemented!("update_batch is implemented instead");
     }
 
     fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
