@@ -288,7 +288,7 @@ impl Accumulator for VarianceAccumulator {
                 continue;
             }
             let new_count = self.count + c;
-            let new_mean = (self.mean + means.value(i)) / 2 as f64;
+            let new_mean = self.mean * self.count as f64 / new_count as f64 + means.value(i) * c as f64 / new_count as f64;
             let delta = self.mean - means.value(i);
             let new_m2 = self.m2
                 + m2s.value(i)
@@ -374,10 +374,17 @@ impl Accumulator for VarianceAccumulator {
         let mean1 = ScalarValue::from(self.mean);
         let mean2 = ScalarValue::from(mean);
 
-        let new_mean = ScalarValue::div(
-            &ScalarValue::add(&mean1, &mean2)?,
-            &ScalarValue::from(2_f64),
+        let new_mean = ScalarValue::add(
+            &ScalarValue::div(
+                &ScalarValue::mul(&mean1,&ScalarValue::from(self.count))?,
+                &ScalarValue::from(new_count as f64),
+            )?,
+            &ScalarValue::div(
+                &ScalarValue::mul(&mean2,&ScalarValue::from(count))?,
+                &ScalarValue::from(new_count as f64),
+            )?
         )?;
+        
         let delta = ScalarValue::add(&mean2.arithmetic_negate(), &mean1)?;
         let delta_sqrt = ScalarValue::mul(&delta, &delta)?;
         let new_m2 = ScalarValue::add(
