@@ -327,7 +327,7 @@ impl Accumulator for VarianceAccumulator {
             };
             if let ScalarValue::Float64(Some(m)) = new_m2 {
                 self.m2 = m;
-            }else {
+            } else {
                 unreachable!()
             };
         }
@@ -358,7 +358,7 @@ impl Accumulator for VarianceAccumulator {
         };
         if let ScalarValue::Float64(Some(n)) = states[2] {
             m2 = n;
-        }else {
+        } else {
             unreachable!()
         };
 
@@ -385,7 +385,10 @@ impl Accumulator for VarianceAccumulator {
                 &ScalarValue::mul(
                     &delta_sqrt,
                     &ScalarValue::div(
-                        &ScalarValue::mul(&ScalarValue::from(self.count), &ScalarValue::from(count))?,
+                        &ScalarValue::mul(
+                            &ScalarValue::from(self.count),
+                            &ScalarValue::from(count),
+                        )?,
                         &ScalarValue::from(new_count as f64),
                     )?,
                 )?,
@@ -402,7 +405,7 @@ impl Accumulator for VarianceAccumulator {
         };
         if let ScalarValue::Float64(Some(m)) = new_m2 {
             self.m2 = m;
-        }else {
+        } else {
             unreachable!()
         };
 
