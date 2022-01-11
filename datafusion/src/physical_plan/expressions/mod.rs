@@ -55,6 +55,8 @@ mod stddev;
 mod sum;
 mod try_cast;
 mod variance;
+mod covariance;
+
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -96,6 +98,9 @@ pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
 pub(crate) use variance::{
     is_variance_support_arg_type, variance_return_type, Variance, VariancePop,
+};
+pub(crate) use covariance::{
+    is_covariance_support_arg_type, covariance_return_type, Covariance, CovariancePop,
 };
 
 /// returns the name of the state

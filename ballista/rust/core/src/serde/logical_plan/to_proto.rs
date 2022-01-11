@@ -1027,9 +1027,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::Avg => protobuf::AggregateFunction::Avg,
                     AggregateFunction::Count => protobuf::AggregateFunction::Count,
                     AggregateFunction::Variance => protobuf::AggregateFunction::Variance,
-                    AggregateFunction::VariancePop => {
-                        protobuf::AggregateFunction::VariancePop
-                    }
+                    AggregateFunction::VariancePop => protobuf::AggregateFunction::VariancePop,
+                    AggregateFunction::Covariance => protobuf::AggregateFunction::Covariance,
+                    AggregateFunction::CovariancePop => protobuf::AggregateFunction::CovariancePop,
                     AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
                     AggregateFunction::StddevPop => {
                         protobuf::AggregateFunction::StddevPop
@@ -1266,6 +1266,8 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Variance => Self::Variance,
             AggregateFunction::VariancePop => Self::VariancePop,
+            AggregateFunction::Covariance => Self::Covariance,
+            AggregateFunction::CovariancePop => Self::CovariancePop,
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
         }

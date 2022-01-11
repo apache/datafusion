@@ -1,0 +1,552 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Defines physical expressions that can evaluated at runtime during query execution
+
+use std::any::Any;
+use std::sync::Arc;
+
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
+use crate::scalar::ScalarValue;
+use arrow::array::Float64Array;
+use arrow::{
+    array::{ArrayRef, UInt64Array},
+    compute::cast,
+    datatypes::DataType,
+    datatypes::Field,
+};
+
+use super::{format_state_name, StatsType};
+
+/// COVAR and COVAR_SAMP aggregate expression
+#[derive(Debug)]
+pub struct Covariance {
+    name: String,
+    expr1: Arc<dyn PhysicalExpr>,
+    expr2: Arc<dyn PhysicalExpr>,
+}
+
+/// COVAR_POP aggregate expression
+#[derive(Debug)]
+pub struct CovariancePop {
+    name: String,
+    expr1: Arc<dyn PhysicalExpr>,
+    expr2: Arc<dyn PhysicalExpr>,
+}
+
+/// function return type of covariance
+pub(crate) fn covariance_return_type(arg_type: &DataType) -> Result<DataType> {
+    match arg_type {
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float32
+        | DataType::Float64 => Ok(DataType::Float64),
+        other => Err(DataFusionError::Plan(format!(
+            "VARIANCE does not support {:?}",
+            other
+        ))),
+    }
+}
+
+pub(crate) fn is_covariance_support_arg_type(arg_type: &DataType) -> bool {
+    matches!(
+        arg_type,
+        DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64
+    )
+}
+
+impl Covariance {
+    /// Create a new COVAR aggregate function
+    pub fn new(
+        expr1: Arc<dyn PhysicalExpr>,
+        expr2: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
+        // the result of covariance just support FLOAT64 data type.
+        assert!(matches!(data_type, DataType::Float64));
+        Self {
+            name: name.into(),
+            expr1,
+            expr2,
+        }
+    }
+}
+
+impl AggregateExpr for Covariance {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(&self.name, DataType::Float64, true))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CovarianceAccumulator::try_new(StatsType::Sample)?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        Ok(vec![
+            Field::new(
+                &format_state_name(&self.name, "count"),
+                DataType::UInt64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "mean1"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "mean2"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "algo_const"),
+                DataType::Float64,
+                true,
+            ),
+        ])
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr1.clone(), self.expr2.clone()]
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl CovariancePop {
+    /// Create a new COVAR_POP aggregate function
+    pub fn new(
+        expr1: Arc<dyn PhysicalExpr>,
+        expr2: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        data_type: DataType,
+    ) -> Self {
+        // the result of covariance just support FLOAT64 data type.
+        assert!(matches!(data_type, DataType::Float64));
+        Self {
+            name: name.into(),
+            expr1,
+            expr2,
+        }
+    }
+}
+
+impl AggregateExpr for CovariancePop {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(&self.name, DataType::Float64, true))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(CovarianceAccumulator::try_new(
+            StatsType::Population,
+        )?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        Ok(vec![
+            Field::new(
+                &format_state_name(&self.name, "count"),
+                DataType::UInt64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "mean1"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "mean2"),
+                DataType::Float64,
+                true,
+            ),
+            Field::new(
+                &format_state_name(&self.name, "algo_const"),
+                DataType::Float64,
+                true,
+            ),
+        ])
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr1.clone(), self.expr2.clone()]
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// An accumulator to compute covariance
+/// The algrithm used is an online implementation and numerically stable. It is based on this paper:
+/// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products".
+/// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
+///
+/// The algorithm has been analyzed here:
+/// Ling, Robert F. (1974). "Comparison of Several Algorithms for Computing Sample Means and Variances".
+/// Journal of the American Statistical Association. 69 (348): 859–866. doi:10.2307/2286154. JSTOR 2286154.
+
+#[derive(Debug)]
+pub struct CovarianceAccumulator {
+    algo_const: f64,
+    mean1: f64,
+    mean2: f64,
+    count: u64,
+    stats_type: StatsType,
+}
+
+impl CovarianceAccumulator {
+    /// Creates a new `CovarianceAccumulator`
+    pub fn try_new(s_type: StatsType) -> Result<Self> {
+        Ok(Self {
+            algo_const: 0_f64,
+            mean1: 0_f64,
+            mean2: 0_f64,
+            count: 0_u64,
+            stats_type: s_type,
+        })
+    }
+
+    pub fn get_count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn get_mean1(&self) -> f64 {
+        self.mean1
+    }
+
+    pub fn get_mean2(&self) -> f64 {
+        self.mean2
+    }
+
+    pub fn get_algo_const(&self) -> f64 {
+        self.algo_const
+    }
+}
+
+impl Accumulator for CovarianceAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::from(self.count),
+            ScalarValue::from(self.mean1),
+            ScalarValue::from(self.mean2),
+            ScalarValue::from(self.algo_const),
+        ])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values1 = &cast(&values[0], &DataType::Float64)?;
+        let values2 = &cast(&values[1], &DataType::Float64)?;
+
+        let arr1 = values1.as_any().downcast_ref::<Float64Array>().unwrap();
+        let arr2 = values2.as_any().downcast_ref::<Float64Array>().unwrap();
+
+
+        for i in 0..arr1.len() {
+            let value1 = arr1.value(i);
+            let value2 = arr2.value(i);
+
+            if (value1 == 0_f64 && values1.is_null(i)) || (value2 == 0_f64 && values2.is_null(i)) {
+                if values2.is_null(i) && values1.is_null(i) {
+                    continue;
+                } else {
+                    return Err(DataFusionError::Internal(
+                        "The two columns are not aligned".to_string(),
+                    )); 
+                }
+            }
+
+            let new_count = self.count + 1;
+            let delta1 = value1 - self.mean1;
+            let new_mean1 = delta1 / new_count as f64 + self.mean1;
+            let delta2 = value2 - self.mean2;
+            let new_mean2 = delta2 / new_count as f64 + self.mean2;
+            let new_c = delta1 * (value2 - new_mean2) + self.algo_const;
+
+            self.count += 1;
+            self.mean1 = new_mean1;
+            self.mean2 = new_mean2;
+            self.algo_const = new_c;
+        }
+
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let means1 = states[1].as_any().downcast_ref::<Float64Array>().unwrap();
+        let means2 = states[2].as_any().downcast_ref::<Float64Array>().unwrap();
+        let cs = states[3].as_any().downcast_ref::<Float64Array>().unwrap();
+
+        for i in 0..counts.len() {
+            let c = counts.value(i);
+            if c == 0_u64 {
+                continue;
+            }
+            let new_count = self.count + c;
+            let new_mean1 = (self.mean1 + means1.value(i)) / 2 as f64;
+            let new_mean2 = (self.mean2 + means2.value(i)) / 2 as f64;
+            let delta1 = self.mean1 - means1.value(i);
+            let delta2 = self.mean2 - means2.value(i);
+            let new_c = self.algo_const + cs.value(i) + delta1 * delta2 * self.count as f64 * c as f64 / new_count as f64;
+
+            self.count = new_count;
+            self.mean1 = new_mean1;
+            self.mean2 = new_mean1;
+            self.algo_const = new_c;
+        }
+        Ok(())
+    }
+
+    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
+        Ok(())
+    }
+
+    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
+        Ok(())
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        let count = match self.stats_type {
+            StatsType::Population => self.count,
+            StatsType::Sample => {
+                if self.count > 0 {
+                    self.count - 1
+                } else {
+                    self.count
+                }
+            }
+        };
+
+        if count <= 1 {
+            return Err(DataFusionError::Internal(
+                "At least two values are needed to calculate variance".to_string(),
+            ));
+        }
+
+        if self.count == 0 {
+            Ok(ScalarValue::Float64(None))
+        } else {
+            Ok(ScalarValue::Float64(Some(self.algo_const / count as f64)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physical_plan::expressions::col;
+    use crate::{error::Result, generic_test_op};
+    use arrow::record_batch::RecordBatch;
+    use arrow::{array::*, datatypes::*};
+
+    #[test]
+    fn variance_f64_1() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            CovariancePop,
+            ScalarValue::from(0.25_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64_2() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            CovariancePop,
+            ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64_3() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Covariance,
+            ScalarValue::from(2.5_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64_4() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Covariance,
+            ScalarValue::from(0.9033333333333333_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_i32() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        generic_test_op!(
+            a,
+            DataType::Int32,
+            CovariancePop,
+            ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_u32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        generic_test_op!(
+            a,
+            DataType::UInt32,
+            CovariancePop,
+            ScalarValue::from(2.0f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f32() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        generic_test_op!(
+            a,
+            DataType::Float32,
+            CovariancePop,
+            ScalarValue::from(2_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn test_variance_return_data_type() -> Result<()> {
+        let data_type = DataType::Float64;
+        let result_type = covariance_return_type(&data_type)?;
+        assert_eq!(DataType::Float64, result_type);
+
+        let data_type = DataType::Decimal(36, 10);
+        assert!(covariance_return_type(&data_type).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_variance_1_input() -> Result<()> {
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+        let agg = Arc::new(Covariance::new(
+            col("a", &schema)?,
+            col("b", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+        let actual = aggregate(&batch, agg);
+        assert!(actual.is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn variance_i32_with_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(3),
+            Some(4),
+            Some(5),
+        ]));
+        generic_test_op!(
+            a,
+            DataType::Int32,
+            CovariancePop,
+            ScalarValue::from(2.1875f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_i32_all_nulls() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+
+        let agg = Arc::new(Covariance::new(
+            col("a", &schema)?,
+            col("b", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+        let actual = aggregate(&batch, agg);
+        assert!(actual.is_err());
+
+        Ok(())
+    }
+
+    fn aggregate(
+        batch: &RecordBatch,
+        agg: Arc<dyn AggregateExpr>,
+    ) -> Result<ScalarValue> {
+        let mut accum = agg.create_accumulator()?;
+        let expr = agg.expressions();
+        let values = expr
+            .iter()
+            .map(|e| e.evaluate(batch))
+            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        accum.update_batch(&values)?;
+        accum.evaluate()
+    }
+}
