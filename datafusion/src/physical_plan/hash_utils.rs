@@ -512,7 +512,7 @@ mod tests {
 
     use arrow::array::{Float32Array, Float64Array};
     #[cfg(not(feature = "force_hash_collisions"))]
-    use arrow::array::{MutableDictionaryArray, MutableUtf8Array, Utf8Array};
+    use arrow::array::{MutableDictionaryArray, MutableUtf8Array, TryExtend, Utf8Array};
 
     use super::*;
 
