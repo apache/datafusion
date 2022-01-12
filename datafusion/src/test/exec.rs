@@ -342,6 +342,13 @@ impl ExecutionPlan for BarrierExec {
 pub struct ErrorExec {
     schema: SchemaRef,
 }
+
+impl Default for ErrorExec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ErrorExec {
     pub fn new() -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
