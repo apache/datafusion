@@ -540,16 +540,14 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
-            displayable(physical_plan.as_ref()).indent().to_string()
+            displayable(physical_plan.as_ref()).indent()
         );
     }
     let result = collect(physical_plan.clone()).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
-            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
-                .indent()
-                .to_string()
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
         );
         print::print(&result);
     }
