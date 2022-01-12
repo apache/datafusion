@@ -26,11 +26,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 
-static mut CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
+static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
-fn next_id() -> usize {
-    unsafe { CONSUMER_ID.fetch_add(1, Ordering::SeqCst) }
-}
+fn next_id() -> usize { CONSUMER_ID.fetch_add(1, Ordering::SeqCst) }
 
 /// Type of the memory consumer
 pub enum ConsumerType {
