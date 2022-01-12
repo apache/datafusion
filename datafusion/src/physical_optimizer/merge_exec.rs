@@ -26,6 +26,7 @@ use crate::{
 use std::sync::Arc;
 
 /// Introduces CoalescePartitionsExec
+#[derive(Default)]
 pub struct AddCoalescePartitionsExec {}
 
 impl AddCoalescePartitionsExec {

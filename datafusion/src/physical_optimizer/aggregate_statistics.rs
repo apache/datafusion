@@ -34,6 +34,7 @@ use super::utils::optimize_children;
 use crate::error::Result;
 
 /// Optimizer that uses available statistics for aggregate functions
+#[derive(Default)]
 pub struct AggregateStatistics {}
 
 impl AggregateStatistics {

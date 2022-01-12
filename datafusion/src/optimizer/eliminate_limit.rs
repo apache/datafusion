@@ -25,6 +25,7 @@ use super::utils;
 use crate::execution::context::ExecutionProps;
 
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
+#[derive(Default)]
 pub struct EliminateLimit;
 
 impl EliminateLimit {

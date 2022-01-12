@@ -186,6 +186,12 @@ impl fmt::Debug for ObjectStoreRegistry {
     }
 }
 
+impl Default for ObjectStoreRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ObjectStoreRegistry {
     /// Create the registry that object stores can registered into.
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.

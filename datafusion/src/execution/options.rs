@@ -46,6 +46,12 @@ pub struct CsvReadOptions<'a> {
     pub file_extension: &'a str,
 }
 
+impl<'a> Default for CsvReadOptions<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> CsvReadOptions<'a> {
     /// Create a CSV read option with default presets
     pub fn new() -> Self {
