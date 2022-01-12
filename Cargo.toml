@@ -33,10 +33,3 @@ exclude = ["python"]
 [profile.release]
 lto = true
 codegen-units = 1
-
-
-# TEMP: patch crates to test arrow
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", branch = "master" }
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", branch = "master" }
-parquet = { git = "https://github.com/apache/arrow-rs.git", branch = "master" }
