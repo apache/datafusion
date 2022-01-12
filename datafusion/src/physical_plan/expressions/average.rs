@@ -263,7 +263,7 @@ mod tests {
 
         generic_test_op!(
             array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(32, 32),
             Avg,
             ScalarValue::Decimal128(Some(35000), 14, 4),
             DataType::Decimal(14, 4)
@@ -283,7 +283,7 @@ mod tests {
         let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(32, 32),
             Avg,
             ScalarValue::Decimal128(Some(32500), 14, 4),
             DataType::Decimal(14, 4)
@@ -300,7 +300,7 @@ mod tests {
         let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(32, 32),
             Avg,
             ScalarValue::Decimal128(None, 14, 4),
             DataType::Decimal(14, 4)

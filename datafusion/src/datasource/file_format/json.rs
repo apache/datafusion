@@ -158,7 +158,7 @@ mod tests {
         let projection = Some(vec![0]);
         let exec = get_exec(&projection, 1024, None).await?;
 
-        let batches = collect(exec).await.expect("Collect batches");
+        let batches = collect(exec).await?;
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());

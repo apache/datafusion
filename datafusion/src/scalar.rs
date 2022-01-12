@@ -3223,10 +3223,16 @@ mod tests {
             .try_push(Some(vec![
                 Some(vec![Some(1), Some(2), Some(3)]),
                 Some(vec![Some(4), Some(5)]),
+            ]))
+            .unwrap();
+        outer_builder
+            .try_push(Some(vec![
                 Some(vec![Some(6)]),
                 Some(vec![Some(7), Some(8)]),
-                Some(vec![Some(9)]),
             ]))
+            .unwrap();
+        outer_builder
+            .try_push(Some(vec![Some(vec![Some(9)])]))
             .unwrap();
 
         let expected = outer_builder.as_box();
