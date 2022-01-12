@@ -28,7 +28,9 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
-fn next_id() -> usize { CONSUMER_ID.fetch_add(1, Ordering::SeqCst) }
+fn next_id() -> usize {
+    CONSUMER_ID.fetch_add(1, Ordering::SeqCst)
+}
 
 /// Type of the memory consumer
 pub enum ConsumerType {
