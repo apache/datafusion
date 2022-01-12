@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit};
+use crate::arrow::datatypes::{DataType, IntervalUnit, Schema, TimeUnit, UnionMode};
 use crate::error::{DataFusionError, Result};
 use arrow::datatypes::Field;
 use avro_rs::schema::Name;
@@ -103,7 +103,7 @@ fn schema_to_field_with_props(
                     .iter()
                     .map(|s| schema_to_field_with_props(s, None, has_nullable, None))
                     .collect::<Result<Vec<Field>>>()?;
-                DataType::Union(fields)
+                DataType::Union(fields, UnionMode::Dense)
             }
         }
         AvroSchema::Record { name, fields, .. } => {
@@ -201,6 +201,7 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::Interval(unit) => match unit {
             IntervalUnit::YearMonth => "intervalyear",
             IntervalUnit::DayTime => "intervalmonth",
+            IntervalUnit::MonthDayNano => "intervalmonthdaynano",
         },
         DataType::Binary => "varbinary",
         DataType::FixedSizeBinary(_) => "fixedsizebinary",
@@ -211,7 +212,7 @@ fn default_field_name(dt: &DataType) -> &str {
         DataType::FixedSizeList(_, _) => "fixed_size_list",
         DataType::LargeList(_) => "largelist",
         DataType::Struct(_) => "struct",
-        DataType::Union(_) => "union",
+        DataType::Union(_, _) => "union",
         DataType::Dictionary(_, _) => "map",
         DataType::Map(_, _) => unimplemented!("Map support not implemented"),
         DataType::Decimal(_, _) => "decimal",

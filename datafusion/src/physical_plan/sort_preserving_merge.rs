@@ -975,8 +975,12 @@ mod tests {
         let basic = basic_sort(csv.clone(), sort.clone()).await;
         let partition = partition_sort(csv, sort).await;
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition = arrow::util::pretty::pretty_format_batches(&[partition]).unwrap();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
+            .unwrap()
+            .to_string();
+        let partition = arrow::util::pretty::pretty_format_batches(&[partition])
+            .unwrap()
+            .to_string();
 
         assert_eq!(
             basic, partition,
@@ -1072,8 +1076,12 @@ mod tests {
         assert_eq!(basic.num_rows(), 300);
         assert_eq!(partition.num_rows(), 300);
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition = arrow::util::pretty::pretty_format_batches(&[partition]).unwrap();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
+            .unwrap()
+            .to_string();
+        let partition = arrow::util::pretty::pretty_format_batches(&[partition])
+            .unwrap()
+            .to_string();
 
         assert_eq!(basic, partition);
     }
@@ -1106,9 +1114,12 @@ mod tests {
         assert_eq!(basic.num_rows(), 300);
         assert_eq!(merged.iter().map(|x| x.num_rows()).sum::<usize>(), 300);
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition =
-            arrow::util::pretty::pretty_format_batches(merged.as_slice()).unwrap();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
+            .unwrap()
+            .to_string();
+        let partition = arrow::util::pretty::pretty_format_batches(merged.as_slice())
+            .unwrap()
+            .to_string();
 
         assert_eq!(basic, partition);
     }
@@ -1245,8 +1256,12 @@ mod tests {
         let merged = merged.remove(0);
         let basic = basic_sort(batches, sort.clone()).await;
 
-        let basic = arrow::util::pretty::pretty_format_batches(&[basic]).unwrap();
-        let partition = arrow::util::pretty::pretty_format_batches(&[merged]).unwrap();
+        let basic = arrow::util::pretty::pretty_format_batches(&[basic])
+            .unwrap()
+            .to_string();
+        let partition = arrow::util::pretty::pretty_format_batches(&[merged])
+            .unwrap()
+            .to_string();
 
         assert_eq!(
             basic, partition,

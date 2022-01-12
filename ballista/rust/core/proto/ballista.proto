@@ -1015,6 +1015,7 @@ enum TimeUnit{
 enum IntervalUnit{
     YearMonth = 0;
     DayTime = 1;
+    MonthDayNano = 2;
 }
 
 message Decimal{
@@ -1040,9 +1041,16 @@ message Struct{
     repeated Field sub_field_types = 1;
 }
 
+enum UnionMode{
+  sparse = 0;
+  dense = 1;
+}
+
 message Union{
     repeated Field union_types = 1;
+    UnionMode union_mode = 2;
 }
+
 
 
 message ScalarListValue{
