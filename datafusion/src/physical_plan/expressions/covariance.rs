@@ -630,6 +630,41 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn covariance_f64_merge_2() -> Result<()> {
+        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+        let c = Arc::new(Float64Array::from(vec![None]));
+        let d = Arc::new(Float64Array::from(vec![None]));
+
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, false),
+            Field::new("b", DataType::Float64, false),
+        ]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a, b])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![c, d])?;
+
+        let agg1 = Arc::new(CovariancePop::new(
+            col("a", &schema)?,
+            col("b", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(CovariancePop::new(
+            col("a", &schema)?,
+            col("b", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(0.6666666666666666));
+
+        Ok(())
+    }
+
     fn aggregate(
         batch: &RecordBatch,
         agg: Arc<dyn AggregateExpr>,
