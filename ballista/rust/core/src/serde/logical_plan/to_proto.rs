@@ -296,7 +296,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     .map(|field| field.into())
                     .collect::<Vec<_>>(),
             }),
-            DataType::Dictionary(key_type, value_type) => {
+            DataType::Dictionary(key_type, value_type, _) => {
                 ArrowTypeEnum::Dictionary(Box::new(protobuf::Dictionary {
                     key: Some(key_type.into()),
                     value: Some(Box::new(value_type.as_ref().into())),
@@ -443,7 +443,7 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             | DataType::LargeList(_)
             | DataType::Struct(_)
             | DataType::Union(_, _, _)
-            | DataType::Dictionary(_, _)
+            | DataType::Dictionary(_, _, _)
             | DataType::Decimal(_, _) => {
                 return Err(proto_error(format!(
                     "Error converting to Datatype to scalar type, {:?} is invalid as a datafusion scalar.",

@@ -107,7 +107,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                         Some(col) => Ok(ColumnarValue::Array(col.clone()))
                     }
                 }
-                (dt, key) => Err(DataFusionError::NotImplemented(format!("get indexed field is only possible on lists with int64 indexes. Tried {} with {} index", dt, key))),
+                (dt, key) => Err(DataFusionError::NotImplemented(format!("get indexed field is only possible on lists with int64 indexes. Tried {:?} with {} index", dt, key))),
             },
             ColumnarValue::Scalar(_) => Err(DataFusionError::NotImplemented(
                 "field access is not yet implemented for scalar values".to_string(),

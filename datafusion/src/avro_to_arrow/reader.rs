@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::arrow_array_reader::AvroArrowArrayReader;
+use super::arrow_array_reader::AvroBatchReader;
 use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use arrow::error::Result as ArrowResult;
-use arrow::io::avro::read;
-use arrow::io::avro::read::Compression;
+use arrow::io::avro::{read, Compression};
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -101,7 +100,7 @@ impl ReaderBuilder {
     }
 
     /// Create a new `Reader` from the `ReaderBuilder`
-    pub fn build<'a, R>(self, source: R) -> Result<Reader<R>>
+    pub fn build<R>(self, source: R) -> Result<Reader<R>>
     where
         R: Read + Seek,
     {
@@ -109,13 +108,26 @@ impl ReaderBuilder {
 
         // check if schema should be inferred
         source.seek(SeekFrom::Start(0))?;
-        let (avro_schemas, schema, codec, file_marker) =
+        let (mut avro_schemas, mut schema, codec, file_marker) =
             read::read_metadata(&mut source)?;
+        if let Some(proj) = self.projection {
+            let indices: Vec<usize> = schema
+                .fields
+                .iter()
+                .filter(|f| !proj.contains(&f.name))
+                .enumerate()
+                .map(|(i, _)| i)
+                .collect();
+            for i in indices {
+                avro_schemas.remove(i);
+                schema.fields.remove(i);
+            }
+        }
+
         Reader::try_new(
             source,
             Arc::new(schema),
             self.batch_size,
-            self.projection,
             avro_schemas,
             codec,
             file_marker,
@@ -125,7 +137,7 @@ impl ReaderBuilder {
 
 /// Avro file record  reader
 pub struct Reader<R: Read> {
-    array_reader: AvroArrowArrayReader<R>,
+    array_reader: AvroBatchReader<R>,
     schema: SchemaRef,
     batch_size: usize,
 }
@@ -139,16 +151,14 @@ impl<'a, R: Read> Reader<R> {
         reader: R,
         schema: SchemaRef,
         batch_size: usize,
-        projection: Option<Vec<String>>,
-        avro_schemas: Vec<avro_rs::Schema>,
+        avro_schemas: Vec<avro_schema::Schema>,
         codec: Option<Compression>,
         file_marker: [u8; 16],
     ) -> Result<Self> {
         Ok(Self {
-            array_reader: AvroArrowArrayReader::try_new(
+            array_reader: AvroBatchReader::try_new(
                 reader,
                 schema.clone(),
-                projection,
                 avro_schemas,
                 codec,
                 file_marker,

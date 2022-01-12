@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-
+use arrow::io::flight::deserialize_schemas;
 use arrow_format::flight::data::{flight_descriptor, FlightDescriptor, Ticket};
 use arrow_format::flight::service::flight_service_client::FlightServiceClient;
 use datafusion::arrow::io::print;
@@ -43,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();
-    let schema = Schema::try_from(&schema_result)?;
+    let (schema, _) = deserialize_schemas(schema_result.schema.as_slice()).unwrap();
+    let schema = Arc::new(schema);
     println!("Schema: {:?}", schema);
 
     // Call do_get to execute a SQL query and receive results
@@ -56,7 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the schema should be the first message returned, else client should error
     let flight_data = stream.message().await?.unwrap();
     // convert FlightData to a stream
-    let schema = Arc::new(Schema::try_from(&flight_data)?);
+    let (schema, ipc_schema) =
+        deserialize_schemas(flight_data.data_body.as_slice()).unwrap();
+    let schema = Arc::new(schema);
     println!("Schema: {:?}", schema);
 
     // all the remaining stream messages should be dictionary and record batches
@@ -66,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let record_batch = arrow::io::flight::deserialize_batch(
             &flight_data,
             schema.clone(),
-            true,
+            &ipc_schema,
             &dictionaries_by_field,
         )?;
         results.push(record_batch);

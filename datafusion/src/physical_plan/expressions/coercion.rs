@@ -63,13 +63,13 @@ fn dictionary_value_coercion(
 pub fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
         (
-            DataType::Dictionary(_lhs_index_type, lhs_value_type),
-            DataType::Dictionary(_rhs_index_type, rhs_value_type),
+            DataType::Dictionary(_lhs_index_type, lhs_value_type, _),
+            DataType::Dictionary(_rhs_index_type, rhs_value_type, _),
         ) => dictionary_value_coercion(lhs_value_type, rhs_value_type),
-        (DataType::Dictionary(_index_type, value_type), _) => {
+        (DataType::Dictionary(_index_type, value_type, _), _) => {
             dictionary_value_coercion(value_type, rhs_type)
         }
-        (_, DataType::Dictionary(_index_type, value_type)) => {
+        (_, DataType::Dictionary(_index_type, value_type, _)) => {
             dictionary_value_coercion(lhs_type, value_type)
         }
         _ => None,
@@ -136,7 +136,7 @@ pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Dat
                 (TimeUnit::Nanosecond, TimeUnit::Microsecond) => TimeUnit::Microsecond,
                 (l, r) => {
                     assert_eq!(l, r);
-                    l.clone()
+                    *l
                 }
             };
 
@@ -213,18 +213,23 @@ mod tests {
         use arrow::datatypes::IntegerType;
 
         // TODO: In the future, this would ideally return Dictionary types and avoid unpacking
-        let lhs_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Int32));
-        let rhs_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Int16));
+        let lhs_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Int32), false);
+        let rhs_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Int16), false);
         assert_eq!(
             dictionary_coercion(&lhs_type, &rhs_type),
             Some(DataType::Int32)
         );
 
-        let lhs_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8));
-        let rhs_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Int16));
+        let lhs_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8), false);
+        let rhs_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Int16), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), None);
 
-        let lhs_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8));
+        let lhs_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8), false);
         let rhs_type = DataType::Utf8;
         assert_eq!(
             dictionary_coercion(&lhs_type, &rhs_type),
@@ -232,7 +237,8 @@ mod tests {
         );
 
         let lhs_type = DataType::Utf8;
-        let rhs_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8));
+        let rhs_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8), false);
         assert_eq!(
             dictionary_coercion(&lhs_type, &rhs_type),
             Some(DataType::Utf8)

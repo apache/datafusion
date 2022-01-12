@@ -29,10 +29,10 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
+use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::*, buffer::MutableBuffer};
 
 use arrow::compute::take;
 
@@ -666,8 +666,8 @@ fn build_join_indexes(
     match join_type {
         JoinType::Inner | JoinType::Semi | JoinType::Anti => {
             // Using a buffer builder to avoid slower normal builder
-            let mut left_indices = MutableBuffer::<u64>::new();
-            let mut right_indices = MutableBuffer::<u32>::new();
+            let mut left_indices = Vec::<u64>::new();
+            let mut right_indices = Vec::<u32>::new();
 
             // Visit all of the right rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -709,8 +709,8 @@ fn build_join_indexes(
             ))
         }
         JoinType::Left => {
-            let mut left_indices = MutableBuffer::<u64>::new();
-            let mut right_indices = MutableBuffer::<u32>::new();
+            let mut left_indices = Vec::<u64>::new();
+            let mut right_indices = Vec::<u32>::new();
 
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -887,7 +887,7 @@ fn produce_from_matched(
     };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
-    let indices = UInt64Array::from_data(DataType::UInt64, indices.into(), None);
+    let indices = UInt64Array::from_data(DataType::UInt64, indices, None);
 
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());

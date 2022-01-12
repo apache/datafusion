@@ -179,7 +179,7 @@ fn create_flight_iter(
     options: &WriteOptions,
 ) -> Box<dyn Iterator<Item = Result<FlightData, Status>>> {
     let (flight_dictionaries, flight_batch) =
-        arrow::io::flight::serialize_batch(batch, options);
+        arrow::io::flight::serialize_batch(batch, &[], options);
     Box::new(
         flight_dictionaries
             .into_iter()
@@ -202,7 +202,7 @@ async fn stream_flight_data(path: String, tx: FlightDataSender) -> Result<(), St
 
     let options = WriteOptions::default();
     let schema_flight_data =
-        arrow::io::flight::serialize_schema(reader.schema().as_ref());
+        arrow::io::flight::serialize_schema(reader.schema().as_ref(), &[]);
     send_response(&tx, Ok(schema_flight_data)).await?;
 
     let mut row_count = 0;

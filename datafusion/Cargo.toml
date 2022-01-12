@@ -39,7 +39,9 @@ path = "src/lib.rs"
 
 [features]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
-simd = ["arrow/simd"]
+# FIXME: https://github.com/jorgecarleitao/arrow2/issues/580
+#simd = ["arrow/simd"]
+simd = []
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
@@ -48,7 +50,7 @@ pyarrow = ["pyo3"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
-avro = ["arrow/io_avro", "arrow/io_avro_async", "arrow/io_avro_compression", "num-traits", "avro-rs"]
+avro = ["arrow/io_avro", "arrow/io_avro_async", "arrow/io_avro_compression", "num-traits", "avro-schema"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
@@ -76,7 +78,7 @@ smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
 num-traits = { version = "0.2", optional = true }
 pyo3 = { version = "0.14", optional = true }
-avro-rs = { version = "0.13", optional = true }
+avro-schema = { version = "0.2", optional = true }
 
 [dependencies.arrow]
 package = "arrow2"

@@ -76,7 +76,7 @@ impl DistinctCount {
 fn state_type(data_type: DataType) -> DataType {
     match data_type {
         // when aggregating dictionary values, use the underlying value type
-        DataType::Dictionary(_key_type, value_type) => *value_type,
+        DataType::Dictionary(_key_type, value_type, _) => *value_type,
         t => t,
     }
 }

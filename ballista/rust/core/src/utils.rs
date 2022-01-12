@@ -87,6 +87,7 @@ pub async fn write_stream_to_disk(
     let mut writer = FileWriter::try_new(
         &mut file,
         stream.schema().as_ref(),
+        None,
         WriteOptions::default(),
     )?;
 
@@ -103,7 +104,7 @@ pub async fn write_stream_to_disk(
         num_bytes += batch_size_bytes;
 
         let timer = disk_write_metric.timer();
-        writer.write(&batch)?;
+        writer.write(&batch, None)?;
         timer.done();
     }
     let timer = disk_write_metric.timer();

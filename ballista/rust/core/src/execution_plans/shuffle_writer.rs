@@ -458,12 +458,17 @@ impl ShuffleWriter {
             num_rows: 0,
             num_bytes: 0,
             path: path.to_owned(),
-            writer: FileWriter::try_new(buffer_writer, schema, WriteOptions::default())?,
+            writer: FileWriter::try_new(
+                buffer_writer,
+                schema,
+                None,
+                WriteOptions::default(),
+            )?,
         })
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
+        self.writer.write(batch, None)?;
         self.num_batches += 1;
         self.num_rows += batch.num_rows() as u64;
         let num_bytes: usize = batch

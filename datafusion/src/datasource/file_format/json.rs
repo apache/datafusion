@@ -57,17 +57,17 @@ impl FileFormat for JsonFormat {
     }
 
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
-        let mut schemas = Vec::new();
+        let mut fields = Vec::new();
         let records_to_read = self.schema_infer_max_rec;
         while let Some(obj_reader) = readers.next().await {
             let mut reader = std::io::BufReader::new(obj_reader?.sync_reader()?);
             // FIXME: return number of records read from infer_json_schema so we can enforce
             // records_to_read
-            let schema = json::infer_json_schema(&mut reader, records_to_read)?;
-            schemas.push(schema);
+            let schema = json::read::infer(&mut reader, records_to_read)?;
+            fields.extend(schema);
         }
 
-        let schema = Schema::try_merge(schemas)?;
+        let schema = Schema::new(fields);
         Ok(Arc::new(schema))
     }
 

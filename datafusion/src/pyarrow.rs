@@ -15,14 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef};
+use arrow::array::Array;
 use arrow::error::ArrowError;
-use arrow::ffi::{Ffi_ArrowArray, Ffi_ArrowSchema};
 use pyo3::exceptions::{PyException, PyNotImplementedError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::{AsPyPointer, PyNativeType};
+use pyo3::PyNativeType;
 use std::sync::Arc;
 
 use crate::error::DataFusionError;
@@ -34,7 +33,12 @@ impl From<DataFusionError> for PyErr {
     }
 }
 
-/// an error that bridges ArrowError with a Python error
+impl From<PyO3ArrowError> for PyErr {
+    fn from(err: PyO3ArrowError) -> PyErr {
+        PyException::new_err(format!("{:?}", err))
+    }
+}
+
 #[derive(Debug)]
 enum PyO3ArrowError {
     ArrowError(ArrowError),
@@ -57,10 +61,12 @@ fn to_rust_array(ob: PyObject, py: Python) -> PyResult<Arc<dyn Array>> {
     )?;
 
     let field = unsafe {
-        arrow::ffi::import_field_from_c(schema.as_ref()).map_err(PyO3ArrowError::from)?
+        arrow::ffi::import_field_from_c(schema.as_ref())
+            .map_err(PyO3ArrowError::ArrowError)?
     };
     let array = unsafe {
-        arrow::ffi::import_array_from_c(array, &field).map_err(PyO3ArrowError::from)?
+        arrow::ffi::import_array_from_c(array, &field)
+            .map_err(PyO3ArrowError::ArrowError)?
     };
 
     Ok(array.into())
@@ -78,7 +84,7 @@ impl<'source> FromPyObject<'source> for ScalarValue {
 
         // convert the pyarrow array to rust array using C data interface]
         let array = to_rust_array(array.to_object(py), py)?;
-        let scalar = ScalarValue::try_from_array(&array.into(), 0)?;
+        let scalar = ScalarValue::try_from_array(&array, 0)?;
 
         Ok(scalar)
     }

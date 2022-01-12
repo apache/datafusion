@@ -639,11 +639,12 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
                 .iter()
                 .zip(descritors.clone())
                 .map(|(array, type_)| {
-                    let encoding = if let DataType::Dictionary(_, _) = array.data_type() {
-                        Encoding::RleDictionary
-                    } else {
-                        Encoding::Plain
-                    };
+                    let encoding =
+                        if let DataType::Dictionary(_, _, _) = array.data_type() {
+                            Encoding::RleDictionary
+                        } else {
+                            Encoding::Plain
+                        };
                     array_to_pages(array.as_ref(), type_, options, encoding).map(
                         move |pages| {
                             let encoded_pages = DynIter::new(pages.map(|x| Ok(x?)));

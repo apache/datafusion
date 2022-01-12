@@ -114,7 +114,7 @@ impl ExecutionPlan for AvroExec {
                 builder = builder.with_projection(proj);
             }
             let reader = builder.build(file).unwrap();
-            Box::new(reader.into_iter()) as BatchIter
+            Box::new(reader) as BatchIter
         };
 
         Ok(Box::pin(FileStream::new(

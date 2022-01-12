@@ -17,6 +17,8 @@
 
 //! Client API for sending requests to executors.
 
+use arrow::io::flight::deserialize_schemas;
+use arrow::io::ipc::IpcSchema;
 use std::sync::{Arc, Mutex};
 use std::{collections::HashMap, pin::Pin};
 use std::{
@@ -121,10 +123,12 @@ impl BallistaClient {
         {
             Some(flight_data) => {
                 // convert FlightData to a stream
-                let schema = Arc::new(Schema::try_from(&flight_data)?);
+                let (schema, ipc_schema) =
+                    deserialize_schemas(flight_data.data_body.as_slice()).unwrap();
+                let schema = Arc::new(schema);
 
                 // all the remaining stream messages should be dictionary and record batches
-                Ok(Box::pin(FlightDataStream::new(stream, schema)))
+                Ok(Box::pin(FlightDataStream::new(stream, schema, ipc_schema)))
             }
             None => Err(ballista_error(
                 "Did not receive schema batch from flight server",
@@ -136,13 +140,19 @@ impl BallistaClient {
 struct FlightDataStream {
     stream: Mutex<Streaming<FlightData>>,
     schema: SchemaRef,
+    ipc_schema: IpcSchema,
 }
 
 impl FlightDataStream {
-    pub fn new(stream: Streaming<FlightData>, schema: SchemaRef) -> Self {
+    pub fn new(
+        stream: Streaming<FlightData>,
+        schema: SchemaRef,
+        ipc_schema: IpcSchema,
+    ) -> Self {
         Self {
             stream: Mutex::new(stream),
             schema,
+            ipc_schema,
         }
     }
 }
@@ -161,10 +171,11 @@ impl Stream for FlightDataStream {
                     .map_err(|e| ArrowError::from_external_error(Box::new(e)))
                     .and_then(|flight_data_chunk| {
                         let hm = HashMap::new();
+
                         arrow::io::flight::deserialize_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
-                            true,
+                            &self.ipc_schema,
                             &hm,
                         )
                     });

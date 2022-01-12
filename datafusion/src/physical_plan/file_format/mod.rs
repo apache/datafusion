@@ -54,7 +54,7 @@ use super::{ColumnStatistics, Statistics};
 lazy_static! {
     /// The datatype used for all partitioning columns for now
     pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType =
-        DataType::Dictionary(IntegerType::UInt8, Box::new(DataType::Utf8));
+        DataType::Dictionary(IntegerType::UInt8, Box::new(DataType::Utf8), true);
 }
 
 /// The base configurations to provide when creating a physical plan for

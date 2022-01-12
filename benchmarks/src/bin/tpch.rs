@@ -55,11 +55,11 @@ use ballista::prelude::{
 };
 use structopt::StructOpt;
 
-#[cfg(feature = "snmalloc")]
+#[cfg(all(feature = "snmalloc", not(feature = "mimalloc")))]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[cfg(feature = "mimalloc")]
+#[cfg(all(feature = "mimalloc", not(feature = "snmalloc")))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

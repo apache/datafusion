@@ -97,7 +97,7 @@ fn cast_with_error(array: &dyn Array, cast_type: &DataType) -> Result<Box<dyn Ar
             .collect::<Vec<Option<i32>>>();
         let invalid_values = take::take(array, &Int32Array::from(&invalid_indices))?;
         return Err(DataFusionError::Execution(format!(
-            "Could not cast {} to value of type {}",
+            "Could not cast {:?} to value of type {:?}",
             invalid_values, cast_type
         )));
     }

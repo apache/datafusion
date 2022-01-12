@@ -27,7 +27,6 @@ use arrow::compute::concatenate;
 use arrow::datatypes::DataType::Decimal;
 use arrow::{
     array::*,
-    buffer::MutableBuffer,
     datatypes::{DataType, Field, IntegerType, IntervalUnit, TimeUnit},
     scalar::{PrimitiveScalar, Scalar},
     types::{days_ms, NativeType},
@@ -469,8 +468,7 @@ macro_rules! dyn_to_array {
     ($self:expr, $value:expr, $size:expr, $ty:ty) => {{
         Arc::new(PrimitiveArray::<$ty>::from_data(
             $self.get_datatype(),
-            MutableBuffer::<$ty>::from_trusted_len_iter(repeat(*$value).take($size))
-                .into(),
+            Buffer::<$ty>::from_iter(repeat(*$value).take($size)),
             None,
         ))
     }};
@@ -1338,7 +1336,9 @@ impl ScalarValue {
                 Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
             }
             ScalarValue::Float64(e) => match e {
-                Some(value) => dyn_to_array!(self, value, size, f64),
+                Some(value) => {
+                    dyn_to_array!(self, value, size, f64)
+                }
                 None => new_null_array(self.get_datatype(), size).into(),
             },
             ScalarValue::Float32(e) => match e {
@@ -1553,7 +1553,7 @@ impl ScalarValue {
             DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
                 typed_cast_tz!(array, index, TimestampNanosecond, tz_opt)
             }
-            DataType::Dictionary(index_type, _) => {
+            DataType::Dictionary(index_type, _, _) => {
                 let (values, values_index) = match index_type {
                     IntegerType::Int8 => get_dict_value::<i8>(array, index)?,
                     IntegerType::Int16 => get_dict_value::<i16>(array, index)?,
@@ -1638,7 +1638,7 @@ impl ScalarValue {
     /// comparisons where comparing a single row at a time is necessary.
     #[inline]
     pub fn eq_array(&self, array: &ArrayRef, index: usize) -> bool {
-        if let DataType::Dictionary(key_type, _) = array.data_type() {
+        if let DataType::Dictionary(key_type, _, _) = array.data_type() {
             return self.eq_array_dictionary(array, index, key_type);
         }
 
@@ -1959,19 +1959,19 @@ impl<T: NativeType> TryFrom<PrimitiveScalar<T>> for ScalarValue {
         match s.data_type() {
             DataType::Timestamp(TimeUnit::Second, tz) => {
                 let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
-                Ok(ScalarValue::TimestampSecond(Some(s.value()), tz.clone()))
+                Ok(ScalarValue::TimestampSecond(s.value(), tz.clone()))
             }
             DataType::Timestamp(TimeUnit::Microsecond, tz) => {
                 let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
-                Ok(ScalarValue::TimestampMicrosecond(Some(s.value()), tz.clone()))
+                Ok(ScalarValue::TimestampMicrosecond(s.value(), tz.clone()))
             }
             DataType::Timestamp(TimeUnit::Millisecond, tz) => {
                 let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
-                Ok(ScalarValue::TimestampMillisecond(Some(s.value()), tz.clone()))
+                Ok(ScalarValue::TimestampMillisecond(s.value(), tz.clone()))
             }
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
                 let s = s.as_any().downcast_ref::<PrimitiveScalar<i64>>().unwrap();
-                Ok(ScalarValue::TimestampNanosecond(Some(s.value()), tz.clone()))
+                Ok(ScalarValue::TimestampNanosecond(s.value(), tz.clone()))
             }
             _ => Err(DataFusionError::Internal(
                 format!(
@@ -2017,7 +2017,7 @@ impl TryFrom<&DataType> for ScalarValue {
             DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => {
                 ScalarValue::TimestampNanosecond(None, tz_opt.clone())
             }
-            DataType::Dictionary(_index_type, value_type) => {
+            DataType::Dictionary(_index_type, value_type, _) => {
                 value_type.as_ref().try_into()?
             }
             DataType::List(ref nested_type) => {
@@ -2157,7 +2157,7 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::Binary(Some(_)) => write!(f, "Binary(\"{}\")", self),
             ScalarValue::LargeBinary(None) => write!(f, "LargeBinary({})", self),
             ScalarValue::LargeBinary(Some(_)) => write!(f, "LargeBinary(\"{}\")", self),
-            ScalarValue::List(_, dt) => write!(f, "List[{}]([{}])", dt, self),
+            ScalarValue::List(_, dt) => write!(f, "List[{:?}]([{}])", dt, self),
             ScalarValue::Date32(_) => write!(f, "Date32(\"{}\")", self),
             ScalarValue::Date64(_) => write!(f, "Date64(\"{}\")", self),
             ScalarValue::IntervalDayTime(_) => {
@@ -2520,7 +2520,8 @@ mod tests {
 
     #[test]
     fn scalar_try_from_dict_datatype() {
-        let data_type = DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8));
+        let data_type =
+            DataType::Dictionary(IntegerType::Int8, Box::new(DataType::Utf8), false);
         let data_type = &data_type;
         assert_eq!(ScalarValue::Utf8(None), data_type.try_into().unwrap())
     }
@@ -3008,7 +3009,7 @@ mod tests {
                     as ArrayRef,
             ),
             (
-                field_d.clone(),
+                field_d,
                 Arc::new(StructArray::from_data(
                     DataType::Struct(vec![field_e, field_f]),
                     vec![

@@ -399,7 +399,7 @@ mod tests {
                 .collect();
 
         let mut field = Field::new("field_name", DataType::UInt64, true);
-        field.set_metadata(Some(field_metadata.clone()));
+        field = field.with_metadata(field_metadata.clone());
         let schema = Schema::new_from(vec![field], schema_metadata.clone());
         let schema = Arc::new(schema);
 
@@ -429,10 +429,7 @@ mod tests {
         assert_eq!(&vec![expected_batch], &result);
 
         // explicitlty ensure the metadata is present
-        assert_eq!(
-            result[0].schema().fields()[0].metadata(),
-            &Some(field_metadata)
-        );
+        assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
         Ok(())

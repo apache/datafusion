@@ -16,11 +16,8 @@
 // under the License.
 
 //! Print format variants
-use datafusion::arrow::io::{
-    csv::write,
-    json::{JsonArray, JsonFormat, LineDelimited, Writer},
-    print,
-};
+use arrow::io::json::write::{JsonArray, JsonFormat, LineDelimited};
+use datafusion::arrow::io::{csv::write, print};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use std::fmt;
@@ -74,11 +71,23 @@ impl fmt::Display for PrintFormat {
 }
 
 fn print_batches_to_json<J: JsonFormat>(batches: &[RecordBatch]) -> Result<String> {
+    if batches.is_empty() {
+        return Ok("{}".to_string());
+    }
     let mut bytes = vec![];
-    {
-        let mut writer = Writer::<_, J>::new(&mut bytes);
-        writer.write_batches(batches)?;
-        writer.finish()?;
+    let schema = batches[0].schema();
+    let names = schema
+        .fields
+        .iter()
+        .map(|f| f.name.clone())
+        .collect::<Vec<String>>();
+    for batch in batches {
+        arrow::io::json::write::serialize(
+            &names,
+            batch.columns(),
+            J::default(),
+            &mut bytes,
+        );
     }
     let formatted = String::from_utf8(bytes)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;

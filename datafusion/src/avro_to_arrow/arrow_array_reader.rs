@@ -22,22 +22,20 @@ use crate::error::Result;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::io::avro::read;
-use arrow::io::avro::read::{Compression, Reader as AvroReader};
+use arrow::io::avro::read::Reader as AvroReader;
+use arrow::io::avro::{read, Compression};
 use std::io::Read;
 
-pub struct AvroArrowArrayReader<R: Read> {
+pub struct AvroBatchReader<R: Read> {
     reader: AvroReader<R>,
     schema: SchemaRef,
-    projection: Option<Vec<String>>,
 }
 
-impl<'a, R: Read> AvroArrowArrayReader<R> {
+impl<'a, R: Read> AvroBatchReader<R> {
     pub fn try_new(
         reader: R,
         schema: SchemaRef,
-        projection: Option<Vec<String>>,
-        avro_schemas: Vec<avro_rs::Schema>,
+        avro_schemas: Vec<avro_schema::Schema>,
         codec: Option<Compression>,
         file_marker: [u8; 16],
     ) -> Result<Self> {
@@ -49,11 +47,7 @@ impl<'a, R: Read> AvroArrowArrayReader<R> {
             avro_schemas,
             schema.clone(),
         );
-        Ok(Self {
-            reader,
-            schema,
-            projection,
-        })
+        Ok(Self { reader, schema })
     }
 
     /// Read the next batch of records
@@ -63,13 +57,7 @@ impl<'a, R: Read> AvroArrowArrayReader<R> {
             let mut batch = batch;
             'batch: while batch.num_rows() < batch_size {
                 if let Some(Ok(next_batch)) = self.reader.next() {
-                    let num_rows = &batch.num_rows() + next_batch.num_rows();
-                    let next_batch = if let Some(_proj) = self.projection.as_ref() {
-                        // TODO: projection
-                        next_batch
-                    } else {
-                        next_batch
-                    };
+                    let num_rows = batch.num_rows() + next_batch.num_rows();
                     batch = concat_batches(&self.schema, &[batch, next_batch], num_rows)?
                 } else {
                     break 'batch;

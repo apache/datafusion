@@ -477,6 +477,7 @@ mod tests {
     use futures::StreamExt;
     use parquet::metadata::ColumnChunkMetaData;
     use parquet::statistics::Statistics as ParquetStatistics;
+    use parquet_format_async_temp::RowGroup;
 
     #[tokio::test]
     async fn parquet_exec_with_projection() -> Result<()> {
@@ -856,6 +857,7 @@ mod tests {
         use parquet::schema::types::{physical_type_to_type, ParquetType};
         use parquet_format_async_temp::{ColumnChunk, ColumnMetaData};
 
+        let mut chunks = vec![];
         let mut columns = vec![];
         for (i, s) in column_statistics.into_iter().enumerate() {
             let column_descr = schema_descr.column(i);
@@ -893,9 +895,15 @@ mod tests {
                 crypto_metadata: None,
                 encrypted_column_metadata: None,
             };
-            let column = ColumnChunkMetaData::new(column_chunk, column_descr.clone());
+            let column = ColumnChunkMetaData::try_from_thrift(
+                column_descr.clone(),
+                column_chunk.clone(),
+            )
+            .unwrap();
             columns.push(column);
+            chunks.push(column_chunk);
         }
-        RowGroupMetaData::new(columns, 1000, 2000)
+        let rg = RowGroup::new(chunks, 0, 0, None, None, None, None);
+        RowGroupMetaData::try_from_thrift(schema_descr, rg).unwrap()
     }
 }

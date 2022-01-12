@@ -107,5 +107,5 @@ impl StructArrayExt for StructArray {
 pub fn struct_array_from(pairs: Vec<(Field, ArrayRef)>) -> StructArray {
     let fields: Vec<Field> = pairs.iter().map(|v| v.0.clone()).collect();
     let values = pairs.iter().map(|v| v.1.clone()).collect();
-    StructArray::from_data(DataType::Struct(fields.clone()), values, None)
+    StructArray::from_data(DataType::Struct(fields), values, None)
 }

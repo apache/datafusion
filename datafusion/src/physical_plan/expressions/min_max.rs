@@ -39,7 +39,7 @@ use super::format_state_name;
 // The reason min/max aggregate produces unpacked output because there is only one
 // min/max value per group; there is no needs to keep them Dictionary encode
 fn min_max_aggregate_data_type(input_type: DataType) -> DataType {
-    if let DataType::Dictionary(_, value_type) = input_type {
+    if let DataType::Dictionary(_, value_type, _) = input_type {
         *value_type
     } else {
         input_type

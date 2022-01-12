@@ -535,7 +535,7 @@ impl DefaultPhysicalPlanner {
                     let contains_dict = groups
                         .iter()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
-                        .any(|x| matches!(x, DataType::Dictionary(_, _)));
+                        .any(|x| matches!(x, DataType::Dictionary(_, _, _)));
 
                     let can_repartition = !groups.is_empty()
                         && ctx_state.config.target_partitions > 1

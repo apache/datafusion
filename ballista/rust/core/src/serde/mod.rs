@@ -272,7 +272,7 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message missing required field 'key'"))?;
                 let key_datatype: IntegerType = pb_key_datatype.try_into()?;
                 let value_datatype: DataType = pb_value_datatype.as_ref().try_into()?;
-                DataType::Dictionary(key_datatype, Box::new(value_datatype))
+                DataType::Dictionary(key_datatype, Box::new(value_datatype), false)
             }
         })
     }

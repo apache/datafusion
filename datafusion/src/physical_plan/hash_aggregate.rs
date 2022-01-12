@@ -39,7 +39,6 @@ use crate::{
 
 use arrow::{
     array::*,
-    buffer::MutableBuffer,
     compute::{cast, concatenate, take},
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
@@ -424,7 +423,7 @@ fn group_aggregate_batch(
     }
 
     // Collect all indices + offsets based on keys in this vec
-    let mut batch_indices = MutableBuffer::<u32>::new();
+    let mut batch_indices = Vec::<u32>::new();
     let mut offsets = vec![0];
     let mut offset_so_far = 0;
     for group_idx in groups_with_rows.iter() {

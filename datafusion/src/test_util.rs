@@ -231,9 +231,9 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
 /// Get the schema for the aggregate_test_* csv files
 pub fn aggr_test_schema() -> Arc<Schema> {
     let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(Some(BTreeMap::from_iter(
+    f1 = f1.with_metadata(BTreeMap::from_iter(
         vec![("testing".into(), "test".into())].into_iter(),
-    )));
+    ));
     let schema = Schema::new(vec![
         f1,
         Field::new("c2", DataType::UInt32, false),
