@@ -50,8 +50,11 @@ mod nth_value;
 mod nullif;
 mod rank;
 mod row_number;
+mod stats;
+mod stddev;
 mod sum;
 mod try_cast;
+mod variance;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -84,9 +87,16 @@ pub use nth_value::NthValue;
 pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
 pub use rank::{dense_rank, percent_rank, rank};
 pub use row_number::RowNumber;
+pub use stats::StatsType;
+pub(crate) use stddev::{
+    is_stddev_support_arg_type, stddev_return_type, Stddev, StddevPop,
+};
 pub(crate) use sum::is_sum_support_arg_type;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
+pub(crate) use variance::{
+    is_variance_support_arg_type, variance_return_type, Variance, VariancePop,
+};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
