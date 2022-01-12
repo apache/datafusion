@@ -672,7 +672,7 @@ mod tests {
             .state()?
             .iter()
             .map(|v| vec![v.clone()])
-            .map(|x| ScalarValue::iter_to_array(x.clone()).map(|e| e).unwrap())
+            .map(|x| ScalarValue::iter_to_array(x).unwrap())
             .collect::<Vec<_>>();
         accum1.merge_batch(&state2)?;
         accum1.evaluate()
