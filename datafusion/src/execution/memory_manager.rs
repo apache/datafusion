@@ -109,9 +109,9 @@ pub trait MemoryConsumer: Send + Sync {
                 self.id()
             );
             let freed = self.spill().await?;
-            self.memory_manager().record_free(freed);
+            self.memory_manager()
+                .record_free_then_acquire(freed, required);
         }
-        self.memory_manager().record_acquire(required);
         Ok(())
     }
 
@@ -241,6 +241,7 @@ impl MemoryManager {
 
             if remaining >= required {
                 granted = true;
+                *rqt_current_used += required;
                 break;
             } else if current < min_per_rqt {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
@@ -257,14 +258,11 @@ impl MemoryManager {
         granted
     }
 
-    fn record_free(&self, freed: usize) {
+    fn record_free_then_acquire(&self, freed: usize, acquired: usize) {
         let mut requesters_total = self.requesters_total.lock().unwrap();
         *requesters_total -= freed;
+        *requesters_total += acquired;
         self.cv.notify_all()
-    }
-
-    fn record_acquire(&self, acquired: usize) {
-        *self.requesters_total.lock().unwrap() += acquired;
     }
 
     /// Drop a memory consumer from memory usage tracking
