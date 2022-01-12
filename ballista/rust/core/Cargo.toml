@@ -35,18 +35,15 @@ async-trait = "0.1.36"
 futures = "0.3"
 hashbrown = "0.11"
 log = "0.4"
-prost = "0.8"
+prost = "0.9"
 serde = {version = "1", features = ["derive"]}
 sqlparser = "0.13"
 tokio = "1.0"
-tonic = "0.5"
+tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
 chrono = { version = "0.4", default-features = false }
 
-# workaround for https://github.com/apache/arrow-datafusion/issues/1498
-# should be able to remove when we update arrow-flight
-quote = "=1.0.10"
-arrow-flight = { version = "6.4.0"  }
+arrow-flight = { version = "7.0.0"  }
 
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
@@ -54,4 +51,4 @@ datafusion = { path = "../../../datafusion", version = "6.0.0" }
 tempfile = "3"
 
 [build-dependencies]
-tonic-build = { version = "0.5" }
+tonic-build = { version = "0.6" }
