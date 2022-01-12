@@ -20,7 +20,6 @@
     clippy::float_cmp,
     clippy::from_over_into,
     clippy::module_inception,
-    clippy::new_without_default,
     clippy::type_complexity,
     clippy::upper_case_acronyms
 )]
