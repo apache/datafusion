@@ -18,7 +18,6 @@
 // Clippy lints, some should be disabled incrementally
 #![allow(
     clippy::float_cmp,
-    clippy::type_complexity,
     clippy::upper_case_acronyms
 )]
 
