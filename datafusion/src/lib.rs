@@ -15,15 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 #![warn(missing_docs, clippy::needless_borrow)]
-// Clippy lints, some should be disabled incrementally
-#![allow(
-    clippy::float_cmp,
-    clippy::from_over_into,
-    clippy::module_inception,
-    clippy::new_without_default,
-    clippy::type_complexity,
-    clippy::upper_case_acronyms
-)]
 
 //! [DataFusion](https://github.com/apache/arrow-datafusion)
 //! is an extensible query execution framework that uses

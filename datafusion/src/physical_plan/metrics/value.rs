@@ -50,6 +50,12 @@ impl Display for Count {
     }
 }
 
+impl Default for Count {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Count {
     /// create a new counter
     pub fn new() -> Self {
@@ -76,6 +82,12 @@ impl Count {
 pub struct Time {
     /// elapsed time, in nanoseconds
     nanos: Arc<AtomicUsize>,
+}
+
+impl Default for Time {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PartialEq for Time {
@@ -138,6 +150,12 @@ impl Time {
 pub struct Timestamp {
     /// Time thing started
     timestamp: Arc<Mutex<Option<DateTime<Utc>>>>,
+}
+
+impl Default for Timestamp {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Timestamp {

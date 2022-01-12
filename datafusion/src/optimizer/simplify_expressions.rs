@@ -43,6 +43,7 @@ use crate::{error::Result, logical_plan::Operator};
 /// is optimized to
 /// `Filter: b > 2`
 ///
+#[derive(Default)]
 pub struct SimplifyExpressions {}
 
 /// returns true if `needle` is found in a chain of search_op
