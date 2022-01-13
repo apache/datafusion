@@ -141,6 +141,12 @@ pub struct ExecutionContext {
     pub state: Arc<Mutex<ExecutionContextState>>,
 }
 
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExecutionContext {
     /// Creates a new execution context using a default configuration.
     pub fn new() -> Self {
@@ -1049,6 +1055,27 @@ pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
 }
 
+impl Default for ExecutionProps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExecutionProps {
+    /// Creates a new execution props
+    pub fn new() -> Self {
+        ExecutionProps {
+            query_execution_start_time: chrono::Utc::now(),
+        }
+    }
+
+    /// Marks the execution of query started timestamp
+    pub fn start_execution(&mut self) -> &Self {
+        self.query_execution_start_time = chrono::Utc::now();
+        &*self
+    }
+}
+
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct ExecutionContextState {
@@ -1068,18 +1095,9 @@ pub struct ExecutionContextState {
     pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
-impl ExecutionProps {
-    /// Creates a new execution props
-    pub fn new() -> Self {
-        ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
-        }
-    }
-
-    /// Marks the execution of query started timestamp
-    pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
-        &*self
+impl Default for ExecutionContextState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1845,9 +1863,9 @@ mod tests {
     #[tokio::test]
     async fn aggregate_decimal_min() -> Result<()> {
         let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
-
         let result = plan_and_collect(&mut ctx, "select min(c1) from d_table")
             .await
             .unwrap();
@@ -1858,6 +1876,10 @@ mod tests {
             "| -100.009        |",
             "+-----------------+",
         ];
+        assert_eq!(
+            &DataType::Decimal(10, 3),
+            result[0].schema().field(0).data_type()
+        );
         assert_batches_sorted_eq!(expected, &result);
         Ok(())
     }
@@ -1865,6 +1887,7 @@ mod tests {
     #[tokio::test]
     async fn aggregate_decimal_max() -> Result<()> {
         let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
 
@@ -1878,6 +1901,58 @@ mod tests {
             "| 110.009         |",
             "+-----------------+",
         ];
+        assert_eq!(
+            &DataType::Decimal(10, 3),
+            result[0].schema().field(0).data_type()
+        );
+        assert_batches_sorted_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_decimal_sum() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
+        ctx.register_table("d_table", test::table_with_decimal())
+            .unwrap();
+        let result = plan_and_collect(&mut ctx, "select sum(c1) from d_table")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| SUM(d_table.c1) |",
+            "+-----------------+",
+            "| 100.000         |",
+            "+-----------------+",
+        ];
+        assert_eq!(
+            &DataType::Decimal(20, 3),
+            result[0].schema().field(0).data_type()
+        );
+        assert_batches_sorted_eq!(expected, &result);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn aggregate_decimal_avg() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        // the data type of c1 is decimal(10,3)
+        ctx.register_table("d_table", test::table_with_decimal())
+            .unwrap();
+        let result = plan_and_collect(&mut ctx, "select avg(c1) from d_table")
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----------------+",
+            "| AVG(d_table.c1) |",
+            "+-----------------+",
+            "| 5.0000000       |",
+            "+-----------------+",
+        ];
+        assert_eq!(
+            &DataType::Decimal(14, 7),
+            result[0].schema().field(0).data_type()
+        );
         assert_batches_sorted_eq!(expected, &result);
         Ok(())
     }

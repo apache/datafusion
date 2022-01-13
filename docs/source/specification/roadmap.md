@@ -49,16 +49,15 @@ to provide:
 
 ## Additional SQL Language Features
 
+- Decimal Support [#122](https://github.com/apache/arrow-datafusion/issues/122)
 - Complete support list on [status](https://github.com/apache/arrow-datafusion/blob/master/README.md#status)
 - Timestamp Arithmetic [#194](https://github.com/apache/arrow-datafusion/issues/194)
 - SQL Parser extension point [#533](https://github.com/apache/arrow-datafusion/issues/533)
 - Support for nested structures (fields, lists, structs) [#119](https://github.com/apache/arrow-datafusion/issues/119)
-- Remaining Set Operators (`INTERSECT` / `EXCEPT`) [#1082](https://github.com/apache/arrow-datafusion/issues/1082)
 - Run all queries from the TPCH benchmark (see [milestone](https://github.com/apache/arrow-datafusion/milestone/2) for more details)
 
 ## Query Optimizer
 
-- Additional constant folding / partial evaluation [#1070](https://github.com/apache/arrow-datafusion/issues/1070)
 - More sophisticated cost based optimizer for join ordering
 - Implement advanced query optimization framework (Tokomak) #440
 - Finer optimizations for group by and aggregate functions
@@ -66,7 +65,6 @@ to provide:
 ## Datasources
 
 - Better support for reading data from remote filesystems (e.g. S3) without caching it locally [#907](https://github.com/apache/arrow-datafusion/issues/907) [#1060](https://github.com/apache/arrow-datafusion/issues/1060)
-- Support for partitioned datasources [#1139](https://github.com/apache/arrow-datafusion/issues/1139) and make the integration of other table formats (Delta, Iceberg...) simpler
 - Improve performances of file format datasources (parallelize file listings, async Arrow readers, file chunk prefetching capability...)
 
 ## Runtime / Infrastructure

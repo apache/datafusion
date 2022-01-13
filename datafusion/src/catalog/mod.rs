@@ -18,6 +18,7 @@
 //! This module contains interfaces and default implementations
 //! of table namespacing concepts, including catalogs and schemas.
 
+#![allow(clippy::module_inception)]
 pub mod catalog;
 pub mod information_schema;
 pub mod schema;

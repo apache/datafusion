@@ -181,6 +181,7 @@ pub fn make_now(
     move |_arg| {
         Ok(ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
             now_ts,
+            Some("UTC".to_owned()),
         )))
     }
 }
@@ -240,8 +241,11 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let f = |x: Option<i64>| x.map(|x| date_trunc_single(granularity, x)).transpose();
 
     Ok(match array {
-        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v)) => {
-            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond((f)(*v)?))
+        ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
+            ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
+                (f)(*v)?,
+                tz_opt.clone(),
+            ))
         }
         ColumnarValue::Array(array) => {
             let array = array

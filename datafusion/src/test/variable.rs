@@ -22,6 +22,7 @@ use crate::scalar::ScalarValue;
 use crate::variable::VarProvider;
 
 /// System variable
+#[derive(Default)]
 pub struct SystemVar {}
 
 impl SystemVar {
@@ -40,6 +41,7 @@ impl VarProvider for SystemVar {
 }
 
 /// user defined variable
+#[derive(Default)]
 pub struct UserDefinedVar {}
 
 impl UserDefinedVar {
