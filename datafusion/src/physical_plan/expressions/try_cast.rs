@@ -310,7 +310,7 @@ mod tests {
         for value in array {
             decimal_builder.append_value(*value)?
         }
-        decimal_builder.append_null();
+        decimal_builder.append_null()?;
         Ok(decimal_builder.finish())
     }
 
@@ -392,7 +392,7 @@ mod tests {
         let decimal_array = create_decimal_array(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(10, 3),
             Float32Array,
             DataType::Float32,
             vec![
@@ -408,15 +408,15 @@ mod tests {
         let decimal_array = create_decimal_array(&array, 20, 6)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(20, 6),
             Float64Array,
             DataType::Float64,
             vec![
-                Some(1.234_f64),
-                Some(2.222_f64),
-                Some(0.003_f64),
-                Some(4.0_f64),
-                Some(5.0_f64),
+                Some(0.001234_f64),
+                Some(0.002222_f64),
+                Some(0.000003_f64),
+                Some(0.004_f64),
+                Some(0.005_f64),
                 None,
             ]
         );

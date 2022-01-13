@@ -164,8 +164,8 @@ mod tests {
     use arrow::array::{StringArray, Time64NanosecondArray};
     use arrow::{
         array::{
-            Array, Int16Array, Int32Array, Int64Array, Int8Array,
-            TimestampNanosecondArray, UInt32Array,
+            Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+            Int8Array, TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
@@ -366,7 +366,7 @@ mod tests {
         for value in array {
             decimal_builder.append_value(*value)?
         }
-        decimal_builder.append_null();
+        decimal_builder.append_null()?;
         Ok(decimal_builder.finish())
     }
 
@@ -395,14 +395,14 @@ mod tests {
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
-            Int8Array,
+            Int16Array,
             DataType::Int16,
             vec![
-                Some(1_i8),
-                Some(2_i8),
-                Some(3_i8),
-                Some(4_i8),
-                Some(5_i8),
+                Some(1_i16),
+                Some(2_i16),
+                Some(3_i16),
+                Some(4_i16),
+                Some(5_i16),
                 None,
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
@@ -412,14 +412,14 @@ mod tests {
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
-            Int8Array,
+            Int32Array,
             DataType::Int32,
             vec![
-                Some(1_i8),
-                Some(2_i8),
-                Some(3_i8),
-                Some(4_i8),
-                Some(5_i8),
+                Some(1_i32),
+                Some(2_i32),
+                Some(3_i32),
+                Some(4_i32),
+                Some(5_i32),
                 None,
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
@@ -429,14 +429,14 @@ mod tests {
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
-            Int8Array,
+            Int64Array,
             DataType::Int64,
             vec![
-                Some(1_i8),
-                Some(2_i8),
-                Some(3_i8),
-                Some(4_i8),
-                Some(5_i8),
+                Some(1_i64),
+                Some(2_i64),
+                Some(3_i64),
+                Some(4_i64),
+                Some(5_i64),
                 None,
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
@@ -446,7 +446,7 @@ mod tests {
         let decimal_array = create_decimal_array(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(10, 3),
             Float32Array,
             DataType::Float32,
             vec![
@@ -463,15 +463,15 @@ mod tests {
         let decimal_array = create_decimal_array(&array, 20, 6)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(20, 6),
             Float64Array,
             DataType::Float64,
             vec![
-                Some(1.234_f64),
-                Some(2.222_f64),
-                Some(0.003_f64),
-                Some(4.0_f64),
-                Some(5.0_f64),
+                Some(0.001234_f64),
+                Some(0.002222_f64),
+                Some(0.000003_f64),
+                Some(0.004_f64),
+                Some(0.005_f64),
                 None,
             ],
             DEFAULT_DATAFUSION_CAST_OPTIONS
