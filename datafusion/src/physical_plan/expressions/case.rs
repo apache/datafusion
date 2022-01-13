@@ -24,6 +24,8 @@ use arrow::compute::{eq, eq_utf8};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 
+type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
+
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
 /// corresponding "then" expressions, and an optional "else" expression.
@@ -46,7 +48,7 @@ pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
     /// One or more when/then expressions
-    when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    when_then_expr: Vec<WhenThen>,
     /// Optional "else" expression
     else_expr: Option<Arc<dyn PhysicalExpr>>,
 }
@@ -71,7 +73,7 @@ impl CaseExpr {
     /// Create a new CASE WHEN expression
     pub fn try_new(
         expr: Option<Arc<dyn PhysicalExpr>>,
-        when_then_expr: &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)],
+        when_then_expr: &[WhenThen],
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         if when_then_expr.is_empty() {
@@ -93,7 +95,7 @@ impl CaseExpr {
     }
 
     /// One or more when/then expressions
-    pub fn when_then_expr(&self) -> &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)] {
+    pub fn when_then_expr(&self) -> &[WhenThen] {
         &self.when_then_expr
     }
 
@@ -437,7 +439,7 @@ impl PhysicalExpr for CaseExpr {
 /// Create a CASE expression
 pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
-    when_thens: &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)],
+    when_thens: &[WhenThen],
     else_expr: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(CaseExpr::try_new(expr, when_thens, else_expr)?))
