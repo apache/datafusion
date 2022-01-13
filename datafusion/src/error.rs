@@ -105,7 +105,7 @@ impl From<ParserError> for DataFusionError {
 }
 
 impl Display for DataFusionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
             DataFusionError::ParquetError(ref desc) => {

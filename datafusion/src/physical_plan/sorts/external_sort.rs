@@ -176,7 +176,7 @@ impl ExternalSorter {
 }
 
 impl Debug for ExternalSorter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ExternalSorter")
             .field("id", &self.id())
             .field("memory_used", &self.used())

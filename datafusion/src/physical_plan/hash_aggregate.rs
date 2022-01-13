@@ -619,7 +619,7 @@ struct Accumulators {
 }
 
 impl std::fmt::Debug for Accumulators {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
         let map_string = "RawTable";
         f.debug_struct("Accumulators")

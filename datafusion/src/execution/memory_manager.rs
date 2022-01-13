@@ -60,7 +60,7 @@ impl MemoryConsumerId {
 }
 
 impl Display for MemoryConsumerId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}:{}", self.partition_id, self.id)
     }
 }
@@ -123,7 +123,7 @@ pub trait MemoryConsumer: Send + Sync {
 }
 
 impl Debug for dyn MemoryConsumer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(
             f,
             "{}[{}]: {}",
@@ -135,7 +135,7 @@ impl Debug for dyn MemoryConsumer {
 }
 
 impl Display for dyn MemoryConsumer {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         write!(f, "{}[{}]", self.name(), self.id(),)
     }
 }
@@ -280,7 +280,7 @@ impl MemoryManager {
 }
 
 impl Display for MemoryManager {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let requesters =
             self.requesters
                 .lock()

@@ -56,7 +56,7 @@ pub struct AggregateUDF {
 }
 
 impl Debug for AggregateUDF {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("AggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)

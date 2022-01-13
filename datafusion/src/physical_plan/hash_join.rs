@@ -91,7 +91,7 @@ use std::fmt;
 struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
         Ok(())
     }
 }

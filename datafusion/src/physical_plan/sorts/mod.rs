@@ -66,7 +66,7 @@ struct SortKeyCursor {
 }
 
 impl<'a> std::fmt::Debug for SortKeyCursor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
             .field("columns", &self.columns)
             .field("cur_row", &self.cur_row)
@@ -232,7 +232,7 @@ pub(crate) struct SortedStream {
 }
 
 impl Debug for SortedStream {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "InMemSorterStream")
     }
 }
