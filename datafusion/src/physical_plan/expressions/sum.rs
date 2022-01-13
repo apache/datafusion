@@ -422,7 +422,8 @@ mod tests {
         );
 
         // test sum batch
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for i in 1..6 {
             decimal_builder.push(Some(i as i128));
         }
@@ -431,7 +432,8 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for i in 1..6 {
             decimal_builder.push(Some(i as i128));
         }
@@ -455,7 +457,8 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(123), 10, 2), result);
 
         // test with batch
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for i in 1..6 {
             if i == 2 {
                 decimal_builder.push_null();
@@ -468,7 +471,8 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(35, 0));
         for i in 1..6 {
             if i == 2 {
                 decimal_builder.push_null();
@@ -495,7 +499,8 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(None, 10, 2), result);
 
         // test with batch
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for _i in 1..6 {
             decimal_builder.push_null();
         }
@@ -504,7 +509,8 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for _i in 1..6 {
             decimal_builder.push_null();
         }

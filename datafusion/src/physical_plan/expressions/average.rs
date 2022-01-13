@@ -255,7 +255,8 @@ mod tests {
     #[test]
     fn avg_decimal() -> Result<()> {
         // test agg
-        let mut decimal_builder = Int128Vec::with_capacity(6);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(6).to(DataType::Decimal(10, 0));
         for i in 1..7 {
             decimal_builder.push(Some(i as i128));
         }
@@ -263,7 +264,7 @@ mod tests {
 
         generic_test_op!(
             array,
-            DataType::Decimal(32, 32),
+            DataType::Decimal(10, 0),
             Avg,
             ScalarValue::Decimal128(Some(35000), 14, 4),
             DataType::Decimal(14, 4)
@@ -272,7 +273,8 @@ mod tests {
 
     #[test]
     fn avg_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for i in 1..6 {
             if i == 2 {
                 decimal_builder.push_null();
@@ -283,7 +285,7 @@ mod tests {
         let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
-            DataType::Decimal(32, 32),
+            DataType::Decimal(10, 0),
             Avg,
             ScalarValue::Decimal128(Some(32500), 14, 4),
             DataType::Decimal(14, 4)
@@ -293,14 +295,15 @@ mod tests {
     #[test]
     fn avg_decimal_all_nulls() -> Result<()> {
         // test agg
-        let mut decimal_builder = Int128Vec::with_capacity(5);
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
         for _i in 1..6 {
             decimal_builder.push_null();
         }
         let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
-            DataType::Decimal(32, 32),
+            DataType::Decimal(10, 0),
             Avg,
             ScalarValue::Decimal128(None, 14, 4),
             DataType::Decimal(14, 4)
