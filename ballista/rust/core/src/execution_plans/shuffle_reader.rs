@@ -28,11 +28,13 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, Statistics,
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion::{
     error::{DataFusionError, Result},
@@ -100,7 +102,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     async fn execute(
         &self,
         partition: usize,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         info!("ShuffleReaderExec::execute({})", partition);
 
         let fetch_time =

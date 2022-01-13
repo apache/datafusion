@@ -81,6 +81,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::execution::runtime_env::RuntimeEnv;
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampMicrosecondArray,
@@ -90,8 +91,9 @@ mod tests {
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let projection = None;
+        let runtime = Arc::new(RuntimeEnv::default());
         let exec = get_exec("alltypes_plain.avro", &projection, 2, None).await?;
-        let stream = exec.execute(0).await?;
+        let stream = exec.execute(0, runtime).await?;
 
         let tt_batches = stream
             .map(|batch| {

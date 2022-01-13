@@ -162,7 +162,8 @@ impl DataFrame for DataFrameImpl {
     /// execute it, collecting all resulting batches into memory
     async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let plan = self.create_physical_plan().await?;
-        Ok(collect(plan).await?)
+        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        Ok(collect(plan, runtime).await?)
     }
 
     /// Print results.
@@ -181,7 +182,8 @@ impl DataFrame for DataFrameImpl {
     /// execute it, returning a stream over a single partition
     async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
         let plan = self.create_physical_plan().await?;
-        execute_stream(plan).await
+        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        execute_stream(plan, runtime).await
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
@@ -189,14 +191,16 @@ impl DataFrame for DataFrameImpl {
     /// partitioning
     async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
         let plan = self.create_physical_plan().await?;
-        Ok(collect_partitioned(plan).await?)
+        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        Ok(collect_partitioned(plan, runtime).await?)
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
     /// execute it, returning a stream for each partition
     async fn execute_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
-        Ok(execute_stream_partitioned(plan).await?)
+        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        Ok(execute_stream_partitioned(plan, runtime).await?)
     }
 
     /// Returns the schema from the logical plan

@@ -48,6 +48,7 @@ use arrow::{
 use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;
@@ -207,8 +208,12 @@ impl ExecutionPlan for HashAggregateExec {
         self.input.output_partitioning()
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition).await?;
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
+        let input = self.input.execute(partition, runtime).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -614,7 +619,7 @@ struct Accumulators {
 }
 
 impl std::fmt::Debug for Accumulators {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
         let map_string = "RawTable";
         f.debug_struct("Accumulators")
@@ -1061,6 +1066,8 @@ mod tests {
             DataType::Float64,
         ))];
 
+        let runtime = Arc::new(RuntimeEnv::default());
+
         let partial_aggregate = Arc::new(HashAggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
@@ -1069,7 +1076,8 @@ mod tests {
             input_schema.clone(),
         )?);
 
-        let result = common::collect(partial_aggregate.execute(0).await?).await?;
+        let result =
+            common::collect(partial_aggregate.execute(0, runtime.clone()).await?).await?;
 
         let expected = vec![
             "+---+---------------+-------------+",
@@ -1100,7 +1108,8 @@ mod tests {
             input_schema,
         )?);
 
-        let result = common::collect(merged_aggregate.execute(0).await?).await?;
+        let result =
+            common::collect(merged_aggregate.execute(0, runtime.clone()).await?).await?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];
@@ -1161,7 +1170,11 @@ mod tests {
             )))
         }
 
-        async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+        async fn execute(
+            &self,
+            _partition: usize,
+            _runtime: Arc<RuntimeEnv>,
+        ) -> Result<SendableRecordBatchStream> {
             let stream;
             if self.yield_first {
                 stream = TestYieldingStream::New;
@@ -1237,6 +1250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_without_groups() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -1258,7 +1272,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec);
+        let fut = crate::physical_plan::collect(hash_aggregate_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1270,6 +1284,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_with_groups() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float32, true),
@@ -1294,7 +1309,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec);
+        let fut = crate::physical_plan::collect(hash_aggregate_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

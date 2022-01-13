@@ -98,6 +98,7 @@ mod tests {
     use arrow::array::Int64Array;
 
     use super::*;
+    use crate::execution::runtime_env::RuntimeEnv;
     use crate::{
         datasource::{
             file_format::PhysicalPlanConfig,
@@ -111,9 +112,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
         let exec = get_exec(&projection, 2, None).await?;
-        let stream = exec.execute(0).await?;
+        let stream = exec.execute(0, runtime).await?;
 
         let tt_batches: i32 = stream
             .map(|batch| {
@@ -135,9 +137,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
         let exec = get_exec(&projection, 1024, Some(1)).await?;
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
         assert_eq!(1, batches[0].num_rows());
@@ -163,10 +166,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_int_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
         let exec = get_exec(&projection, 1024, None).await?;
 
-        let batches = collect(exec).await.expect("Collect batches");
+        let batches = collect(exec, runtime).await.expect("Collect batches");
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());

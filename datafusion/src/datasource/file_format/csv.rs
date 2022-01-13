@@ -136,6 +136,7 @@ mod tests {
     use arrow::array::StringArray;
 
     use super::*;
+    use crate::execution::runtime_env::RuntimeEnv;
     use crate::{
         datasource::{
             file_format::PhysicalPlanConfig,
@@ -149,10 +150,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
         let exec = get_exec("aggregate_test_100.csv", &projection, 2, None).await?;
-        let stream = exec.execute(0).await?;
+        let stream = exec.execute(0, runtime).await?;
 
         let tt_batches: i32 = stream
             .map(|batch| {
@@ -174,9 +176,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0, 1, 2, 3]);
         let exec = get_exec("aggregate_test_100.csv", &projection, 1024, Some(1)).await?;
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
         assert_eq!(1, batches[0].num_rows());
@@ -219,10 +222,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_char_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
         let exec = get_exec("aggregate_test_100.csv", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await.expect("Collect batches");
+        let batches = collect(exec, runtime).await.expect("Collect batches");
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());

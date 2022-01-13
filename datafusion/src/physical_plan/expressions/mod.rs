@@ -117,7 +117,7 @@ pub struct PhysicalSortExpr {
 }
 
 impl std::fmt::Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let opts_string = match (self.options.descending, self.options.nulls_first) {
             (true, true) => "DESC",
             (true, false) => "DESC NULLS LAST",
