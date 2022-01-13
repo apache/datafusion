@@ -60,7 +60,7 @@ impl FromStr for PrintFormat {
 }
 
 impl fmt::Display for PrintFormat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Self::Csv => write!(f, "csv"),
             Self::Tsv => write!(f, "tsv"),

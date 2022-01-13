@@ -171,7 +171,7 @@ pub struct ObjectStoreRegistry {
 }
 
 impl fmt::Debug for ObjectStoreRegistry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ObjectStoreRegistry")
             .field(
                 "schemes",

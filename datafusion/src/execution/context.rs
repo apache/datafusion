@@ -76,6 +76,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -178,6 +179,9 @@ impl ExecutionContext {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let runtime_env =
+            Arc::new(RuntimeEnv::new(config.runtime_config.clone()).unwrap());
+
         Self {
             state: Arc::new(Mutex::new(ExecutionContextState {
                 catalog_list,
@@ -187,6 +191,7 @@ impl ExecutionContext {
                 config,
                 execution_props: ExecutionProps::new(),
                 object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+                runtime_env,
             })),
         }
     }
@@ -713,6 +718,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the CSV files (one per partition)
         let fs_path = Path::new(path);
+        let runtime = self.state.lock().unwrap().runtime_env.clone();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -722,7 +728,7 @@ impl ExecutionContext {
                     let path = fs_path.join(&filename);
                     let file = fs::File::create(path)?;
                     let mut writer = csv::Writer::new(file);
-                    let stream = plan.execute(i).await?;
+                    let stream = plan.execute(i, runtime.clone()).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
                             .map(|batch| writer.write(&batch?))
@@ -752,6 +758,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(path);
+        let runtime = self.state.lock().unwrap().runtime_env.clone();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -765,7 +772,7 @@ impl ExecutionContext {
                         plan.schema(),
                         writer_properties.clone(),
                     )?;
-                    let stream = plan.execute(i).await?;
+                    let stream = plan.execute(i, runtime.clone()).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
                             .map(|batch| writer.write(&batch?))
@@ -893,6 +900,8 @@ pub struct ExecutionConfig {
     pub repartition_windows: bool,
     /// Should Datafusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
+    /// Runtime configurations such as memory threshold and local disk for spill
+    pub runtime_config: RuntimeConfig,
 }
 
 impl Default for ExecutionConfig {
@@ -927,6 +936,7 @@ impl Default for ExecutionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            runtime_config: RuntimeConfig::default(),
         }
     }
 }
@@ -1044,6 +1054,12 @@ impl ExecutionConfig {
         self.parquet_pruning = enabled;
         self
     }
+
+    /// Customize runtime config
+    pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
+        self.runtime_config = config;
+        self
+    }
 }
 
 /// Holds per-execution properties and data (such as starting timestamps, etc).
@@ -1093,6 +1109,8 @@ pub struct ExecutionContextState {
     pub execution_props: ExecutionProps,
     /// Object Store that are registered with the context
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    /// Runtime environment
+    pub runtime_env: Arc<RuntimeEnv>,
 }
 
 impl Default for ExecutionContextState {
@@ -1112,6 +1130,7 @@ impl ExecutionContextState {
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),
             object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            runtime_env: Arc::new(RuntimeEnv::default()),
         }
     }
 
@@ -1378,7 +1397,8 @@ mod tests {
 
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
 
-        let results = collect_partitioned(physical_plan).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let results = collect_partitioned(physical_plan, runtime).await?;
 
         // note that the order of partitions is not deterministic
         let mut num_rows = 0;
@@ -1426,6 +1446,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
 
         let table = ctx.table("test")?;
         let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
@@ -1457,7 +1478,7 @@ mod tests {
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-        let batches = collect(physical_plan).await?;
+        let batches = collect(physical_plan, runtime).await?;
         assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
 
         Ok(())
@@ -1533,7 +1554,8 @@ mod tests {
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("b", physical_plan.schema().field(0).name().as_str());
 
-        let batches = collect(physical_plan).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let batches = collect(physical_plan, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(4, batches[0].num_rows());
@@ -3307,7 +3329,8 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
-        let result = collect(plan).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let result = collect(plan, runtime).await?;
 
         let expected = vec![
             "+-----+-----+-----------------+",

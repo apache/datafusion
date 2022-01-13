@@ -23,6 +23,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
 use datafusion::error::DataFusionError;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 
@@ -71,7 +72,11 @@ impl Executor {
             ))
         }?;
 
-        let partitions = exec.execute_shuffle_write(part).await?;
+        let runtime_config =
+            RuntimeConfig::new().with_local_dirs(vec![self.work_dir.clone()]);
+        let runtime = Arc::new(RuntimeEnv::new(runtime_config)?);
+
+        let partitions = exec.execute_shuffle_write(part, runtime).await?;
 
         println!(
             "=== [{}/{}/{}] Physical plan with metrics ===\n{}\n",

@@ -33,6 +33,7 @@ use arrow::{
 };
 use futures::Stream;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -162,7 +163,11 @@ impl ExecutionPlan for MockExec {
     }
 
     /// Returns a stream which yields data
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
         // Result doesn't implement clone, so do it ourself
@@ -293,7 +298,11 @@ impl ExecutionPlan for BarrierExec {
     }
 
     /// Returns a stream which yields data
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
         let (tx, rx) = tokio::sync::mpsc::channel(2);
@@ -386,7 +395,11 @@ impl ExecutionPlan for ErrorExec {
     }
 
     /// Returns a stream which yields data
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Internal(format!(
             "ErrorExec, unsurprisingly, errored in partition {}",
             partition
@@ -463,7 +476,11 @@ impl ExecutionPlan for StatisticsExec {
         }
     }
 
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
 
@@ -553,7 +570,11 @@ impl ExecutionPlan for BlockingExec {
         )))
     }
 
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(BlockingStream {
             schema: Arc::clone(&self.schema),
             _refs: Arc::clone(&self.refs),
