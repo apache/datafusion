@@ -260,7 +260,7 @@ impl Accumulator for VarianceAccumulator {
             .downcast_ref::<Float64Array>()
             .unwrap()
             .iter()
-            .filter_map(|v| v);
+            .flatten();
 
         for value in arr {
             let new_count = self.count + 1;

@@ -290,13 +290,13 @@ impl Accumulator for CovarianceAccumulator {
             .downcast_ref::<Float64Array>()
             .unwrap()
             .iter()
-            .filter_map(|v| v);
+            .flatten();
         let mut arr2 = values2
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap()
             .iter()
-            .filter_map(|v| v);
+            .flatten();
 
         for _i in 0..values1.len() {
             let value1 = arr1.next();
