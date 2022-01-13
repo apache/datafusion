@@ -120,6 +120,10 @@ impl SchedulerServer {
                 .as_millis(),
         }
     }
+
+    pub fn set_caller_ip(&mut self, ip: IpAddr) {
+        self.caller_ip = ip;
+    }
 }
 
 const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
