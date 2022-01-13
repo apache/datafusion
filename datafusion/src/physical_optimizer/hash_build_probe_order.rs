@@ -38,6 +38,7 @@ use crate::error::Result;
 /// is the smallest.
 /// If the information is not available, the order stays the same,
 /// so that it could be optimized manually in a query.
+#[derive(Default)]
 pub struct HashBuildProbeOrder {}
 
 impl HashBuildProbeOrder {

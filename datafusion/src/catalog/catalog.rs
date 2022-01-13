@@ -59,6 +59,12 @@ impl MemoryCatalogList {
     }
 }
 
+impl Default for MemoryCatalogList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CatalogList for MemoryCatalogList {
     fn as_any(&self) -> &dyn Any {
         self
@@ -81,6 +87,12 @@ impl CatalogList for MemoryCatalogList {
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         let catalogs = self.catalogs.read().unwrap();
         catalogs.get(name).cloned()
+    }
+}
+
+impl Default for MemoryCatalogProvider {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

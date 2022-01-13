@@ -29,6 +29,7 @@ use crate::{
 use std::sync::Arc;
 
 /// Optimizer that introduces CoalesceBatchesExec to avoid overhead with small batches
+#[derive(Default)]
 pub struct CoalesceBatches {}
 
 impl CoalesceBatches {

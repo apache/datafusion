@@ -18,6 +18,7 @@
 //! This module contains a query optimizer that operates against a logical plan and applies
 //! some simple rules to a logical plan, such as "Projection Push Down" and "Type Coercion".
 
+#![allow(clippy::module_inception)]
 pub mod common_subexpr_eliminate;
 pub mod eliminate_limit;
 pub mod filter_push_down;

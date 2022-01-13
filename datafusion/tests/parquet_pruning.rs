@@ -528,7 +528,7 @@ impl ContextWithParquet {
             .collect()
             .await
             .expect("getting input");
-        let pretty_input = pretty_format_batches(&input).unwrap();
+        let pretty_input = pretty_format_batches(&input).unwrap().to_string();
 
         let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
         let physical_plan = self
@@ -564,7 +564,7 @@ impl ContextWithParquet {
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 
-        let pretty_results = pretty_format_batches(&results).unwrap();
+        let pretty_results = pretty_format_batches(&results).unwrap().to_string();
 
         let sql = sql.into();
         TestOutput {
