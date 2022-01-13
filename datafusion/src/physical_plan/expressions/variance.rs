@@ -255,14 +255,14 @@ impl Accumulator for VarianceAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = values.as_any().downcast_ref::<Float64Array>().unwrap();
+        let arr = values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .flatten();
 
-        for i in 0..arr.len() {
-            let value = arr.value(i);
-
-            if value == 0_f64 && values.is_null(i) {
-                continue;
-            }
+        for value in arr {
             let new_count = self.count + 1;
             let delta1 = value - self.mean;
             let new_mean = delta1 / new_count as f64 + self.mean;
@@ -495,6 +495,62 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn variance_f64_merge_1() -> Result<()> {
+        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64]));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
+
+        let agg1 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(2_f64));
+
+        Ok(())
+    }
+
+    #[test]
+    fn variance_f64_merge_2() -> Result<()> {
+        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let b = Arc::new(Float64Array::from(vec![None]));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
+
+        let agg1 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(2_f64));
+
+        Ok(())
+    }
+
     fn aggregate(
         batch: &RecordBatch,
         agg: Arc<dyn AggregateExpr>,
@@ -508,5 +564,38 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
+    }
+
+    fn merge(
+        batch1: &RecordBatch,
+        batch2: &RecordBatch,
+        agg1: Arc<dyn AggregateExpr>,
+        agg2: Arc<dyn AggregateExpr>,
+    ) -> Result<ScalarValue> {
+        let mut accum1 = agg1.create_accumulator()?;
+        let mut accum2 = agg2.create_accumulator()?;
+        let expr1 = agg1.expressions();
+        let expr2 = agg2.expressions();
+
+        let values1 = expr1
+            .iter()
+            .map(|e| e.evaluate(batch1))
+            .map(|r| r.map(|v| v.into_array(batch1.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        let values2 = expr2
+            .iter()
+            .map(|e| e.evaluate(batch2))
+            .map(|r| r.map(|v| v.into_array(batch2.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        accum1.update_batch(&values1)?;
+        accum2.update_batch(&values2)?;
+        let state2 = accum2
+            .state()?
+            .iter()
+            .map(|v| vec![v.clone()])
+            .map(|x| ScalarValue::iter_to_array(x).unwrap())
+            .collect::<Vec<_>>();
+        accum1.merge_batch(&state2)?;
+        accum1.evaluate()
     }
 }
