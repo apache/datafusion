@@ -171,13 +171,8 @@ impl Accumulator for AvgAccumulator {
         Ok(vec![ScalarValue::from(self.count), self.sum.clone()])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let values = &values[0];
-
-        self.count += (!values.is_null()) as u64;
-        self.sum = sum::sum(&self.sum, values)?;
-
-        Ok(())
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
+        unimplemented!("update_batch is implemented instead");
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
@@ -188,18 +183,8 @@ impl Accumulator for AvgAccumulator {
         Ok(())
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count = &states[0];
-        // counts are summed
-        if let ScalarValue::UInt64(Some(c)) = count {
-            self.count += c
-        } else {
-            unreachable!()
-        };
-
-        // sums are summed
-        self.sum = sum::sum(&self.sum, &states[1])?;
-        Ok(())
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
+        unimplemented!("merge_batch is implemented instead");
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
