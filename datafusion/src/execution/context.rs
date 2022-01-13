@@ -142,6 +142,12 @@ pub struct ExecutionContext {
     pub state: Arc<Mutex<ExecutionContextState>>,
 }
 
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExecutionContext {
     /// Creates a new execution context using a default configuration.
     pub fn new() -> Self {
@@ -1065,6 +1071,27 @@ pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
 }
 
+impl Default for ExecutionProps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExecutionProps {
+    /// Creates a new execution props
+    pub fn new() -> Self {
+        ExecutionProps {
+            query_execution_start_time: chrono::Utc::now(),
+        }
+    }
+
+    /// Marks the execution of query started timestamp
+    pub fn start_execution(&mut self) -> &Self {
+        self.query_execution_start_time = chrono::Utc::now();
+        &*self
+    }
+}
+
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
 pub struct ExecutionContextState {
@@ -1086,18 +1113,9 @@ pub struct ExecutionContextState {
     pub runtime_env: Arc<RuntimeEnv>,
 }
 
-impl ExecutionProps {
-    /// Creates a new execution props
-    pub fn new() -> Self {
-        ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
-        }
-    }
-
-    /// Marks the execution of query started timestamp
-    pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
-        &*self
+impl Default for ExecutionContextState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

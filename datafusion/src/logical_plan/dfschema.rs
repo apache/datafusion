@@ -297,11 +297,12 @@ impl DFSchema {
     }
 }
 
-impl Into<Schema> for DFSchema {
-    /// Convert a schema into a DFSchema
-    fn into(self) -> Schema {
+impl From<DFSchema> for Schema {
+    /// Convert DFSchema into a Schema
+    fn from(df_schema: DFSchema) -> Self {
         Schema::new(
-            self.fields
+            df_schema
+                .fields
                 .into_iter()
                 .map(|f| {
                     if f.qualifier().is_some() {
@@ -319,10 +320,10 @@ impl Into<Schema> for DFSchema {
     }
 }
 
-impl Into<Schema> for &DFSchema {
-    /// Convert a schema into a DFSchema
-    fn into(self) -> Schema {
-        Schema::new(self.fields.iter().map(|f| f.field.clone()).collect())
+impl From<&DFSchema> for Schema {
+    /// Convert DFSchema reference into a Schema
+    fn from(df_schema: &DFSchema) -> Self {
+        Schema::new(df_schema.fields.iter().map(|f| f.field.clone()).collect())
     }
 }
 
@@ -340,9 +341,9 @@ impl TryFrom<Schema> for DFSchema {
     }
 }
 
-impl Into<SchemaRef> for DFSchema {
-    fn into(self) -> SchemaRef {
-        SchemaRef::new(self.into())
+impl From<DFSchema> for SchemaRef {
+    fn from(df_schema: DFSchema) -> Self {
+        SchemaRef::new(df_schema.into())
     }
 }
 

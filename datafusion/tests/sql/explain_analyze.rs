@@ -43,7 +43,9 @@ async fn explain_analyze_baseline_metrics() {
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
     let runtime = ctx.state.lock().unwrap().runtime_env.clone();
     let results = collect(physical_plan.clone(), runtime).await.unwrap();
-    let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&results)
+        .unwrap()
+        .to_string();
     println!("Query Output:\n\n{}", formatted);
 
     assert_metrics!(
@@ -552,13 +554,17 @@ async fn explain_analyze_runs_optimizers() {
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let actual = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
     assert_contains!(actual, expected);
 
     // EXPLAIN ANALYZE should work the same
     let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let actual = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
     assert_contains!(actual, expected);
 }
 
@@ -764,7 +770,9 @@ async fn csv_explain_analyze() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
 
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
@@ -784,7 +792,9 @@ async fn csv_explain_analyze_verbose() {
     let sql =
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);

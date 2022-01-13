@@ -54,6 +54,7 @@ use std::{
 /// and when it reaches a node that does not commute with it, it adds the filter to that place.
 /// When it passes through a projection, it re-writes the filter's expression taking into accoun that projection.
 /// When multiple filters would have been written, it `AND` their expressions into a single expression.
+#[derive(Default)]
 pub struct FilterPushDown {}
 
 #[derive(Debug, Clone, Default)]

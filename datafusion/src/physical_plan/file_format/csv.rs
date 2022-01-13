@@ -121,6 +121,7 @@ impl ExecutionPlan for CsvExec {
 
         let fun = move |file, remaining: &Option<usize>| {
             let bounds = remaining.map(|x| (0, x + start_line));
+            let datetime_format = None;
             Box::new(csv::Reader::new(
                 file,
                 Arc::clone(&file_schema),
@@ -129,6 +130,7 @@ impl ExecutionPlan for CsvExec {
                 batch_size,
                 bounds,
                 file_projection.clone(),
+                datetime_format,
             )) as BatchIter
         };
 

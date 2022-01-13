@@ -20,6 +20,7 @@
 
 use std::{convert::TryInto, io::Cursor};
 
+use datafusion::arrow::datatypes::UnionMode;
 use datafusion::logical_plan::{JoinConstraint, JoinType, Operator};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
@@ -119,6 +120,10 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
                 AggregateFunction::ApproxDistinct
             }
             protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
+            protobuf::AggregateFunction::Variance => AggregateFunction::Variance,
+            protobuf::AggregateFunction::VariancePop => AggregateFunction::VariancePop,
+            protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
+            protobuf::AggregateFunction::StddevPop => AggregateFunction::StddevPop,
         }
     }
 }
@@ -242,13 +247,24 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            arrow_type::ArrowTypeEnum::Union(union) => DataType::Union(
-                union
+            arrow_type::ArrowTypeEnum::Union(union) => {
+                let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
+                    .ok_or_else(|| {
+                        proto_error(
+                            "Protobuf deserialization error: Unknown union mode type",
+                        )
+                    })?;
+                let union_mode = match union_mode {
+                    protobuf::UnionMode::Dense => UnionMode::Dense,
+                    protobuf::UnionMode::Sparse => UnionMode::Sparse,
+                };
+                let union_types = union
                     .union_types
                     .iter()
                     .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
+                    .collect::<Result<Vec<_>, _>>()?;
+                DataType::Union(union_types, union_mode)
+            }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let pb_key_datatype = dict
                     .as_ref()
