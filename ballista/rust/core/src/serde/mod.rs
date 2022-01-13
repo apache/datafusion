@@ -122,6 +122,10 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
             protobuf::AggregateFunction::Variance => AggregateFunction::Variance,
             protobuf::AggregateFunction::VariancePop => AggregateFunction::VariancePop,
+            protobuf::AggregateFunction::Covariance => AggregateFunction::Covariance,
+            protobuf::AggregateFunction::CovariancePop => {
+                AggregateFunction::CovariancePop
+            }
             protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
             protobuf::AggregateFunction::StddevPop => AggregateFunction::StddevPop,
         }
