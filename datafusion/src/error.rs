@@ -64,6 +64,9 @@ pub enum DataFusionError {
     /// This error is thrown when a consumer cannot acquire memory from the Memory Manager
     /// we can just cancel the execution of the partition.
     ResourcesExhausted(String),
+    /// Errors originating from outside DataFusion's core codebase.
+    /// For example, a custom S3Error from the crate datafusion-objectstore-s3
+    External(Box<dyn error::Error + Send + Sync>),
 }
 
 impl DataFusionError {
@@ -104,6 +107,12 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
+impl From<Box<dyn error::Error + Send + Sync>> for DataFusionError {
+    fn from(err: Box<dyn error::Error + Send + Sync>) -> Self {
+        DataFusionError::External(err)
+    }
+}
+
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
@@ -132,8 +141,13 @@ impl Display for DataFusionError {
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
             }
+<<<<<<< HEAD
             DataFusionError::ResourcesExhausted(ref desc) => {
                 write!(f, "Resources exhausted: {}", desc)
+=======
+            DataFusionError::External(ref desc) => {
+                write!(f, "External error: {}", desc)
+>>>>>>> 905910ae (Update errors)
             }
         }
     }

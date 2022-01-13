@@ -20,6 +20,7 @@
 pub mod local;
 
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::{self, Debug};
 use std::io::Read;
 use std::pin::Pin;
@@ -31,7 +32,7 @@ use futures::{AsyncRead, Stream, StreamExt};
 
 use local::LocalFileSystem;
 
-use crate::error::{DataFusionError, Result};
+use crate::error::{DataFusionError, Result as DataFusionResult};
 
 /// Object Reader for one file in an object store.
 ///
@@ -40,18 +41,23 @@ use crate::error::{DataFusionError, Result};
 #[async_trait]
 pub trait ObjectReader: Send + Sync {
     /// Get reader for a part [start, start + length] in the file asynchronously
-    async fn chunk_reader(&self, start: u64, length: usize)
-        -> Result<Box<dyn AsyncRead>>;
+    async fn chunk_reader(
+        &self,
+        start: u64,
+        length: usize,
+    ) -> Result<Box<dyn AsyncRead>, Box<dyn Error + Send + Sync>>;
 
     /// Get reader for a part [start, start + length] in the file
     fn sync_chunk_reader(
         &self,
         start: u64,
         length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>>;
+    ) -> Result<Box<dyn Read + Send + Sync>, Box<dyn Error + Send + Sync>>;
 
     /// Get reader for the entire file
-    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
+    fn sync_reader(
+        &self,
+    ) -> Result<Box<dyn Read + Send + Sync>, Box<dyn Error + Send + Sync>> {
         self.sync_chunk_reader(0, self.length() as usize)
     }
 
@@ -114,29 +120,38 @@ impl std::fmt::Display for FileMeta {
 
 /// Stream of files listed from object store
 pub type FileMetaStream =
-    Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Stream<Item = DataFusionResult<FileMeta>> + Send + Sync + 'static>>;
 
 /// Stream of list entries obtained from object store
 pub type ListEntryStream =
-    Pin<Box<dyn Stream<Item = Result<ListEntry>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Stream<Item = DataFusionResult<ListEntry>> + Send + Sync + 'static>>;
 
 /// Stream readers opened on a given object store
-pub type ObjectReaderStream =
-    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync + 'static>>;
+pub type ObjectReaderStream = Pin<
+    Box<
+        dyn Stream<Item = Result<Arc<dyn ObjectReader>, Box<dyn Error + Send + Sync>>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
     /// Returns all the files in path `prefix`
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
+    async fn list_file(
+        &self,
+        prefix: &str,
+    ) -> Result<FileMetaStream, Box<dyn Error + Send + Sync>>;
 
     /// Calls `list_file` with a suffix filter
     async fn list_file_with_suffix(
         &self,
         prefix: &str,
         suffix: &str,
-    ) -> Result<FileMetaStream> {
+    ) -> Result<FileMetaStream, Box<dyn Error + Send + Sync>> {
         let file_stream = self.list_file(prefix).await?;
         let suffix = suffix.to_owned();
         Ok(Box::pin(file_stream.filter(move |fr| {
@@ -154,10 +169,13 @@ pub trait ObjectStore: Sync + Send + Debug {
         &self,
         prefix: &str,
         delimiter: Option<String>,
-    ) -> Result<ListEntryStream>;
+    ) -> Result<ListEntryStream, Box<dyn Error + Send + Sync>>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(
+        &self,
+        file: SizedFile,
+    ) -> Result<Arc<dyn ObjectReader>, Box<dyn Error + Send + Sync>>;
 }
 
 static LOCAL_SCHEME: &str = "file";
@@ -229,7 +247,7 @@ impl ObjectStoreRegistry {
     pub fn get_by_uri<'a>(
         &self,
         uri: &'a str,
-    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
+    ) -> Result<(Arc<dyn ObjectStore>, &'a str), Box<dyn Error + Send + Sync>> {
         if let Some((scheme, path)) = uri.split_once("://") {
             let stores = self.object_stores.read().unwrap();
             let store = stores

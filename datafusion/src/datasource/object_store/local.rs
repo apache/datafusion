@@ -17,6 +17,7 @@
 
 //! Object store that represents the Local File System.
 
+use std::error::Error;
 use std::fs::{self, File, Metadata};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -28,8 +29,7 @@ use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
 use crate::datasource::PartitionedFile;
-use crate::error::DataFusionError;
-use crate::error::Result;
+use crate::error::{DataFusionError, Result as DataFusionResult};
 
 use super::{ObjectReaderStream, SizedFile};
 
@@ -39,7 +39,10 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+    async fn list_file(
+        &self,
+        prefix: &str,
+    ) -> Result<FileMetaStream, Box<dyn Error + Send + Sync>> {
         list_all(prefix.to_owned()).await
     }
 
@@ -47,11 +50,14 @@ impl ObjectStore for LocalFileSystem {
         &self,
         _prefix: &str,
         _delimiter: Option<String>,
-    ) -> Result<ListEntryStream> {
+    ) -> Result<ListEntryStream, Box<dyn Error + Send + Sync>> {
         todo!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(
+        &self,
+        file: SizedFile,
+    ) -> Result<Arc<dyn ObjectReader>, Box<dyn Error + Send + Sync>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
@@ -61,7 +67,7 @@ struct LocalFileReader {
 }
 
 impl LocalFileReader {
-    fn new(file: SizedFile) -> Result<Self> {
+    fn new(file: SizedFile) -> DataFusionResult<Self> {
         Ok(Self { file })
     }
 }
@@ -72,7 +78,7 @@ impl ObjectReader for LocalFileReader {
         &self,
         _start: u64,
         _length: usize,
-    ) -> Result<Box<dyn AsyncRead>> {
+    ) -> Result<Box<dyn AsyncRead>, Box<dyn Error + Send + Sync>> {
         todo!(
             "implement once async file readers are available (arrow-rs#78, arrow-rs#111)"
         )
@@ -82,7 +88,7 @@ impl ObjectReader for LocalFileReader {
         &self,
         start: u64,
         length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>> {
+    ) -> Result<Box<dyn Read + Send + Sync>, Box<dyn Error + Send + Sync>> {
         // A new file descriptor is opened for each chunk reader.
         // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
@@ -98,7 +104,9 @@ impl ObjectReader for LocalFileReader {
     }
 }
 
-async fn list_all(prefix: String) -> Result<FileMetaStream> {
+async fn list_all(
+    prefix: String,
+) -> Result<FileMetaStream, Box<dyn Error + Send + Sync>> {
     fn get_meta(path: String, metadata: Metadata) -> FileMeta {
         FileMeta {
             sized_file: SizedFile {
@@ -112,7 +120,7 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
     async fn find_files_in_dir(
         path: String,
         to_visit: &mut Vec<String>,
-    ) -> Result<Vec<FileMeta>> {
+    ) -> DataFusionResult<Vec<FileMeta>> {
         let mut dir = tokio::fs::read_dir(path).await?;
         let mut files = Vec::new();
 
@@ -194,7 +202,7 @@ mod tests {
     use tempfile::tempdir;
 
     #[tokio::test]
-    async fn test_recursive_listing() -> Result<()> {
+    async fn test_recursive_listing() -> DataFusionResult<()> {
         // tmp/a.txt
         // tmp/x/b.txt
         // tmp/y/c.txt
