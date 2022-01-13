@@ -280,10 +280,7 @@ async fn spill_partial_sorted_stream(
     path: String,
     schema: SchemaRef,
 ) -> Result<usize> {
-    let (sender, receiver): (
-        TKSender<Option<ArrowResult<RecordBatch>>>,
-        TKReceiver<Option<ArrowResult<RecordBatch>>>,
-    ) = tokio::sync::mpsc::channel(2);
+    let (sender, receiver) = tokio::sync::mpsc::channel(2);
     while let Some(item) = in_mem_stream.next().await {
         sender.send(Some(item)).await.ok();
     }
