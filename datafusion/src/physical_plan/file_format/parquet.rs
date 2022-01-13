@@ -312,20 +312,10 @@ macro_rules! get_statistic {
 // Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
 macro_rules! get_min_max_values {
     ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
-        let (column_index, field) = if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
-            (v, f)
-        } else {
-            // Named column was not present
-            return None
-        };
+        let (column_index, field) = $self.parquet_schema.column_with_name(&$column.name)?;
 
         let data_type = field.data_type();
-        let null_scalar: ScalarValue = if let Ok(v) = data_type.try_into() {
-            v
-        } else {
-            // DataFusion doesn't have support for ScalarValues of the column type
-            return None
-        };
+        let null_scalar: ScalarValue = data_type.try_into().ok()?;
 
         let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
             .iter()
@@ -441,11 +431,8 @@ fn read_partition(
                     break;
                 }
                 Some(Err(e)) => {
-                    let err_msg = format!(
-                        "Error reading batch from {}: {}",
-                        partitioned_file,
-                        e.to_string()
-                    );
+                    let err_msg =
+                        format!("Error reading batch from {}: {}", partitioned_file, e);
                     // send error to operator
                     send_result(
                         &response_tx,

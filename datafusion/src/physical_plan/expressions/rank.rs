@@ -38,6 +38,7 @@ pub struct Rank {
 }
 
 #[derive(Debug, Copy, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum RankType {
     Rank,
     DenseRank,
