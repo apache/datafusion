@@ -255,14 +255,14 @@ impl Accumulator for VarianceAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &cast(&values[0], &DataType::Float64)?;
-        let arr = values.as_any().downcast_ref::<Float64Array>().unwrap();
+        let arr = values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v);
 
-        for i in 0..arr.len() {
-            let value = arr.value(i);
-
-            if value == 0_f64 && values.is_null(i) {
-                continue;
-            }
+        for value in arr {
             let new_count = self.count + 1;
             let delta1 = value - self.mean;
             let new_mean = delta1 / new_count as f64 + self.mean;

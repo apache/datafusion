@@ -285,17 +285,25 @@ impl Accumulator for CovarianceAccumulator {
         let values1 = &cast(&values[0], &DataType::Float64)?;
         let values2 = &cast(&values[1], &DataType::Float64)?;
 
-        let arr1 = values1.as_any().downcast_ref::<Float64Array>().unwrap();
-        let arr2 = values2.as_any().downcast_ref::<Float64Array>().unwrap();
+        let mut arr1 = values1
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v);
+        let mut arr2 = values2
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v);
 
-        for i in 0..arr1.len() {
-            let value1 = arr1.value(i);
-            let value2 = arr2.value(i);
+        for _i in 0..values1.len() {
+            let value1 = arr1.next();
+            let value2 = arr2.next();
 
-            if (value1 == 0_f64 && values1.is_null(i))
-                || (value2 == 0_f64 && values2.is_null(i))
-            {
-                if values2.is_null(i) && values1.is_null(i) {
+            if value1 == None || value2 == None {
+                if value1 == None && value2 == None {
                     continue;
                 } else {
                     return Err(DataFusionError::Internal(
@@ -305,11 +313,11 @@ impl Accumulator for CovarianceAccumulator {
             }
 
             let new_count = self.count + 1;
-            let delta1 = value1 - self.mean1;
+            let delta1 = value1.unwrap() - self.mean1;
             let new_mean1 = delta1 / new_count as f64 + self.mean1;
-            let delta2 = value2 - self.mean2;
+            let delta2 = value2.unwrap() - self.mean2;
             let new_mean2 = delta2 / new_count as f64 + self.mean2;
-            let new_c = delta1 * (value2 - new_mean2) + self.algo_const;
+            let new_c = delta1 * (value2.unwrap() - new_mean2) + self.algo_const;
 
             self.count += 1;
             self.mean1 = new_mean1;
