@@ -67,7 +67,7 @@ impl<R: BufRead> Iterator for JsonBatchReader<R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // json::read::read_rows iterates on the empty vec and reads at most n rows
-        let mut rows: Vec<String> = Vec::with_capacity(self.batch_size);
+        let mut rows = vec![String::default(); self.batch_size];
         let read = json::read::read_rows(&mut self.reader, rows.as_mut_slice());
         read.and_then(|records_read| {
             if records_read > 0 {
@@ -81,6 +81,7 @@ impl<R: BufRead> Iterator for JsonBatchReader<R> {
                 } else {
                     self.schema.fields.clone()
                 };
+                rows.truncate(records_read);
                 json::read::deserialize(&rows, fields).map(Some)
             } else {
                 Ok(None)

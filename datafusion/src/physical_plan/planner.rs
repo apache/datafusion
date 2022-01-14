@@ -1654,18 +1654,14 @@ mod tests {
                 name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: None } }\
+                metadata: {} } }\
         ] }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: None }\
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
