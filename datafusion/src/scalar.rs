@@ -1739,7 +1739,7 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{}", format!("{:?},{:?},{:?}", v, p, s))?;
+                write!(f, "{:?},{:?},{:?}", v, p, s)?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,

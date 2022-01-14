@@ -35,7 +35,7 @@ impl SystemVar {
 impl VarProvider for SystemVar {
     /// get system variable value
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue> {
-        let s = format!("{}-{}", "system-var".to_string(), var_names.concat());
+        let s = format!("{}-{}", "system-var", var_names.concat());
         Ok(ScalarValue::Utf8(Some(s)))
     }
 }
@@ -54,7 +54,7 @@ impl UserDefinedVar {
 impl VarProvider for UserDefinedVar {
     /// Get user defined variable value
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue> {
-        let s = format!("{}-{}", "user-defined-var".to_string(), var_names.concat());
+        let s = format!("{}-{}", "user-defined-var", var_names.concat());
         Ok(ScalarValue::Utf8(Some(s)))
     }
 }
