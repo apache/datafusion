@@ -1663,6 +1663,22 @@ impl TryFrom<ScalarValue> for i64 {
     }
 }
 
+// special implementation for i128 because of Decimal128
+impl TryFrom<ScalarValue> for i128 {
+    type Error = DataFusionError;
+
+    fn try_from(value: ScalarValue) -> Result<Self> {
+        match value {
+            ScalarValue::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
 impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
@@ -1739,7 +1755,7 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{}", format!("{:?},{:?},{:?}", v, p, s))?;
+                write!(f, "{:?},{:?},{:?}", v, p, s)?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
@@ -1813,7 +1829,7 @@ impl fmt::Display for ScalarValue {
 }
 
 impl fmt::Debug for ScalarValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({})", self),
             ScalarValue::Boolean(_) => write!(f, "Boolean({})", self),
@@ -1919,6 +1935,8 @@ mod tests {
     fn scalar_decimal_test() {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
         assert_eq!(DataType::Decimal(10, 1), decimal_value.get_datatype());
+        let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
+        assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
         let neg_decimal_value = decimal_value.arithmetic_negate();
         match neg_decimal_value {

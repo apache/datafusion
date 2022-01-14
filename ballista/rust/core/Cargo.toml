@@ -44,7 +44,6 @@ uuid = { version = "0.8", features = ["v4"] }
 chrono = { version = "0.4", default-features = false }
 
 arrow-flight = { version = "7.0.0"  }
-
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
 [dev-dependencies]

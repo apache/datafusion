@@ -396,7 +396,8 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
     let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let res = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let res = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&res);
 
     let res1 = actual[0][0].as_str();

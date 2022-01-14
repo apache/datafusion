@@ -23,8 +23,9 @@ use crate::serde::scheduler::PartitionLocation;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion::{
     error::{DataFusionError, Result},
@@ -102,7 +103,8 @@ impl ExecutionPlan for UnresolvedShuffleExec {
     async fn execute(
         &self,
         _partition: usize,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Plan(
             "Ballista UnresolvedShuffleExec does not support execution".to_owned(),
         ))

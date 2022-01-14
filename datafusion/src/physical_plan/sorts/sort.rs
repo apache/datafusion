@@ -17,16 +17,17 @@
 
 //! Defines the SORT plan
 
-use super::common::AbortOnDropSingle;
-use super::metrics::{
+use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
-use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
+use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
@@ -137,7 +138,11 @@ impl ExecutionPlan for SortExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         if !self.preserve_partitioning {
             if 0 != partition {
                 return Err(DataFusionError::Internal(format!(
@@ -155,7 +160,7 @@ impl ExecutionPlan for SortExec {
         }
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let input = self.input.execute(partition).await?;
+        let input = self.input.execute(partition, runtime).await?;
 
         Ok(Box::pin(SortStream::new(
             input,
@@ -186,7 +191,7 @@ impl ExecutionPlan for SortExec {
     }
 }
 
-fn sort_batch(
+pub(crate) fn sort_batch(
     batch: RecordBatch,
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
@@ -330,6 +335,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
@@ -371,7 +377,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
         )?);
 
-        let result: Vec<RecordBatch> = collect(sort_exec).await?;
+        let result: Vec<RecordBatch> = collect(sort_exec, runtime).await?;
         assert_eq!(result.len(), 1);
 
         let columns = result[0].columns();
@@ -393,6 +399,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_metadata() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let field_metadata: BTreeMap<String, String> =
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
@@ -422,7 +429,7 @@ mod tests {
             input,
         )?);
 
-        let result: Vec<RecordBatch> = collect(sort_exec).await?;
+        let result: Vec<RecordBatch> = collect(sort_exec, runtime).await?;
 
         let expected_data: ArrayRef =
             Arc::new(vec![1, 2, 3].into_iter().map(Some).collect::<UInt64Array>());
@@ -444,6 +451,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_lex_sort_by_float() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float64, true),
@@ -499,7 +507,7 @@ mod tests {
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
-        let result: Vec<RecordBatch> = collect(sort_exec.clone()).await?;
+        let result: Vec<RecordBatch> = collect(sort_exec.clone(), runtime).await?;
         let metrics = sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);
@@ -548,6 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -561,7 +570,7 @@ mod tests {
             blocking_exec,
         )?);
 
-        let fut = collect(sort_exec);
+        let fut = collect(sort_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

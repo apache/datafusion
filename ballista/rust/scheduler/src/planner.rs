@@ -254,7 +254,7 @@ mod test {
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::hash_join::HashJoinExec;
-    use datafusion::physical_plan::sort::SortExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };
@@ -293,7 +293,7 @@ mod test {
             .plan_query_stages(&job_uuid.to_string(), plan)
             .await?;
         for stage in &stages {
-            println!("{}", displayable(stage.as_ref()).indent().to_string());
+            println!("{}", displayable(stage.as_ref()).indent());
         }
 
         /* Expected result:
@@ -407,7 +407,7 @@ order by
             .plan_query_stages(&job_uuid.to_string(), plan)
             .await?;
         for stage in &stages {
-            println!("{}", displayable(stage.as_ref()).indent().to_string());
+            println!("{}", displayable(stage.as_ref()).indent());
         }
 
         /* Expected result:

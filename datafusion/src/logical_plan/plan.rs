@@ -1027,7 +1027,7 @@ pub enum PlanType {
 }
 
 impl fmt::Display for PlanType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
             PlanType::OptimizedLogicalPlan { optimizer_name } => {
