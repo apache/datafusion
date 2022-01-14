@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
       day: sunday
-      time: "7:00"
+      time: "07:00"
     open-pull-requests-limit: 10
     target-branch: master
     labels: [auto-dependencies]
