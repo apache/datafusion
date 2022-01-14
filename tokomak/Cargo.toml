@@ -34,5 +34,3 @@ tokio="^1"
 indexmap = "1"
 fxhash = "0.2"
 
-[features]
-invariant_verification=[]
