@@ -77,6 +77,7 @@ pub struct ExecutorMeta {
     pub id: String,
     pub host: String,
     pub port: u16,
+    pub grpc_port: u16,
 }
 
 #[allow(clippy::from_over_into)]
@@ -86,6 +87,7 @@ impl Into<protobuf::ExecutorMetadata> for ExecutorMeta {
             id: self.id,
             host: self.host,
             port: self.port as u32,
+            grpc_port: self.grpc_port as u32,
         }
     }
 }
@@ -96,7 +98,146 @@ impl From<protobuf::ExecutorMetadata> for ExecutorMeta {
             id: meta.id,
             host: meta.host,
             port: meta.port as u16,
+            grpc_port: meta.grpc_port as u16,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ExecutorSpecification {
+    pub task_slots: u32,
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::ExecutorSpecification> for ExecutorSpecification {
+    fn into(self) -> protobuf::ExecutorSpecification {
+        protobuf::ExecutorSpecification {
+            resources: vec![protobuf::executor_resource::Resource::TaskSlots(
+                self.task_slots,
+            )]
+            .into_iter()
+            .map(|r| protobuf::ExecutorResource { resource: Some(r) })
+            .collect(),
+        }
+    }
+}
+
+impl From<protobuf::ExecutorSpecification> for ExecutorSpecification {
+    fn from(input: protobuf::ExecutorSpecification) -> Self {
+        let mut ret = Self { task_slots: 0 };
+        for resource in input.resources {
+            if let Some(protobuf::executor_resource::Resource::TaskSlots(task_slots)) =
+                resource.resource
+            {
+                ret.task_slots = task_slots
+            }
+        }
+        ret
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExecutorData {
+    pub executor_id: String,
+    pub total_task_slots: u32,
+    pub available_task_slots: u32,
+}
+
+struct ExecutorResourcePair {
+    total: protobuf::executor_resource::Resource,
+    available: protobuf::executor_resource::Resource,
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::ExecutorData> for ExecutorData {
+    fn into(self) -> protobuf::ExecutorData {
+        protobuf::ExecutorData {
+            executor_id: self.executor_id,
+            resources: vec![ExecutorResourcePair {
+                total: protobuf::executor_resource::Resource::TaskSlots(
+                    self.total_task_slots,
+                ),
+                available: protobuf::executor_resource::Resource::TaskSlots(
+                    self.available_task_slots,
+                ),
+            }]
+            .into_iter()
+            .map(|r| protobuf::ExecutorResourcePair {
+                total: Some(protobuf::ExecutorResource {
+                    resource: Some(r.total),
+                }),
+                available: Some(protobuf::ExecutorResource {
+                    resource: Some(r.available),
+                }),
+            })
+            .collect(),
+        }
+    }
+}
+
+impl From<protobuf::ExecutorData> for ExecutorData {
+    fn from(input: protobuf::ExecutorData) -> Self {
+        let mut ret = Self {
+            executor_id: input.executor_id,
+            total_task_slots: 0,
+            available_task_slots: 0,
+        };
+        for resource in input.resources {
+            if let Some(task_slots) = resource.total {
+                if let Some(protobuf::executor_resource::Resource::TaskSlots(
+                    task_slots,
+                )) = task_slots.resource
+                {
+                    ret.total_task_slots = task_slots
+                }
+            };
+            if let Some(task_slots) = resource.available {
+                if let Some(protobuf::executor_resource::Resource::TaskSlots(
+                    task_slots,
+                )) = task_slots.resource
+                {
+                    ret.available_task_slots = task_slots
+                }
+            };
+        }
+        ret
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ExecutorState {
+    // in bytes
+    pub available_memory_size: u64,
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<protobuf::ExecutorState> for ExecutorState {
+    fn into(self) -> protobuf::ExecutorState {
+        protobuf::ExecutorState {
+            metrics: vec![protobuf::executor_metric::Metric::AvailableMemory(
+                self.available_memory_size,
+            )]
+            .into_iter()
+            .map(|m| protobuf::ExecutorMetric { metric: Some(m) })
+            .collect(),
+        }
+    }
+}
+
+impl From<protobuf::ExecutorState> for ExecutorState {
+    fn from(input: protobuf::ExecutorState) -> Self {
+        let mut ret = Self {
+            available_memory_size: u64::MAX,
+        };
+        for metric in input.metrics {
+            if let Some(protobuf::executor_metric::Metric::AvailableMemory(
+                available_memory_size,
+            )) = metric.metric
+            {
+                ret.available_memory_size = available_memory_size
+            }
+        }
+        ret
     }
 }
 

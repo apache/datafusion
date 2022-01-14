@@ -22,6 +22,7 @@ use std::sync::Arc;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
+use ballista_core::serde::scheduler::ExecutorSpecification;
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -31,13 +32,27 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 pub struct Executor {
     /// Directory for storing partial results
     work_dir: String,
+
+    /// Specification like total task slots
+    pub specification: ExecutorSpecification,
 }
 
 impl Executor {
     /// Create a new executor instance
     pub fn new(work_dir: &str) -> Self {
+        Executor::new_with_specification(
+            work_dir,
+            ExecutorSpecification { task_slots: 4 },
+        )
+    }
+
+    pub fn new_with_specification(
+        work_dir: &str,
+        specification: ExecutorSpecification,
+    ) -> Self {
         Self {
             work_dir: work_dir.to_owned(),
+            specification,
         }
     }
 }

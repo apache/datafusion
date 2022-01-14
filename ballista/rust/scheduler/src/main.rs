@@ -36,9 +36,14 @@ use ballista_scheduler::api::{get_routes, EitherBody, Error};
 use ballista_scheduler::state::EtcdClient;
 #[cfg(feature = "sled")]
 use ballista_scheduler::state::StandaloneClient;
-use ballista_scheduler::{state::ConfigBackendClient, ConfigBackend, SchedulerServer};
+use ballista_scheduler::{
+    state::ConfigBackendClient, ConfigBackend, SchedulerEnv, SchedulerServer,
+    TaskScheduler,
+};
 
+use ballista_core::config::TaskSchedulingPolicy;
 use log::info;
+use tokio::sync::mpsc;
 
 #[macro_use]
 extern crate configure_me;
@@ -52,20 +57,40 @@ mod config {
         "/scheduler_configure_me_config.rs"
     ));
 }
+
 use config::prelude::*;
 
 async fn start_server(
     config_backend: Arc<dyn ConfigBackendClient>,
     namespace: String,
     addr: SocketAddr,
+    policy: TaskSchedulingPolicy,
 ) -> Result<()> {
     info!(
         "Ballista v{} Scheduler listening on {:?}",
         BALLISTA_VERSION, addr
     );
     //should only call SchedulerServer::new() once in the process
-    let scheduler_server =
-        SchedulerServer::new(config_backend.clone(), namespace.clone());
+    info!(
+        "Starting Scheduler grpc server with task scheduling policy of {:?}",
+        policy
+    );
+    let scheduler_server = match policy {
+        TaskSchedulingPolicy::PushStaged => {
+            // TODO make the buffer size configurable
+            let (tx_job, rx_job) = mpsc::channel::<String>(10000);
+            let scheduler_server = SchedulerServer::new_with_policy(
+                config_backend.clone(),
+                namespace.clone(),
+                policy,
+                Some(SchedulerEnv { tx_job }),
+            );
+            let task_scheduler = TaskScheduler::new(Arc::new(scheduler_server.clone()));
+            task_scheduler.start(rx_job);
+            scheduler_server
+        }
+        _ => SchedulerServer::new(config_backend.clone(), namespace.clone()),
+    };
 
     Ok(Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {
@@ -163,6 +188,8 @@ async fn main() -> Result<()> {
             )
         }
     };
-    start_server(client, namespace, addr).await?;
+
+    let policy: TaskSchedulingPolicy = opt.scheduler_policy;
+    start_server(client, namespace, addr, policy).await?;
     Ok(())
 }
