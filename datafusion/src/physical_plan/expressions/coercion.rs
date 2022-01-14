@@ -30,6 +30,7 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
             | DataType::Float16
             | DataType::Float32
             | DataType::Float64
+            | DataType::Decimal(_, _)
     )
 }
 
@@ -186,20 +187,6 @@ pub fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType>
         return Some(lhs_type.clone());
     }
     numerical_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type))
-        .or_else(|| temporal_coercion(lhs_type, rhs_type))
-}
-
-// coercion rules that assume an ordered set, such as "less than".
-// These are the union of all numerical coercion rules and all string coercion rules
-pub fn order_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
-        // same type => all good
-        return Some(lhs_type.clone());
-    }
-
-    numerical_coercion(lhs_type, rhs_type)
-        .or_else(|| string_coercion(lhs_type, rhs_type))
         .or_else(|| dictionary_coercion(lhs_type, rhs_type))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
 }
