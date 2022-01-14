@@ -143,6 +143,7 @@ impl FromStr for TokomakDataType {
                 let interval_unit=match interval_unit_str{
                     "ym"=>IntervalUnit::YearMonth,
                     "dt"=>IntervalUnit::DayTime,
+                    "mdn" => IntervalUnit::MonthDayNano,
                     _=> return Err(DataFusionError::Internal(format!("{} is not a valid interval unit. Valid interval units are ym for YearMonth and dt for DayTime", interval_unit_str))),
                 };
                 TokomakDataType::Interval(interval_unit)
@@ -277,7 +278,7 @@ impl TryFrom<DataType> for TokomakDataType {
             | DataType::FixedSizeList(_, _)
             | DataType::LargeList(_)
             | DataType::Struct(_)
-            | DataType::Union(_)
+            | DataType::Union(_, _)
             | DataType::Dictionary(_, _)
             | DataType::Map(_, _)) => {
                 return Err(DataFusionError::Internal(format!(
@@ -335,6 +336,7 @@ impl std::fmt::Display for TokomakDataType {
                     match unit {
                         IntervalUnit::DayTime => "dt",
                         IntervalUnit::YearMonth => "ym",
+                        IntervalUnit::MonthDayNano => "mdn",
                     }
                 )
             }
