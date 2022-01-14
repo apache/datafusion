@@ -61,6 +61,9 @@ pub enum DataFusionError {
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
+    /// This error is thrown when a consumer cannot acquire memory from the Memory Manager
+    /// we can just cancel the execution of the partition.
+    ResourcesExhausted(String),
 }
 
 impl DataFusionError {
@@ -102,7 +105,7 @@ impl From<ParserError> for DataFusionError {
 }
 
 impl Display for DataFusionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
             DataFusionError::ParquetError(ref desc) => {
@@ -128,6 +131,9 @@ impl Display for DataFusionError {
             }
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
+            }
+            DataFusionError::ResourcesExhausted(ref desc) => {
+                write!(f, "Resources exhausted: {}", desc)
             }
         }
     }

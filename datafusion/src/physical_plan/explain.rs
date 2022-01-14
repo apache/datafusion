@@ -31,6 +31,7 @@ use crate::{
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 
 use super::SendableRecordBatchStream;
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
@@ -101,7 +102,11 @@ impl ExecutionPlan for ExplainExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "ExplainExec invalid partition {}",

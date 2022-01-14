@@ -24,7 +24,7 @@ keywords = [ "arrow", "datafusion", "ballista", "query", "sql" ]
 license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.57"
+rust-version = "1.58"
 
 [features]
 experimental-tokomak=["tokomak"]
@@ -35,6 +35,6 @@ rustyline = "9.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 tokomak = {path="../tokomak", optional=true}
 datafusion = { path = "../datafusion", version = "6.0.0" }
-arrow = { version = "6.4.0" }
+arrow = { version = "7.0.0" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0" }
 

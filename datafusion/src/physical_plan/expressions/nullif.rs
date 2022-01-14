@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::binary::{eq_decimal, eq_decimal_scalar};
 use crate::scalar::ScalarValue;
 use arrow::array::Array;
 use arrow::array::*;

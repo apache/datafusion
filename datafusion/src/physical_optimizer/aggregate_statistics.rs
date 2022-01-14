@@ -34,6 +34,7 @@ use super::utils::optimize_children;
 use crate::error::Result;
 
 /// Optimizer that uses available statistics for aggregate functions
+#[derive(Default)]
 pub struct AggregateStatistics {}
 
 impl AggregateStatistics {
@@ -258,6 +259,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use crate::error::Result;
+    use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::Operator;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
@@ -294,6 +296,7 @@ mod tests {
         nulls: bool,
     ) -> Result<()> {
         let conf = ExecutionConfig::new();
+        let runtime = Arc::new(RuntimeEnv::default());
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
         let (col, count) = match nulls {
@@ -303,7 +306,7 @@ mod tests {
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
-        let result = common::collect(optimized.execute(0).await?).await?;
+        let result = common::collect(optimized.execute(0, runtime).await?).await?;
         assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
         assert_eq!(
             result[0]

@@ -25,6 +25,7 @@ use self::{
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
+    execution::runtime_env::RuntimeEnv,
     scalar::ScalarValue,
 };
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
@@ -154,7 +155,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// creates an iterator
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream>;
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream>;
 
     /// Return a snapshot of the set of [`Metric`]s for this
     /// [`ExecutionPlan`].
@@ -310,24 +315,28 @@ pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
-pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
-    let stream = execute_stream(plan).await?;
+pub async fn collect(
+    plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
+) -> Result<Vec<RecordBatch>> {
+    let stream = execute_stream(plan, runtime).await?;
     common::collect(stream).await
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of results
 pub async fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
-        1 => plan.execute(0).await,
+        1 => plan.execute(0, runtime).await,
         _ => {
             // merge into a single partition
             let plan = CoalescePartitionsExec::new(plan.clone());
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
-            plan.execute(0).await
+            plan.execute(0, runtime).await
         }
     }
 }
@@ -335,8 +344,9 @@ pub async fn execute_stream(
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let streams = execute_stream_partitioned(plan).await?;
+    let streams = execute_stream_partitioned(plan, runtime).await?;
     let mut batches = Vec::with_capacity(streams.len());
     for stream in streams {
         batches.push(common::collect(stream).await?);
@@ -347,11 +357,12 @@ pub async fn collect_partitioned(
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
 pub async fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
     let num_partitions = plan.output_partitioning().partition_count();
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
-        streams.push(plan.execute(i).await?);
+        streams.push(plan.execute(i, runtime.clone()).await?);
     }
     Ok(streams)
 }
@@ -565,7 +576,17 @@ pub trait Accumulator: Send + Sync + Debug {
     // of two values, sum and n.
     fn state(&self) -> Result<Vec<ScalarValue>>;
 
-    /// updates the accumulator's state from a vector of scalars.
+    /// Updates the accumulator's state from a vector of scalars
+    /// (called by default implementation of [`update_batch`]).
+    ///
+    /// Note: this method is often the simplest to implement and is
+    /// backwards compatible to help to lower the barrier to entry for
+    /// new users to write `Accumulators`
+    ///
+    /// You should always implement `update_batch` instead of this
+    /// method for production aggregators or if you find yourself
+    /// wanting to use mathematical kernels for [`ScalarValue`] such as
+    /// `ScalarValue::add`, `ScalarValue::mul`, etc
     fn update(&mut self, values: &[ScalarValue]) -> Result<()>;
 
     /// updates the accumulator's state from a vector of arrays.
@@ -582,7 +603,12 @@ pub trait Accumulator: Send + Sync + Debug {
         })
     }
 
-    /// updates the accumulator's state from a vector of scalars.
+    /// Updates the accumulator's state from a vector of scalars.
+    /// (called by default implementation of [`merge`]).
+    ///
+    /// You should always implement `merge_batch` instead of this
+    /// method for production aggregators. Please see notes on
+    /// [`update`] for more detail and rationale.
     fn merge(&mut self, states: &[ScalarValue]) -> Result<()>;
 
     /// updates the accumulator's state from a vector of states.
@@ -636,8 +662,7 @@ pub mod projection;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
 pub mod repartition;
-pub mod sort;
-pub mod sort_preserving_merge;
+pub mod sorts;
 pub mod stream;
 pub mod string_expressions;
 pub mod type_coercion;

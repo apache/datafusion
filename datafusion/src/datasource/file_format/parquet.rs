@@ -341,6 +341,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::execution::runtime_env::RuntimeEnv;
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampNanosecondArray,
@@ -349,9 +350,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
         let exec = get_exec("alltypes_plain.parquet", &projection, 2, None).await?;
-        let stream = exec.execute(0).await?;
+        let stream = exec.execute(0, runtime).await?;
 
         let tt_batches = stream
             .map(|batch| {
@@ -373,6 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, Some(1)).await?;
 
@@ -380,7 +383,7 @@ mod tests {
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
         assert!(exec.statistics().is_exact);
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -390,6 +393,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
@@ -415,7 +419,7 @@ mod tests {
             y
         );
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
 
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
@@ -426,10 +430,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![1]);
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -454,10 +459,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -479,10 +485,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![10]);
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -504,10 +511,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![6]);
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -532,10 +540,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![7]);
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -560,10 +569,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![9]);
         let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
 
-        let batches = collect(exec).await?;
+        let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());

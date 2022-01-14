@@ -45,6 +45,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Projection;
 
 //// Custom source dataframe tests ////
@@ -132,7 +133,11 @@ impl ExecutionPlan for CustomExecutionPlan {
             ))
         }
     }
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
@@ -243,7 +248,8 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let batches = collect(physical_plan).await?;
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let batches = collect(physical_plan, runtime).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
     assert_eq!(1, batches[0].num_columns());
@@ -289,7 +295,8 @@ async fn optimizers_catch_all_statistics() {
     )
     .unwrap();
 
-    let actual = collect(physical_plan).await.unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let actual = collect(physical_plan, runtime).await.unwrap();
 
     assert_eq!(actual.len(), 1);
     assert_eq!(format!("{:?}", actual[0]), format!("{:?}", expected));

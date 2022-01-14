@@ -32,7 +32,7 @@ mod average;
 mod binary;
 mod case;
 mod cast;
-mod coercion;
+pub(crate) mod coercion;
 mod column;
 mod count;
 mod cume_dist;
@@ -44,14 +44,18 @@ mod lead_lag;
 mod literal;
 #[macro_use]
 mod min_max;
+mod covariance;
 mod negative;
 mod not;
 mod nth_value;
 mod nullif;
 mod rank;
 mod row_number;
+mod stats;
+mod stddev;
 mod sum;
 mod try_cast;
+mod variance;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
@@ -69,6 +73,9 @@ pub use cast::{
 };
 pub use column::{col, Column};
 pub use count::Count;
+pub(crate) use covariance::{
+    covariance_return_type, is_covariance_support_arg_type, Covariance, CovariancePop,
+};
 pub use cume_dist::cume_dist;
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
@@ -84,9 +91,16 @@ pub use nth_value::NthValue;
 pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
 pub use rank::{dense_rank, percent_rank, rank};
 pub use row_number::RowNumber;
+pub use stats::StatsType;
+pub(crate) use stddev::{
+    is_stddev_support_arg_type, stddev_return_type, Stddev, StddevPop,
+};
 pub(crate) use sum::is_sum_support_arg_type;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
+pub(crate) use variance::{
+    is_variance_support_arg_type, variance_return_type, Variance, VariancePop,
+};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
@@ -103,7 +117,7 @@ pub struct PhysicalSortExpr {
 }
 
 impl std::fmt::Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let opts_string = match (self.options.descending, self.options.nulls_first) {
             (true, true) => "DESC",
             (true, false) => "DESC NULLS LAST",
@@ -150,6 +164,32 @@ mod tests {
 
             let agg = Arc::new(<$OP>::new(
                 col("a", &schema)?,
+                "bla".to_string(),
+                $EXPECTED_DATATYPE,
+            ));
+            let actual = aggregate(&batch, agg)?;
+            let expected = ScalarValue::from($EXPECTED);
+
+            assert_eq!(expected, actual);
+
+            Ok(())
+        }};
+    }
+
+    /// macro to perform an aggregation with two inputs and verify the result.
+    #[macro_export]
+    macro_rules! generic_test_op2 {
+        ($ARRAY1:expr, $ARRAY2:expr, $DATATYPE1:expr, $DATATYPE2:expr, $OP:ident, $EXPECTED:expr, $EXPECTED_DATATYPE:expr) => {{
+            let schema = Schema::new(vec![
+                Field::new("a", $DATATYPE1, false),
+                Field::new("b", $DATATYPE2, false),
+            ]);
+            let batch =
+                RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY1, $ARRAY2])?;
+
+            let agg = Arc::new(<$OP>::new(
+                col("a", &schema)?,
+                col("b", &schema)?,
                 "bla".to_string(),
                 $EXPECTED_DATATYPE,
             ));

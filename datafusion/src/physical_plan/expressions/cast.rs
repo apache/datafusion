@@ -162,7 +162,10 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use arrow::array::{StringArray, Time64NanosecondArray};
     use arrow::{
-        array::{Array, Int32Array, Int64Array, TimestampNanosecondArray, UInt32Array},
+        array::{
+            Array, DecimalArray, Float32Array, Float64Array, Int16Array, Int32Array,
+            Int64Array, Int8Array, TimestampNanosecondArray, UInt32Array,
+        },
         datatypes::*,
     };
 
@@ -215,6 +218,129 @@ mod tests {
                 }
             }
         }};
+    }
+
+    #[test]
+    fn test_cast_numeric_to_decimal() -> Result<()> {
+        // int8
+        generic_test_cast!(
+            Int8Array,
+            DataType::Int8,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(3, 0),
+            vec![
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // int16
+        generic_test_cast!(
+            Int16Array,
+            DataType::Int16,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(5, 0),
+            vec![
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // int32
+        generic_test_cast!(
+            Int32Array,
+            DataType::Int32,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(10, 0),
+            vec![
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // int64
+        generic_test_cast!(
+            Int64Array,
+            DataType::Int64,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(20, 0),
+            vec![
+                Some(1_i128),
+                Some(2_i128),
+                Some(3_i128),
+                Some(4_i128),
+                Some(5_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // int64 to different scale
+        generic_test_cast!(
+            Int64Array,
+            DataType::Int64,
+            vec![1, 2, 3, 4, 5],
+            DecimalArray,
+            DataType::Decimal(20, 2),
+            vec![
+                Some(100_i128),
+                Some(200_i128),
+                Some(300_i128),
+                Some(400_i128),
+                Some(500_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // float32
+        generic_test_cast!(
+            Float32Array,
+            DataType::Float32,
+            vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
+            DecimalArray,
+            DataType::Decimal(10, 2),
+            vec![
+                Some(150_i128),
+                Some(250_i128),
+                Some(300_i128),
+                Some(112_i128),
+                Some(550_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        // float64
+        generic_test_cast!(
+            Float64Array,
+            DataType::Float64,
+            vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
+            DecimalArray,
+            DataType::Decimal(20, 4),
+            vec![
+                Some(15000_i128),
+                Some(25000_i128),
+                Some(30000_i128),
+                Some(11234_i128),
+                Some(55000_i128),
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        Ok(())
     }
 
     #[test]

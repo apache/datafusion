@@ -76,7 +76,7 @@ pub struct Metric {
 }
 
 impl Display for Metric {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.value.name())?;
 
         let mut iter = self
@@ -282,7 +282,7 @@ impl MetricsSet {
 
 impl Display for MetricsSet {
     /// format the MetricsSet as a single string
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut is_first = true;
         for i in self.metrics.iter() {
             if !is_first {
@@ -363,7 +363,7 @@ impl Label {
 }
 
 impl Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}={}", self.name, self.value)
     }
 }

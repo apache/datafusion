@@ -19,6 +19,7 @@
 
 use super::{common, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr,
@@ -133,7 +134,11 @@ impl ExecutionPlan for ValuesExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(

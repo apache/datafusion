@@ -139,7 +139,7 @@ impl From<tokio::task::JoinError> for BallistaError {
 }
 
 impl Display for BallistaError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             BallistaError::NotImplemented(ref desc) => {
                 write!(f, "Not implemented: {}", desc)
