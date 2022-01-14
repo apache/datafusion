@@ -92,9 +92,8 @@ pub fn keys_to_predicate<A: Analysis<TokomakLogicalPlan>>(
     move |egraph: &mut EGraph<TokomakLogicalPlan, A>, subst: &Subst| -> Option<Id> {
         let (left, right) = get_join_keys(egraph, subst[join_keys])?;
         assert!(left.len() == right.len());
-        //TODO: Determine if there is an allocation free way to do this.
-        let (left, right) = (left.to_vec(), right.to_vec());
 
+        let (left, right) = (left.to_vec(), right.to_vec());
         let mut predicate = egraph.add(TokomakLogicalPlan::Eq([left[0], right[0]]));
         for (l, r) in left.iter().zip(right.iter()).skip(1) {
             let other = egraph.add(TokomakLogicalPlan::Eq([*l, *r]));
