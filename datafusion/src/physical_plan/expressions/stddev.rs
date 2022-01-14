@@ -209,6 +209,10 @@ impl StddevAccumulator {
             variance: VarianceAccumulator::try_new(s_type)?,
         })
     }
+
+    pub fn get_m2(&self) -> f64 {
+        self.variance.get_m2()
+    }
 }
 
 impl Accumulator for StddevAccumulator {

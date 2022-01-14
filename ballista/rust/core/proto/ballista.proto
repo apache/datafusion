@@ -175,6 +175,7 @@ enum AggregateFunction {
   COVARIANCE_POP=10;
   STDDEV=11;
   STDDEV_POP=12;
+  CORRELATION=13;
 }
 
 message AggregateExprNode {

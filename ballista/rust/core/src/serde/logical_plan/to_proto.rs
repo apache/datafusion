@@ -1049,6 +1049,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::StddevPop => {
                         protobuf::AggregateFunction::StddevPop
                     }
+                    AggregateFunction::Correlation => {
+                        protobuf::AggregateFunction::Correlation
+                    }
                 };
 
                 let arg = &args[0];
@@ -1285,6 +1288,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::CovariancePop => Self::CovariancePop,
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
+            AggregateFunction::Correlation => Self::Correlation,
         }
     }
 }
