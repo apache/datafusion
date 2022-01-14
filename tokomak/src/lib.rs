@@ -756,14 +756,12 @@ impl RunnerSettings {
         rules: &[Rewrite<TokomakLogicalPlan, TokomakAnalysis>],
         cost_func: C,
     ) -> Result<LogicalPlan, DataFusionError> {
-        let mut runner = self
-            .create_runner(egraph)
-            .with_scheduler(
-                BackoffScheduler::default()
-                    .with_initial_match_limit(2000)
-                    //Focus on more smaller iterations. So increase ban length
-                    .with_ban_length(5),
-            );
+        let mut runner = self.create_runner(egraph).with_scheduler(
+            BackoffScheduler::default()
+                .with_initial_match_limit(2000)
+                //Focus on more smaller iterations. So increase ban length
+                .with_ban_length(5),
+        );
         let start = std::time::Instant::now();
 
         runner = runner.run(rules.iter());
@@ -909,9 +907,6 @@ impl CostFunction<TokomakLogicalPlan> for DefaultCostFunc {
     where
         C: FnMut(Id) -> Self::Cost,
     {
-
-        
-
         let op_cost = match enode {
             TokomakLogicalPlan::Filter(_) => 0,
             // if cost.plan_height < 10{
@@ -1141,31 +1136,40 @@ impl Display for UDAFName {
     }
 }
 
-
 #[cfg(test)]
-mod tests{
-    use std:: time::Duration;
+mod tests {
+    use std::time::Duration;
 
-    use datafusion::{logical_plan::{LogicalPlanBuilder, Expr, col, lit, LogicalPlan, when, DFSchema}, arrow::datatypes::{DataType, Schema, Field}, error::DataFusionError, scalar::ScalarValue, optimizer::optimizer::OptimizerRule, execution::context::ExecutionProps, physical_plan::{window_functions::WindowFunction, aggregates::AggregateFunction}};
+    use datafusion::{
+        arrow::datatypes::{DataType, Field, Schema},
+        error::DataFusionError,
+        execution::context::ExecutionProps,
+        logical_plan::{col, lit, when, DFSchema, Expr, LogicalPlan, LogicalPlanBuilder},
+        optimizer::optimizer::OptimizerRule,
+        physical_plan::{
+            aggregates::AggregateFunction, window_functions::WindowFunction,
+        },
+        scalar::ScalarValue,
+    };
     use egg::{EGraph, Extractor};
 
     use crate::{expr::to_tokomak_expr, RunnerSettings, ALL_RULES};
     type TestResult = Result<(), Box<dyn std::error::Error>>;
-    
+
     fn expr_test_schema() -> Schema {
-            Schema::new(vec![
-                Field::new( "c1", DataType::Utf8, true),
-                Field::new( "c2", DataType::Boolean, true),
-                Field::new( "c1_non_null", DataType::Utf8, false),
-                Field::new( "c2_non_null", DataType::Boolean, false),
-            ])   
+        Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Boolean, true),
+            Field::new("c1_non_null", DataType::Utf8, false),
+            Field::new("c2_non_null", DataType::Boolean, false),
+        ])
     }
 
-    fn expr_test_scan_builder()->LogicalPlanBuilder{
+    fn expr_test_scan_builder() -> LogicalPlanBuilder {
         LogicalPlanBuilder::scan_empty(Some("test"), &expr_test_schema(), None).unwrap()
     }
 
-    fn test_roundtrip_expr(expr: &Expr)->Result<(), Box<dyn std::error::Error>>{
+    fn test_roundtrip_expr(expr: &Expr) -> Result<(), Box<dyn std::error::Error>> {
         let mut egraph = EGraph::default();
         let schema = expr_test_scan_builder().build()?.schema().clone();
         let root = to_tokomak_expr(expr, &mut egraph, schema.as_ref())?;
@@ -1177,13 +1181,14 @@ mod tests{
                 "TokomakOptimizer could not extract plan from egraph.",
             ))
         })?;
-        let converter = crate::plan::TokomakPlanConverter::new(&plan, &eclass_ids, &egraph);
+        let converter =
+            crate::plan::TokomakPlanConverter::new(&plan, &eclass_ids, &egraph);
         let rt_expr = converter.convert_to_expr(root)?;
         assert_eq!(expr, &rt_expr);
         Ok(())
     }
 
-    fn roundtrip_plan(plan: &LogicalPlan)->TestResult{
+    fn roundtrip_plan(plan: &LogicalPlan) -> TestResult {
         let mut egraph = EGraph::default();
         let root = crate::plan::to_tokomak_plan(plan, &mut egraph)?;
         let ex = Extractor::new(&egraph, crate::DefaultCostFunc);
@@ -1193,29 +1198,26 @@ mod tests{
                 "TokomakOptimizer could not extract plan from egraph.",
             ))
         })?;
-        let rt_plan = crate::plan::convert_to_df_plan(&rec_expr_plan, &eclass_ids, &egraph)?;
+        let rt_plan =
+            crate::plan::convert_to_df_plan(&rec_expr_plan, &eclass_ids, &egraph)?;
         assert_eq!(format!("{:?}", plan), format!("{:?}", rt_plan));
         Ok(())
-
     }
 
-    fn test_roundtrip_expr_list(exprs: &[Expr])->TestResult{
-        for e in exprs{
+    fn test_roundtrip_expr_list(exprs: &[Expr]) -> TestResult {
+        for e in exprs {
             test_roundtrip_expr(e)?;
         }
         Ok(())
     }
 
     #[test]
-    fn test_not_exprs()->Result<(), Box<dyn std::error::Error>>{
-        let exprs = vec![
-            col("c2").not().not().not(),
-            col("c2").not()
-        ];
+    fn test_not_exprs() -> Result<(), Box<dyn std::error::Error>> {
+        let exprs = vec![col("c2").not().not().not(), col("c2").not()];
         test_roundtrip_expr_list(&exprs)
     }
     #[test]
-    fn test_scalar_value_roundtrip()->TestResult{
+    fn test_scalar_value_roundtrip() -> TestResult {
         let scalars = [
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Boolean(Some(false)),
@@ -1280,7 +1282,6 @@ mod tests{
             ScalarValue::TimestampNanosecond(Some(32), None),
             ScalarValue::TimestampNanosecond(Some(-400), None),
             ScalarValue::TimestampNanosecond(None, None),
-
             ScalarValue::IntervalYearMonth(None),
             ScalarValue::IntervalYearMonth(Some(0)),
             ScalarValue::IntervalYearMonth(Some(45021)),
@@ -1292,44 +1293,41 @@ mod tests{
         ];
         let exprs = scalars.into_iter().map(lit).collect::<Vec<_>>();
         test_roundtrip_expr_list(&exprs)
-                    /* 
-            
-            ScalarValue::Binary
-            ScalarValue::LargeBinary
-            ScalarValue::List
-            ScalarValue::Struct
-            */
-        
+        /*
+
+        ScalarValue::Binary
+        ScalarValue::LargeBinary
+        ScalarValue::List
+        ScalarValue::Struct
+        */
     }
 
     #[test]
-    fn roundtrip_scalar_func()->TestResult{
-        use datafusion::logical_plan::{lpad, to_hex, rpad, lit};
+    fn roundtrip_scalar_func() -> TestResult {
+        use datafusion::logical_plan::{lit, lpad, rpad, to_hex};
         let testschema = expr_test_schema();
-        let dfschema: DFSchema  = testschema.try_into()?; 
+        let dfschema: DFSchema = testschema.try_into()?;
         let exprs = vec![
             lpad(vec![lit("test"), lit(12)]),
             rpad(vec![lit("test"), lit(12)]),
-            to_hex(lit("123").cast_to(&DataType::Int64, &dfschema)?)
+            to_hex(lit("123").cast_to(&DataType::Int64, &dfschema)?),
         ];
         test_roundtrip_expr_list(&exprs)
     }
 
     #[test]
-    fn roundtrip_null_cmp()->TestResult{
+    fn roundtrip_null_cmp() -> TestResult {
         let exprs = vec![
             lit(true).eq(lit(ScalarValue::Boolean(None))),
             lit(ScalarValue::Boolean(None)).not_eq(lit(ScalarValue::Boolean(None))),
             col("c2").not_eq(lit(ScalarValue::Boolean(None))),
             lit(ScalarValue::Boolean(None)).eq(col("c2")),
-            
-
         ];
         test_roundtrip_expr_list(&exprs)
     }
 
     #[test]
-    fn roundtrip_case_expr()->TestResult{
+    fn roundtrip_case_expr() -> TestResult {
         use datafusion::logical_plan::{case, col, when};
         let exprs = vec![
             case(col("c2").and(col("c2")))
@@ -1339,25 +1337,26 @@ mod tests{
             case(col("c2").and(col("c2")))
                 .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
                 .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
-                .otherwise(lit(12u8))?,            
-            when(
-                col("c2").and(col("c2")), lit(ScalarValue::UInt8(Some(4)))
-                ).otherwise(lit(ScalarValue::UInt8(Some(123))))?,
-            when(
-                col("c2").and(col("c2")), lit(ScalarValue::UInt8(Some(4)))).end()?
+                .otherwise(lit(12u8))?,
+            when(col("c2").and(col("c2")), lit(ScalarValue::UInt8(Some(4))))
+                .otherwise(lit(ScalarValue::UInt8(Some(123))))?,
+            when(col("c2").and(col("c2")), lit(ScalarValue::UInt8(Some(4)))).end()?,
         ];
 
         test_roundtrip_expr_list(&exprs)
     }
 
-    fn simple_optimizer_test(input_plan: &LogicalPlan, expected: &str)->TestResult{
+    fn simple_optimizer_test(input_plan: &LogicalPlan, expected: &str) -> TestResult {
         let mut runner_settings = RunnerSettings::new();
-        runner_settings.with_node_limit(1_000_000).with_iter_limit(10_000).with_time_limit(Duration::from_secs_f64(30.0));
+        runner_settings
+            .with_node_limit(1_000_000)
+            .with_iter_limit(10_000)
+            .with_time_limit(Duration::from_secs_f64(30.0));
         let mut optimizer = crate::Tokomak::new(runner_settings);
         optimizer.add_builtin_rules(ALL_RULES);
         let optimized_plan = optimizer.optimize(input_plan, &ExecutionProps::new())?;
         let actual = format!("{:?}", optimized_plan);
-        
+
         assert_eq!(expected, actual);
         Ok(())
     }
@@ -1365,12 +1364,14 @@ mod tests{
     //Test that expressions have the same name after being optimized and that
     //No unnecesary as exprs are added
     #[test]
-    fn rename_expr_projection() ->TestResult{
+    fn rename_expr_projection() -> TestResult {
         let table_scan = expr_test_scan_builder().build()?;
         //Th
-        let proj = vec![col("c2").and(col("c2")),//This expression should get optimized to col("c2")
-             col("c2"),
-            col("c2").and(col("c2_non_null"))];
+        let proj = vec![
+            col("c2").and(col("c2")), //This expression should get optimized to col("c2")
+            col("c2"),
+            col("c2").and(col("c2_non_null")),
+        ];
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(proj)
             .unwrap()
@@ -1384,20 +1385,21 @@ mod tests{
         simple_optimizer_test(&plan, expected)
     }
     #[test]
-    fn rename_expr_aggregate()->TestResult{
-        use datafusion::logical_plan::{sum, case};
+    fn rename_expr_aggregate() -> TestResult {
+        use datafusion::logical_plan::{case, sum};
         let table_scan = expr_test_scan_builder().build()?;
-        let sum_case_expr = sum(
-            case(col("c2").and(col("c2")))
-                .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
-                .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
-                .end()?
-        );
-        
+        let sum_case_expr = sum(case(col("c2").and(col("c2")))
+            .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
+            .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
+            .end()?);
+
         let plan = LogicalPlanBuilder::from(table_scan)
-        .aggregate( vec![col("c2")], vec![sum_case_expr.clone(), sum_case_expr.alias("aliased_group")])?
-        .project(vec![Expr::Wildcard])?
-        .build()?;
+            .aggregate(
+                vec![col("c2")],
+                vec![sum_case_expr.clone(), sum_case_expr.alias("aliased_group")],
+            )?
+            .project(vec![Expr::Wildcard])?
+            .build()?;
 
         roundtrip_plan(&plan)?;
         let expected = "Projection: #test.c2, #SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END), #aliased_group\n  Aggregate: groupBy=[[#test.c2]], aggr=[[SUM(CASE #test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END) AS SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END), SUM(CASE #test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END) AS aliased_group]]\n    TableScan: test projection=None";
@@ -1405,32 +1407,43 @@ mod tests{
     }
 
     #[test]
-    fn optimize_expr_case()->TestResult{
-        use datafusion::logical_plan::{sum, case};
+    fn optimize_expr_case() -> TestResult {
+        use datafusion::logical_plan::{case, sum};
         let table_scan = expr_test_scan_builder().build()?;
-        let sum_lit_case_expr = sum(
-            case(col("c2").and(col("c2")))
-                .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
-                .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
-                .end().unwrap()
-        );
-        let sum_lit_case_expr_otherwise = sum(
-            case(col("c2").and(col("c2")))
-                .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
-                .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
-                .otherwise(lit(32u8)).unwrap()
-        );
-        let sum_if_case_expr_otherwise = sum(
-            when(
-            col("c2").and(col("c2")), lit(ScalarValue::UInt8(Some(4)))
-            )
-            .otherwise(lit(ScalarValue::UInt8(Some(123)))).unwrap()
-        );
-        let sum_if_case_expr = sum(when(col("c2").and(col("c2")), lit(ScalarValue::UInt8(Some(3)))).end().unwrap());
+        let sum_lit_case_expr = sum(case(col("c2").and(col("c2")))
+            .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
+            .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
+            .end()
+            .unwrap());
+        let sum_lit_case_expr_otherwise = sum(case(col("c2").and(col("c2")))
+            .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
+            .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
+            .otherwise(lit(32u8))
+            .unwrap());
+        let sum_if_case_expr_otherwise = sum(when(
+            col("c2").and(col("c2")),
+            lit(ScalarValue::UInt8(Some(4))),
+        )
+        .otherwise(lit(ScalarValue::UInt8(Some(123))))
+        .unwrap());
+        let sum_if_case_expr = sum(when(
+            col("c2").and(col("c2")),
+            lit(ScalarValue::UInt8(Some(3))),
+        )
+        .end()
+        .unwrap());
         let plan = LogicalPlanBuilder::from(table_scan)
-        .aggregate( vec![col("c2")], vec![sum_lit_case_expr, sum_lit_case_expr_otherwise,sum_if_case_expr,sum_if_case_expr_otherwise])?
-        .project(vec![Expr::Wildcard])?
-        .build()?;
+            .aggregate(
+                vec![col("c2")],
+                vec![
+                    sum_lit_case_expr,
+                    sum_lit_case_expr_otherwise,
+                    sum_if_case_expr,
+                    sum_if_case_expr_otherwise,
+                ],
+            )?
+            .project(vec![Expr::Wildcard])?
+            .build()?;
 
         roundtrip_plan(&plan)?;
         let expected = "Projection: #test.c2, #SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END), #SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) ELSE UInt8(32) END), #SUM(CASE WHEN test.c2 AND test.c2 THEN UInt8(3) END), #SUM(CASE WHEN test.c2 AND test.c2 THEN UInt8(4) ELSE UInt8(123) END)\
@@ -1440,21 +1453,21 @@ mod tests{
     }
 
     #[test]
-    fn window_rename_expr()->TestResult{
+    fn window_rename_expr() -> TestResult {
         use datafusion::logical_plan::case;
         let table_scan = expr_test_scan_builder().build()?;
-        let case_expr = 
-            case(col("c2").and(col("c2")))
-                .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
-                .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
-                .end()?;
-        let sum_case_expr = Expr::WindowFunction{fun: WindowFunction::AggregateFunction(AggregateFunction::Sum), 
-            args: vec![case_expr], 
+        let case_expr = case(col("c2").and(col("c2")))
+            .when(lit(true), lit(ScalarValue::UInt8(Some(1))))
+            .when(lit(false), lit(ScalarValue::UInt8(Some(0))))
+            .end()?;
+        let sum_case_expr = Expr::WindowFunction {
+            fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
+            args: vec![case_expr],
             partition_by: vec![col("c1")],
-            order_by: vec![], 
-            window_frame: None
+            order_by: vec![],
+            window_frame: None,
         };
-        
+
         let plan = LogicalPlanBuilder::from(table_scan)
             .window(vec![sum_case_expr, col("c2").alias("test")])?
             .project(vec![Expr::Wildcard])?
@@ -1465,5 +1478,4 @@ mod tests{
         \n    TableScan: test projection=None";
         simple_optimizer_test(&plan, expected)
     }
-
 }

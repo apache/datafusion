@@ -272,9 +272,9 @@ impl LanguageChildren for CaseIf {
 }
 impl CaseIf {
     fn when_then(&self) -> &[Id] {
-        if self.0.len() % 2 == 0{
+        if self.0.len() % 2 == 0 {
             &self.0[..]
-        } else{
+        } else {
             &self.0[0..self.0.len() - 1]
         }
     }
@@ -326,9 +326,9 @@ impl CaseLit {
         self.0[0]
     }
     fn when_then(&self) -> &[Id] {
-        if self.0.len() %2 == 0{
-            &self.0[1..self.len()-1]
-        }else{
+        if self.0.len() % 2 == 0 {
+            &self.0[1..self.len() - 1]
+        } else {
             &self.0[1..self.len()]
         }
     }
@@ -956,7 +956,6 @@ impl<'a> PlanConverter<'a> {
             .egraph
             .add(TokomakLogicalPlan::PList(ids.into_boxed_slice())))
     }
-    
 
     fn set_schema(
         &mut self,
@@ -1296,13 +1295,13 @@ fn unexpected_expr(
     ))
 }
 
-pub (crate) struct TokomakPlanConverter<'a> {
+pub(crate) struct TokomakPlanConverter<'a> {
     refs: &'a [TokomakLogicalPlan],
     eclasses: &'a [Id],
     egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>,
 }
 impl<'a> TokomakPlanConverter<'a> {
-    pub (crate) fn new(
+    pub(crate) fn new(
         rec_expr: &'a RecExpr<TokomakLogicalPlan>,
         eclasses: &'a [Id],
         egraph: &'a EGraph<TokomakLogicalPlan, TokomakAnalysis>,
@@ -1344,11 +1343,13 @@ impl<'a> TokomakPlanConverter<'a> {
         &self,
         when_then: &[Id],
     ) -> DFResult<Vec<(Box<Expr>, Box<Expr>)>> {
-        if when_then.len() %2 != 0 || when_then.len() <= 1{
-            return Err(DataFusionError::Internal(format!("When then list must be even in length and greater than 0, found: {}", when_then.len())))
+        if when_then.len() % 2 != 0 || when_then.len() <= 1 {
+            return Err(DataFusionError::Internal(format!(
+                "When then list must be even in length and greater than 0, found: {}",
+                when_then.len()
+            )));
         }
         let mut wt = Vec::with_capacity(when_then.len() / 2);
-        
         for win in when_then.chunks_exact(2) {
             let when = self.convert_to_expr(win[0])?.into();
             let then = self.convert_to_expr(win[1])?.into();
@@ -1746,7 +1747,7 @@ impl<'a> TokomakPlanConverter<'a> {
             if let Expr::Alias(e, s) = expr {
                 let extracted = e.name(input_schema)?;
                 println!("alias: {:?}, calculated: {}", s, extracted);
-                if *s ==extracted {
+                if *s == extracted {
                     println!("Not using alias: {} as it is unecessary", s);
                     let mut expr_swap = Expr::Wildcard;
                     std::mem::swap(&mut expr_swap, e.as_mut());
@@ -1758,7 +1759,7 @@ impl<'a> TokomakPlanConverter<'a> {
 
         Ok(exprs)
     }
-    
+
     fn extract_expr_list(
         &self,
         id: Id,
@@ -2053,8 +2054,11 @@ impl<'a> TokomakPlanConverter<'a> {
                     "Aggregate.aggr_expr",
                 )?;
                 println!("Aggr expr{:?}", aggr_expr);
-                let group_expr =
-                    self.extract_expr_list_remove_uneccesary_aliases(*group_expr, input.schema().as_ref(), "Aggregate.group_expr")?;
+                let group_expr = self.extract_expr_list_remove_uneccesary_aliases(
+                    *group_expr,
+                    input.schema().as_ref(),
+                    "Aggregate.group_expr",
+                )?;
                 let p = input.build()?;
                 let input = LogicalPlanBuilder::from(p);
                 input.aggregate(group_expr, aggr_expr)?

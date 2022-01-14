@@ -55,8 +55,7 @@ pub enum TokomakDataType {
     Duration(TimeUnit),
 }
 
-
-impl Language for TokomakDataType{
+impl Language for TokomakDataType {
     fn matches(&self, other: &Self) -> bool {
         std::mem::discriminant(self) == std::mem::discriminant(other)
     }
@@ -66,39 +65,36 @@ impl Language for TokomakDataType{
     }
 
     fn children_mut(&mut self) -> &mut [Id] {
-        &mut[]
+        &mut []
     }
 }
 
-
-fn matches_type_with_parameter_pack(prefix: &str, op: &str)->bool{
-    let ends_with = op.ends_with(">");
-    if !ends_with{
+fn matches_type_with_parameter_pack(prefix: &str, op: &str) -> bool {
+    let ends_with = op.ends_with('>');
+    if !ends_with {
         return false;
     }
     //If the prefix is not long enougth to contain the op and the two extra bytes required
-    if prefix.len() + 2 >= op.len(){
+    if prefix.len() + 2 >= op.len() {
         return false;
     }
-    let mut byte_prefix_iter = prefix.as_bytes().iter();
     let mut byte_op_iter = op.as_bytes().iter();
-    while let Some(prefix_byte) = byte_prefix_iter.next(){
+    for prefix_byte in prefix.as_bytes().iter() {
         //Since op is longer than prefix this is okay
         let op_byte = byte_op_iter.next().unwrap();
-        if *op_byte != *prefix_byte{
+        if *op_byte != *prefix_byte {
             return false;
         }
     }
     *byte_op_iter.next().unwrap_or(&b't') == b'<'
 }
 
-
-fn extract_parameter_pack<'a>(prefix: &str, op: &'a str)->&'a str{
+fn extract_parameter_pack<'a>(prefix: &str, op: &'a str) -> &'a str {
     let prefix_len = prefix.len();
-    &op[prefix_len+1..op.len()-1]
+    &op[prefix_len + 1..op.len() - 1]
 }
 
-fn parse_time_unit(time_unit: &str)->Result<TimeUnit, DataFusionError>{
+fn parse_time_unit(time_unit: &str) -> Result<TimeUnit, DataFusionError> {
     Ok(match time_unit{
         "s" => TimeUnit::Second,
         "ms" => TimeUnit::Millisecond,
@@ -108,15 +104,15 @@ fn parse_time_unit(time_unit: &str)->Result<TimeUnit, DataFusionError>{
     })
 }
 
-impl FromStr for TokomakDataType{
-    type Err=DataFusionError;
+impl FromStr for TokomakDataType {
+    type Err = DataFusionError;
 
     fn from_str(op: &str) -> Result<Self, Self::Err> {
-        let dt = match op{
+        let dt = match op {
             "date32" => TokomakDataType::Date32,
-            "date64" =>  TokomakDataType::Date64,
-            "bool" =>  TokomakDataType::Boolean,
-            "int8" =>  TokomakDataType::Int8,
+            "date64" => TokomakDataType::Date64,
+            "bool" => TokomakDataType::Boolean,
+            "int8" => TokomakDataType::Int8,
             "int16" => TokomakDataType::Int16,
             "int32" => TokomakDataType::Int32,
             "int64" => TokomakDataType::Int64,
@@ -128,16 +124,21 @@ impl FromStr for TokomakDataType{
             "float64" => TokomakDataType::Float64,
             "utf8" => TokomakDataType::Utf8,
             "largeutf8" => TokomakDataType::LargeUtf8,
-            _ if matches_type_with_parameter_pack("timestamp", op) =>{
+            _ if matches_type_with_parameter_pack("timestamp", op) => {
                 let param_pack = extract_parameter_pack("timestamp", op);
                 let mut param_iter = param_pack.split(',');
-                let time_unit = param_iter.next().ok_or_else(|| DataFusionError::Internal(format!("Could not extract datatype parameter pack from {}", op)))?;
+                let time_unit = param_iter.next().ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "Could not extract datatype parameter pack from {}",
+                        op
+                    ))
+                })?;
                 let tz = param_iter.next();
                 let time_unit = parse_time_unit(time_unit)?;
                 let tz = tz.map(String::from);
                 TokomakDataType::Timestamp(time_unit, tz)
             }
-            _ if matches_type_with_parameter_pack("interval", op)=>{
+            _ if matches_type_with_parameter_pack("interval", op) => {
                 let interval_unit_str = extract_parameter_pack("interval", op);
                 let interval_unit=match interval_unit_str{
                     "ym"=>IntervalUnit::YearMonth,
@@ -146,44 +147,68 @@ impl FromStr for TokomakDataType{
                 };
                 TokomakDataType::Interval(interval_unit)
             }
-            _ if matches_type_with_parameter_pack("decimal", op)=>{
+            _ if matches_type_with_parameter_pack("decimal", op) => {
                 let param_pack = extract_parameter_pack("decimal", op);
                 let mut param_iter = param_pack.split(',');
-                let precision_str = param_iter.next().ok_or_else(|| DataFusionError::Internal(String::from("Could not extract decimal precision from parameter pack")))?;
-                let scale_str = param_iter.next().ok_or_else(|| DataFusionError::Internal(String::from("Could not extract decimal scale from parameter pack")))?;
-                let precision: usize = precision_str.parse().map_err(|e| DataFusionError::Internal(format!("Could not parse {} as decimal precision: {}", precision_str, e)))?;
-                let scale: usize = scale_str.parse().map_err(|e| DataFusionError::Internal(format!("Could not parse {} as decimal scale: {}", precision_str, e)))?;
+                let precision_str = param_iter.next().ok_or_else(|| {
+                    DataFusionError::Internal(String::from(
+                        "Could not extract decimal precision from parameter pack",
+                    ))
+                })?;
+                let scale_str = param_iter.next().ok_or_else(|| {
+                    DataFusionError::Internal(String::from(
+                        "Could not extract decimal scale from parameter pack",
+                    ))
+                })?;
+                let precision: usize = precision_str.parse().map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "Could not parse {} as decimal precision: {}",
+                        precision_str, e
+                    ))
+                })?;
+                let scale: usize = scale_str.parse().map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "Could not parse {} as decimal scale: {}",
+                        precision_str, e
+                    ))
+                })?;
                 if precision > MAX_PRECISION_FOR_DECIMAL128 {
                     return Err(DataFusionError::Internal(format!("The precision {} exceeded the maximum allowed precision of {} for decimal128", precision, MAX_PRECISION_FOR_DECIMAL128)));
                 }
                 if scale > precision {
-                    return Err(DataFusionError::Internal(format!("The scale, {}, was larger than the precision {}", scale, precision)));
+                    return Err(DataFusionError::Internal(format!(
+                        "The scale, {}, was larger than the precision {}",
+                        scale, precision
+                    )));
                 }
                 TokomakDataType::Decimal128(precision, scale)
             }
 
-            _ if matches_type_with_parameter_pack("time32", op)=>{
+            _ if matches_type_with_parameter_pack("time32", op) => {
                 let param_pack = extract_parameter_pack("time32", op);
                 let time_unit = parse_time_unit(param_pack)?;
                 TokomakDataType::Time32(time_unit)
             }
-            _ if matches_type_with_parameter_pack("time64", op)=>{
+            _ if matches_type_with_parameter_pack("time64", op) => {
                 let param_pack = extract_parameter_pack("time64", op);
                 let time_unit = parse_time_unit(param_pack)?;
                 TokomakDataType::Time32(time_unit)
             }
-            _ if matches_type_with_parameter_pack("duration", op)=>{
+            _ if matches_type_with_parameter_pack("duration", op) => {
                 let param_pack = extract_parameter_pack("duration", op);
                 let time_unit = parse_time_unit(param_pack)?;
                 TokomakDataType::Duration(time_unit)
             }
-            _=> return Err(DataFusionError::Internal(format!("The string {} is not a valid tokomak datatype", op)))
+            _ => {
+                return Err(DataFusionError::Internal(format!(
+                    "The string {} is not a valid tokomak datatype",
+                    op
+                )))
+            }
         };
         Ok(dt)
     }
 }
-
-
 
 impl From<TokomakDataType> for DataType {
     fn from(v: TokomakDataType) -> Self {
@@ -204,12 +229,13 @@ impl From<TokomakDataType> for DataType {
             TokomakDataType::Utf8 => DataType::Utf8,
             TokomakDataType::LargeUtf8 => DataType::LargeUtf8,
             TokomakDataType::Timestamp(unit, tz) => DataType::Timestamp(unit, tz),
-            TokomakDataType::Interval(unit)=>DataType::Interval(unit),
+            TokomakDataType::Interval(unit) => DataType::Interval(unit),
             TokomakDataType::Time32(unit) => DataType::Time32(unit),
             TokomakDataType::Time64(unit) => DataType::Time32(unit),
-            TokomakDataType::Decimal128(precision, scale) => DataType::Decimal(precision ,scale),
+            TokomakDataType::Decimal128(precision, scale) => {
+                DataType::Decimal(precision, scale)
+            }
             TokomakDataType::Duration(unit) => DataType::Duration(unit),
-            
         }
     }
 }
@@ -235,24 +261,27 @@ impl TryFrom<DataType> for TokomakDataType {
             DataType::LargeUtf8 => TokomakDataType::LargeUtf8,
             DataType::Timestamp(unit, tz) => TokomakDataType::Timestamp(unit, tz),
             DataType::Interval(unit) => TokomakDataType::Interval(unit),
-            DataType::Decimal(precision, scale)=>TokomakDataType::Decimal128(precision, scale),
+            DataType::Decimal(precision, scale) => {
+                TokomakDataType::Decimal128(precision, scale)
+            }
             DataType::Time32(unit) => TokomakDataType::Time32(unit),
             DataType::Time64(unit) => TokomakDataType::Time64(unit),
             DataType::Duration(unit) => TokomakDataType::Duration(unit),
-            //TODO: Do more complex types need supprt? Only used in Cast and TryCast Expr. Can those cast more complex types?  
-            dt @(
-            DataType::Float16|
-            DataType::Null|
-            DataType::Binary|
-            DataType::FixedSizeBinary(_)|
-            DataType::LargeBinary |
-            DataType::List(_) |
-            DataType::FixedSizeList(_, _) |
-            DataType::LargeList(_) |
-            DataType::Struct(_) |
-            DataType::Union(_) |
-            DataType::Dictionary(_, _) |
-            DataType::Map(_, _) ) =>{
+            //TODO: Do more complex types need supprt? Only used in Cast and TryCast Expr. Can those cast more complex types?
+            dt
+            @
+            (DataType::Float16
+            | DataType::Null
+            | DataType::Binary
+            | DataType::FixedSizeBinary(_)
+            | DataType::LargeBinary
+            | DataType::List(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::LargeList(_)
+            | DataType::Struct(_)
+            | DataType::Union(_)
+            | DataType::Dictionary(_, _)
+            | DataType::Map(_, _)) => {
                 return Err(DataFusionError::Internal(format!(
                     "The data type {} is invalid as a tokomak datatype",
                     dt
@@ -262,10 +291,10 @@ impl TryFrom<DataType> for TokomakDataType {
     }
 }
 
-impl std::fmt::Display for TokomakDataType{
+impl std::fmt::Display for TokomakDataType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let disp_tunit = |tunit: &TimeUnit|->&'static str{
-            match tunit{
+        let disp_tunit = |tunit: &TimeUnit| -> &'static str {
+            match tunit {
                 TimeUnit::Second => "s",
                 TimeUnit::Millisecond => "ms",
                 TimeUnit::Microsecond => "us",
@@ -273,7 +302,7 @@ impl std::fmt::Display for TokomakDataType{
             }
         };
 
-        let simple_fmt = match self{
+        let simple_fmt = match self {
             TokomakDataType::Date32 => "date32",
             TokomakDataType::Date64 => "date64",
             TokomakDataType::Boolean => "bool",
@@ -289,16 +318,34 @@ impl std::fmt::Display for TokomakDataType{
             TokomakDataType::Float64 => "float64",
             TokomakDataType::Utf8 => "utf8",
             TokomakDataType::LargeUtf8 => "largeutf8",
-            TokomakDataType::Timestamp(unit, None) => return write!(f, "timestamp<{}>", disp_tunit(unit)),
-            TokomakDataType::Timestamp(unit, Some(tz))=> return write!(f, "timestamp<{},{}>", disp_tunit(unit),tz),
-            TokomakDataType::Time32(unit) => return write!(f, "time32<{}>", disp_tunit(unit)),
-            TokomakDataType::Time64(unit) => return write!(f, "time64<{}>", disp_tunit(unit)),
-            TokomakDataType::Interval(unit) => return write!(f, "interval<{}>", match unit{
-                IntervalUnit::DayTime=>"dt",
-                IntervalUnit::YearMonth=>"ym",
-            }),
-            TokomakDataType::Decimal128(precision, scale) =>return write!(f, "decimal<{},{}>", precision, scale),
-            TokomakDataType::Duration(unit) => return write!(f, "duration<{}>", disp_tunit(unit)),
+            TokomakDataType::Timestamp(unit, None) => {
+                return write!(f, "timestamp<{}>", disp_tunit(unit))
+            }
+            TokomakDataType::Timestamp(unit, Some(tz)) => {
+                return write!(f, "timestamp<{},{}>", disp_tunit(unit), tz)
+            }
+            TokomakDataType::Time32(unit) => {
+                return write!(f, "time32<{}>", disp_tunit(unit))
+            }
+            TokomakDataType::Time64(unit) => {
+                return write!(f, "time64<{}>", disp_tunit(unit))
+            }
+            TokomakDataType::Interval(unit) => {
+                return write!(
+                    f,
+                    "interval<{}>",
+                    match unit {
+                        IntervalUnit::DayTime => "dt",
+                        IntervalUnit::YearMonth => "ym",
+                    }
+                )
+            }
+            TokomakDataType::Decimal128(precision, scale) => {
+                return write!(f, "decimal<{},{}>", precision, scale)
+            }
+            TokomakDataType::Duration(unit) => {
+                return write!(f, "duration<{}>", disp_tunit(unit))
+            }
         };
         write!(f, "{}", simple_fmt)
     }
