@@ -22,8 +22,8 @@ use ballista_scheduler::externalscaler::external_scaler_server::ExternalScalerSe
 use futures::future::{self, Either, TryFutureExt};
 use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use std::convert::Infallible;
-use std::net::{IpAddr, Ipv4Addr};
 use std::{net::SocketAddr, sync::Arc};
+use tonic::transport::server::Connected;
 use tonic::transport::Server as TonicServer;
 use tower::Service;
 
@@ -64,17 +64,11 @@ async fn start_server(
         BALLISTA_VERSION, addr
     );
     //should only call SchedulerServer::new() once in the process
-    let scheduler_server_without_caller_ip = SchedulerServer::new(
-        config_backend.clone(),
-        namespace.clone(),
-        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-    );
+    let scheduler_server =
+        SchedulerServer::new(config_backend.clone(), namespace.clone());
 
     Ok(Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {
-            let mut scheduler_server = scheduler_server_without_caller_ip.clone();
-            scheduler_server.set_caller_ip(request.remote_addr().ip());
-
             let scheduler_grpc_server =
                 SchedulerGrpcServer::new(scheduler_server.clone());
 
@@ -84,10 +78,16 @@ async fn start_server(
                 .add_service(scheduler_grpc_server)
                 .add_service(keda_scaler)
                 .into_service();
-            let mut warp = warp::service(get_routes(scheduler_server));
+            let mut warp = warp::service(get_routes(scheduler_server.clone()));
 
+            let connect_info = request.connect_info();
             future::ok::<_, Infallible>(tower::service_fn(
                 move |req: hyper::Request<hyper::Body>| {
+                    // Set the connect info from hyper to tonic
+                    let (mut parts, body) = req.into_parts();
+                    parts.extensions.insert(connect_info.clone());
+                    let req = http::Request::from_parts(parts, body);
+
                     let header = req.headers().get(hyper::header::ACCEPT);
                     if header.is_some() && header.unwrap().eq("application/json") {
                         return Either::Left(
