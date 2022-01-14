@@ -32,7 +32,7 @@ mod average;
 mod binary;
 mod case;
 mod cast;
-mod coercion;
+pub(crate) mod coercion;
 mod column;
 mod count;
 mod cume_dist;
