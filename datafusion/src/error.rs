@@ -144,13 +144,11 @@ impl Display for DataFusionError {
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
             }
-<<<<<<< HEAD
             DataFusionError::ResourcesExhausted(ref desc) => {
                 write!(f, "Resources exhausted: {}", desc)
-=======
+            }
             DataFusionError::External(ref desc) => {
                 write!(f, "External error: {}", desc)
->>>>>>> 905910ae (Update errors)
             }
         }
     }
