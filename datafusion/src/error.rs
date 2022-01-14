@@ -31,6 +31,9 @@ use sqlparser::parser::ParserError;
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T> = result::Result<T, DataFusionError>;
 
+/// Error type for generic operations that could result in DataFusionError::External
+pub type GenericError = Box<dyn error::Error + Send + Sync>;
+
 /// DataFusion error
 #[derive(Debug)]
 #[allow(missing_docs)]
@@ -66,7 +69,7 @@ pub enum DataFusionError {
     ResourcesExhausted(String),
     /// Errors originating from outside DataFusion's core codebase.
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
-    External(Box<dyn error::Error + Send + Sync>),
+    External(GenericError),
 }
 
 impl DataFusionError {
@@ -107,8 +110,8 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
-impl From<Box<dyn error::Error + Send + Sync>> for DataFusionError {
-    fn from(err: Box<dyn error::Error + Send + Sync>) -> Self {
+impl From<GenericError> for DataFusionError {
+    fn from(err: GenericError) -> Self {
         DataFusionError::External(err)
     }
 }

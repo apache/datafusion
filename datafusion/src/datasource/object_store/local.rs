@@ -17,7 +17,6 @@
 
 //! Object store that represents the Local File System.
 
-use std::error::Error;
 use std::fs::{self, File, Metadata};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
@@ -29,7 +28,7 @@ use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
 use crate::datasource::PartitionedFile;
-use crate::error::{DataFusionError, Result as DataFusionResult};
+use crate::error::{DataFusionError, GenericError, Result as DataFusionResult};
 
 use super::{ObjectReaderStream, SizedFile};
 
@@ -39,10 +38,7 @@ pub struct LocalFileSystem;
 
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
-    async fn list_file(
-        &self,
-        prefix: &str,
-    ) -> Result<FileMetaStream, Box<dyn Error + Send + Sync>> {
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream, GenericError> {
         list_all(prefix.to_owned()).await
     }
 
@@ -50,14 +46,14 @@ impl ObjectStore for LocalFileSystem {
         &self,
         _prefix: &str,
         _delimiter: Option<String>,
-    ) -> Result<ListEntryStream, Box<dyn Error + Send + Sync>> {
+    ) -> Result<ListEntryStream, GenericError> {
         todo!()
     }
 
     fn file_reader(
         &self,
         file: SizedFile,
-    ) -> Result<Arc<dyn ObjectReader>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Arc<dyn ObjectReader>, GenericError> {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 }
@@ -78,7 +74,7 @@ impl ObjectReader for LocalFileReader {
         &self,
         _start: u64,
         _length: usize,
-    ) -> Result<Box<dyn AsyncRead>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Box<dyn AsyncRead>, GenericError> {
         todo!(
             "implement once async file readers are available (arrow-rs#78, arrow-rs#111)"
         )
@@ -88,7 +84,7 @@ impl ObjectReader for LocalFileReader {
         &self,
         start: u64,
         length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<Box<dyn Read + Send + Sync>, GenericError> {
         // A new file descriptor is opened for each chunk reader.
         // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
@@ -104,9 +100,7 @@ impl ObjectReader for LocalFileReader {
     }
 }
 
-async fn list_all(
-    prefix: String,
-) -> Result<FileMetaStream, Box<dyn Error + Send + Sync>> {
+async fn list_all(prefix: String) -> Result<FileMetaStream, GenericError> {
     fn get_meta(path: String, metadata: Metadata) -> FileMeta {
         FileMeta {
             sized_file: SizedFile {
