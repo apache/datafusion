@@ -41,8 +41,8 @@ pub mod externalscaler {
     include!(concat!(env!("OUT_DIR"), "/externalscaler.rs"));
 }
 
+use std::fmt;
 use std::{convert::TryInto, sync::Arc};
-use std::{fmt, net::IpAddr};
 
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
@@ -94,17 +94,12 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct SchedulerServer {
-    caller_ip: IpAddr,
     pub(crate) state: Arc<SchedulerState>,
     start_time: u128,
 }
 
 impl SchedulerServer {
-    pub fn new(
-        config: Arc<dyn ConfigBackendClient>,
-        namespace: String,
-        caller_ip: IpAddr,
-    ) -> Self {
+    pub fn new(config: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
         let state = Arc::new(SchedulerState::new(config, namespace));
         let state_clone = state.clone();
 
@@ -112,17 +107,12 @@ impl SchedulerServer {
         tokio::spawn(async move { state_clone.synchronize_job_status_loop().await });
 
         Self {
-            caller_ip,
             state,
             start_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis(),
         }
-    }
-
-    pub fn set_caller_ip(&mut self, ip: IpAddr) {
-        self.caller_ip = ip;
     }
 }
 
@@ -181,6 +171,7 @@ impl SchedulerGrpc for SchedulerServer {
         &self,
         request: Request<PollWorkParams>,
     ) -> std::result::Result<Response<PollWorkResult>, tonic::Status> {
+        let remote_addr = request.remote_addr();
         if let PollWorkParams {
             metadata: Some(metadata),
             can_accept_task,
@@ -195,7 +186,7 @@ impl SchedulerGrpc for SchedulerServer {
                     .map(|h| match h {
                         OptionalHost::Host(host) => host,
                     })
-                    .unwrap_or_else(|| self.caller_ip.to_string()),
+                    .unwrap_or_else(|| remote_addr.unwrap().ip().to_string()),
                 port: metadata.port as u16,
             };
             let mut lock = self.state.lock().await.map_err(|e| {
