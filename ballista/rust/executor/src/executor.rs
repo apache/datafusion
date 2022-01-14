@@ -83,7 +83,9 @@ impl Executor {
             job_id,
             stage_id,
             part,
-            DisplayableExecutionPlan::with_metrics(&exec).indent()
+            DisplayableExecutionPlan::with_metrics(&exec)
+                .indent()
+                .to_string()
         );
 
         Ok(partitions)

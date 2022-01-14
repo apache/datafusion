@@ -542,7 +542,7 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
-            displayable(physical_plan.as_ref()).indent()
+            displayable(physical_plan.as_ref()).indent().to_string()
         );
     }
     let runtime = ctx.state.lock().unwrap().runtime_env.clone();
@@ -550,7 +550,9 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
-            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
+                .indent()
+                .to_string()
         );
         pretty::print_batches(&result)?;
     }

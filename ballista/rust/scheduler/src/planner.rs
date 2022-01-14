@@ -293,7 +293,7 @@ mod test {
             .plan_query_stages(&job_uuid.to_string(), plan)
             .await?;
         for stage in &stages {
-            println!("{}", displayable(stage.as_ref()).indent());
+            println!("{}", displayable(stage.as_ref()).indent().to_string());
         }
 
         /* Expected result:
@@ -407,7 +407,7 @@ order by
             .plan_query_stages(&job_uuid.to_string(), plan)
             .await?;
         for stage in &stages {
-            println!("{}", displayable(stage.as_ref()).indent());
+            println!("{}", displayable(stage.as_ref()).indent().to_string());
         }
 
         /* Expected result:
