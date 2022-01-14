@@ -1627,7 +1627,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
@@ -1674,7 +1674,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
@@ -1733,7 +1733,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
