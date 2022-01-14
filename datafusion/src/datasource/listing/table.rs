@@ -28,7 +28,7 @@ use crate::{
     logical_plan::Expr,
     physical_plan::{
         empty::EmptyExec,
-        file_format::{PhysicalPlanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
+        file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
         ExecutionPlan, Statistics,
     },
 };
@@ -192,7 +192,7 @@ impl TableProvider for ListingTable {
         self.options
             .format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::clone(&self.object_store),
                     file_schema: Arc::clone(&self.file_schema),
                     file_groups: partitioned_file_lists,

@@ -57,7 +57,7 @@ lazy_static! {
 /// The base configurations to provide when creating a physical plan for
 /// any given file format.
 #[derive(Debug, Clone)]
-pub struct PhysicalPlanConfig {
+pub struct FileScanConfig {
     /// Store from which the `files` should be fetched
     pub object_store: Arc<dyn ObjectStore>,
     /// Schema before projection. It contains the columns that are expected
@@ -76,7 +76,7 @@ pub struct PhysicalPlanConfig {
     pub table_partition_cols: Vec<String>,
 }
 
-impl PhysicalPlanConfig {
+impl FileScanConfig {
     /// Project the schema and the statistics on the given column indices
     fn project(&self) -> (SchemaRef, Statistics) {
         if self.projection.is_none() && self.table_partition_cols.is_empty() {
@@ -473,8 +473,8 @@ mod tests {
         projection: Option<Vec<usize>>,
         statistics: Statistics,
         table_partition_cols: Vec<String>,
-    ) -> PhysicalPlanConfig {
-        PhysicalPlanConfig {
+    ) -> FileScanConfig {
+        FileScanConfig {
             file_schema,
             file_groups: vec![vec![]],
             limit: None,

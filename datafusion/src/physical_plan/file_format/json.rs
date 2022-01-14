@@ -28,19 +28,19 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::file_stream::{BatchIter, FileStream};
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 
 /// Execution plan for scanning NdJson data source
 #[derive(Debug, Clone)]
 pub struct NdJsonExec {
-    base_config: PhysicalPlanConfig,
+    base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
 }
 
 impl NdJsonExec {
     /// Create a new JSON reader execution plan provided base configurations
-    pub fn new(base_config: PhysicalPlanConfig) -> Self {
+    pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
@@ -90,7 +90,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = runtime.config.batch_size;
+        let batch_size = runtime.batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
@@ -161,7 +161,7 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::default());
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(PhysicalPlanConfig {
+        let exec = NdJsonExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
             file_schema: infer_schema(path).await?,
@@ -215,7 +215,7 @@ mod tests {
     async fn nd_json_exec_file_projection() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(PhysicalPlanConfig {
+        let exec = NdJsonExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
             file_schema: infer_schema(path).await?,

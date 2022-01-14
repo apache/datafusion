@@ -30,7 +30,7 @@ use crate::avro_to_arrow::read_avro_schema_from_reader;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
-use crate::physical_plan::file_format::{AvroExec, PhysicalPlanConfig};
+use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
@@ -61,7 +61,7 @@ impl FileFormat for AvroFormat {
 
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = AvroExec::new(conf);
@@ -360,7 +360,7 @@ mod tests {
         let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
                     file_schema,
                     file_groups,

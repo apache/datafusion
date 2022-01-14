@@ -29,7 +29,7 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
-        file_format::PhysicalPlanConfig,
+        file_format::FileScanConfig,
         metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         stream::RecordBatchReceiverStream,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -67,7 +67,7 @@ use super::PartitionColumnProjector;
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
-    base_config: PhysicalPlanConfig,
+    base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
     /// Execution metrics
@@ -88,7 +88,7 @@ struct ParquetFileMetrics {
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
     /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
-    pub fn new(base_config: PhysicalPlanConfig, predicate: Option<Expr>) -> Self {
+    pub fn new(base_config: FileScanConfig, predicate: Option<Expr>) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
@@ -125,7 +125,7 @@ impl ParquetExec {
     }
 
     /// Ref to the base configs
-    pub fn base_config(&self) -> &PhysicalPlanConfig {
+    pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
     }
 }
@@ -206,7 +206,7 @@ impl ExecutionPlan for ParquetExec {
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
         let pruning_predicate = self.pruning_predicate.clone();
-        let batch_size = runtime.config.batch_size;
+        let batch_size = runtime.batch_size();
         let limit = self.base_config.limit;
         let object_store = Arc::clone(&self.base_config.object_store);
         let partition_col_proj = PartitionColumnProjector::new(
@@ -478,7 +478,7 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
                 file_schema: ParquetFormat::default()
@@ -528,7 +528,7 @@ mod tests {
             ScalarValue::Utf8(Some("26".to_owned())),
         ];
         let parquet_exec = ParquetExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: ParquetFormat::default()

@@ -111,7 +111,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::PartitionedFile;
-    use crate::physical_plan::file_format::{ParquetExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::Statistics;
     use crate::test::object_store::TestObjectStore;
@@ -122,7 +122,7 @@ mod tests {
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: TestObjectStore::new_arc(&[("x", 100)]),
                     file_schema,
                     file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
@@ -160,7 +160,7 @@ mod tests {
             Arc::new(ProjectionExec::try_new(
                 vec![],
                 Arc::new(ParquetExec::new(
-                    PhysicalPlanConfig {
+                    FileScanConfig {
                         object_store: TestObjectStore::new_arc(&[("x", 100)]),
                         file_schema,
                         file_groups: vec![vec![PartitionedFile::new(

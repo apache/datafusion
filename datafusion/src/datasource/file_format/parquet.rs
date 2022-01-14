@@ -35,7 +35,7 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -104,7 +104,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
@@ -615,7 +615,7 @@ mod tests {
         let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
         let exec = format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
                     file_schema,
                     file_groups,

@@ -229,7 +229,7 @@ mod tests {
     use crate::{
         physical_plan::{
             collect,
-            file_format::{CsvExec, PhysicalPlanConfig},
+            file_format::{CsvExec, FileScanConfig},
         },
         scalar::ScalarValue,
     };
@@ -246,7 +246,7 @@ mod tests {
         let (_, files2) = test::create_partitioned_csv("aggregate_test_100.csv", 5)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::clone(&fs),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
@@ -260,7 +260,7 @@ mod tests {
         );
 
         let csv2 = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::clone(&fs),
                 file_schema: Arc::clone(&schema),
                 file_groups: files2,

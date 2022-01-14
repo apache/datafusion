@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use super::FileFormat;
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
@@ -85,7 +85,7 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::new(conf);
@@ -101,7 +101,7 @@ mod tests {
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::{
         datasource::{
-            file_format::PhysicalPlanConfig,
+            file_format::FileScanConfig,
             object_store::local::{
                 local_object_reader, local_object_reader_stream,
                 local_unpartitioned_file, LocalFileSystem,
@@ -211,7 +211,7 @@ mod tests {
         let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
                     file_schema,
                     file_groups,

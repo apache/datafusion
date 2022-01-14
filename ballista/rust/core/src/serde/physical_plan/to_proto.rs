@@ -43,7 +43,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::physical_plan::{file_format::AvroExec, filter::FilterExec};
 use datafusion::physical_plan::{
-    file_format::PhysicalPlanConfig, hash_aggregate::AggregateMode,
+    file_format::FileScanConfig, hash_aggregate::AggregateMode,
 };
 use datafusion::{
     datasource::PartitionedFile, physical_plan::coalesce_batches::CoalesceBatchesExec,
@@ -677,10 +677,10 @@ impl From<&Statistics> for protobuf::Statistics {
     }
 }
 
-impl TryFrom<&PhysicalPlanConfig> for protobuf::FileScanExecConf {
+impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
     type Error = BallistaError;
     fn try_from(
-        conf: &PhysicalPlanConfig,
+        conf: &FileScanConfig,
     ) -> Result<protobuf::FileScanExecConf, Self::Error> {
         let file_groups = conf
             .file_groups
