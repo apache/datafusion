@@ -700,7 +700,6 @@ impl TryFrom<&PhysicalPlanConfig> for protobuf::FileScanExecConf {
                 .map(|n| *n as u32)
                 .collect(),
             schema: Some(conf.file_schema.as_ref().into()),
-            batch_size: conf.batch_size as u32,
             table_partition_cols: conf.table_partition_cols.to_vec(),
         })
     }

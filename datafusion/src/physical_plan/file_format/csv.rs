@@ -110,9 +110,9 @@ impl ExecutionPlan for CsvExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.config.batch_size;
         let file_schema = Arc::clone(&self.base_config.file_schema);
         let file_projection = self.base_config.file_column_projection_indices();
         let has_header = self.has_header;
@@ -153,10 +153,9 @@ impl ExecutionPlan for CsvExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "CsvExec: files={}, has_header={}, batch_size={}, limit={:?}",
+                    "CsvExec: files={}, has_header={}, limit={:?}",
                     super::FileGroupsDisplay(&self.base_config.file_groups),
                     self.has_header,
-                    self.base_config.batch_size,
                     self.base_config.limit,
                 )
             }
@@ -192,7 +191,6 @@ mod tests {
                 file_groups: vec![vec![local_unpartitioned_file(path)]],
                 statistics: Statistics::default(),
                 projection: Some(vec![0, 2, 4]),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -239,7 +237,6 @@ mod tests {
                 file_groups: vec![vec![local_unpartitioned_file(path)]],
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: Some(5),
                 table_partition_cols: vec![],
             },
@@ -293,7 +290,6 @@ mod tests {
                 file_schema,
                 file_groups: vec![vec![partitioned_file]],
                 statistics: Statistics::default(),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec!["date".to_owned()],
             },

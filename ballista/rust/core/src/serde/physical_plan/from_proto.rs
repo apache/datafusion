@@ -797,7 +797,6 @@ impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
                 .collect::<Result<Vec<_>, _>>()?,
             statistics,
             projection,
-            batch_size: self.batch_size as usize,
             limit: self.limit.as_ref().map(|sl| sl.limit as usize),
             table_partition_cols: vec![],
         })

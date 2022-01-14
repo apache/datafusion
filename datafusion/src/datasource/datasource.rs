@@ -77,7 +77,6 @@ pub trait TableProvider: Sync + Send {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         filters: &[Expr],
         // limit can be used to reduce the amount scanned
         // from the datasource as a performance optimization.

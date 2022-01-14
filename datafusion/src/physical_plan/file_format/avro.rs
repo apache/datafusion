@@ -107,11 +107,11 @@ impl ExecutionPlan for AvroExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.config.batch_size;
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The avro reader cannot limit the number of records, so `remaining` is ignored.
@@ -149,9 +149,8 @@ impl ExecutionPlan for AvroExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "AvroExec: files={}, batch_size={}, limit={:?}",
+                    "AvroExec: files={}, limit={:?}",
                     super::FileGroupsDisplay(&self.base_config.file_groups),
-                    self.base_config.batch_size,
                     self.base_config.limit,
                 )
             }
@@ -188,7 +187,6 @@ mod tests {
                 .await?,
             statistics: Statistics::default(),
             projection: Some(vec![0, 1, 2]),
-            batch_size: 1024,
             limit: None,
             table_partition_cols: vec![],
         });
@@ -249,7 +247,6 @@ mod tests {
             file_groups: vec![vec![partitioned_file]],
             file_schema: file_schema,
             statistics: Statistics::default(),
-            batch_size: 1024,
             limit: None,
             table_partition_cols: vec!["date".to_owned()],
         });

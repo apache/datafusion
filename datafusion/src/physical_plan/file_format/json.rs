@@ -86,11 +86,11 @@ impl ExecutionPlan for NdJsonExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.config.batch_size;
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
@@ -122,8 +122,7 @@ impl ExecutionPlan for NdJsonExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "JsonExec: batch_size={}, limit={:?}, files={}",
-                    self.base_config.batch_size,
+                    "JsonExec: limit={:?}, files={}",
                     self.base_config.limit,
                     super::FileGroupsDisplay(&self.base_config.file_groups),
                 )
@@ -168,7 +167,6 @@ mod tests {
             file_schema: infer_schema(path).await?,
             statistics: Statistics::default(),
             projection: None,
-            batch_size: 1024,
             limit: Some(3),
             table_partition_cols: vec![],
         });
@@ -223,7 +221,6 @@ mod tests {
             file_schema: infer_schema(path).await?,
             statistics: Statistics::default(),
             projection: Some(vec![0, 2]),
-            batch_size: 1024,
             limit: None,
             table_partition_cols: vec![],
         });

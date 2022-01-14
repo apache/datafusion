@@ -190,7 +190,7 @@ impl ExecutionPlan for ParquetExec {
     async fn execute(
         &self,
         partition_index: usize,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
         // because the parquet implementation is not thread-safe, it is necessary to execute
         // on a thread and communicate with channels
@@ -206,7 +206,7 @@ impl ExecutionPlan for ParquetExec {
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
         let pruning_predicate = self.pruning_predicate.clone();
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.config.batch_size;
         let limit = self.base_config.limit;
         let object_store = Arc::clone(&self.base_config.object_store);
         let partition_col_proj = PartitionColumnProjector::new(
@@ -247,8 +247,7 @@ impl ExecutionPlan for ParquetExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "ParquetExec: batch_size={}, limit={:?}, partitions={}",
-                    self.base_config.batch_size,
+                    "ParquetExec: limit={:?}, partitions={}",
                     self.base_config.limit,
                     super::FileGroupsDisplay(&self.base_config.file_groups)
                 )
@@ -495,7 +494,6 @@ mod tests {
                     .await?,
                 statistics: Statistics::default(),
                 projection: Some(vec![0, 1, 2]),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -547,7 +545,6 @@ mod tests {
                 statistics: Statistics::default(),
                 // file has 10 cols so index 12 should be month
                 projection: Some(vec![0, 1, 2, 12]),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![
                     "year".to_owned(),

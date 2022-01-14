@@ -170,7 +170,6 @@ impl TableProvider for ListingTable {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -199,7 +198,6 @@ impl TableProvider for ListingTable {
                     file_groups: partitioned_file_lists,
                     statistics,
                     projection: projection.clone(),
-                    batch_size,
                     limit,
                     table_partition_cols: self.options.table_partition_cols.clone(),
                 },
@@ -289,7 +287,7 @@ mod tests {
         let table = load_table("alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
-            .scan(&projection, 1024, &[], None)
+            .scan(&projection, &[], None)
             .await
             .expect("Scan table");
 
@@ -313,7 +311,7 @@ mod tests {
             .await?;
         let table =
             ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
-        let exec = table.scan(&None, 1024, &[], None).await?;
+        let exec = table.scan(&None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
@@ -345,7 +343,7 @@ mod tests {
         let filter = Expr::not_eq(col("p1"), lit("v1"));
 
         let scan = table
-            .scan(&None, 1024, &[filter], None)
+            .scan(&None, &[filter], None)
             .await
             .expect("Empty execution plan");
 

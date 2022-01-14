@@ -70,8 +70,6 @@ pub struct PhysicalPlanConfig {
     /// Columns on which to project the data. Indexes that are higher than the
     /// number of columns of `file_schema` refer to `table_partition_cols`.
     pub projection: Option<Vec<usize>>,
-    /// The maximum number of records per arrow column
-    pub batch_size: usize,
     /// The minimum number of records required from this source plan
     pub limit: Option<usize>,
     /// The partitioning column names
@@ -477,7 +475,6 @@ mod tests {
         table_partition_cols: Vec<String>,
     ) -> PhysicalPlanConfig {
         PhysicalPlanConfig {
-            batch_size: 1024,
             file_schema,
             file_groups: vec![vec![]],
             limit: None,

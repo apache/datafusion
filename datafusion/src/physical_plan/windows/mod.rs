@@ -198,7 +198,6 @@ mod tests {
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
