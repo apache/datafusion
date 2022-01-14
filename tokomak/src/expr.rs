@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains structs which represent more complex expressions in the TokomakLogicalPlan
-use datafusion::logical_plan::{Column, Expr, DFSchema};
+use datafusion::logical_plan::{Column, DFSchema, Expr};
 use egg::*;
 use std::convert::TryInto;
 use std::{fmt::Display, str::FromStr};
@@ -262,9 +262,8 @@ impl LanguageChildren for SortExpr{
 pub(crate) fn to_tokomak_expr(
     expr: &Expr,
     egraph: &mut EGraph<crate::plan::TokomakLogicalPlan, crate::TokomakAnalysis>,
-    schema: &DFSchema
+    schema: &DFSchema,
 ) -> Result<Id, datafusion::error::DataFusionError> {
     let mut converter = crate::plan::PlanConverter { egraph };
     converter.as_tokomak_expr(expr, schema)
-    
 }
