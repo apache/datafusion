@@ -268,9 +268,7 @@ impl TryFrom<DataType> for TokomakDataType {
             DataType::Time64(unit) => TokomakDataType::Time64(unit),
             DataType::Duration(unit) => TokomakDataType::Duration(unit),
             //TODO: Do more complex types need supprt? Only used in Cast and TryCast Expr. Can those cast more complex types?
-            dt
-            @
-            (DataType::Float16
+            dt @ (DataType::Float16
             | DataType::Null
             | DataType::Binary
             | DataType::FixedSizeBinary(_)

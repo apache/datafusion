@@ -315,12 +315,7 @@ macro_rules! get_min_max_values {
         };
 
         let data_type = field.data_type();
-        let null_scalar: ScalarValue = if let Ok(v) = data_type.try_into() {
-            v
-        } else {
-            // DataFusion doesn't have support for ScalarValues of the column type
-            return None
-        };
+        let null_scalar: ScalarValue = data_type.try_into().ok()?;
 
         let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
             .iter()

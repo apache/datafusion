@@ -2068,9 +2068,7 @@ impl<'a> TokomakPlanConverter<'a> {
                 let exprs = self.extract_expr_list(*sort_exprs, "Sort.exprs")?;
                 input.sort(exprs)?
             }
-            handle_elsewhere
-            @
-            (TokomakLogicalPlan::Table(_)
+            handle_elsewhere @ (TokomakLogicalPlan::Table(_)
             | TokomakLogicalPlan::Values(_)
             | TokomakLogicalPlan::TableProject(_)
             | TokomakLogicalPlan::Str(_)
@@ -2084,9 +2082,7 @@ impl<'a> TokomakPlanConverter<'a> {
                 )))
             }
 
-            expr
-            @
-            (TokomakLogicalPlan::ExprAlias(_)
+            expr @ (TokomakLogicalPlan::ExprAlias(_)
             | TokomakLogicalPlan::Plus(_)
             | TokomakLogicalPlan::Minus(_)
             | TokomakLogicalPlan::Multiply(_)
