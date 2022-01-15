@@ -17,7 +17,6 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
-use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
@@ -328,10 +327,6 @@ impl Accumulator for DistinctArrayAggAccumulator {
         )])
     }
 
-    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
-        unimplemented!("update_batch is implemented instead");
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         assert_eq!(values.len(), 1, "batch input should only include 1 column!");
 
@@ -340,10 +335,6 @@ impl Accumulator for DistinctArrayAggAccumulator {
             self.values.insert(ScalarValue::try_from_array(arr, i)?);
         }
         Ok(())
-    }
-
-    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
-        unimplemented!("merge_batch is implemented instead");
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -373,13 +364,17 @@ impl Accumulator for DistinctArrayAggAccumulator {
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
+    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::tests::aggregate;
+
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
         UInt8Array,
     };
     use arrow::array::{Int32Builder, ListBuilder, UInt64Builder};
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Schema};
+    use arrow::record_batch::RecordBatch;
 
     macro_rules! build_list {
         ($LISTS:expr, $BUILDER_TYPE:ident) => {{
@@ -877,5 +872,152 @@ mod tests {
         assert_eq!(result, ScalarValue::UInt64(Some(5)));
 
         Ok(())
+    }
+
+    // Ordering is unpredictable when using ARRAY_AGG(DISTINCT). Thus we cannot test by simply
+    // checking for equality of output, and it is difficult to sort since ORD is not implemented
+    // for ScalarValue. Thus we check for equality via the following:
+    //   1. `expected` and `actual` have the same number of elements.
+    //   2. `expected` contains no duplicates.
+    //   3. `expected` and `actual` contain the same unique elements.
+    fn check_distinct_array_agg(
+        input: ArrayRef,
+        expected: ScalarValue,
+        datatype: DataType,
+    ) -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![input])?;
+
+        let agg = Arc::new(DistinctArrayAgg::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            datatype,
+        ));
+        let actual = aggregate(&batch, agg)?;
+
+        match (expected, actual) {
+            (ScalarValue::List(Some(e), _), ScalarValue::List(Some(a), _)) => {
+                // Check that the inputs are the same length.
+                assert_eq!(e.len(), a.len());
+
+                let h1: HashSet<ScalarValue> = HashSet::from_iter(e.clone().into_iter());
+                let h2: HashSet<ScalarValue> = HashSet::from_iter(a.into_iter());
+
+                // Check that e's elements are unique.
+                assert_eq!(h1.len(), e.len());
+
+                // Check that a contains the same unique elements as e.
+                assert_eq!(h1, h2);
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn distinct_array_agg_i32() -> Result<()> {
+        let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
+
+        let out = ScalarValue::List(
+            Some(Box::new(vec![
+                ScalarValue::Int32(Some(1)),
+                ScalarValue::Int32(Some(2)),
+                ScalarValue::Int32(Some(7)),
+                ScalarValue::Int32(Some(4)),
+                ScalarValue::Int32(Some(5)),
+            ])),
+            Box::new(DataType::Int32),
+        );
+
+        check_distinct_array_agg(col, out, DataType::Int32)
+    }
+
+    #[test]
+    fn distinct_array_agg_nested() -> Result<()> {
+        // [[1, 2, 3], [4, 5]]
+        let l1 = ScalarValue::List(
+            Some(Box::new(vec![
+                ScalarValue::List(
+                    Some(Box::new(vec![
+                        ScalarValue::from(1i32),
+                        ScalarValue::from(2i32),
+                        ScalarValue::from(3i32),
+                    ])),
+                    Box::new(DataType::Int32),
+                ),
+                ScalarValue::List(
+                    Some(Box::new(vec![
+                        ScalarValue::from(4i32),
+                        ScalarValue::from(5i32),
+                    ])),
+                    Box::new(DataType::Int32),
+                ),
+            ])),
+            Box::new(DataType::List(Box::new(Field::new(
+                "item",
+                DataType::Int32,
+                true,
+            )))),
+        );
+
+        // [[6], [7, 8]]
+        let l2 = ScalarValue::List(
+            Some(Box::new(vec![
+                ScalarValue::List(
+                    Some(Box::new(vec![ScalarValue::from(6i32)])),
+                    Box::new(DataType::Int32),
+                ),
+                ScalarValue::List(
+                    Some(Box::new(vec![
+                        ScalarValue::from(7i32),
+                        ScalarValue::from(8i32),
+                    ])),
+                    Box::new(DataType::Int32),
+                ),
+            ])),
+            Box::new(DataType::List(Box::new(Field::new(
+                "item",
+                DataType::Int32,
+                true,
+            )))),
+        );
+
+        // [[9]]
+        let l3 = ScalarValue::List(
+            Some(Box::new(vec![ScalarValue::List(
+                Some(Box::new(vec![ScalarValue::from(9i32)])),
+                Box::new(DataType::Int32),
+            )])),
+            Box::new(DataType::List(Box::new(Field::new(
+                "item",
+                DataType::Int32,
+                true,
+            )))),
+        );
+
+        let list = ScalarValue::List(
+            Some(Box::new(vec![l1.clone(), l2.clone(), l3.clone()])),
+            Box::new(DataType::List(Box::new(Field::new(
+                "item",
+                DataType::Int32,
+                true,
+            )))),
+        );
+
+        // Duplicate l1 in the input array and check that it is deduped in the output.
+        let array = ScalarValue::iter_to_array(vec![l1.clone(), l2, l3, l1]).unwrap();
+
+        check_distinct_array_agg(
+            array,
+            list,
+            DataType::List(Box::new(Field::new(
+                "item",
+                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
+                true,
+            ))),
+        )
     }
 }
