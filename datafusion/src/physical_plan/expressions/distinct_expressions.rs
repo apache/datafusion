@@ -342,8 +342,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
             return Ok(());
         };
 
-        for i in 0..states.len() {
-            let array = &states[i];
+        for array in states {
             for j in 0..array.len() {
                 self.values.insert(ScalarValue::try_from_array(array, j)?);
             }
