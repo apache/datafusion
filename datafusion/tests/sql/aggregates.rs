@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::scalar::ScalarValue;
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -420,5 +421,60 @@ async fn csv_query_array_agg_one() -> Result<()> {
         "+----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_array_agg_distinct() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT array_agg(distinct c2) FROM aggregate_test_100";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+
+    // The results for this query should be something like the following:
+    //    +------------------------------------------+
+    //    | ARRAYAGG(DISTINCT aggregate_test_100.c2) |
+    //    +------------------------------------------+
+    //    | [4, 2, 3, 5, 1]                          |
+    //    +------------------------------------------+
+    // Since ARRAY_AGG(DISTINCT) ordering is nondeterministic, check the schema and contents.
+    assert_eq!(
+        *actual[0].schema(),
+        Schema::new(vec![Field::new(
+            "ARRAYAGG(DISTINCT aggregate_test_100.c2)",
+            DataType::List(Box::new(Field::new("item", DataType::UInt32, true))),
+            false
+        ),])
+    );
+
+    // We should have 1 row containing a list
+    let column = actual[0].column(0);
+    assert_eq!(column.len(), 1);
+
+    let list = ScalarValue::try_from_array(column, 0)?;
+    let mut contents = vec![];
+    match list {
+        // Since ScalarValue does not implement ORD, we must extract the underlying values
+        // before sorting and comparing with expected.
+        ScalarValue::List(Some(v), _) => {
+            for i in 0..v.len() {
+                match v[i] {
+                    ScalarValue::UInt32(Some(b)) => {
+                        contents.push(b);
+                    }
+                    _ => {
+                        unreachable!()
+                    }
+                }
+            }
+        }
+        _ => {
+            unreachable!()
+        }
+    }
+
+    contents.sort_unstable();
+    assert_eq!(contents, vec![1, 2, 3, 4, 5]);
+
     Ok(())
 }
