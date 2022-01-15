@@ -123,7 +123,7 @@ To run the benchmarks:
 
 ```bash
 cd $ARROW_HOME/benchmarks
-cargo run --release benchmark ballista --host localhost --port 50050 --query 1 --path $(pwd)/data --format tbl
+cargo run --release --bin tpch benchmark ballista --host localhost --port 50050 --query 1 --path $(pwd)/data --format tbl
 ```
 
 ## Running the Ballista Benchmarks on docker-compose
