@@ -32,7 +32,6 @@ use super::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_types};
-use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use expressions::{
@@ -198,14 +197,12 @@ pub fn create_aggregate_expr(
             name,
             return_type,
         )),
-        (AggregateFunction::Count, true) => {
-            Arc::new(distinct_expressions::DistinctCount::new(
-                coerced_exprs_types,
-                coerced_phy_exprs,
-                name,
-                return_type,
-            ))
-        }
+        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
+            coerced_exprs_types,
+            coerced_phy_exprs,
+            name,
+            return_type,
+        )),
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
             coerced_phy_exprs[0].clone(),
             name,
@@ -229,7 +226,7 @@ pub fn create_aggregate_expr(
             coerced_exprs_types[0].clone(),
         )),
         (AggregateFunction::ArrayAgg, true) => {
-            Arc::new(distinct_expressions::DistinctArrayAgg::new(
+            Arc::new(expressions::DistinctArrayAgg::new(
                 coerced_phy_exprs[0].clone(),
                 name,
                 coerced_exprs_types[0].clone(),
@@ -399,10 +396,9 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
 mod tests {
     use super::*;
     use crate::error::Result;
-    use crate::physical_plan::distinct_expressions::{DistinctArrayAgg, DistinctCount};
     use crate::physical_plan::expressions::{
-        ApproxDistinct, ArrayAgg, Avg, Correlation, Count, Covariance, Max, Min, Stddev,
-        Sum, Variance,
+        ApproxDistinct, ArrayAgg, Avg, Correlation, Count, Covariance, DistinctArrayAgg,
+        Max, Min, Stddev, Sum, Variance,
     };
 
     #[test]
