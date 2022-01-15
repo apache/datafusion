@@ -25,6 +25,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use ahash::RandomState;
+use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
 use crate::error::{DataFusionError, Result};
@@ -229,6 +230,142 @@ impl Accumulator for DistinctCountAccumulator {
                 t
             ))),
         }
+    }
+}
+
+/// Expression for a ARRAY_AGG(DISTINCT) aggregation.
+#[derive(Debug)]
+pub struct DistinctArrayAgg {
+    /// Column name
+    name: String,
+    /// The DataType for the input expression
+    input_data_type: DataType,
+    /// The input expression
+    expr: Arc<dyn PhysicalExpr>,
+}
+
+impl DistinctArrayAgg {
+    /// Create a new DistinctArrayAgg aggregate function
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        name: impl Into<String>,
+        input_data_type: DataType,
+    ) -> Self {
+        let name = name.into();
+        Self {
+            name,
+            expr,
+            input_data_type,
+        }
+    }
+}
+
+impl AggregateExpr for DistinctArrayAgg {
+    /// Return a reference to Any that can be used for downcasting
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn field(&self) -> Result<Field> {
+        Ok(Field::new(
+            &self.name,
+            DataType::List(Box::new(Field::new(
+                "item",
+                self.input_data_type.clone(),
+                true,
+            ))),
+            false,
+        ))
+    }
+
+    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
+        Ok(Box::new(DistinctArrayAggAccumulator::try_new(
+            &self.input_data_type,
+        )?))
+    }
+
+    fn state_fields(&self) -> Result<Vec<Field>> {
+        Ok(vec![Field::new(
+            &format_state_name(&self.name, "distinct_array_agg"),
+            DataType::List(Box::new(Field::new(
+                "item",
+                self.input_data_type.clone(),
+                true,
+            ))),
+            false,
+        )])
+    }
+
+    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        vec![self.expr.clone()]
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Debug)]
+struct DistinctArrayAggAccumulator {
+    values: HashSet<ScalarValue>,
+    datatype: DataType,
+}
+
+impl DistinctArrayAggAccumulator {
+    pub fn try_new(datatype: &DataType) -> Result<Self> {
+        Ok(Self {
+            values: HashSet::new(),
+            datatype: datatype.clone(),
+        })
+    }
+}
+
+impl Accumulator for DistinctArrayAggAccumulator {
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::List(
+            Some(Box::new(self.values.clone().into_iter().collect())),
+            Box::new(self.datatype.clone()),
+        )])
+    }
+
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
+        unimplemented!("update_batch is implemented instead");
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        assert_eq!(values.len(), 1, "batch input should only include 1 column!");
+
+        let arr = &values[0];
+        for i in 0..arr.len() {
+            self.values.insert(ScalarValue::try_from_array(arr, i)?);
+        }
+        Ok(())
+    }
+
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
+        unimplemented!("merge_batch is implemented instead");
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        };
+
+        for i in 0..states.len() {
+            let array = &states[i];
+            for j in 0..array.len() {
+                self.values.insert(ScalarValue::try_from_array(array, j)?);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn evaluate(&self) -> Result<ScalarValue> {
+        Ok(ScalarValue::List(
+            Some(Box::new(self.values.clone().into_iter().collect())),
+            Box::new(self.datatype.clone()),
+        ))
     }
 }
 
