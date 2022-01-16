@@ -541,7 +541,6 @@ mod tests {
             .unwrap();
 
         let num_rows = stats
-            // see https://github.com/jorgecarleitao/arrow2/pull/416 for fix
             .column_by_name("num_rows")
             .unwrap()
             .as_any()
@@ -577,7 +576,6 @@ mod tests {
             .downcast_ref::<StructArray>()
             .unwrap();
         let num_rows = stats
-            // see https://github.com/jorgecarleitao/arrow2/pull/416 for fix
             .column_by_name("num_rows")
             .unwrap()
             .as_any()

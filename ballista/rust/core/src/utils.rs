@@ -30,11 +30,11 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
-use arrow::io::ipc::write::WriteOptions;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
+use datafusion::arrow::io::ipc::write::WriteOptions;
 use datafusion::arrow::{
     array::*,
     compute::aggregate::estimated_bytes_size,

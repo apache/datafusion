@@ -878,7 +878,7 @@ mod tests {
             // compute
             let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
 
-            // verify that the array's data_type is correct
+            // verify that the array is equal
             assert_eq!($C_ARRAY, result.as_ref());
         }};
     }

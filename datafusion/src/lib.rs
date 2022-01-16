@@ -227,6 +227,7 @@ pub mod variable;
 
 // re-export dependencies from arrow-rs to minimise version maintenance for crate users
 pub use arrow;
+pub use parquet;
 
 mod arrow_temporal_util;
 

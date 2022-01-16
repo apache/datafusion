@@ -83,11 +83,7 @@ avro-schema = { version = "0.2", optional = true }
 [dependencies.arrow]
 package = "arrow2"
 version="0.8"
-features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "io_print", "ahash",
-    "compute_merge_sort", "compute_concatenate", "compute_regex_match", "compute_arithmetics",
-    "compute_cast", "compute_partition", "compute_temporal", "compute_take", "compute_aggregate",
-    "compute_comparison", "compute_if_then_else", "compute_nullif", "compute_boolean", "compute_length",
-    "compute_limit", "compute_boolean_kleene", "compute_like", "compute_filter", "compute_window",]
+features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "io_print", "ahash", "compute"]
 
 [dev-dependencies]
 criterion = "0.3"

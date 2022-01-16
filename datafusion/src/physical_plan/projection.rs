@@ -71,7 +71,7 @@ impl ProjectionExec {
                     e.nullable(&input_schema)?,
                 );
                 if let Some(metadata) = get_field_metadata(e, &input_schema) {
-                    field = field.with_metadata(metadata);
+                    field.metadata = metadata;
                 }
 
                 Ok(field)

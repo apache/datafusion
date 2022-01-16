@@ -58,8 +58,24 @@ impl NdJsonExec {
 struct JsonBatchReader<R: Read> {
     reader: R,
     schema: SchemaRef,
-    batch_size: usize,
     proj: Option<Vec<String>>,
+    rows: Vec<String>,
+}
+
+impl<R: Read> JsonBatchReader<R> {
+    fn new(
+        reader: R,
+        schema: SchemaRef,
+        batch_size: usize,
+        proj: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            reader,
+            schema,
+            proj,
+            rows: vec![String::default(); batch_size],
+        }
+    }
 }
 
 impl<R: BufRead> Iterator for JsonBatchReader<R> {
@@ -67,8 +83,7 @@ impl<R: BufRead> Iterator for JsonBatchReader<R> {
 
     fn next(&mut self) -> Option<Self::Item> {
         // json::read::read_rows iterates on the empty vec and reads at most n rows
-        let mut rows = vec![String::default(); self.batch_size];
-        let read = json::read::read_rows(&mut self.reader, rows.as_mut_slice());
+        let read = json::read::read_rows(&mut self.reader, self.rows.as_mut_slice());
         read.and_then(|records_read| {
             if records_read > 0 {
                 let fields = if let Some(proj) = &self.proj {
@@ -81,8 +96,8 @@ impl<R: BufRead> Iterator for JsonBatchReader<R> {
                 } else {
                     self.schema.fields.clone()
                 };
-                rows.truncate(records_read);
-                json::read::deserialize(&rows, fields).map(Some)
+                self.rows.truncate(records_read);
+                json::read::deserialize(&self.rows, fields).map(Some)
             } else {
                 Ok(None)
             }
@@ -131,12 +146,12 @@ impl ExecutionPlan for NdJsonExec {
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
-            Box::new(JsonBatchReader {
-                reader: BufReader::new(file),
-                schema: file_schema.clone(),
+            Box::new(JsonBatchReader::new(
+                BufReader::new(file),
+                file_schema.clone(),
                 batch_size,
-                proj: proj.clone(),
-            }) as BatchIter
+                proj.clone(),
+            )) as BatchIter
         };
 
         Ok(Box::pin(FileStream::new(
