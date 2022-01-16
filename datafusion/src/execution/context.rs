@@ -2929,11 +2929,11 @@ mod tests {
         let type_values = vec![
             (
                 DataType::Int8,
-                Arc::new(Int8Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int8Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int16,
-                Arc::new(Int16Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int16Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int32,
@@ -2945,11 +2945,11 @@ mod tests {
             ),
             (
                 DataType::UInt8,
-                Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt8Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt16,
-                Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt16Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt32,
@@ -4149,7 +4149,7 @@ mod tests {
                         .unwrap();
 
                 // create mock record batch
-                let ids = Arc::new(Int32Array::from(vec![i as i32]));
+                let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
                 let names = Arc::new(StringArray::from(vec!["test"]));
                 let rec_batch =
                     RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();

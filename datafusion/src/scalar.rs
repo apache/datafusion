@@ -2651,7 +2651,7 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e.clone(),
-                        Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 2])) as ArrayRef,
                     ),
                     (
                         field_f.clone(),
@@ -2746,7 +2746,7 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e,
-                        Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 4, 6])) as ArrayRef,
                     ),
                     (
                         field_f,
