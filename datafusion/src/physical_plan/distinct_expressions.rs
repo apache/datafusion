@@ -17,12 +17,12 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
+use arrow::array::ArrayRef;
+use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
-
-use arrow::datatypes::{DataType, Field};
 
 use ahash::RandomState;
 use std::collections::HashSet;
@@ -130,8 +130,7 @@ struct DistinctCountAccumulator {
     state_data_types: Vec<DataType>,
     count_data_type: DataType,
 }
-
-impl Accumulator for DistinctCountAccumulator {
+impl DistinctCountAccumulator {
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // If a row has a NULL, it is not included in the final count.
         if !values.iter().any(|v| v.is_null()) {
@@ -165,7 +164,33 @@ impl Accumulator for DistinctCountAccumulator {
             self.update(&row_values)
         })
     }
+}
 
+impl Accumulator for DistinctCountAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        };
+        (0..values[0].len()).try_for_each(|index| {
+            let v = values
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.update(&v)
+        })
+    }
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        };
+        (0..states[0].len()).try_for_each(|index| {
+            let v = states
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.merge(&v)
+        })
+    }
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut cols_out = self
             .state_data_types
@@ -317,9 +342,20 @@ mod tests {
 
         let mut accum = agg.create_accumulator()?;
 
-        for row in rows.iter() {
-            accum.update(row)?
-        }
+        let cols = (0..rows[0].len())
+            .map(|i| {
+                rows.iter()
+                    .map(|inner| inner[i].clone())
+                    .collect::<Vec<ScalarValue>>()
+            })
+            .collect::<Vec<_>>();
+
+        let arrays: Vec<ArrayRef> = cols
+            .iter()
+            .map(|c| ScalarValue::iter_to_array(c.clone()))
+            .collect::<Result<Vec<ArrayRef>>>()?;
+
+        accum.update_batch(&arrays)?;
 
         Ok((accum.state()?, accum.evaluate()?))
     }

@@ -18,7 +18,7 @@
 /// In this example we will declare a single-type, single return type UDAF that computes the geometric mean.
 /// The geometric mean is described here: https://en.wikipedia.org/wiki/Geometric_mean
 use datafusion::arrow::{
-    array::Float32Array, array::Float64Array, datatypes::DataType,
+    array::ArrayRef, array::Float32Array, array::Float64Array, datatypes::DataType,
     record_batch::RecordBatch,
 };
 
@@ -66,20 +66,6 @@ impl GeometricMean {
     pub fn new() -> Self {
         GeometricMean { n: 0, prod: 1.0 }
     }
-}
-
-// UDAFs are built using the trait `Accumulator`, that offers DataFusion the necessary functions
-// to use them.
-impl Accumulator for GeometricMean {
-    // this function serializes our state to `ScalarValue`, which DataFusion uses
-    // to pass this state between execution stages.
-    // Note that this can be arbitrary data.
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![
-            ScalarValue::from(self.prod),
-            ScalarValue::from(self.n),
-        ])
-    }
 
     // this function receives one entry per argument of this accumulator.
     // DataFusion calls this function on every row, and expects this function to update the accumulator's state.
@@ -114,6 +100,20 @@ impl Accumulator for GeometricMean {
         };
         Ok(())
     }
+}
+
+// UDAFs are built using the trait `Accumulator`, that offers DataFusion the necessary functions
+// to use them.
+impl Accumulator for GeometricMean {
+    // This function serializes our state to `ScalarValue`, which DataFusion uses
+    // to pass this state between execution stages.
+    // Note that this can be arbitrary data.
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![
+            ScalarValue::from(self.prod),
+            ScalarValue::from(self.n),
+        ])
+    }
 
     // DataFusion expects this function to return the final value of this aggregator.
     // in this case, this is the formula of the geometric mean
@@ -122,9 +122,37 @@ impl Accumulator for GeometricMean {
         Ok(ScalarValue::from(value))
     }
 
+    // DataFusion calls this function to update the accumulator's state for a batch
+    // of inputs rows. In this case the product is updated with values from the first column
+    // and the count is updated based on the row count
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        };
+        (0..values[0].len()).try_for_each(|index| {
+            let v = values
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.update(&v)
+        })
+    }
+
     // Optimization hint: this trait also supports `update_batch` and `merge_batch`,
     // that can be used to perform these operations on arrays instead of single values.
     // By default, these methods call `update` and `merge` row by row
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        };
+        (0..states[0].len()).try_for_each(|index| {
+            let v = states
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.merge(&v)
+        })
+    }
 }
 
 #[tokio::main]

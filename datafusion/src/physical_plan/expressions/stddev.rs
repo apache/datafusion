@@ -224,14 +224,6 @@ impl Accumulator for StddevAccumulator {
         ])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        self.variance.update(values)
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.variance.merge(states)
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         self.variance.update_batch(values)
     }

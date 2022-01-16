@@ -21,6 +21,7 @@ use super::format_state_name;
 use crate::error::Result;
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -106,15 +107,6 @@ impl ArrayAggAccumulator {
             datatype: datatype.clone(),
         })
     }
-}
-
-impl Accumulator for ArrayAggAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::List(
-            Some(Box::new(self.array.clone())),
-            Box::new(self.datatype.clone()),
-        )])
-    }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         let value = &values[0];
@@ -136,6 +128,39 @@ impl Accumulator for ArrayAggAccumulator {
             _ => unreachable!(),
         }
         Ok(())
+    }
+}
+
+impl Accumulator for ArrayAggAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        };
+        (0..values[0].len()).try_for_each(|index| {
+            let v = values
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.update(&v)
+        })
+    }
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        };
+        (0..states[0].len()).try_for_each(|index| {
+            let v = states
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.merge(&v)
+        })
+    }
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![ScalarValue::List(
+            Some(Box::new(self.array.clone())),
+            Box::new(self.datatype.clone()),
+        )])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {

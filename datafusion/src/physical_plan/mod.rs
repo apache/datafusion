@@ -566,9 +566,9 @@ pub trait WindowExpr: Send + Sync + Debug {
 /// generically accumulates values.
 ///
 /// An accumulator knows how to:
-/// * update its state from inputs via `update`
+/// * update its state from inputs via `update_batch`
 /// * convert its internal state to a vector of scalar values
-/// * update its state from multiple accumulators' states via `merge`
+/// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
 pub trait Accumulator: Send + Sync + Debug {
     /// Returns the state of the accumulator at the end of the accumulation.
@@ -576,54 +576,11 @@ pub trait Accumulator: Send + Sync + Debug {
     // of two values, sum and n.
     fn state(&self) -> Result<Vec<ScalarValue>>;
 
-    /// Updates the accumulator's state from a vector of scalars
-    /// (called by default implementation of [`update_batch`]).
-    ///
-    /// Note: this method is often the simplest to implement and is
-    /// backwards compatible to help to lower the barrier to entry for
-    /// new users to write `Accumulators`
-    ///
-    /// You should always implement `update_batch` instead of this
-    /// method for production aggregators or if you find yourself
-    /// wanting to use mathematical kernels for [`ScalarValue`] such as
-    /// `ScalarValue::add`, `ScalarValue::mul`, etc
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()>;
-
     /// updates the accumulator's state from a vector of arrays.
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        };
-        (0..values[0].len()).try_for_each(|index| {
-            let v = values
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.update(&v)
-        })
-    }
-
-    /// Updates the accumulator's state from a vector of scalars.
-    /// (called by default implementation of [`merge`]).
-    ///
-    /// You should always implement `merge_batch` instead of this
-    /// method for production aggregators. Please see notes on
-    /// [`update`] for more detail and rationale.
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()>;
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
     /// updates the accumulator's state from a vector of states.
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        };
-        (0..states[0].len()).try_for_each(|index| {
-            let v = states
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.merge(&v)
-        })
-    }
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;

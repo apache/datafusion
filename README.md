@@ -49,7 +49,7 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Known Uses
 
-Projects that adapt to or service as plugins to DataFusion:
+Projects that adapt to or serve as plugins to DataFusion:
 
 - [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
 - [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
