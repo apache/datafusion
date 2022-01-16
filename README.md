@@ -49,14 +49,19 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Known Uses
 
+Projects that adapt to or service as plugins to DataFusion:
+
+- [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
+- [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
+- [datafusion-hdfs-native](https://github.com/datafusion-contrib/datafusion-hdfs-native)
+
 Here are some of the projects known to use DataFusion:
 
 - [Ballista](ballista) Distributed Compute Platform
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
-- [datafusion-python](https://pypi.org/project/datafusion)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
-- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [ROAPI](https://github.com/roapi/roapi)
