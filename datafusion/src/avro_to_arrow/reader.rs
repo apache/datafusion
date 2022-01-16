@@ -111,13 +111,14 @@ impl ReaderBuilder {
         let (mut avro_schemas, mut schema, codec, file_marker) =
             read::read_metadata(&mut source)?;
         if let Some(proj) = self.projection {
-            let indices: Vec<usize> = schema
+            let mut indices: Vec<usize> = schema
                 .fields
                 .iter()
                 .filter(|f| !proj.contains(&f.name))
                 .enumerate()
                 .map(|(i, _)| i)
                 .collect();
+            indices.sort_by(|i1, i2| i2.cmp(i1));
             for i in indices {
                 avro_schemas.remove(i);
                 schema.fields.remove(i);

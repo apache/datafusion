@@ -33,8 +33,6 @@ use crate::error::Result;
 
 use super::{ObjectReaderStream, SizedFile};
 
-impl ReadSeek for std::fs::File {}
-
 #[derive(Debug)]
 /// Local File System as Object Store.
 pub struct LocalFileSystem;
@@ -81,7 +79,9 @@ impl ObjectReader for LocalFileReader {
     }
 
     fn sync_reader(&self) -> Result<Box<dyn ReadSeek + Send + Sync>> {
-        Ok(Box::new(File::open(&self.file.path)?))
+        let file = File::open(&self.file.path)?;
+        let buf_reader = BufReader::new(file);
+        Ok(Box::new(buf_reader))
     }
 
     fn sync_chunk_reader(

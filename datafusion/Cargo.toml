@@ -40,8 +40,8 @@ path = "src/lib.rs"
 [features]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 # FIXME: https://github.com/jorgecarleitao/arrow2/issues/580
-#simd = ["arrow/simd"]
-simd = []
+simd = ["arrow/simd"]
+#simd = []
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]

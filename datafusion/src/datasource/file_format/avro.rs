@@ -141,7 +141,7 @@ mod tests {
                 "double_col: Float64",
                 "date_string_col: Binary",
                 "string_col: Binary",
-                "timestamp_col: Timestamp(Microsecond, None)",
+                "timestamp_col: Timestamp(Microsecond, Some(\"00:00\"))",
             ],
             x
         );

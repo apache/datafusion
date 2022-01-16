@@ -36,8 +36,7 @@ use crate::error::{DataFusionError, Result};
 /// Both Read and Seek
 pub trait ReadSeek: Read + Seek {}
 
-impl<R: Read + Seek> ReadSeek for std::io::BufReader<R> {}
-impl<R: AsRef<[u8]>> ReadSeek for std::io::Cursor<R> {}
+impl<R: Read + Seek> ReadSeek for R {}
 
 /// Object Reader for one file in an object store.
 ///
