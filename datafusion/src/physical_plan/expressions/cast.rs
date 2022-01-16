@@ -160,14 +160,62 @@ mod tests {
     use super::*;
     use crate::error::Result;
     use crate::physical_plan::expressions::col;
-    use arrow::array::{StringArray, Time64NanosecondArray};
     use arrow::{
         array::{
-            Array, DecimalArray, Float32Array, Float64Array, Int16Array, Int32Array,
-            Int64Array, Int8Array, TimestampNanosecondArray, UInt32Array,
+            Array, DecimalArray, DecimalBuilder, Float32Array, Float64Array, Int16Array,
+            Int32Array, Int64Array, Int8Array, StringArray, Time64NanosecondArray,
+            TimestampNanosecondArray, UInt32Array,
         },
         datatypes::*,
     };
+
+    // runs an end-to-end test of physical type cast
+    // 1. construct a record batch with a column "a" of type A
+    // 2. construct a physical expression of CAST(a AS B)
+    // 3. evaluate the expression
+    // 4. verify that the resulting expression is of type B
+    // 5. verify that the resulting values are downcastable and correct
+    macro_rules! generic_decimal_to_other_test_cast {
+        ($DECIMAL_ARRAY:ident, $A_TYPE:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr,$CAST_OPTIONS:expr) => {{
+            let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
+            let batch = RecordBatch::try_new(
+                Arc::new(schema.clone()),
+                vec![Arc::new($DECIMAL_ARRAY)],
+            )?;
+            // verify that we can construct the expression
+            let expression =
+                cast_with_options(col("a", &schema)?, &schema, $TYPE, $CAST_OPTIONS)?;
+
+            // verify that its display is correct
+            assert_eq!(
+                format!("CAST(a@0 AS {:?})", $TYPE),
+                format!("{}", expression)
+            );
+
+            // verify that the expression's type is correct
+            assert_eq!(expression.data_type(&schema)?, $TYPE);
+
+            // compute
+            let result = expression.evaluate(&batch)?.into_array(batch.num_rows());
+
+            // verify that the array's data_type is correct
+            assert_eq!(*result.data_type(), $TYPE);
+
+            // verify that the data itself is downcastable
+            let result = result
+                .as_any()
+                .downcast_ref::<$TYPEARRAY>()
+                .expect("failed to downcast");
+
+            // verify that the result itself is correct
+            for (i, x) in $VEC.iter().enumerate() {
+                match x {
+                    Some(x) => assert_eq!(result.value(i), *x),
+                    None => assert!(!result.is_valid(i)),
+                }
+            }
+        }};
+    }
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -428,6 +476,128 @@ mod tests {
                 ))
             }
         }
+        Ok(())
+    }
+
+    fn create_decimal_array(
+        array: &[i128],
+        precision: usize,
+        scale: usize,
+    ) -> Result<DecimalArray> {
+        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+        for value in array {
+            decimal_builder.append_value(*value)?
+        }
+        decimal_builder.append_null()?;
+        Ok(decimal_builder.finish())
+    }
+
+    #[test]
+    fn test_cast_decimal_to_numeric() -> Result<()> {
+        let array: Vec<i128> = vec![1, 2, 3, 4, 5];
+        // decimal to i8
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int8Array,
+            DataType::Int8,
+            vec![
+                Some(1_i8),
+                Some(2_i8),
+                Some(3_i8),
+                Some(4_i8),
+                Some(5_i8),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to i16
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int16Array,
+            DataType::Int16,
+            vec![
+                Some(1_i16),
+                Some(2_i16),
+                Some(3_i16),
+                Some(4_i16),
+                Some(5_i16),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to i32
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int32Array,
+            DataType::Int32,
+            vec![
+                Some(1_i32),
+                Some(2_i32),
+                Some(3_i32),
+                Some(4_i32),
+                Some(5_i32),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to i64
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int64Array,
+            DataType::Int64,
+            vec![
+                Some(1_i64),
+                Some(2_i64),
+                Some(3_i64),
+                Some(4_i64),
+                Some(5_i64),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to float32
+        let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
+        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 3),
+            Float32Array,
+            DataType::Float32,
+            vec![
+                Some(1.234_f32),
+                Some(2.222_f32),
+                Some(0.003_f32),
+                Some(4.0_f32),
+                Some(5.0_f32),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to float64
+        let decimal_array = create_decimal_array(&array, 20, 6)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(20, 6),
+            Float64Array,
+            DataType::Float64,
+            vec![
+                Some(0.001234_f64),
+                Some(0.002222_f64),
+                Some(0.000003_f64),
+                Some(0.004_f64),
+                Some(0.005_f64),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
         Ok(())
     }
 }
