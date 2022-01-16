@@ -61,7 +61,7 @@ pub(crate) fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "VARIANCE does not support {:?}",
+            "VAR does not support {:?}",
             other
         ))),
     }

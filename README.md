@@ -49,14 +49,19 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Known Uses
 
+Projects that adapt to or service as plugins to DataFusion:
+
+- [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
+- [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
+- [datafusion-hdfs-native](https://github.com/datafusion-contrib/datafusion-hdfs-native)
+
 Here are some of the projects known to use DataFusion:
 
 - [Ballista](ballista) Distributed Compute Platform
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
-- [datafusion-python](https://pypi.org/project/datafusion)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
-- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [ROAPI](https://github.com/roapi/roapi)
@@ -268,7 +273,7 @@ This library currently supports many SQL constructs, including
 - `CAST` to change types, including e.g. `Timestamp(Nanosecond, None)`
 - Many mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
 - `WHERE` to filter
-- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `VAR`, `COVAR`, `STDDEV` (sample and population)
+- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `CORR`, `VAR`, `COVAR`, `STDDEV` (sample and population)
 - `ORDER BY` together with an expression and optional `ASC` or `DESC` and also optional `NULLS FIRST` or `NULLS LAST`
 
 ## Supported Functions

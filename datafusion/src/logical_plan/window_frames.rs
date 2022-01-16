@@ -28,7 +28,7 @@ use sqlparser::ast;
 use std::cmp::Ordering;
 use std::convert::{From, TryFrom};
 use std::fmt;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 /// The frame-spec determines which output rows are read by an aggregate window function.
@@ -171,12 +171,6 @@ impl From<ast::WindowFrameBound> for WindowFrameBound {
     }
 }
 
-impl Hash for WindowFrameBound {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let rank = self.get_rank();
-        rank.hash(state)
-    }
-}
 
 impl fmt::Display for WindowFrameBound {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -205,6 +199,12 @@ impl PartialOrd for WindowFrameBound {
 impl Ord for WindowFrameBound {
     fn cmp(&self, other: &Self) -> Ordering {
         self.get_rank().cmp(&other.get_rank())
+    }
+}
+
+impl Hash for WindowFrameBound {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.get_rank().hash(state)
     }
 }
 
