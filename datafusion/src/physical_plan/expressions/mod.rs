@@ -44,6 +44,7 @@ mod lead_lag;
 mod literal;
 #[macro_use]
 mod min_max;
+mod correlation;
 mod covariance;
 mod negative;
 mod not;
@@ -72,6 +73,9 @@ pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 pub use column::{col, Column};
+pub(crate) use correlation::{
+    correlation_return_type, is_correlation_support_arg_type, Correlation,
+};
 pub use count::Count;
 pub(crate) use covariance::{
     covariance_return_type, is_covariance_support_arg_type, Covariance, CovariancePop,
