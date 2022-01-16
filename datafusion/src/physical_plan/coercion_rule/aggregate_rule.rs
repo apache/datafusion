@@ -21,8 +21,9 @@ use crate::arrow::datatypes::Schema;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::aggregates::AggregateFunction;
 use crate::physical_plan::expressions::{
-    is_avg_support_arg_type, is_covariance_support_arg_type, is_stddev_support_arg_type,
-    is_sum_support_arg_type, is_variance_support_arg_type, try_cast,
+    is_avg_support_arg_type, is_correlation_support_arg_type,
+    is_covariance_support_arg_type, is_stddev_support_arg_type, is_sum_support_arg_type,
+    is_variance_support_arg_type, try_cast,
 };
 use crate::physical_plan::functions::{Signature, TypeSignature};
 use crate::physical_plan::PhysicalExpr;
@@ -134,6 +135,15 @@ pub(crate) fn coerce_types(
         }
         AggregateFunction::StddevPop => {
             if !is_stddev_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::Correlation => {
+            if !is_correlation_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
