@@ -169,7 +169,7 @@ impl FromStr for Column {
 }
 
 impl fmt::Display for Column {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.relation {
             Some(r) => write!(f, "#{}.{}", r, self.name),
             None => write!(f, "#{}", self.name),

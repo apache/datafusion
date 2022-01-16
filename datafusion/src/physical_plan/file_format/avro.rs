@@ -26,6 +26,7 @@ use arrow::datatypes::SchemaRef;
 #[cfg(feature = "avro")]
 use arrow::error::ArrowError;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
@@ -92,14 +93,22 @@ impl ExecutionPlan for AvroExec {
     }
 
     #[cfg(not(feature = "avro"))]
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::NotImplemented(
             "Cannot execute avro plan without avro feature enabled".to_string(),
         ))
     }
 
     #[cfg(feature = "avro")]
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
         let batch_size = self.base_config.batch_size;

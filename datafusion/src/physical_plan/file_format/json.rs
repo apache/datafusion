@@ -19,6 +19,7 @@
 use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -82,7 +83,11 @@ impl ExecutionPlan for NdJsonExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
         let batch_size = self.base_config.batch_size;
@@ -154,6 +159,7 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_without_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(PhysicalPlanConfig {
@@ -191,7 +197,7 @@ mod tests {
             &DataType::Utf8
         );
 
-        let mut it = exec.execute(0).await?;
+        let mut it = exec.execute(0, runtime).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -209,6 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(PhysicalPlanConfig {
             object_store: Arc::new(LocalFileSystem {}),
@@ -228,7 +235,7 @@ mod tests {
         inferred_schema.field_with_name("c").unwrap();
         inferred_schema.field_with_name("d").unwrap_err();
 
-        let mut it = exec.execute(0).await?;
+        let mut it = exec.execute(0, runtime).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);

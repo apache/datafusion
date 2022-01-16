@@ -45,7 +45,7 @@ impl PartialEq for Count {
 }
 
 impl Display for Count {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.value())
     }
 }
@@ -97,7 +97,7 @@ impl PartialEq for Time {
 }
 
 impl Display for Time {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let duration = std::time::Duration::from_nanos(self.value() as u64);
         write!(f, "{:?}", duration)
     }
@@ -216,7 +216,7 @@ impl PartialEq for Timestamp {
 }
 
 impl Display for Timestamp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.value() {
             None => write!(f, "NONE"),
             Some(v) => {
@@ -416,7 +416,7 @@ impl MetricValue {
 
 impl std::fmt::Display for MetricValue {
     /// Prints the value of this metric
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::OutputRows(count) | Self::Count { count, .. } => {
                 write!(f, "{}", count)

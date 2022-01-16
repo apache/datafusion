@@ -37,6 +37,7 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use super::SendableRecordBatchStream;
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::spawn_execution;
 use pin_project_lite::pin_project;
 
@@ -97,7 +98,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
@@ -113,7 +118,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
             )),
             1 => {
                 // bypass any threading / metrics if there is a single partition
-                self.input.execute(0).await
+                self.input.execute(0, runtime).await
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -136,6 +141,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                         self.input.clone(),
                         sender.clone(),
                         part_i,
+                        runtime.clone(),
                     ));
                 }
 
@@ -215,6 +221,7 @@ mod tests {
 
     #[tokio::test]
     async fn merge() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
@@ -244,7 +251,7 @@ mod tests {
         assert_eq!(merge.output_partitioning().partition_count(), 1);
 
         // the result should contain 4 batches (one per input partition)
-        let iter = merge.execute(0).await?;
+        let iter = merge.execute(0, runtime).await?;
         let batches = common::collect(iter).await?;
         assert_eq!(batches.len(), num_partitions);
 
@@ -257,6 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -265,7 +273,7 @@ mod tests {
         let coaelesce_partitions_exec =
             Arc::new(CoalescePartitionsExec::new(blocking_exec));
 
-        let fut = collect(coaelesce_partitions_exec);
+        let fut = collect(coaelesce_partitions_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
