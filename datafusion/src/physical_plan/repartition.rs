@@ -492,9 +492,8 @@ impl RecordBatchStream for RepartitionStream {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{collect, expressions::col, memory::MemoryExec},
@@ -513,6 +512,7 @@ mod tests {
         error::ArrowError,
     };
     use futures::FutureExt;
+    use std::collections::HashSet;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -613,7 +613,7 @@ mod tests {
     fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
         RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
+            vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
         )
         .unwrap()
     }

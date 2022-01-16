@@ -1695,6 +1695,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::{
         error::Result,
         physical_plan::expressions::{col, lit},
@@ -1723,7 +1724,7 @@ mod tests {
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
 
             let expr =
                 create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &ctx_state)?;
@@ -3996,16 +3997,16 @@ mod tests {
 
         // different types, to validate that casting happens
         generic_test_array(
-            Arc::new(UInt32Array::from(vec![1u32])),
-            Arc::new(UInt64Array::from(vec![1u64])),
+            Arc::new(UInt32Array::from_slice(&[1u32])),
+            Arc::new(UInt64Array::from_slice(&[1u64])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )?;
 
         // different types (another order), to validate that casting happens
         generic_test_array(
-            Arc::new(UInt64Array::from(vec![1u64])),
-            Arc::new(UInt32Array::from(vec![1u32])),
+            Arc::new(UInt64Array::from_slice(&[1u64])),
+            Arc::new(UInt32Array::from_slice(&[1u32])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )
@@ -4059,7 +4060,7 @@ mod tests {
 
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],

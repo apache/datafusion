@@ -1930,6 +1930,7 @@ impl ScalarType<i64> for TimestampNanosecondType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
 
     #[test]
     fn scalar_decimal_test() {
@@ -2635,7 +2636,7 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 23])) as ArrayRef,
             ),
             (
                 field_b.clone(),
@@ -2654,7 +2655,7 @@ mod tests {
                     ),
                     (
                         field_f.clone(),
-                        Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2730,7 +2731,7 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a,
-                Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 7, -1000])) as ArrayRef,
             ),
             (
                 field_b,
@@ -2749,7 +2750,7 @@ mod tests {
                     ),
                     (
                         field_f,
-                        Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),

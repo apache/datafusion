@@ -394,6 +394,7 @@ impl Accumulator for CovarianceAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::col;
     use crate::{error::Result, generic_test_op2};
     use arrow::record_batch::RecordBatch;
@@ -401,8 +402,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -417,8 +418,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -433,8 +434,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_4() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4.1_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1.1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(&[4.1_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -449,8 +450,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_5() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4.1_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1.1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(&[4.1_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -485,8 +486,8 @@ mod tests {
 
     #[test]
     fn covariance_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3]));
+        let b: ArrayRef = Arc::new(Int32Array::from_slice(&[4, 5, 6]));
 
         generic_test_op2!(
             a,
@@ -501,8 +502,8 @@ mod tests {
 
     #[test]
     fn covariance_u32() -> Result<()> {
-        let a: ArrayRef = Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32]));
-        let b: ArrayRef = Arc::new(UInt32Array::from(vec![4_u32, 5_u32, 6_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[1_u32, 2_u32, 3_u32]));
+        let b: ArrayRef = Arc::new(UInt32Array::from_slice(&[4_u32, 5_u32, 6_u32]));
         generic_test_op2!(
             a,
             b,
@@ -516,8 +517,8 @@ mod tests {
 
     #[test]
     fn covariance_f32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32]));
-        let b: ArrayRef = Arc::new(Float32Array::from(vec![4_f32, 5_f32, 6_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(&[1_f32, 2_f32, 3_f32]));
+        let b: ArrayRef = Arc::new(Float32Array::from_slice(&[4_f32, 5_f32, 6_f32]));
         generic_test_op2!(
             a,
             b,
@@ -604,10 +605,10 @@ mod tests {
 
     #[test]
     fn covariance_f64_merge_1() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
-        let c = Arc::new(Float64Array::from(vec![1.1_f64, 2.2_f64, 3.3_f64]));
-        let d = Arc::new(Float64Array::from(vec![4.4_f64, 5.5_f64, 6.6_f64]));
+        let a = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64, 6_f64]));
+        let c = Arc::new(Float64Array::from_slice(&[1.1_f64, 2.2_f64, 3.3_f64]));
+        let d = Arc::new(Float64Array::from_slice(&[4.4_f64, 5.5_f64, 6.6_f64]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, false),
@@ -639,8 +640,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_merge_2() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+        let a = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64, 6_f64]));
         let c = Arc::new(Float64Array::from(vec![None]));
         let d = Arc::new(Float64Array::from(vec![None]));
 
