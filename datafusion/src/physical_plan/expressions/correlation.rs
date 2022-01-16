@@ -220,7 +220,11 @@ impl Accumulator for CorrelationAccumulator {
         if let ScalarValue::Float64(Some(c)) = covar {
             if let ScalarValue::Float64(Some(s1)) = stddev1 {
                 if let ScalarValue::Float64(Some(s2)) = stddev2 {
-                    return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
+                    if s1 == 0_f64 || s2 == 0_f64 {
+                        return Ok(ScalarValue::Float64(Some(0_f64)));
+                    } else {
+                        return Ok(ScalarValue::Float64(Some(c / s1 / s2)));
+                    }
                 }
             }
         }
