@@ -77,6 +77,10 @@ use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
 use datafusion::physical_plan::window_functions::WindowFunction;
 
+//TODO: Add support for ScalarVariable expression
+//TODO: Add support for IndexedFieldAccess
+//TODO: Figure out if Column expressions require additional disambiguation. Are column qualifiers unique within query? If multiple of the same qualifiers are allowed
+// then some way of figuring out which table/named plan a column is from is required to avoid datatype errors.
 define_language! {
     /// Representation of datafusion's LogicalPlan and Expr. Note that some of these nodes may be split into multiple nodes.
     /// An example of this is [datafusion::logical_plan::plan::Repartition] which has two variants Hash and RoundRobin.
@@ -271,14 +275,17 @@ impl LanguageChildren for CaseIf {
     }
 }
 impl CaseIf {
-    fn when_then(&self) -> &[Id] {
+    /// Returns list of alternating when then expressions
+    pub fn when_then(&self) -> &[Id] {
         if self.0.len() % 2 == 0 {
             &self.0[..]
         } else {
             &self.0[0..self.0.len() - 1]
         }
     }
-    fn else_expr(&self) -> Option<Id> {
+
+    ///Returns the else expression
+    pub fn else_expr(&self) -> Option<Id> {
         if self.0.len() % 2 == 0 {
             None
         } else {
@@ -322,17 +329,20 @@ impl LanguageChildren for CaseLit {
 }
 
 impl CaseLit {
-    fn expr(&self) -> Id {
+    ///Returns the expression in the case expression
+    pub fn expr(&self) -> Id {
         self.0[0]
     }
-    fn when_then(&self) -> &[Id] {
+    ///Returns list of alternating when then expressions
+    pub fn when_then(&self) -> &[Id] {
         if self.0.len() % 2 == 0 {
             &self.0[1..self.len() - 1]
         } else {
             &self.0[1..self.len()]
         }
     }
-    fn else_expr(&self) -> Option<Id> {
+    ///Returns the else epxression id if it exists
+    pub fn else_expr(&self) -> Option<Id> {
         //expr when then [when then]... else
         if self.0.len() % 2 == 0 {
             Some(*self.0.last().unwrap())
@@ -606,23 +616,29 @@ pub(crate) struct PlanConverter<'a> {
 
 impl<'a> PlanConverter<'a> {
     fn add_udf(&mut self, key: Symbol, udf: Arc<ScalarUDF>) -> DFResult<()> {
-        if let Some(_existing_udf) = self.egraph.analysis.sudf_registry.insert(key, udf) {
-            return Err(DataFusionError::Plan(format!(
-                "Found 2 udfs with the same name in the plan: '{}'",
-                key
-            )));
-        }
+        //TODO: Figure out how to handle identity of udf's since they can be called without entering in registry
+        // no gaurentee of uniqueness on name and comparing locations of Arc's has issues: https://stackoverflow.com/questions/67109860/how-to-compare-trait-objects-within-an-arc
+
+        //if let Some(_existing_udf) = self.egraph.analysis.sudf_registry.insert(key, udf) {
+        //    return Err(DataFusionError::Plan(format!(
+        //        "Found 2 udfs with the same name in the plan: '{}'",
+        //        key
+        //    )));
+        //}
+        self.egraph.analysis.sudf_registry.insert(key, udf);
         Ok(())
     }
 
     fn add_udaf(&mut self, key: Symbol, udaf: Arc<AggregateUDF>) -> DFResult<()> {
-        if let Some(_existing_udaf) = self.egraph.analysis.udaf_registry.insert(key, udaf)
-        {
-            return Err(DataFusionError::Plan(format!(
-                "Found 2 udafs with the same name: '{}'",
-                key
-            )));
-        }
+        //TODO: Figure out how to handle identity of udaf's same issues as udfs
+        //if let Some(_existing_udaf) = self.egraph.analysis.udaf_registry.insert(key, udaf)
+        //{
+        //    return Err(DataFusionError::Plan(format!(
+        //        "Found 2 udafs with the same name: '{}'",
+        //        key
+        //    )));
+        //}
+        self.egraph.analysis.udaf_registry.insert(key, udaf);
         Ok(())
     }
 
@@ -858,8 +874,6 @@ impl<'a> PlanConverter<'a> {
                     .add(TokomakLogicalPlan::ScalarUDF(ScalarUDFName(fun_name)));
                 let args = self.as_tokomak_expr_list(args, schema)?;
                 let func_call = FunctionCall::new(func, args);
-                self.add_udf(fun_name, fun.clone())?;
-
                 TokomakLogicalPlan::ScalarUDFCall(func_call)
             }
             Expr::WindowFunction {
@@ -1041,8 +1055,8 @@ impl<'a> PlanConverter<'a> {
 
     fn convert_filter(&mut self, filter: &plan::Filter) -> DFResult<TokomakLogicalPlan> {
         //Since all of the rules dealing with filters are of the form (filter ?input_plan (and ?predicate_of_interest ?other))
-        //add a dummy value to the predicate so that teh above pattern will still match. The Filter removal rule will remove all
-        //filter plans with literal true value
+        //add a dummy value to the predicate so that teh above pattern will still match if only the predicate of interest is present.
+        //The Filter removal rule will remove all filter plans with literal true value
         let plan::Filter { predicate, input } = filter;
         let predicate = predicate.clone().and(lit(true));
         let predicate = self.as_tokomak_expr(&predicate, input.schema())?;
@@ -1518,7 +1532,7 @@ impl<'a> TokomakPlanConverter<'a> {
                     let high_expr = self.convert_to_expr(*high)?;
                     Expr::Between {
                         expr: Box::new(expr),
-                        negated: false,
+                        negated: true,
                         low: Box::new(low_expr),
                         high: Box::new(high_expr),
                     }

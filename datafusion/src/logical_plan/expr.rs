@@ -969,6 +969,13 @@ impl Not for Expr {
     }
 }
 
+impl std::ops::Neg for Expr {
+    type Output = Self;
+    fn neg(self) -> Self::Output {
+        Expr::Negative(self.into())
+    }
+}
+
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {

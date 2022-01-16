@@ -16,7 +16,7 @@
 // under the License.
 #![deny(missing_docs)]
 
-//! This crate contains the equality graph optimizer Tokomak. It uses [egg](https://github.com/egraphs-good/egg).
+//! This crate contains the equality graph based optimizer Tokomak. It uses [egg](https://github.com/egraphs-good/egg).
 
 use datafusion::arrow::datatypes::DataType;
 
@@ -59,6 +59,13 @@ use datatype::TokomakDataType;
 
 use std::collections::HashSet;
 
+//TODO: Add some way for rules to filter themselves out from being run on a query. E.g. If no cross joins are present then there is no need to run rules that
+// look for cross joins.
+//TODO: Instead of using functions to parse rules into machine instructions at runtime create procedural macro that parses rule AST and converts it to normal rust code.
+// This would require splitting this crate apart to allow procedural macros to use utility functions. Desired end result should be somewhat similar to cockroachdb's optimizer.
+// Should allow arbitrary custom code to be run by the rule
+//TODO: Look at custom rule syntax that is better suited to sql.
+
 ///TokomakAnalysis contains datatype and schema caches as well as the udf and udaf registries
 pub struct TokomakAnalysis {
     datatype_cache: HashSet<RefCount<DataType>, fxhash::FxBuildHasher>,
@@ -68,18 +75,17 @@ pub struct TokomakAnalysis {
     udaf_registry: HashMap<Symbol, Arc<AggregateUDF>>,
     always_merge: bool,
 }
+
 impl Default for TokomakAnalysis {
     fn default() -> Self {
-        let mut a = Self {
+        Self {
             datatype_cache: Default::default(),
             schema_cache: Default::default(),
             sudf_registry: Default::default(),
             udaf_registry: Default::default(),
             always_merge: true,
             boolean_dt: RefCount::new(DataType::Boolean),
-        };
-        a.datatype_cache.insert(RefCount::new(DataType::Boolean));
-        a
+        }
     }
 }
 
@@ -318,14 +324,15 @@ impl TokomakAnalysis {
         TData::Schema(s)
     }
 
-    fn make_case_lit(
-        _egraph: &EGraph<TokomakLogicalPlan, Self>,
-        _case: &CaseLit,
-    ) -> TData {
-        TData::None
+    fn make_case_lit(egraph: &EGraph<TokomakLogicalPlan, Self>, case: &CaseLit) -> TData {
+        Self::get_datatype(egraph, &case.expr())
+            .map(TData::DataType)
+            .unwrap_or(TData::None)
     }
-    fn make_case_if(_egraph: &EGraph<TokomakLogicalPlan, Self>, _case: &CaseIf) -> TData {
-        TData::None
+    fn make_case_if(egraph: &EGraph<TokomakLogicalPlan, Self>, case: &CaseIf) -> TData {
+        Self::get_datatype(egraph, &case.when_then()[1])
+            .map(TData::DataType)
+            .unwrap_or(TData::None)
     }
     fn make_impl(
         egraph: &EGraph<TokomakLogicalPlan, Self>,
@@ -350,7 +357,9 @@ impl TokomakAnalysis {
             TokomakLogicalPlan::FullJoin(j) => Self::make_join(egraph, j, JoinType::Full),
             TokomakLogicalPlan::SemiJoin(j) => Self::make_join(egraph, j, JoinType::Semi),
             TokomakLogicalPlan::AntiJoin(j) => Self::make_join(egraph, j, JoinType::Anti),
-            TokomakLogicalPlan::Extension(_) => todo!(),
+            TokomakLogicalPlan::Extension(_) => {
+                todo!("Extension LogicalPlans are not implemented yet")
+            }
             TokomakLogicalPlan::CrossJoin([l, r]) => {
                 let lschema = Self::get_schema(egraph, *l).unwrap();
                 let rschema = Self::get_schema(egraph, *r).unwrap();
@@ -361,6 +370,7 @@ impl TokomakAnalysis {
                 TData::Schema(Self::check_schema_cache(egraph, cschema))
             }
             TokomakLogicalPlan::Limit([input, _count]) => get_data(input),
+            //Empty relation should be set when converting from datafusion plan or already set when replacing plan with empty relation
             TokomakLogicalPlan::EmptyRelation(_) => TData::None,
             TokomakLogicalPlan::TableScan(t) => {
                 let schema = t.projected_schema(egraph);
@@ -417,12 +427,9 @@ impl TokomakAnalysis {
             | TokomakLogicalPlan::InList(_)
             | TokomakLogicalPlan::NotInList(_) => Self::get_boolean(egraph),
             TokomakLogicalPlan::Negative([input]) => get_data(input),
-
-            TokomakLogicalPlan::EList(_) => TData::None,
-
             TokomakLogicalPlan::Scalar(s) => {
                 let dt = s.datatype();
-                TData::DataType(RefCount::new(dt))
+                TData::DataType(Self::check_datatype_cache(egraph, dt))
             }
             TokomakLogicalPlan::ScalarBuiltinCall(f) => {
                 assert!(egraph[f.fun()].nodes.len() == 1);
@@ -568,6 +575,7 @@ impl TokomakAnalysis {
             | TokomakLogicalPlan::Cast([_expr, dt]) => get_data(dt),
 
             TokomakLogicalPlan::PList(_)
+            | TokomakLogicalPlan::EList(_)
             | TokomakLogicalPlan::ScalarBuiltin(_)
             | TokomakLogicalPlan::AggregateBuiltin(_)
             | TokomakLogicalPlan::WindowBuiltin(_)
@@ -1138,16 +1146,28 @@ impl Display for UDAFName {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     use datafusion::{
-        arrow::datatypes::{DataType, Field, Schema},
+        arrow::{
+            array::{ArrayRef, Float64Array},
+            datatypes::{DataType, Field, Schema},
+        },
         error::DataFusionError,
         execution::context::ExecutionProps,
-        logical_plan::{col, lit, when, DFSchema, Expr, LogicalPlan, LogicalPlanBuilder},
+        logical_plan::{
+            col, create_udaf, lit, when,
+            window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
+            DFSchema, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
+        },
         optimizer::optimizer::OptimizerRule,
         physical_plan::{
-            aggregates::AggregateFunction, window_functions::WindowFunction,
+            aggregates::AggregateFunction,
+            expressions::AvgAccumulator,
+            functions::{make_scalar_function, Signature, Volatility},
+            udaf::AggregateUDF,
+            udf::ScalarUDF,
+            window_functions::WindowFunction,
         },
         scalar::ScalarValue,
     };
@@ -1160,9 +1180,48 @@ mod tests {
         Schema::new(vec![
             Field::new("c1", DataType::Utf8, true),
             Field::new("c2", DataType::Boolean, true),
+            Field::new("c3", DataType::Float64, true),
             Field::new("c1_non_null", DataType::Utf8, false),
             Field::new("c2_non_null", DataType::Boolean, false),
+            Field::new("c3_non_null", DataType::Float64, false),
         ])
+    }
+
+    fn test_udf() -> Arc<ScalarUDF> {
+        let func = |args: &[ArrayRef]| -> Result<ArrayRef, DataFusionError> {
+            let l = &args[0];
+            let r = &args[1];
+            let l = l.as_any().downcast_ref::<Float64Array>().unwrap();
+            let r = r.as_any().downcast_ref::<Float64Array>().unwrap();
+            let res = datafusion::arrow::compute::multiply(l, r)?;
+            Ok(Arc::new(res))
+        };
+        let scalar_func_impl = make_scalar_function(func);
+        let return_type: Arc<
+            dyn Fn(&[DataType]) -> Result<Arc<DataType>, DataFusionError> + Send + Sync,
+        > = Arc::new(|_args: &[DataType]| Ok(Arc::new(DataType::Float64)));
+        ScalarUDF::new(
+            "multiply_f64",
+            &Signature::exact(
+                vec![DataType::Float64, DataType::Float64],
+                Volatility::Immutable,
+            ),
+            &return_type,
+            &scalar_func_impl,
+        )
+        .into()
+    }
+
+    fn test_udaf() -> Arc<AggregateUDF> {
+        create_udaf(
+            "MY_AVG",
+            DataType::Float64,
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            Arc::new(|| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
+            Arc::new(vec![DataType::UInt64, DataType::Float64]),
+        )
+        .into()
     }
 
     fn expr_test_scan_builder() -> LogicalPlanBuilder {
@@ -1212,12 +1271,13 @@ mod tests {
     }
 
     #[test]
-    fn test_not_exprs() -> Result<(), Box<dyn std::error::Error>> {
+    fn roundtrip_not() -> Result<(), Box<dyn std::error::Error>> {
         let exprs = vec![col("c2").not().not().not(), col("c2").not()];
         test_roundtrip_expr_list(&exprs)
     }
+
     #[test]
-    fn test_scalar_value_roundtrip() -> TestResult {
+    fn roundtrip_scalar_value() -> TestResult {
         let scalars = [
             ScalarValue::Boolean(Some(true)),
             ScalarValue::Boolean(Some(false)),
@@ -1293,13 +1353,145 @@ mod tests {
         ];
         let exprs = scalars.into_iter().map(lit).collect::<Vec<_>>();
         test_roundtrip_expr_list(&exprs)
-        /*
+    }
+    #[test]
+    fn round_trip_inlist() -> TestResult {
+        use datafusion::logical_plan::in_list;
+        let exprs = vec![
+            in_list(col("c1"), vec![lit("test1"), lit("test2")], false),
+            in_list(col("c1"), vec![lit("test1"), lit("test2")], true),
+        ];
+        test_roundtrip_expr_list(&exprs)
+    }
 
-        ScalarValue::Binary
-        ScalarValue::LargeBinary
-        ScalarValue::List
-        ScalarValue::Struct
-        */
+    #[test]
+    fn roundtrip_binop() -> TestResult {
+        //Missing is distinct from. Not sure how it is used. Only part of aggregate plan?
+        let exprs = vec![
+            col("c3") + col("c3"),
+            col("c3") - col("c3"),
+            col("c3") * col("c3"),
+            col("c3") / col("c3"),
+            col("c3").modulus(lit(4f32)),
+            col("c1").like(lit("test%")),
+            col("c1").not_like(lit("%test%")),
+            col("c1").eq(col("c1_non_null")),
+            col("c1").not_eq(col("c1_non_null")),
+            col("c3").lt(col("c3_non_null") + lit(2f64)),
+            col("c3").lt_eq(col("c3_non_null") + lit(2f64)),
+            col("c3").gt_eq(col("c3_non_null") + lit(2f64)),
+            col("c3").gt_eq(col("c3_non_null") + lit(2f64)),
+            col("c1").and(col("c1_non_null")),
+            col("c1").or(col("c1_non_null")),
+            Expr::BinaryExpr {
+                left: col("c1").into(),
+                op: Operator::RegexMatch,
+                right: col("c1_non_null").into(),
+            },
+            Expr::BinaryExpr {
+                left: col("c1").into(),
+                op: Operator::RegexIMatch,
+                right: col("c1_non_null").into(),
+            },
+            Expr::BinaryExpr {
+                left: col("c1").into(),
+                op: Operator::RegexNotMatch,
+                right: col("c1_non_null").into(),
+            },
+            Expr::BinaryExpr {
+                left: col("c1").into(),
+                op: Operator::RegexNotIMatch,
+                right: col("c1_non_null").into(),
+            },
+        ];
+        test_roundtrip_expr_list(&exprs)
+    }
+
+    #[test]
+    fn roundtrip_between() -> TestResult {
+        let exprs = vec![
+            Expr::Between {
+                expr: col("c3").into(),
+                low: lit(4f64).into(),
+                high: lit(6f64).into(),
+                negated: false,
+            },
+            Expr::Between {
+                expr: col("c3").into(),
+                low: lit(-1000f64).into(),
+                high: lit(-1f64).into(),
+                negated: true,
+            },
+        ];
+        test_roundtrip_expr_list(&exprs)
+    }
+
+    #[test]
+    fn roundtrip_negative() -> TestResult {
+        let exprs = vec![Expr::Negative(col("c3").into()) - lit(-1f64)];
+        test_roundtrip_expr_list(&exprs)
+    }
+    #[test]
+    fn roundtrip_aggregate_call() -> TestResult {
+        let exprs = vec![
+            Expr::AggregateFunction {
+                fun: AggregateFunction::Count,
+                args: vec![col("c1")],
+                distinct: true,
+            },
+            Expr::AggregateFunction {
+                fun: AggregateFunction::Count,
+                args: vec![col("c1")],
+                distinct: false,
+            },
+            Expr::AggregateFunction {
+                fun: AggregateFunction::Sum,
+                args: vec![col("c3")],
+                distinct: true,
+            },
+            Expr::AggregateFunction {
+                fun: AggregateFunction::Sum,
+                args: vec![col("c3")],
+                distinct: false,
+            },
+        ];
+        test_roundtrip_expr_list(&exprs)
+    }
+
+    #[test]
+    fn roundtrip_window_call() -> TestResult {
+        let exprs = vec![
+            Expr::WindowFunction {
+                fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
+                args: vec![col("c3")],
+                partition_by: vec![col("c1")],
+                order_by: vec![],
+                window_frame: None,
+            },
+            Expr::WindowFunction {
+                fun: WindowFunction::AggregateFunction(AggregateFunction::Sum),
+                args: vec![col("c3")],
+                partition_by: vec![col("c1")],
+                order_by: vec![],
+                window_frame: Some(WindowFrame {
+                    units: WindowFrameUnits::Rows,
+                    start_bound: WindowFrameBound::CurrentRow,
+                    end_bound: WindowFrameBound::CurrentRow,
+                }),
+            },
+        ];
+        test_roundtrip_expr_list(&exprs)
+    }
+
+    #[test]
+    fn roundtrip_sort() -> TestResult {
+        let exprs = vec![
+            col("c3").sort(false, false),
+            col("c3").sort(false, true),
+            col("c3").sort(true, false),
+            col("c3").sort(true, true),
+        ];
+        test_roundtrip_expr_list(&exprs)
     }
 
     #[test]
@@ -1312,6 +1504,20 @@ mod tests {
             rpad(vec![lit("test"), lit(12)]),
             to_hex(lit("123").cast_to(&DataType::Int64, &dfschema)?),
         ];
+        test_roundtrip_expr_list(&exprs)
+    }
+
+    #[test]
+    fn roundtrip_udf() -> TestResult {
+        let udf = test_udf();
+        let exprs = vec![udf.call(vec![col("c3")])];
+        test_roundtrip_expr_list(&exprs)
+    }
+
+    #[test]
+    fn roundtrip_udaf() -> TestResult {
+        let udaf = test_udaf();
+        let exprs = vec![udaf.call(vec![col("c3")])];
         test_roundtrip_expr_list(&exprs)
     }
 
