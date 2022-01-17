@@ -626,7 +626,6 @@ message ScanLimit {
 message FileScanExecConf {
   repeated FileGroup file_groups = 1;
   Schema schema = 2;
-  uint32 batch_size = 3;
   repeated uint32 projection = 4;
   ScanLimit limit = 5;
   Statistics statistics = 6;

@@ -48,7 +48,7 @@ use datafusion::logical_plan::{
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::file_format::{
-    AvroExec, CsvExec, ParquetExec, PhysicalPlanConfig,
+    AvroExec, CsvExec, FileScanConfig, ParquetExec,
 };
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
@@ -770,10 +770,10 @@ impl TryInto<Statistics> for &protobuf::Statistics {
     }
 }
 
-impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
+impl TryInto<FileScanConfig> for &protobuf::FileScanExecConf {
     type Error = BallistaError;
 
-    fn try_into(self) -> Result<PhysicalPlanConfig, Self::Error> {
+    fn try_into(self) -> Result<FileScanConfig, Self::Error> {
         let schema = Arc::new(convert_required!(self.schema)?);
         let projection = self
             .projection
@@ -787,7 +787,7 @@ impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
         };
         let statistics = convert_required!(self.statistics)?;
 
-        Ok(PhysicalPlanConfig {
+        Ok(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_schema: schema,
             file_groups: self
@@ -797,7 +797,6 @@ impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
                 .collect::<Result<Vec<_>, _>>()?,
             statistics,
             projection,
-            batch_size: self.batch_size as usize,
             limit: self.limit.as_ref().map(|sl| sl.limit as usize),
             table_partition_cols: vec![],
         })

@@ -31,12 +31,12 @@ use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 use super::file_stream::{BatchIter, FileStream};
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
 pub struct CsvExec {
-    base_config: PhysicalPlanConfig,
+    base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
     has_header: bool,
@@ -45,7 +45,7 @@ pub struct CsvExec {
 
 impl CsvExec {
     /// Create a new CSV reader execution plan provided base and specific configurations
-    pub fn new(base_config: PhysicalPlanConfig, has_header: bool, delimiter: u8) -> Self {
+    pub fn new(base_config: FileScanConfig, has_header: bool, delimiter: u8) -> Self {
         let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
@@ -58,7 +58,7 @@ impl CsvExec {
     }
 
     /// Ref to the base configs
-    pub fn base_config(&self) -> &PhysicalPlanConfig {
+    pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
     }
     /// true if the first line of each file is a header
@@ -110,9 +110,9 @@ impl ExecutionPlan for CsvExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
         let file_projection = self.base_config.file_column_projection_indices();
         let has_header = self.has_header;
@@ -153,10 +153,9 @@ impl ExecutionPlan for CsvExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "CsvExec: files={}, has_header={}, batch_size={}, limit={:?}",
+                    "CsvExec: files={}, has_header={}, limit={:?}",
                     super::FileGroupsDisplay(&self.base_config.file_groups),
                     self.has_header,
-                    self.base_config.batch_size,
                     self.base_config.limit,
                 )
             }
@@ -186,13 +185,12 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema,
                 file_groups: vec![vec![local_unpartitioned_file(path)]],
                 statistics: Statistics::default(),
                 projection: Some(vec![0, 2, 4]),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -233,13 +231,12 @@ mod tests {
         let filename = "aggregate_test_100.csv";
         let path = format!("{}/csv/{}", testdata, filename);
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema,
                 file_groups: vec![vec![local_unpartitioned_file(path)]],
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: Some(5),
                 table_partition_cols: vec![],
             },
@@ -285,7 +282,7 @@ mod tests {
         partitioned_file.partition_values =
             vec![ScalarValue::Utf8(Some("2021-10-26".to_owned()))];
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 // we should be able to project on the partition column
                 // wich is supposed to be after the file fields
                 projection: Some(vec![0, file_schema.fields().len()]),
@@ -293,7 +290,6 @@ mod tests {
                 file_schema,
                 file_groups: vec![vec![partitioned_file]],
                 statistics: Statistics::default(),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec!["date".to_owned()],
             },

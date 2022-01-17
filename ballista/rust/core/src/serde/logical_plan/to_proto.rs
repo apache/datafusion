@@ -826,8 +826,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             partition_count: *partition_count as u64,
                         })
                     }
-                    Partitioning::RoundRobinBatch(batch_size) => {
-                        PartitionMethod::RoundRobin(*batch_size as u64)
+                    Partitioning::RoundRobinBatch(partition_count) => {
+                        PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                 };
 
