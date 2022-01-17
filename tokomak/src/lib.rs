@@ -325,7 +325,7 @@ impl TokomakAnalysis {
     }
 
     fn make_case_lit(egraph: &EGraph<TokomakLogicalPlan, Self>, case: &CaseLit) -> TData {
-        Self::get_datatype(egraph, &case.expr())
+        Self::get_datatype(egraph, &case.when_then()[1])
             .map(TData::DataType)
             .unwrap_or(TData::None)
     }
@@ -1381,8 +1381,8 @@ mod tests {
             col("c3").lt_eq(col("c3_non_null") + lit(2f64)),
             col("c3").gt_eq(col("c3_non_null") + lit(2f64)),
             col("c3").gt_eq(col("c3_non_null") + lit(2f64)),
-            col("c1").and(col("c1_non_null")),
-            col("c1").or(col("c1_non_null")),
+            col("c2").and(col("c2_non_null")),
+            col("c2").or(col("c2_non_null")),
             Expr::BinaryExpr {
                 left: col("c1").into(),
                 op: Operator::RegexMatch,
@@ -1679,7 +1679,7 @@ mod tests {
             .project(vec![Expr::Wildcard])?
             .build()?;
 
-        let expected = "Projection: #SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END) PARTITION BY [#test.c1], #test, #test.c1, #test.c2, #test.c1_non_null, #test.c2_non_null\
+        let expected = "Projection: #SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END) PARTITION BY [#test.c1], #test, #test.c1, #test.c2, #test.c3, #test.c1_non_null, #test.c2_non_null, #test.c3_non_null\
         \n  WindowAggr: windowExpr=[[SUM(CASE #test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END) PARTITION BY [#test.c1] AS SUM(CASE test.c2 AND test.c2 WHEN Boolean(true) THEN UInt8(1) WHEN Boolean(false) THEN UInt8(0) END) PARTITION BY [#test.c1], #test.c2 AS test]]\
         \n    TableScan: test projection=None";
         simple_optimizer_test(&plan, expected)

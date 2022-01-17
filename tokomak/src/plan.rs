@@ -32,6 +32,7 @@ use datafusion::error::DataFusionError;
 use datafusion::error::Result as DFResult;
 use datafusion::logical_plan::lit;
 use datafusion::logical_plan::plan;
+use datafusion::logical_plan::Values;
 
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::logical_plan::Column;
@@ -1265,8 +1266,11 @@ impl<'a> PlanConverter<'a> {
             LogicalPlan::Limit (l)=> self.convert_limit(l)?,
 
             LogicalPlan::Extension(e)=>self.convert_extension(e)?,
+            LogicalPlan::Values(values)=>{
+                let shared_vals = SharedValues(Arc::new(values.values.clone()));
+                TokomakLogicalPlan::Values(shared_vals)
+            }
             plan @ (LogicalPlan::CreateExternalTable (_) |
-            LogicalPlan::Values (_) |
             LogicalPlan::Explain (_) |
             LogicalPlan::Analyze (_) |
             LogicalPlan::CreateMemoryTable(_)|
@@ -1879,10 +1883,6 @@ impl<'a> TokomakPlanConverter<'a> {
         Ok(alias)
     }
 
-    fn convert_to_builder(&self, id: Id) -> Result<LogicalPlanBuilder, DataFusionError> {
-        Ok(self.convert_to_builder_inner(id).unwrap())
-    }
-
     fn get_schema(&self, id: Id) -> Option<&DFSchema> {
         let eclass_id = self.get_eclass_id(id);
         match &self.egraph[eclass_id].data {
@@ -1896,10 +1896,7 @@ impl<'a> TokomakPlanConverter<'a> {
         self.eclasses[eclass_idx]
     }
 
-    fn convert_to_builder_inner(
-        &self,
-        id: Id,
-    ) -> Result<LogicalPlanBuilder, DataFusionError> {
+    fn convert_to_builder(&self, id: Id) -> Result<LogicalPlanBuilder, DataFusionError> {
         let plan = self.get_ref(id);
         let builder: LogicalPlanBuilder = match plan {
             TokomakLogicalPlan::Filter([input, predicate]) => {
@@ -2082,8 +2079,20 @@ impl<'a> TokomakPlanConverter<'a> {
                 let exprs = self.extract_expr_list(*sort_exprs, "Sort.exprs")?;
                 input.sort(exprs)?
             }
+            TokomakLogicalPlan::Values(values)=>{
+                let values = &values.0;
+                let schema = if let TData::Schema(schema) = &self.egraph[id].data{
+                    schema.as_ref().clone()
+                }else{
+                    return Err(DataFusionError::Internal(format!("Found egraph data: {:?} expected Schema", self.egraph[id].data)));
+                };
+                let plan = LogicalPlan::Values(Values{
+                    values: values.as_ref().clone(),
+                    schema: Arc::new(schema)
+                });
+                LogicalPlanBuilder::from(plan)
+            }
             handle_elsewhere @ (TokomakLogicalPlan::Table(_)
-            | TokomakLogicalPlan::Values(_)
             | TokomakLogicalPlan::TableProject(_)
             | TokomakLogicalPlan::Str(_)
             | TokomakLogicalPlan::None
@@ -2091,7 +2100,7 @@ impl<'a> TokomakPlanConverter<'a> {
             | TokomakLogicalPlan::PList(_)
             | TokomakLogicalPlan::Type(_)) => {
                 return Err(DataFusionError::Internal(format!(
-                    "Found unhandled node type {:?}",
+                    "Found unhandled node type {:?}. This should have been handled by the parent plan",
                     handle_elsewhere
                 )))
             }
@@ -2186,10 +2195,11 @@ impl PartialEq for SharedValues {
 
 impl Hash for SharedValues {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let mut buf = String::with_capacity(1024);
+        let num_exprs = self.0.iter().fold(0usize, |acc, value| value.len() + acc);
+        let mut buf = String::with_capacity(10 * num_exprs);
         for e in self.0.iter().flatten() {
             buf.clear();
-            write!(buf, "{:?}", e).unwrap();
+            write!(buf, "{:?}\"'", e).unwrap();
             buf.hash(state);
         }
     }
