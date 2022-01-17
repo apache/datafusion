@@ -50,9 +50,9 @@ use std::{
 /// Projection: #a AS b
 ///     Filter: #a Gt Int64(10)  <--- changed from #b to #a
 ///
-/// This performs a single pass trought the plan. When it passes trought a filter, it stores that filter,
+/// This performs a single pass through the plan. When it passes through a filter, it stores that filter,
 /// and when it reaches a node that does not commute with it, it adds the filter to that place.
-/// When it passes through a projection, it re-writes the filter's expression taking into accoun that projection.
+/// When it passes through a projection, it re-writes the filter's expression taking into account that projection.
 /// When multiple filters would have been written, it `AND` their expressions into a single expression.
 #[derive(Default)]
 pub struct FilterPushDown {}
