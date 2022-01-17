@@ -269,6 +269,7 @@ fn create_dict_array(
 #[cfg(test)]
 mod tests {
     use crate::{
+        assert_batches_eq,
         test::{build_table_i32, columns, object_store::TestObjectStore},
         test_util::aggr_test_schema,
     };
@@ -399,7 +400,7 @@ mod tests {
             "| 2 | 0  | 12 | 2021 | 26  |",
             "+---+----+----+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
 
         // project another batch that is larger than the previous one
         let file_batch = build_table_i32(
@@ -429,7 +430,7 @@ mod tests {
             "| 9 | -6  | 16 | 2021 | 27  |",
             "+---+-----+----+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
 
         // project another batch that is smaller than the previous one
         let file_batch = build_table_i32(
@@ -457,7 +458,7 @@ mod tests {
             "| 3 | 4 | 6 | 2021 | 28  |",
             "+---+---+---+------+-----+",
         ];
-        crate::assert_batches_eq!(expected, &[projected_batch]);
+        assert_batches_eq!(expected, &[projected_batch]);
     }
 
     // sets default for configs that play no role in projections

@@ -32,8 +32,8 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use chrono::{Datelike, Duration};
-use datafusion::arrow::io::print;
 use datafusion::{
+    arrow_print,
     datasource::TableProvider,
     logical_plan::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder},
     physical_plan::{
@@ -530,7 +530,7 @@ impl ContextWithParquet {
             .collect()
             .await
             .expect("getting input");
-        let pretty_input = print::write(&input);
+        let pretty_input = arrow_print::write(&input);
 
         let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
         let physical_plan = self
@@ -566,7 +566,7 @@ impl ContextWithParquet {
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 
-        let pretty_results = print::write(&results);
+        let pretty_results = arrow_print::write(&results);
 
         let sql = sql.into();
         TestOutput {

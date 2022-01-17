@@ -64,10 +64,10 @@ use arrow::{
     array::{Int64Array, Utf8Array},
     datatypes::SchemaRef,
     error::ArrowError,
-    io::print::write,
     record_batch::RecordBatch,
 };
 use datafusion::{
+    arrow_print::write,
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
     execution::context::QueryPlanner,

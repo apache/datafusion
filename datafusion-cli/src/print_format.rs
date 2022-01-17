@@ -202,10 +202,10 @@ mod tests {
     fn test_print_batches_to_json_empty() -> Result<()> {
         let batches = vec![];
         let r = print_batches_to_json::<JsonArray>(&batches)?;
-        assert_eq!("", r);
+        assert_eq!("{}", r);
 
         let r = print_batches_to_json::<LineDelimited>(&batches)?;
-        assert_eq!("", r);
+        assert_eq!("{}", r);
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),

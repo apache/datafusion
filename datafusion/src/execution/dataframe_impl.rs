@@ -29,7 +29,6 @@ use crate::{
     dataframe::*,
     physical_plan::{collect, collect_partitioned},
 };
-use arrow::io::print;
 use arrow::record_batch::RecordBatch;
 
 use crate::physical_plan::{
@@ -168,14 +167,14 @@ impl DataFrame for DataFrameImpl {
     /// Print results.
     async fn show(&self) -> Result<()> {
         let results = self.collect().await?;
-        print::print(&results);
+        print!("{}", crate::arrow_print::write(&results));
         Ok(())
     }
 
     /// Print results and limit rows.
     async fn show_limit(&self, num: usize) -> Result<()> {
         let results = self.limit(num)?.collect().await?;
-        print::print(&results);
+        print!("{}", crate::arrow_print::write(&results));
         Ok(())
     }
 

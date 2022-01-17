@@ -20,7 +20,7 @@ use std::sync::Arc;
 use arrow::io::flight::deserialize_schemas;
 use arrow_format::flight::data::{flight_descriptor, FlightDescriptor, Ticket};
 use arrow_format::flight::service::flight_service_client::FlightServiceClient;
-use datafusion::arrow::io::print;
+use datafusion::arrow_print;
 use std::collections::HashMap;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // print the results
-    print::print(&results);
+    println!("{}", arrow_print::write(&results));
 
     Ok(())
 }

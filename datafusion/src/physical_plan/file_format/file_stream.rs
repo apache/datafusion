@@ -192,6 +192,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        assert_batches_eq,
         error::Result,
         test::{make_partition, object_store::TestObjectStore},
     };
@@ -230,7 +231,7 @@ mod tests {
         let batches = create_and_collect(None).await;
 
         #[rustfmt::skip]
-        crate::assert_batches_eq!(&[
+        assert_batches_eq!(&[
             "+---+",
             "| i |",
             "+---+",
@@ -254,7 +255,7 @@ mod tests {
     async fn with_limit_between_files() -> Result<()> {
         let batches = create_and_collect(Some(5)).await;
         #[rustfmt::skip]
-        crate::assert_batches_eq!(&[
+        assert_batches_eq!(&[
             "+---+",
             "| i |",
             "+---+",
@@ -273,7 +274,7 @@ mod tests {
     async fn with_limit_at_middle_of_batch() -> Result<()> {
         let batches = create_and_collect(Some(6)).await;
         #[rustfmt::skip]
-        crate::assert_batches_eq!(&[
+        assert_batches_eq!(&[
             "+---+",
             "| i |",
             "+---+",

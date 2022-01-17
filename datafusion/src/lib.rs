@@ -57,7 +57,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = datafusion::arrow::io::print::write(&results);
+//! let pretty_results = datafusion::arrow_print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+--------------------------+",
@@ -92,7 +92,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = datafusion::arrow::io::print::write(&results);
+//! let pretty_results = datafusion::arrow_print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
@@ -229,6 +229,7 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
+pub mod arrow_print;
 mod arrow_temporal_util;
 
 pub mod field_util;

@@ -250,6 +250,7 @@ impl ExecutionPlan for CsvExec {
 mod tests {
     use super::*;
     use crate::{
+        assert_batches_eq,
         datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},
         scalar::ScalarValue,
         test_util::aggr_test_schema,
@@ -298,7 +299,7 @@ mod tests {
             "+----+-----+------------+",
         ];
 
-        crate::assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
+        assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
         Ok(())
     }
 
@@ -343,7 +344,7 @@ mod tests {
             "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
         ];
 
-        crate::assert_batches_eq!(expected, &[batch]);
+        assert_batches_eq!(expected, &[batch]);
 
         Ok(())
     }
@@ -396,7 +397,7 @@ mod tests {
             "| b  | 2021-10-26 |",
             "+----+------------+",
         ];
-        crate::assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
+        assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
         Ok(())
     }
 

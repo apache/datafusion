@@ -1023,10 +1023,11 @@ mod tests {
     use futures::FutureExt;
 
     use super::*;
+    use crate::assert_batches_sorted_eq;
+    use crate::physical_plan::common;
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::{assert_batches_sorted_eq, physical_plan::common};
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 

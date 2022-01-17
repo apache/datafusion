@@ -20,7 +20,6 @@ use std::sync::Arc;
 use chrono::prelude::*;
 use chrono::Duration;
 
-use datafusion::arrow::io::print;
 use datafusion::arrow::{array::*, datatypes::*, record_batch::RecordBatch};
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;

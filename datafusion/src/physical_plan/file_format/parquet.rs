@@ -458,6 +458,7 @@ fn read_partition(
 
 #[cfg(test)]
 mod tests {
+    use crate::assert_batches_eq;
     use crate::datasource::{
         file_format::{parquet::ParquetFormat, FileFormat},
         object_store::local::{
@@ -566,7 +567,7 @@ mod tests {
             "| 1  | false    | 1           | 10    |",
             "+----+----------+-------------+-------+",
         ];
-        crate::assert_batches_eq!(expected, &[batch]);
+        assert_batches_eq!(expected, &[batch]);
 
         let batch = results.next().await;
         assert!(batch.is_none());
