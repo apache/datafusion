@@ -43,12 +43,7 @@ where
     S: AsRef<[T::Native]>,
 {
     fn from_slice(slice: S) -> Self {
-        let slice = slice.as_ref();
-        let array_data = ArrayData::builder(T::DATA_TYPE)
-            .len(slice.len())
-            .add_buffer(Buffer::from_slice_ref(&slice));
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
+        Self::from_iter_values(slice.as_ref().iter().cloned())
     }
 }
 
@@ -59,6 +54,9 @@ where
     S: AsRef<[I]>,
     I: AsRef<[u8]>,
 {
+    /// convert a slice of byte slices into a binary array (without nulls)
+    ///
+    /// implementation details: here the Self::from_vec can be called but not without another copy
     fn from_slice(slice: S) -> Self {
         let slice = slice.as_ref();
         let mut offsets = Vec::with_capacity(slice.len() + 1);
@@ -88,26 +86,7 @@ where
     I: AsRef<str>,
 {
     fn from_slice(slice: S) -> Self {
-        let slice = slice.as_ref();
-        let mut offsets =
-            MutableBuffer::new((slice.len() + 1) * std::mem::size_of::<OffsetSize>());
-        let mut values = MutableBuffer::new(0);
-
-        let mut length_so_far = OffsetSize::zero();
-        offsets.push(length_so_far);
-
-        for s in slice {
-            let s = s.as_ref();
-            length_so_far += OffsetSize::from_usize(s.len()).unwrap();
-            offsets.push(length_so_far);
-            values.extend_from_slice(s.as_bytes());
-        }
-        let array_data = ArrayData::builder(OffsetSize::DATA_TYPE)
-            .len(slice.len())
-            .add_buffer(offsets.into())
-            .add_buffer(values.into());
-        let array_data = unsafe { array_data.build_unchecked() };
-        Self::from(array_data)
+        Self::from_iter_values(slice.as_ref().iter())
     }
 }
 
