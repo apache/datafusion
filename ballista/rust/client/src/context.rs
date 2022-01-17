@@ -243,7 +243,6 @@ impl BallistaContext {
         }
     }
 
-
     /// is a 'show *' sql
     pub async fn is_show_statement(&self, sql: &str) -> Result<bool> {
         let mut is_show_variable: bool = false;
@@ -256,7 +255,7 @@ impl BallistaContext {
         }
 
         if let DFStatement::Statement(s) = &statements[0] {
-            let st: &Statement= s;
+            let st: &Statement = s;
             match st {
                 Statement::ShowVariable { .. } => {
                     is_show_variable = true;
@@ -290,7 +289,9 @@ impl BallistaContext {
         let is_show = self.is_show_statement(sql).await?;
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
-            ctx = ExecutionContext::with_config(ExecutionConfig::new().with_information_schema(true));
+            ctx = ExecutionContext::with_config(
+                ExecutionConfig::new().with_information_schema(true),
+            );
         }
 
         // register tables with DataFusion context
@@ -345,7 +346,6 @@ impl BallistaContext {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use std::fs::File;
@@ -398,7 +398,10 @@ mod tests {
 
         context.sql(sql.as_str()).await.unwrap();
 
-        let df = context.sql("show columns from csv_with_timestamps;").await.unwrap();
+        let df = context
+            .sql("show columns from csv_with_timestamps;")
+            .await
+            .unwrap();
         df.show().await.unwrap();
     }
 }
