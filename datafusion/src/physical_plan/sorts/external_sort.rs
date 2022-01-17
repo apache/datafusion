@@ -25,7 +25,7 @@ use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricsSet, Time,
 };
 use crate::physical_plan::sorts::sort::sort_batch;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
@@ -50,6 +50,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{Receiver as TKReceiver, Sender as TKSender};
 use tokio::task;
 
@@ -63,7 +64,7 @@ use tokio::task;
 ///     let batch = input.next();
 ///     // no enough memory available, spill first.
 ///     if exec_memory_available < size_of(batch) {
-///         let ordered_stream = in_mem_heap_sort(in_mem_batches.drain(..));
+///         let ordered_stream = sort_preserving_merge(in_mem_batches.drain(..));
 ///         let tmp_file = spill_write(ordered_stream);
 ///         spills.push(tmp_file);
 ///     }
@@ -73,7 +74,7 @@ use tokio::task;
 /// }
 ///
 /// let partial_ordered_streams = vec![];
-/// let in_mem_stream = in_mem_heap_sort(in_mem_batches.drain(..));
+/// let in_mem_stream = sort_preserving_merge(in_mem_batches.drain(..));
 /// partial_ordered_streams.push(in_mem_stream);
 /// partial_ordered_streams.extend(spills.drain(..).map(read_as_stream));
 /// let result = sort_preserving_merge(partial_ordered_streams);
@@ -85,7 +86,8 @@ struct ExternalSorter {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     runtime: Arc<RuntimeEnv>,
-    metrics: ExecutionPlanMetricsSet,
+    metrics: AggregatedMetricsSet,
+    inner_metrics: BaselineMetrics,
     used: AtomicUsize,
     spilled_bytes: AtomicUsize,
     spilled_count: AtomicUsize,
@@ -96,8 +98,10 @@ impl ExternalSorter {
         partition_id: usize,
         schema: SchemaRef,
         expr: Vec<PhysicalSortExpr>,
+        metrics: AggregatedMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
+        let inner_metrics = metrics.new_intermediate_baseline(partition_id);
         Self {
             id: MemoryConsumerId::new(partition_id),
             schema,
@@ -105,7 +109,8 @@ impl ExternalSorter {
             spills: Mutex::new(vec![]),
             expr,
             runtime,
-            metrics: ExecutionPlanMetricsSet::new(),
+            metrics,
+            inner_metrics,
             used: AtomicUsize::new(0),
             spilled_bytes: AtomicUsize::new(0),
             spilled_count: AtomicUsize::new(0),
@@ -117,49 +122,70 @@ impl ExternalSorter {
         self.try_grow(size).await?;
         self.used.fetch_add(size, Ordering::SeqCst);
         // sort each batch as it's inserted, more probably to be cache-resident
+        let elapsed_compute = self.inner_metrics.elapsed_compute().clone();
+        let timer = elapsed_compute.timer();
         let sorted_batch = sort_batch(input, self.schema.clone(), &*self.expr)?;
+        timer.done();
         let mut in_mem_batches = self.in_mem_batches.lock().await;
         in_mem_batches.push(sorted_batch);
         Ok(())
+    }
+
+    async fn spilled_before(&self) -> bool {
+        let spills = self.spills.lock().await;
+        !spills.is_empty()
     }
 
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
     async fn sort(&self) -> Result<SendableRecordBatchStream> {
         let partition = self.partition_id();
         let mut in_mem_batches = self.in_mem_batches.lock().await;
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let mut streams: Vec<SortedStream> = vec![];
-        let in_mem_stream = in_mem_partial_sort(
-            &mut *in_mem_batches,
-            self.schema.clone(),
-            &self.expr,
-            self.runtime.batch_size(),
-            baseline_metrics,
-            self.runtime.clone(),
-        )
-        .await?;
-        streams.push(SortedStream::new(in_mem_stream, self.used()));
 
-        let mut spills = self.spills.lock().await;
-
-        for spill in spills.drain(..) {
-            let stream = read_spill_as_stream(spill, self.schema.clone()).await?;
-            streams.push(SortedStream::new(stream, 0));
-        }
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
-        Ok(Box::pin(
-            SortPreservingMergeStream::new_from_streams(
-                streams,
+        if self.spilled_before().await {
+            let baseline_metrics = self.metrics.new_intermediate_baseline(partition);
+            let mut streams: Vec<SortedStream> = vec![];
+            let in_mem_stream = in_mem_partial_sort(
+                &mut *in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
                 self.runtime.batch_size(),
                 baseline_metrics,
-                partition,
                 self.runtime.clone(),
             )
-            .await,
-        ))
+            .await?;
+            streams.push(SortedStream::new(in_mem_stream, self.used()));
+
+            let mut spills = self.spills.lock().await;
+
+            for spill in spills.drain(..) {
+                let stream = read_spill_as_stream(spill, self.schema.clone()).await?;
+                streams.push(SortedStream::new(stream, 0));
+            }
+            let baseline_metrics = self.metrics.new_final_baseline(partition);
+            Ok(Box::pin(
+                SortPreservingMergeStream::new_from_streams(
+                    streams,
+                    self.schema.clone(),
+                    &self.expr,
+                    self.runtime.batch_size(),
+                    baseline_metrics,
+                    partition,
+                    self.runtime.clone(),
+                )
+                .await,
+            ))
+        } else {
+            let baseline_metrics = self.metrics.new_final_baseline(partition);
+            in_mem_partial_sort(
+                &mut *in_mem_batches,
+                self.schema.clone(),
+                &self.expr,
+                self.runtime.batch_size(),
+                baseline_metrics,
+                self.runtime.clone(),
+            )
+            .await
+        }
     }
 
     fn used(&self) -> usize {
@@ -220,7 +246,7 @@ impl MemoryConsumer for ExternalSorter {
             return Ok(0);
         }
 
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let baseline_metrics = self.metrics.new_intermediate_baseline(partition);
 
         let path = self.runtime.disk_manager.create_tmp_file()?;
         let stream = in_mem_partial_sort(
@@ -263,6 +289,7 @@ async fn in_mem_partial_sort(
         Ok(Box::pin(SizedRecordBatchStream::new(
             schema,
             vec![Arc::new(sorted_bathes.pop().unwrap())],
+            baseline_metrics,
         )))
     } else {
         let batches = sorted_bathes.drain(..).collect();
@@ -359,10 +386,77 @@ pub struct ExternalSortExec {
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
-    /// Execution metrics
-    metrics: ExecutionPlanMetricsSet,
+    /// Containing all metrics set created for sort, such as all sets for `sort_merge_join`s
+    all_metrics: AggregatedMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
+}
+
+#[derive(Debug, Clone)]
+struct AggregatedMetricsSet {
+    intermediate: Arc<std::sync::Mutex<Vec<ExecutionPlanMetricsSet>>>,
+    final_: Arc<std::sync::Mutex<Vec<ExecutionPlanMetricsSet>>>,
+}
+
+impl AggregatedMetricsSet {
+    fn new() -> Self {
+        Self {
+            intermediate: Arc::new(std::sync::Mutex::new(vec![])),
+            final_: Arc::new(std::sync::Mutex::new(vec![])),
+        }
+    }
+
+    fn new_intermediate_baseline(&self, partition: usize) -> BaselineMetrics {
+        let ms = ExecutionPlanMetricsSet::new();
+        let result = BaselineMetrics::new(&ms, partition);
+        self.intermediate.lock().unwrap().push(ms);
+        result
+    }
+
+    fn new_final_baseline(&self, partition: usize) -> BaselineMetrics {
+        let ms = ExecutionPlanMetricsSet::new();
+        let result = BaselineMetrics::new(&ms, partition);
+        self.final_.lock().unwrap().push(ms);
+        result
+    }
+
+    fn merge_compute_time(&self, dest: &Time) {
+        let time1 = self
+            .intermediate
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| {
+                es.clone_inner()
+                    .elapsed_compute()
+                    .map_or(0u64, |v| v as u64)
+            })
+            .sum();
+        let time2 = self
+            .final_
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| {
+                es.clone_inner()
+                    .elapsed_compute()
+                    .map_or(0u64, |v| v as u64)
+            })
+            .sum();
+        dest.add_duration(Duration::from_nanos(time1));
+        dest.add_duration(Duration::from_nanos(time2));
+    }
+
+    fn merge_output_count(&self, dest: &Count) {
+        let count = self
+            .final_
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| es.clone_inner().output_rows().map_or(0, |v| v))
+            .sum();
+        dest.add(count);
+    }
 }
 
 impl ExternalSortExec {
@@ -384,7 +478,7 @@ impl ExternalSortExec {
         Self {
             expr,
             input,
-            metrics: ExecutionPlanMetricsSet::new(),
+            all_metrics: AggregatedMetricsSet::new(),
             preserve_partitioning,
         }
     }
@@ -467,14 +561,25 @@ impl ExecutionPlan for ExternalSortExec {
             }
         }
 
-        let _baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let input = self.input.execute(partition, runtime.clone()).await?;
 
-        external_sort(input, partition, self.expr.clone(), runtime).await
+        external_sort(
+            input,
+            partition,
+            self.expr.clone(),
+            self.all_metrics.clone(),
+            runtime,
+        )
+        .await
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        let metrics = ExecutionPlanMetricsSet::new();
+        let baseline = BaselineMetrics::new(&metrics, 0);
+        self.all_metrics
+            .merge_compute_time(baseline.elapsed_compute());
+        self.all_metrics.merge_output_count(baseline.output_rows());
+        Some(metrics.clone_inner())
     }
 
     fn fmt_as(
@@ -499,6 +604,7 @@ async fn external_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,
     expr: Vec<PhysicalSortExpr>,
+    metrics: AggregatedMetricsSet,
     runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
     let schema = input.schema();
@@ -506,6 +612,7 @@ async fn external_sort(
         partition_id,
         schema.clone(),
         expr,
+        metrics,
         runtime.clone(),
     ));
     runtime.register_consumer(&(sorter.clone() as Arc<dyn MemoryConsumer>));
@@ -527,15 +634,20 @@ mod tests {
     use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
+    use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::{
         collect,
         file_format::{CsvExec, PhysicalPlanConfig},
     };
     use crate::test;
+    use crate::test::assert_is_pending;
+    use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test_util;
     use arrow::array::*;
     use arrow::compute::SortOptions;
     use arrow::datatypes::*;
+    use futures::FutureExt;
+    use std::collections::{BTreeMap, HashMap};
 
     async fn sort_with_runtime(runtime: Arc<RuntimeEnv>) -> Result<Vec<RecordBatch>> {
         let schema = test_util::aggr_test_schema();
@@ -659,6 +771,189 @@ mod tests {
         let c73 = as_primitive_array::<UInt8Type>(&columns_b3[6]);
         assert_eq!(c7.value(0), 15);
         assert_eq!(c73.value(c73.len() - 1), 254,);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_sort_metadata() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let field_metadata: BTreeMap<String, String> =
+            vec![("foo".to_string(), "bar".to_string())]
+                .into_iter()
+                .collect();
+        let schema_metadata: HashMap<String, String> =
+            vec![("baz".to_string(), "barf".to_string())]
+                .into_iter()
+                .collect();
+
+        let mut field = Field::new("field_name", DataType::UInt64, true);
+        field.set_metadata(Some(field_metadata.clone()));
+        let schema = Schema::new_with_metadata(vec![field], schema_metadata.clone());
+        let schema = Arc::new(schema);
+
+        let data: ArrayRef =
+            Arc::new(vec![3, 2, 1].into_iter().map(Some).collect::<UInt64Array>());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![data]).unwrap();
+        let input =
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema.clone(), None).unwrap());
+
+        let sort_exec = Arc::new(ExternalSortExec::try_new(
+            vec![PhysicalSortExpr {
+                expr: col("field_name", &schema)?,
+                options: SortOptions::default(),
+            }],
+            input,
+        )?);
+
+        let result: Vec<RecordBatch> = collect(sort_exec, runtime).await?;
+
+        let expected_data: ArrayRef =
+            Arc::new(vec![1, 2, 3].into_iter().map(Some).collect::<UInt64Array>());
+        let expected_batch =
+            RecordBatch::try_new(schema.clone(), vec![expected_data]).unwrap();
+
+        // Data is correct
+        assert_eq!(&vec![expected_batch], &result);
+
+        // explicitlty ensure the metadata is present
+        assert_eq!(
+            result[0].schema().fields()[0].metadata(),
+            &Some(field_metadata)
+        );
+        assert_eq!(result[0].schema().metadata(), &schema_metadata);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_lex_sort_by_float() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float32, true),
+            Field::new("b", DataType::Float64, true),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Float32Array::from(vec![
+                    Some(f32::NAN),
+                    None,
+                    None,
+                    Some(f32::NAN),
+                    Some(1.0_f32),
+                    Some(1.0_f32),
+                    Some(2.0_f32),
+                    Some(3.0_f32),
+                ])),
+                Arc::new(Float64Array::from(vec![
+                    Some(200.0_f64),
+                    Some(20.0_f64),
+                    Some(10.0_f64),
+                    Some(100.0_f64),
+                    Some(f64::NAN),
+                    None,
+                    None,
+                    Some(f64::NAN),
+                ])),
+            ],
+        )?;
+
+        let sort_exec = Arc::new(ExternalSortExec::try_new(
+            vec![
+                PhysicalSortExpr {
+                    expr: col("a", &schema)?,
+                    options: SortOptions {
+                        descending: true,
+                        nulls_first: true,
+                    },
+                },
+                PhysicalSortExpr {
+                    expr: col("b", &schema)?,
+                    options: SortOptions {
+                        descending: false,
+                        nulls_first: false,
+                    },
+                },
+            ],
+            Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None)?),
+        )?);
+
+        assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
+        assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
+
+        let result: Vec<RecordBatch> = collect(sort_exec.clone(), runtime).await?;
+        let metrics = sort_exec.metrics().unwrap();
+        assert!(metrics.elapsed_compute().unwrap() > 0);
+        assert_eq!(metrics.output_rows().unwrap(), 8);
+        assert_eq!(result.len(), 1);
+
+        let columns = result[0].columns();
+
+        assert_eq!(DataType::Float32, *columns[0].data_type());
+        assert_eq!(DataType::Float64, *columns[1].data_type());
+
+        let a = as_primitive_array::<Float32Type>(&columns[0]);
+        let b = as_primitive_array::<Float64Type>(&columns[1]);
+
+        // convert result to strings to allow comparing to expected result containing NaN
+        let result: Vec<(Option<String>, Option<String>)> = (0..result[0].num_rows())
+            .map(|i| {
+                let aval = if a.is_valid(i) {
+                    Some(a.value(i).to_string())
+                } else {
+                    None
+                };
+                let bval = if b.is_valid(i) {
+                    Some(b.value(i).to_string())
+                } else {
+                    None
+                };
+                (aval, bval)
+            })
+            .collect();
+
+        let expected: Vec<(Option<String>, Option<String>)> = vec![
+            (None, Some("10".to_owned())),
+            (None, Some("20".to_owned())),
+            (Some("NaN".to_owned()), Some("100".to_owned())),
+            (Some("NaN".to_owned()), Some("200".to_owned())),
+            (Some("3".to_owned()), Some("NaN".to_owned())),
+            (Some("2".to_owned()), None),
+            (Some("1".to_owned()), Some("NaN".to_owned())),
+            (Some("1".to_owned()), None),
+        ];
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_drop_cancel() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+
+        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let refs = blocking_exec.refs();
+        let sort_exec = Arc::new(ExternalSortExec::try_new(
+            vec![PhysicalSortExpr {
+                expr: col("a", &schema)?,
+                options: SortOptions::default(),
+            }],
+            blocking_exec,
+        )?);
+
+        let fut = collect(sort_exec, runtime);
+        let mut fut = fut.boxed();
+
+        assert_is_pending(&mut fut);
+        drop(fut);
+        assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
     }

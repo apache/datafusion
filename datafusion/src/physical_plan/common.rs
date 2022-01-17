@@ -20,6 +20,7 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::metrics::BaselineMetrics;
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -41,15 +42,21 @@ pub struct SizedRecordBatchStream {
     schema: SchemaRef,
     batches: Vec<Arc<RecordBatch>>,
     index: usize,
+    baseline_metrics: BaselineMetrics,
 }
 
 impl SizedRecordBatchStream {
     /// Create a new RecordBatchIterator
-    pub fn new(schema: SchemaRef, batches: Vec<Arc<RecordBatch>>) -> Self {
+    pub fn new(
+        schema: SchemaRef,
+        batches: Vec<Arc<RecordBatch>>,
+        baseline_metrics: BaselineMetrics,
+    ) -> Self {
         SizedRecordBatchStream {
             schema,
             index: 0,
             batches,
+            baseline_metrics,
         }
     }
 }
@@ -61,12 +68,13 @@ impl Stream for SizedRecordBatchStream {
         mut self: std::pin::Pin<&mut Self>,
         _: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        Poll::Ready(if self.index < self.batches.len() {
+        let poll = Poll::Ready(if self.index < self.batches.len() {
             self.index += 1;
             Some(Ok(self.batches[self.index - 1].as_ref().clone()))
         } else {
             None
-        })
+        });
+        self.baseline_metrics.record_poll(poll)
     }
 }
 

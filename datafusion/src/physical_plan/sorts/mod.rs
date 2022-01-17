@@ -200,7 +200,7 @@ impl SortKeyCursor {
 }
 
 impl Ord for SortKeyCursor {
-    /// Needed by min-heap comparison in `in_mem_sort` and reverse the order at the same time.
+    /// Needed by min-heap comparison and reverse the order at the same time.
     fn cmp(&self, other: &Self) -> Ordering {
         other.compare(self).unwrap()
     }
@@ -226,8 +226,7 @@ impl PartialOrd for SortKeyCursor {
 struct RowIndex {
     /// The index of the stream
     stream_idx: usize,
-    /// For sort_preserving_merge, it's the index of the cursor within the stream's VecDequeue.
-    /// For in_mem_sort which have only one batch for each stream, cursor_idx always 0
+    /// The index of the cursor within the stream's VecDequeue.
     cursor_idx: usize,
     /// The row index
     row_idx: usize,
