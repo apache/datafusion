@@ -236,12 +236,10 @@ fn is_distinct_from_decimal(
 ) -> Result<BooleanArray> {
     let mut bool_builder = BooleanBuilder::new(left.len());
     for i in 0..left.len() {
-        if left.is_null(i) && right.is_null(i) {
-            bool_builder.append_value(false)?;
-        } else if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_value(true)?;
-        } else {
-            bool_builder.append_value(left.value(i) != right.value(i))?;
+        match (left.is_null(i), right.is_null(i)) {
+            (true, true) => bool_builder.append_value(false)?,
+            (true, false) | (false, true) => bool_builder.append_value(true)?,
+            (_, _) => bool_builder.append_value(left.value(i) != right.value(i))?,
         }
     }
     Ok(bool_builder.finish())
@@ -253,12 +251,10 @@ fn is_not_distinct_from_decimal(
 ) -> Result<BooleanArray> {
     let mut bool_builder = BooleanBuilder::new(left.len());
     for i in 0..left.len() {
-        if left.is_null(i) && right.is_null(i) {
-            bool_builder.append_value(true)?;
-        } else if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_value(false)?;
-        } else {
-            bool_builder.append_value(left.value(i) == right.value(i))?;
+        match (left.is_null(i), right.is_null(i)) {
+            (true, true) => bool_builder.append_value(true)?,
+            (true, false) | (false, true) => bool_builder.append_value(false)?,
+            (_, _) => bool_builder.append_value(left.value(i) == right.value(i))?,
         }
     }
     Ok(bool_builder.finish())
