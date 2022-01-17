@@ -863,7 +863,7 @@ mod tests {
                 .unwrap_or(0)
         }
 
-        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
             None
         }
     }
@@ -888,7 +888,7 @@ mod tests {
             self.num_containers
         }
 
-        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
             None
         }
     }
