@@ -171,7 +171,6 @@ impl From<ast::WindowFrameBound> for WindowFrameBound {
     }
 }
 
-
 impl fmt::Display for WindowFrameBound {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {

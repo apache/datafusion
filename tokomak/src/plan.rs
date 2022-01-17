@@ -2230,14 +2230,24 @@ impl std::fmt::Display for SharedValues {
     }
 }
 
-
 #[cfg(test)]
-mod test{
+mod test {
     use std::sync::Arc;
 
-    use datafusion::{logical_plan::{LogicalPlan, LogicalPlanBuilder, col, Expr, lit, JoinType, Partitioning, count, sum, window_frames::{WindowFrameUnits, WindowFrameBound, WindowFrame}}, arrow::datatypes::{Schema, DataType, Field}, error::DataFusionError, datasource::empty::EmptyTable, optimizer::optimizer::OptimizerRule, execution::context::ExecutionProps, physical_plan::window_functions::{WindowFunction, BuiltInWindowFunction}};
+    use datafusion::{
+        arrow::datatypes::{DataType, Field, Schema},
+        datasource::empty::EmptyTable,
+        error::DataFusionError,
+        execution::context::ExecutionProps,
+        logical_plan::{
+            col, count, lit, sum,
+            window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
+            Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Partitioning,
+        },
+        optimizer::optimizer::OptimizerRule,
+        physical_plan::window_functions::{BuiltInWindowFunction, WindowFunction},
+    };
     use egg::{EGraph, Extractor};
-    use log::Log;
 
     fn plan_test_schema() -> Schema {
         Schema::new(vec![
@@ -2265,15 +2275,15 @@ mod test{
         assert_eq!(format!("{:?}", plan), format!("{:?}", rt_plan));
         Ok(())
     }
-    fn roundtrip_plans(plans: &[LogicalPlan])->TestResult{
-        for plan in plans{
+    fn roundtrip_plans(plans: &[LogicalPlan]) -> TestResult {
+        for plan in plans {
             roundtrip_plan(plan)?;
         }
         Ok(())
     }
 
-    fn roundtrip_plan_builders(builders: &[LogicalPlanBuilder])->TestResult{
-        for b in builders{
+    fn roundtrip_plan_builders(builders: &[LogicalPlanBuilder]) -> TestResult {
+        for b in builders {
             let plan = b.build()?;
             roundtrip_plan(&plan)?;
         }
@@ -2284,52 +2294,83 @@ mod test{
         LogicalPlanBuilder::scan_empty(Some("test"), &plan_test_schema(), None).unwrap()
     }
     #[test]
-    fn roundtrip_projection()->TestResult{
+    fn roundtrip_projection() -> TestResult {
         let b = plan_test_scan_builder();
         println!("{:?}", b.build()?);
         let builders = vec![
-            b.project(vec![col("c3")*col("c3").alias("square"), col("c2")])?,
-            b.project_with_alias(vec![col("c3")*col("c3").alias("square"), col("c2")],Some("test2".to_string()))?
+            b.project(vec![col("c3") * col("c3").alias("square"), col("c2")])?,
+            b.project_with_alias(
+                vec![col("c3") * col("c3").alias("square"), col("c2")],
+                Some("test2".to_string()),
+            )?,
         ];
         roundtrip_plan_builders(&builders)
     }
 
-    fn make_empty_scan(table_name: &str, projection: Option<Vec<usize>>, filters: Option<Vec<Expr>>, limit: Option<usize>)->Result<LogicalPlan, DataFusionError>{
+    fn make_empty_scan(
+        table_name: &str,
+        projection: Option<Vec<usize>>,
+        filters: Option<Vec<Expr>>,
+        limit: Option<usize>,
+    ) -> Result<LogicalPlan, DataFusionError> {
         let table_schema = plan_test_schema();
         let source = Arc::new(EmptyTable::new(table_schema.into()));
-        let builder = LogicalPlanBuilder::scan_with_limit_and_filters(table_name, source, projection, limit, filters.unwrap_or(Vec::new()))?;
+        let builder = LogicalPlanBuilder::scan_with_limit_and_filters(
+            table_name,
+            source,
+            projection,
+            limit,
+            filters.unwrap_or(Vec::new()),
+        )?;
         Ok(builder.build()?)
     }
 
     #[test]
-    fn roundtrip_scan()->TestResult{
+    fn roundtrip_scan() -> TestResult {
         let plans = vec![
             make_empty_scan("test", None, None, None)?,
-            make_empty_scan("test", Some(vec![0,1]), None, None)?,
+            make_empty_scan("test", Some(vec![0, 1]), None, None)?,
             make_empty_scan("test", None, Some(vec![col("c1").eq(lit("test"))]), None)?,
             make_empty_scan("test", None, None, Some(12))?,
-            make_empty_scan("test", Some(vec![5,4]), Some(vec![col("c2_non_null").eq(lit(false))]), None)?,
-            make_empty_scan("test", Some(vec![5,4]), None, Some(35))?,
-            make_empty_scan("test", Some(vec![5,4]), Some(vec![col("c2_non_null").eq(lit(false))]), Some(usize::MAX))?
+            make_empty_scan(
+                "test",
+                Some(vec![5, 4]),
+                Some(vec![col("c2_non_null").eq(lit(false))]),
+                None,
+            )?,
+            make_empty_scan("test", Some(vec![5, 4]), None, Some(35))?,
+            make_empty_scan(
+                "test",
+                Some(vec![5, 4]),
+                Some(vec![col("c2_non_null").eq(lit(false))]),
+                Some(usize::MAX),
+            )?,
         ];
         roundtrip_plans(&plans)
     }
 
-    fn create_optimizer()->crate::Tokomak{
-        crate::Tokomak::with_builtin_rules(crate::RunnerSettings::default(), crate::ALL_RULES)
+    fn create_optimizer() -> crate::Tokomak {
+        crate::Tokomak::with_builtin_rules(
+            crate::RunnerSettings::default(),
+            crate::ALL_RULES,
+        )
     }
     //May need to remove this test as filter expressions add expression to predicate.
     //No gaurentee of determinism with regards to the extracted plan. Expressions may be reorderd
     #[test]
-    fn roundtrip_filter()->TestResult{
+    fn roundtrip_filter() -> TestResult {
         let b = plan_test_scan_builder();
         let builders = vec![
             b.filter(col("c1").eq(lit("test")))?,
-            b.filter(col("c3").eq(lit(12.0f64)).or(col("c1").like(lit("prefix%"))))?,
+            b.filter(
+                col("c3")
+                    .eq(lit(12.0f64))
+                    .or(col("c1").like(lit("prefix%"))),
+            )?,
         ];
-        
+
         let optimizer = create_optimizer();
-        for b in builders{
+        for b in builders {
             let plan = b.build()?;
             let opt_plan = optimizer.optimize(&plan, &ExecutionProps::new())?;
             let fmt_plan = format!("{:?}", plan);
@@ -2340,9 +2381,26 @@ mod test{
     }
 
     #[test]
-    fn roundtrip_joins()->TestResult{
-        let l = LogicalPlanBuilder::scan_empty(Some("left"), &Schema::new(vec![Field::new("lkey", DataType::Int64, false), Field::new("lkey2", DataType::Utf8, false), Field::new("ldata", DataType::Utf8, true)]), None)?;
-        let r = LogicalPlanBuilder::scan_empty(Some("right"), &Schema::new(vec![Field::new("rkey", DataType::Int64, false), Field::new("rkey2", DataType::Utf8, false), Field::new("rdata", DataType::Utf8,true)]), None)?.build()?;
+    fn roundtrip_joins() -> TestResult {
+        let l = LogicalPlanBuilder::scan_empty(
+            Some("left"),
+            &Schema::new(vec![
+                Field::new("lkey", DataType::Int64, false),
+                Field::new("lkey2", DataType::Utf8, false),
+                Field::new("ldata", DataType::Utf8, true),
+            ]),
+            None,
+        )?;
+        let r = LogicalPlanBuilder::scan_empty(
+            Some("right"),
+            &Schema::new(vec![
+                Field::new("rkey", DataType::Int64, false),
+                Field::new("rkey2", DataType::Utf8, false),
+                Field::new("rdata", DataType::Utf8, true),
+            ]),
+            None,
+        )?
+        .build()?;
 
         let plans = vec![
             l.join(&r, JoinType::Inner, (vec!["lkey"], vec!["rkey"]))?,
@@ -2350,31 +2408,72 @@ mod test{
             l.join(&r, JoinType::Right, (vec!["lkey"], vec!["rkey"]))?,
             l.join(&r, JoinType::Anti, (vec!["lkey"], vec!["rkey"]))?,
             l.join(&r, JoinType::Semi, (vec!["lkey"], vec!["rkey"]))?,
-
             l.join_detailed(&r, JoinType::Inner, (vec!["lkey"], vec!["rkey"]), true)?,
             l.join_detailed(&r, JoinType::Left, (vec!["lkey"], vec!["rkey"]), true)?,
             l.join_detailed(&r, JoinType::Right, (vec!["lkey"], vec!["rkey"]), true)?,
             l.join_detailed(&r, JoinType::Anti, (vec!["lkey"], vec!["rkey"]), true)?,
             l.join_detailed(&r, JoinType::Semi, (vec!["lkey"], vec!["rkey"]), true)?,
-
-            l.join(&r, JoinType::Inner, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
-            l.join(&r, JoinType::Left,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
-            l.join(&r, JoinType::Right, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
-            l.join(&r, JoinType::Anti,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
-            l.join(&r, JoinType::Semi,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
-
-            l.join_detailed(&r, JoinType::Inner, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
-            l.join_detailed(&r, JoinType::Left,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
-            l.join_detailed(&r, JoinType::Right, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
-            l.join_detailed(&r, JoinType::Anti,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
-            l.join_detailed(&r, JoinType::Semi,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
+            l.join(
+                &r,
+                JoinType::Inner,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+            )?,
+            l.join(
+                &r,
+                JoinType::Left,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+            )?,
+            l.join(
+                &r,
+                JoinType::Right,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+            )?,
+            l.join(
+                &r,
+                JoinType::Anti,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+            )?,
+            l.join(
+                &r,
+                JoinType::Semi,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+            )?,
+            l.join_detailed(
+                &r,
+                JoinType::Inner,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+                true,
+            )?,
+            l.join_detailed(
+                &r,
+                JoinType::Left,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+                true,
+            )?,
+            l.join_detailed(
+                &r,
+                JoinType::Right,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+                true,
+            )?,
+            l.join_detailed(
+                &r,
+                JoinType::Anti,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+                true,
+            )?,
+            l.join_detailed(
+                &r,
+                JoinType::Semi,
+                (vec!["lkey", "lkey2"], vec!["rkey", "rkey2"]),
+                true,
+            )?,
         ];
 
         roundtrip_plan_builders(&plans)
-
     }
     #[test]
-    fn roundtrip_limit()->TestResult{
+    fn roundtrip_limit() -> TestResult {
         let b = plan_test_scan_builder();
         let builders = vec![
             b.limit(0)?,
@@ -2388,34 +2487,67 @@ mod test{
     }
 
     #[test]
-    fn roundtrip_sort()->TestResult{
+    fn roundtrip_sort() -> TestResult {
         let b = plan_test_scan_builder();
         let builders = vec![
-            b.sort(vec![col("c1").sort(false, false), col("c3").sort( false, true)])?,
-            b.sort(vec![col("c1").sort(false, false), col("c3").sort( true, false)])?,
-            b.sort(vec![col("c1").sort(false, true), col("c3").sort( false, false)])?,
-            b.sort(vec![col("c1").sort(true, false), col("c3").sort( false, false)])?,
-            b.sort(vec![col("c1").sort(false, false), col("c3").sort( true, true)])?,
-            b.sort(vec![col("c1").sort(false, true), col("c3").sort( false, false)])?,
-            b.sort(vec![col("c1").sort(true, false), col("c3").sort( false, true)])?,
-            b.sort(vec![col("c1").sort(false, true), col("c3").sort( true, true)])?,
-            b.sort(vec![col("c1").sort(true, false), col("c3").sort( true, true)])?,
-            b.sort(vec![col("c1").sort(false, true), col("c3").sort( true, true)])?,
-            b.sort(vec![col("c1").sort(true, true), col("c3").sort( true, true)])?,
+            b.sort(vec![
+                col("c1").sort(false, false),
+                col("c3").sort(false, true),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(false, false),
+                col("c3").sort(true, false),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(false, true),
+                col("c3").sort(false, false),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(true, false),
+                col("c3").sort(false, false),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(false, false),
+                col("c3").sort(true, true),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(false, true),
+                col("c3").sort(false, false),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(true, false),
+                col("c3").sort(false, true),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(false, true),
+                col("c3").sort(true, true),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(true, false),
+                col("c3").sort(true, true),
+            ])?,
+            b.sort(vec![
+                col("c1").sort(false, true),
+                col("c3").sort(true, true),
+            ])?,
+            b.sort(vec![col("c1").sort(true, true), col("c3").sort(true, true)])?,
         ];
 
         roundtrip_plan_builders(&builders)
     }
 
     #[test]
-    fn roundtrip_repartition()->TestResult{
+    fn roundtrip_repartition() -> TestResult {
         let b = plan_test_scan_builder();
         //Hash(Vec<Expr>, usize),
         let builders = vec![
             b.repartition(Partitioning::RoundRobinBatch(12))?,
             b.repartition(Partitioning::RoundRobinBatch(72))?,
             b.repartition(Partitioning::RoundRobinBatch(8192))?,
-            b.repartition(Partitioning::Hash(vec![col("c1"), col("c2"), col("c3")], 12))?,
+            b.repartition(Partitioning::Hash(
+                vec![col("c1"), col("c2"), col("c3")],
+                12,
+            ))?,
             b.repartition(Partitioning::Hash(vec![col("c1"), col("c2")], 36))?,
             b.repartition(Partitioning::Hash(vec![col("c1")], 8192))?,
         ];
@@ -2423,20 +2555,31 @@ mod test{
     }
 
     #[test]
-    fn roudtrip_window()->TestResult{
+    fn roudtrip_window() -> TestResult {
         let b = plan_test_scan_builder();
-        let nth = WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::PercentRank);
+        let nth =
+            WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::PercentRank);
         let builders = vec![
             b.window(vec![count(col("c2")), sum(col("c3"))])?,
-            b.window(vec![Expr::WindowFunction{ fun: nth.clone(), args: vec![], partition_by: vec![col("c1")], order_by: vec![col("c2")], window_frame: None }])?,
-            b.window(vec![Expr::WindowFunction{ fun: nth, args: vec![], partition_by: vec![col("c1")], order_by: vec![], window_frame: Some(WindowFrame {
-                units: WindowFrameUnits::Rows,
-                start_bound: WindowFrameBound::CurrentRow,
-                end_bound: WindowFrameBound::CurrentRow,
-            } ) }])?,
-            
+            b.window(vec![Expr::WindowFunction {
+                fun: nth.clone(),
+                args: vec![],
+                partition_by: vec![col("c1")],
+                order_by: vec![col("c2")],
+                window_frame: None,
+            }])?,
+            b.window(vec![Expr::WindowFunction {
+                fun: nth,
+                args: vec![],
+                partition_by: vec![col("c1")],
+                order_by: vec![],
+                window_frame: Some(WindowFrame {
+                    units: WindowFrameUnits::Rows,
+                    start_bound: WindowFrameBound::CurrentRow,
+                    end_bound: WindowFrameBound::CurrentRow,
+                }),
+            }])?,
         ];
         roundtrip_plan_builders(&builders)
     }
-
 }
