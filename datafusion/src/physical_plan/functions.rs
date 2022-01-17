@@ -57,7 +57,7 @@ use std::convert::From;
 use std::{any::Any, fmt, str::FromStr, sync::Arc};
 
 /// A function's type signature, which defines the function's supported argument types.
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum TypeSignature {
     /// arbitrary number of arguments of an common type out of a list of valid types
     // A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
@@ -79,7 +79,7 @@ pub enum TypeSignature {
 }
 
 ///The Signature of a function defines its supported input types as well as its volatility.
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Signature {
     /// type_signature - The types that the function accepts. See [TypeSignature] for more information.
     pub type_signature: TypeSignature,
@@ -144,7 +144,7 @@ impl Signature {
 }
 
 ///A function's volatility, which defines the functions eligibility for certain optimizations
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// Immutable - An immutable function will always return the same output when given the same input. An example of this is [BuiltinScalarFunction::Cos].
     Immutable,
@@ -170,7 +170,7 @@ pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
 /// Enum of all built-in scalar functions
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinScalarFunction {
     // math functions
     /// abs
@@ -1547,7 +1547,7 @@ pub struct ScalarFunctionExpr {
 }
 
 impl Debug for ScalarFunctionExpr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ScalarFunctionExpr")
             .field("fun", &"<FUNC>")
             .field("name", &self.name)
@@ -1695,6 +1695,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::{
         error::Result,
         physical_plan::expressions::{col, lit},
@@ -1723,7 +1724,7 @@ mod tests {
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
 
             let expr =
                 create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &ctx_state)?;
@@ -3996,16 +3997,16 @@ mod tests {
 
         // different types, to validate that casting happens
         generic_test_array(
-            Arc::new(UInt32Array::from(vec![1u32])),
-            Arc::new(UInt64Array::from(vec![1u64])),
+            Arc::new(UInt32Array::from_slice(&[1u32])),
+            Arc::new(UInt64Array::from_slice(&[1u64])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )?;
 
         // different types (another order), to validate that casting happens
         generic_test_array(
-            Arc::new(UInt64Array::from(vec![1u64])),
-            Arc::new(UInt32Array::from(vec![1u32])),
+            Arc::new(UInt64Array::from_slice(&[1u64])),
+            Arc::new(UInt32Array::from_slice(&[1u32])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )
@@ -4059,7 +4060,7 @@ mod tests {
 
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],

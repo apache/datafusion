@@ -31,6 +31,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -47,7 +48,7 @@ pub struct MemoryExec {
 }
 
 impl fmt::Debug for MemoryExec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)
@@ -86,7 +87,11 @@ impl ExecutionPlan for MemoryExec {
         )))
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
             self.projected_schema.clone(),
@@ -224,6 +229,7 @@ impl RecordBatchStream for MemoryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::ColumnStatistics;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -240,10 +246,10 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from_slice(&[1, 2, 3])),
+                Arc::new(Int32Array::from_slice(&[4, 5, 6])),
                 Arc::new(Int32Array::from(vec![None, None, Some(9)])),
-                Arc::new(Int32Array::from(vec![7, 8, 9])),
+                Arc::new(Int32Array::from_slice(&[7, 8, 9])),
             ],
         )?;
 
@@ -252,6 +258,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&[vec![batch]], schema, Some(vec![2, 1]))?;
@@ -277,7 +284,7 @@ mod tests {
         );
 
         // scan with projection
-        let mut it = executor.execute(0).await?;
+        let mut it = executor.execute(0, runtime).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -289,6 +296,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_without_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&[vec![batch]], schema, None)?;
@@ -325,7 +333,7 @@ mod tests {
             ])
         );
 
-        let mut it = executor.execute(0).await?;
+        let mut it = executor.execute(0, runtime).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(4, batch1.schema().fields().len());
         assert_eq!(4, batch1.num_columns());

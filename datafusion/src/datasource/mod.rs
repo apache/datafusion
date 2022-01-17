@@ -17,6 +17,7 @@
 
 //! DataFusion data sources
 
+#![allow(clippy::module_inception)]
 pub mod datasource;
 pub mod empty;
 pub mod file_format;

@@ -21,7 +21,9 @@
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
 use crate::field_util::get_indexed_field;
-use crate::logical_plan::{window_frames, DFField, DFSchema, LogicalPlan};
+use crate::logical_plan::{
+    plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
+};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
@@ -34,6 +36,7 @@ use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -167,7 +170,7 @@ impl FromStr for Column {
 }
 
 impl fmt::Display for Column {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self.relation {
             Some(r) => write!(f, "#{}.{}", r, self.name),
             None => write!(f, "#{}", self.name),
@@ -219,7 +222,7 @@ impl fmt::Display for Column {
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, PartialOrd)]
+#[derive(Clone, PartialEq, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -368,6 +371,23 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
+}
+
+/// Fixed seed for the hashing so that Ords are consistent across runs
+const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
+
+impl PartialOrd for Expr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let mut hasher = SEED.build_hasher();
+        self.hash(&mut hasher);
+        let s = hasher.finish();
+
+        let mut hasher = SEED.build_hasher();
+        other.hash(&mut hasher);
+        let o = hasher.finish();
+
+        Some(s.cmp(&o))
+    }
 }
 
 impl Expr {
@@ -1306,7 +1326,6 @@ fn normalize_col_with_schemas(
 }
 
 /// Recursively normalize all Column expressions in a list of expression trees
-#[inline]
 pub fn normalize_cols(
     exprs: impl IntoIterator<Item = impl Into<Expr>>,
     plan: &LogicalPlan,
@@ -1315,6 +1334,80 @@ pub fn normalize_cols(
         .into_iter()
         .map(|e| normalize_col(e.into(), plan))
         .collect()
+}
+
+/// Rewrite sort on aggregate expressions to sort on the column of aggregate output
+/// For example, `max(x)` is written to `col("MAX(x)")`
+pub fn rewrite_sort_cols_by_aggs(
+    exprs: impl IntoIterator<Item = impl Into<Expr>>,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    exprs
+        .into_iter()
+        .map(|e| {
+            let expr = e.into();
+            match expr {
+                Expr::Sort {
+                    expr,
+                    asc,
+                    nulls_first,
+                } => {
+                    let sort = Expr::Sort {
+                        expr: Box::new(rewrite_sort_col_by_aggs(*expr, plan)?),
+                        asc,
+                        nulls_first,
+                    };
+                    Ok(sort)
+                }
+                expr => Ok(expr),
+            }
+        })
+        .collect()
+}
+
+fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
+    match plan {
+        LogicalPlan::Aggregate(Aggregate {
+            input, aggr_expr, ..
+        }) => {
+            struct Rewriter<'a> {
+                plan: &'a LogicalPlan,
+                input: &'a LogicalPlan,
+                aggr_expr: &'a Vec<Expr>,
+            }
+
+            impl<'a> ExprRewriter for Rewriter<'a> {
+                fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+                    let normalized_expr = normalize_col(expr.clone(), self.plan);
+                    if normalized_expr.is_err() {
+                        // The expr is not based on Aggregate plan output. Skip it.
+                        return Ok(expr);
+                    }
+                    let normalized_expr = normalized_expr.unwrap();
+                    if let Some(found_agg) =
+                        self.aggr_expr.iter().find(|a| (**a) == normalized_expr)
+                    {
+                        let agg = normalize_col(found_agg.clone(), self.plan)?;
+                        let col = Expr::Column(
+                            agg.to_field(self.input.schema())
+                                .map(|f| f.qualified_column())?,
+                        );
+                        Ok(col)
+                    } else {
+                        Ok(expr)
+                    }
+                }
+            }
+
+            expr.rewrite(&mut Rewriter {
+                plan,
+                input,
+                aggr_expr,
+            })
+        }
+        LogicalPlan::Projection(_) => rewrite_sort_col_by_aggs(expr, plan.inputs()[0]),
+        _ => Ok(expr),
+    }
 }
 
 /// Recursively 'unnormalize' (remove all qualifiers) from an
@@ -2359,7 +2452,7 @@ mod tests {
 
     #[test]
     fn test_partial_ord() {
-        // Test validates that partial ord is defined for Expr, not
+        // Test validates that partial ord is defined for Expr using hashes, not
         // intended to exhaustively test all possibilities
         let exp1 = col("a") + lit(1);
         let exp2 = col("a") + lit(2);
@@ -2367,8 +2460,8 @@ mod tests {
 
         assert!(exp1 < exp2);
         assert!(exp2 > exp1);
-        assert!(exp2 < exp3);
-        assert!(exp3 > exp2);
+        assert!(exp2 > exp3);
+        assert!(exp3 < exp2);
     }
 
     #[test]

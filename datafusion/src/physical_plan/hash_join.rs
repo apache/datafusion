@@ -70,6 +70,7 @@ use super::{
 };
 use crate::arrow::array::BooleanBufferBuilder;
 use crate::arrow::datatypes::TimeUnit;
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use log::debug;
@@ -90,7 +91,7 @@ use std::fmt;
 struct JoinHashMap(RawTable<(u64, SmallVec<[u64; 1]>)>);
 
 impl fmt::Debug for JoinHashMap {
-    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, _f: &mut fmt::Formatter) -> fmt::Result {
         Ok(())
     }
 }
@@ -277,7 +278,11 @@ impl ExecutionPlan for HashJoinExec {
         self.right.output_partitioning()
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         let on_left = self.on.iter().map(|on| on.0.clone()).collect::<Vec<_>>();
         // we only want to compute the build side once for PartitionMode::CollectLeft
         let left_data = {
@@ -292,7 +297,7 @@ impl ExecutionPlan for HashJoinExec {
 
                             // merge all left parts into a single stream
                             let merge = CoalescePartitionsExec::new(self.left.clone());
-                            let stream = merge.execute(0).await?;
+                            let stream = merge.execute(0, runtime.clone()).await?;
 
                             // This operation performs 2 steps at once:
                             // 1. creates a [JoinHashMap] of all batches from the stream
@@ -345,7 +350,7 @@ impl ExecutionPlan for HashJoinExec {
                     let start = Instant::now();
 
                     // Load 1 partition of left side in memory
-                    let stream = self.left.execute(partition).await?;
+                    let stream = self.left.execute(partition, runtime.clone()).await?;
 
                     // This operation performs 2 steps at once:
                     // 1. creates a [JoinHashMap] of all batches from the stream
@@ -396,7 +401,7 @@ impl ExecutionPlan for HashJoinExec {
         // we have the batches and the hash map with their keys. We can how create a stream
         // over the right that uses this information to issue new batches.
 
-        let right_stream = self.right.execute(partition).await?;
+        let right_stream = self.right.execute(partition, runtime.clone()).await?;
         let on_right = self.on.iter().map(|on| on.1.clone()).collect::<Vec<_>>();
 
         let num_rows = left_data.1.num_rows();
@@ -1084,11 +1089,12 @@ mod tests {
         on: JoinOn,
         join_type: &JoinType,
         null_equals_null: bool,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let join = join(left, right, on, join_type, null_equals_null)?;
         let columns = columns(&join.schema());
 
-        let stream = join.execute(0).await?;
+        let stream = join.execute(0, runtime).await?;
         let batches = common::collect(stream).await?;
 
         Ok((columns, batches))
@@ -1100,6 +1106,7 @@ mod tests {
         on: JoinOn,
         join_type: &JoinType,
         null_equals_null: bool,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let partition_count = 4;
 
@@ -1132,7 +1139,7 @@ mod tests {
 
         let mut batches = vec![];
         for i in 0..partition_count {
-            let stream = join.execute(i).await?;
+            let stream = join.execute(i, runtime.clone()).await?;
             let more_batches = common::collect(stream).await?;
             batches.extend(
                 more_batches
@@ -1147,6 +1154,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1169,6 +1177,7 @@ mod tests {
             on.clone(),
             &JoinType::Inner,
             false,
+            runtime,
         )
         .await?;
 
@@ -1190,6 +1199,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_inner_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1211,6 +1221,7 @@ mod tests {
             on.clone(),
             &JoinType::Inner,
             false,
+            runtime,
         )
         .await?;
 
@@ -1232,6 +1243,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_one_no_shared_column_names() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1248,7 +1260,7 @@ mod tests {
         )];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, runtime).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
@@ -1269,6 +1281,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_inner_two() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 2]),
             ("b2", &vec![1, 2, 2]),
@@ -1291,7 +1304,7 @@ mod tests {
         ];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, runtime).await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -1315,6 +1328,7 @@ mod tests {
     /// Test where the left has 2 parts, the right with 1 part => 1 part
     #[tokio::test]
     async fn join_inner_one_two_parts_left() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let batch1 = build_table_i32(
             ("a1", &vec![1, 2]),
             ("b2", &vec![1, 2]),
@@ -1344,7 +1358,7 @@ mod tests {
         ];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Inner, false).await?;
+            join_collect(left, right, on, &JoinType::Inner, false, runtime).await?;
 
         assert_eq!(columns, vec!["a1", "b2", "c1", "a1", "b2", "c2"]);
 
@@ -1368,6 +1382,7 @@ mod tests {
     /// Test where the left has 1 part, the right has 2 parts => 2 parts
     #[tokio::test]
     async fn join_inner_one_two_parts_right() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 5]), // this has a repetition
@@ -1397,7 +1412,7 @@ mod tests {
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
         // first part
-        let stream = join.execute(0).await?;
+        let stream = join.execute(0, runtime.clone()).await?;
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
 
@@ -1411,7 +1426,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
 
         // second part
-        let stream = join.execute(1).await?;
+        let stream = join.execute(1, runtime.clone()).await?;
         let batches = common::collect(stream).await?;
         assert_eq!(batches.len(), 1);
         let expected = vec![
@@ -1442,6 +1457,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_multi_batch() {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1462,7 +1478,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0).await.unwrap();
+        let stream = join.execute(0, runtime).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
@@ -1482,6 +1498,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_multi_batch() {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1503,7 +1520,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0).await.unwrap();
+        let stream = join.execute(0, runtime).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
@@ -1525,6 +1542,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_empty_right() {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1542,7 +1560,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
-        let stream = join.execute(0).await.unwrap();
+        let stream = join.execute(0, runtime).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
@@ -1560,6 +1578,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_empty_right() {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1577,7 +1596,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0).await.unwrap();
+        let stream = join.execute(0, runtime).await.unwrap();
         let batches = common::collect(stream).await.unwrap();
 
         let expected = vec![
@@ -1595,6 +1614,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_left_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1616,6 +1636,7 @@ mod tests {
             on.clone(),
             &JoinType::Left,
             false,
+            runtime,
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -1636,6 +1657,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_left_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1657,6 +1679,7 @@ mod tests {
             on.clone(),
             &JoinType::Left,
             false,
+            runtime,
         )
         .await?;
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
@@ -1677,6 +1700,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_semi() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 2, 3]),
             ("b1", &vec![4, 5, 5, 7]), // 7 does not exist on the right
@@ -1697,7 +1721,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0).await?;
+        let stream = join.execute(0, runtime).await?;
         let batches = common::collect(stream).await?;
 
         let expected = vec![
@@ -1716,6 +1740,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_anti() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 2, 3, 5]),
             ("b1", &vec![4, 5, 5, 7, 7]), // 7 does not exist on the right
@@ -1736,7 +1761,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1"]);
 
-        let stream = join.execute(0).await?;
+        let stream = join.execute(0, runtime).await?;
         let batches = common::collect(stream).await?;
 
         let expected = vec![
@@ -1753,6 +1778,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_right_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1769,7 +1795,7 @@ mod tests {
         )];
 
         let (columns, batches) =
-            join_collect(left, right, on, &JoinType::Right, false).await?;
+            join_collect(left, right, on, &JoinType::Right, false, runtime).await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -1790,6 +1816,7 @@ mod tests {
 
     #[tokio::test]
     async fn partitioned_join_right_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]),
@@ -1806,7 +1833,8 @@ mod tests {
         )];
 
         let (columns, batches) =
-            partitioned_join_collect(left, right, on, &JoinType::Right, false).await?;
+            partitioned_join_collect(left, right, on, &JoinType::Right, false, runtime)
+                .await?;
 
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
 
@@ -1827,6 +1855,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_full_one() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a1", &vec![1, 2, 3]),
             ("b1", &vec![4, 5, 7]), // 7 does not exist on the right
@@ -1847,7 +1876,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
 
-        let stream = join.execute(0).await?;
+        let stream = join.execute(0, runtime).await?;
         let batches = common::collect(stream).await?;
 
         let expected = vec![
@@ -1917,6 +1946,7 @@ mod tests {
 
     #[tokio::test]
     async fn join_with_duplicated_column_names() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let left = build_table(
             ("a", &vec![1, 2, 3]),
             ("b", &vec![4, 5, 7]),
@@ -1938,7 +1968,7 @@ mod tests {
         let columns = columns(&join.schema());
         assert_eq!(columns, vec!["a", "b", "c", "a", "b", "c"]);
 
-        let stream = join.execute(0).await?;
+        let stream = join.execute(0, runtime).await?;
         let batches = common::collect(stream).await?;
 
         let expected = vec![

@@ -1755,7 +1755,7 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{}", format!("{:?},{:?},{:?}", v, p, s))?;
+                write!(f, "{:?},{:?},{:?}", v, p, s)?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
@@ -1829,7 +1829,7 @@ impl fmt::Display for ScalarValue {
 }
 
 impl fmt::Debug for ScalarValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({})", self),
             ScalarValue::Boolean(_) => write!(f, "Boolean({})", self),
@@ -1930,6 +1930,7 @@ impl ScalarType<i64> for TimestampNanosecondType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
 
     #[test]
     fn scalar_decimal_test() {
@@ -2635,7 +2636,7 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 23])) as ArrayRef,
             ),
             (
                 field_b.clone(),
@@ -2650,11 +2651,11 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e.clone(),
-                        Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 2])) as ArrayRef,
                     ),
                     (
                         field_f.clone(),
-                        Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2730,7 +2731,7 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a,
-                Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 7, -1000])) as ArrayRef,
             ),
             (
                 field_b,
@@ -2745,11 +2746,11 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e,
-                        Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 4, 6])) as ArrayRef,
                     ),
                     (
                         field_f,
-                        Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),

@@ -28,13 +28,14 @@ use sqlparser::ast;
 use std::cmp::Ordering;
 use std::convert::{From, TryFrom};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 /// The frame-spec determines which output rows are read by an aggregate window function.
 ///
 /// The ending frame boundary can be omitted (if the BETWEEN and AND keywords that surround the
 /// starting frame boundary are also omitted), in which case the ending frame boundary defaults to
 /// CURRENT ROW.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub struct WindowFrame {
     /// A frame type - either ROWS, RANGE or GROUPS
     pub units: WindowFrameUnits,
@@ -190,6 +191,12 @@ impl Ord for WindowFrameBound {
     }
 }
 
+impl Hash for WindowFrameBound {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.get_rank().hash(state)
+    }
+}
+
 impl WindowFrameBound {
     /// get the rank of this window frame bound.
     ///
@@ -211,7 +218,7 @@ impl WindowFrameBound {
 
 /// There are three frame types: ROWS, GROUPS, and RANGE. The frame type determines how the
 /// starting and ending boundaries of the frame are measured.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Hash)]
 pub enum WindowFrameUnits {
     /// The ROWS frame type means that the starting and ending boundaries for the frame are
     /// determined by counting individual rows relative to the current row.

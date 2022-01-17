@@ -76,9 +76,8 @@ Our source code is hosted on
 [GitHub](https://github.com/apache/arrow-datafusion). For developers new to
 the project, we have curated a
 [good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
-list to help you get started.
+list to help you get started. You can find datafusion's major designs in docs/source/specification.
 
 We use GitHub issues for maintaining a queue of development work and as the
 public record. We often use Google docs, Github issues and pull requests for
-quick and small design discussions. For major design change proposals, please
-make sure to send them to the dev list for more visibility.
+quick and small design discussions. For major design change proposals, we encourage you to write a rfc.

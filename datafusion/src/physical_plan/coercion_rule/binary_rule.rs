@@ -1,3 +1,22 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Support the coercion rule for binary operation
+
 use crate::arrow::datatypes::DataType;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
@@ -183,26 +202,24 @@ fn mathematics_numerical_coercion(
         }
         (Decimal(_, _), _) => {
             let converted_decimal_type = convert_numeric_type_to_decimal(rhs_type);
-            if converted_decimal_type.is_none() {
-                None
-            } else {
-                coercion_decimal_mathematics_type(
+            match converted_decimal_type {
+                None => None,
+                Some(right_decimal_type) => coercion_decimal_mathematics_type(
                     mathematics_op,
                     lhs_type,
-                    &converted_decimal_type.unwrap(),
-                )
+                    &right_decimal_type,
+                ),
             }
         }
         (_, Decimal(_, _)) => {
             let converted_decimal_type = convert_numeric_type_to_decimal(lhs_type);
-            if converted_decimal_type.is_none() {
-                None
-            } else {
-                coercion_decimal_mathematics_type(
+            match converted_decimal_type {
+                None => None,
+                Some(left_decimal_type) => coercion_decimal_mathematics_type(
                     mathematics_op,
-                    &converted_decimal_type.unwrap(),
+                    &left_decimal_type,
                     rhs_type,
-                )
+                ),
             }
         }
         (Float64, _) | (_, Float64) => Some(Float64),

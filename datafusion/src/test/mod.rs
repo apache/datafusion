@@ -20,6 +20,7 @@
 use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
+use crate::from_slice::FromSlice;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use array::{
     Array, ArrayRef, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
@@ -44,7 +45,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from(vec![1])),
+            Arc::new(array::Int32Array::from_slice(&[1])),
             Arc::new(array::StringArray::from(vec!["a"])),
         ],
     )

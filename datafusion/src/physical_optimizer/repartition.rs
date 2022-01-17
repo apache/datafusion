@@ -26,6 +26,7 @@ use crate::physical_plan::{Distribution, Partitioning::*};
 use crate::{error::Result, execution::context::ExecutionConfig};
 
 /// Optimizer that introduces repartition to introduce more parallelism in the plan
+#[derive(Default)]
 pub struct Repartition {}
 
 impl Repartition {

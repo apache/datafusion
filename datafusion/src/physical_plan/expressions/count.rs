@@ -112,22 +112,12 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        if !value.is_null() {
-            self.count += 1;
-        }
-        Ok(())
+    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
+        unimplemented!("update_batch is implemented instead");
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count = &states[0];
-        if let ScalarValue::UInt64(Some(delta)) = count {
-            self.count += *delta;
-        } else {
-            unreachable!()
-        }
-        Ok(())
+    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
+        unimplemented!("merge_batch is implemented instead");
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -151,6 +141,7 @@ impl Accumulator for CountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::expressions::tests::aggregate;
     use crate::{error::Result, generic_test_op};
@@ -159,7 +150,7 @@ mod tests {
 
     #[test]
     fn count_elements() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,

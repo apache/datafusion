@@ -59,6 +59,7 @@ use tokio::{
     task,
 };
 
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 use super::PartitionColumnProjector;
@@ -186,7 +187,11 @@ impl ExecutionPlan for ParquetExec {
         }
     }
 
-    async fn execute(&self, partition_index: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition_index: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // because the parquet implementation is not thread-safe, it is necessary to execute
         // on a thread and communicate with channels
         let (response_tx, response_rx): (
@@ -315,12 +320,8 @@ macro_rules! get_min_max_values {
         };
 
         let data_type = field.data_type();
-        let null_scalar: ScalarValue = if let Ok(v) = data_type.try_into() {
-            v
-        } else {
-            // DataFusion doesn't have support for ScalarValues of the column type
-            return None
-        };
+        // The result may be None, because DataFusion doesn't have support for ScalarValues of the column type
+        let null_scalar: ScalarValue = data_type.try_into().ok()?;
 
         let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
             .iter()
@@ -436,11 +437,8 @@ fn read_partition(
                     break;
                 }
                 Some(Err(e)) => {
-                    let err_msg = format!(
-                        "Error reading batch from {}: {}",
-                        partitioned_file,
-                        e.to_string()
-                    );
+                    let err_msg =
+                        format!("Error reading batch from {}: {}", partitioned_file, e);
                     // send error to operator
                     send_result(
                         &response_tx,
@@ -478,6 +476,7 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
@@ -497,7 +496,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0).await?;
+        let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap()?;
 
         assert_eq!(8, batch.num_rows());
@@ -522,6 +521,7 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let mut partitioned_file = local_unpartitioned_file(filename.clone());
@@ -552,7 +552,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0).await?;
+        let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap()?;
         let expected = vec![
             "+----+----------+-------------+-------+",
