@@ -79,13 +79,15 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
     let partitions = 16;
 
     rt.block_on(async {
-        let mem_table = MemTable::load(Arc::new(csv), 16 * 1024, Some(partitions))
-            .await
-            .unwrap();
-
         // create local execution context
         let mut ctx = ExecutionContext::new();
         ctx.state.lock().unwrap().config.target_partitions = 1;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+
+        let mem_table =
+            MemTable::load(Arc::new(csv), 16 * 1024, Some(partitions), runtime)
+                .await
+                .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))
             .unwrap();
         ctx_holder.lock().unwrap().push(Arc::new(Mutex::new(ctx)))

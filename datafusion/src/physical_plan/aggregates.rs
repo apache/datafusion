@@ -36,7 +36,8 @@ use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use expressions::{
-    avg_return_type, stddev_return_type, sum_return_type, variance_return_type,
+    avg_return_type, covariance_return_type, stddev_return_type, sum_return_type,
+    variance_return_type,
 };
 use std::{fmt, str::FromStr, sync::Arc};
 
@@ -74,6 +75,10 @@ pub enum AggregateFunction {
     Stddev,
     /// Standard Deviation (Population)
     StddevPop,
+    /// Covariance (Sample)
+    Covariance,
+    /// Covariance (Population)
+    CovariancePop,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -100,6 +105,9 @@ impl FromStr for AggregateFunction {
             "stddev" => AggregateFunction::Stddev,
             "stddev_samp" => AggregateFunction::Stddev,
             "stddev_pop" => AggregateFunction::StddevPop,
+            "covar" => AggregateFunction::Covariance,
+            "covar_samp" => AggregateFunction::Covariance,
+            "covar_pop" => AggregateFunction::CovariancePop,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
@@ -134,6 +142,10 @@ pub fn return_type(
         AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
         AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
         AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
+        AggregateFunction::Covariance => covariance_return_type(&coerced_data_types[0]),
+        AggregateFunction::CovariancePop => {
+            covariance_return_type(&coerced_data_types[0])
+        }
         AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
         AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
@@ -259,6 +271,30 @@ pub fn create_aggregate_expr(
                 "VAR_POP(DISTINCT) aggregations are not available".to_string(),
             ));
         }
+        (AggregateFunction::Covariance, false) => Arc::new(expressions::Covariance::new(
+            coerced_phy_exprs[0].clone(),
+            coerced_phy_exprs[1].clone(),
+            name,
+            return_type,
+        )),
+        (AggregateFunction::Covariance, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "COVAR(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
+        (AggregateFunction::CovariancePop, false) => {
+            Arc::new(expressions::CovariancePop::new(
+                coerced_phy_exprs[0].clone(),
+                coerced_phy_exprs[1].clone(),
+                name,
+                return_type,
+            ))
+        }
+        (AggregateFunction::CovariancePop, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "COVAR_POP(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
         (AggregateFunction::Stddev, false) => Arc::new(expressions::Stddev::new(
             coerced_phy_exprs[0].clone(),
             name,
@@ -330,6 +366,9 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::Stddev
         | AggregateFunction::StddevPop => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
+        }
+        AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
+            Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
         }
     }
 }

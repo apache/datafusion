@@ -37,6 +37,7 @@ use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -118,13 +119,17 @@ impl ExecutionPlan for FilterExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema().clone(),
             predicate: self.predicate.clone(),
-            input: self.input.execute(partition).await?,
+            input: self.input.execute(partition, runtime).await?,
             baseline_metrics,
         }))
     }
@@ -234,6 +239,7 @@ mod tests {
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
@@ -275,7 +281,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, Arc::new(csv))?);
 
-        let results = collect(filter).await?;
+        let results = collect(filter, runtime).await?;
 
         results
             .iter()

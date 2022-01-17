@@ -41,8 +41,11 @@ async fn explain_analyze_baseline_metrics() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let results = collect(physical_plan.clone()).await.unwrap();
-    let formatted = arrow::util::pretty::pretty_format_batches(&results).unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(physical_plan.clone(), runtime).await.unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&results)
+        .unwrap()
+        .to_string();
     println!("Query Output:\n\n{}", formatted);
 
     assert_metrics!(
@@ -103,8 +106,9 @@ async fn explain_analyze_baseline_metrics() {
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
+        use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<physical_plan::sort::SortExec>().is_some()
+        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
             // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
@@ -325,7 +329,8 @@ async fn csv_explain_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let results = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -522,7 +527,8 @@ async fn csv_explain_verbose_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let results = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -548,13 +554,17 @@ async fn explain_analyze_runs_optimizers() {
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let actual = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
     assert_contains!(actual, expected);
 
     // EXPLAIN ANALYZE should work the same
     let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let actual = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let actual = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
     assert_contains!(actual, expected);
 }
 
@@ -760,7 +770,9 @@ async fn csv_explain_analyze() {
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
 
     // Only test basic plumbing and try to avoid having to change too
     // many things. explain_analyze_baseline_metrics covers the values
@@ -780,7 +792,9 @@ async fn csv_explain_analyze_verbose() {
     let sql =
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
 
     let verbose_needle = "Output Rows";
     assert_contains!(formatted, verbose_needle);

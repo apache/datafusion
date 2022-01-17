@@ -45,8 +45,14 @@ impl PartialEq for Count {
 }
 
 impl Display for Count {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.value())
+    }
+}
+
+impl Default for Count {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -78,6 +84,12 @@ pub struct Time {
     nanos: Arc<AtomicUsize>,
 }
 
+impl Default for Time {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PartialEq for Time {
     fn eq(&self, other: &Self) -> bool {
         self.value().eq(&other.value())
@@ -85,7 +97,7 @@ impl PartialEq for Time {
 }
 
 impl Display for Time {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let duration = std::time::Duration::from_nanos(self.value() as u64);
         write!(f, "{:?}", duration)
     }
@@ -138,6 +150,12 @@ impl Time {
 pub struct Timestamp {
     /// Time thing started
     timestamp: Arc<Mutex<Option<DateTime<Utc>>>>,
+}
+
+impl Default for Timestamp {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Timestamp {
@@ -198,7 +216,7 @@ impl PartialEq for Timestamp {
 }
 
 impl Display for Timestamp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self.value() {
             None => write!(f, "NONE"),
             Some(v) => {
@@ -398,7 +416,7 @@ impl MetricValue {
 
 impl std::fmt::Display for MetricValue {
     /// Prints the value of this metric
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::OutputRows(count) | Self::Count { count, .. } => {
                 write!(f, "{}", count)

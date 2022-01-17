@@ -39,6 +39,7 @@ use datafusion::physical_plan::{
 };
 
 use async_trait::async_trait;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::future;
 use futures::StreamExt;
 use log::{error, info};
@@ -99,7 +100,8 @@ impl ExecutionPlan for DistributedQueryExec {
     async fn execute(
         &self,
         partition: usize,
-    ) -> datafusion::error::Result<SendableRecordBatchStream> {
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         assert_eq!(0, partition);
 
         info!("Connecting to Ballista scheduler at {}", self.scheduler_url);

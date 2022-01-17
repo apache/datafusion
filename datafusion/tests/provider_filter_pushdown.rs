@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::{
@@ -78,7 +79,11 @@ impl ExecutionPlan for CustomPlan {
         unreachable!()
     }
 
-    async fn execute(&self, _: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema(),
             self.batches.clone(),

@@ -25,7 +25,8 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let results = collect(plan).await.unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
     let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
@@ -45,6 +46,30 @@ async fn csv_query_avg() -> Result<()> {
     let mut actual = execute(&mut ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.5089725099127211"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_covariance_1() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT covar_pop(c2, c12) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["-0.07916932235380847"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_covariance_2() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT covar(c2, c12) FROM aggregate_test_100";
+    let mut actual = execute(&mut ctx, sql).await;
+    actual.sort();
+    let expected = vec![vec!["-0.07996901247859442"]];
     assert_float_eq(&expected, &actual);
     Ok(())
 }

@@ -18,6 +18,7 @@
 //! Stream and channel implementations for window function expressions.
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
@@ -141,8 +142,12 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition).await?;
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
+        let input = self.input.execute(partition, runtime).await?;
         let stream = Box::pin(WindowAggStream::new(
             self.schema.clone(),
             self.window_expr.clone(),

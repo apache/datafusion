@@ -40,6 +40,7 @@ use std::sync::Arc;
 ///    )
 ///    GROUP BY k
 ///  ```
+#[derive(Default)]
 pub struct SingleDistinctToGroupBy {}
 
 const SINGLE_DISTINCT_ALIAS: &str = "alias1";
