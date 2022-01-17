@@ -863,7 +863,8 @@ impl DefaultPhysicalPlanner {
                     } else {
                         Ok(plan)
                     }
-                }
+                },
+                LogicalPlan::StreamingScan(s) => s.source.recv(s.batch_size.unwrap_or(10)).await
             };
             exec_plan
         }.boxed()

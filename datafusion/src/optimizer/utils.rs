@@ -271,6 +271,7 @@ pub fn from_plan(
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
             Ok(plan.clone())
         }
+        s => Ok(s.clone()),
     }
 }
 

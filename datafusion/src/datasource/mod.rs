@@ -23,6 +23,7 @@ pub mod file_format;
 pub mod listing;
 pub mod memory;
 pub mod object_store;
+pub mod streaming;
 
 use futures::Stream;
 

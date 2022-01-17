@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::datasource::streaming::StreamingProvider;
 use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
@@ -27,7 +28,7 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    TableScan, ToStringifiedPlan, Union, Window,
+    StreamScan, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
@@ -364,6 +365,21 @@ impl LogicalPlanBuilder {
         Self::scan_with_filters(table_name, provider, projection, vec![])
     }
 
+    pub fn scan_stream(
+        stream_name: impl Into<String>,
+        schema: &Schema,
+        provider: Arc<dyn StreamingProvider>,
+    ) -> Result<Self> {
+        let sn = stream_name.into();
+        let schema = DFSchema::try_from_qualified_schema(&sn, &provider.schema())?;
+        let plan = LogicalPlan::StreamingScan(StreamScan {
+            topic_name: sn,
+            source: provider,
+            schema: Arc::new(schema),
+            batch_size: Some(10),
+        });
+        Ok(Self::from(plan))
+    }
     /// Convert a table provider into a builder with a TableScan
     pub fn scan_with_filters(
         table_name: impl Into<String>,
@@ -915,14 +931,14 @@ fn validate_unique_names<'a>(
             None => {
                 unique_names.insert(name, (position, expr));
                 Ok(())
-            },
+            }
             Some((existing_position, existing_expr)) => {
                 Err(DataFusionError::Plan(
                     format!("{} require unique expression names \
                              but the expression \"{:?}\" at position {} and \"{:?}\" \
                              at position {} have the same name. Consider aliasing (\"AS\") one of them.",
-                             node_name, existing_expr, existing_position, expr, position,
-                            )
+                            node_name, existing_expr, existing_position, expr, position,
+                    )
                 ))
             }
         }

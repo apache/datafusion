@@ -20,9 +20,11 @@
 use super::display::{GraphvizVisitor, IndentVisitor};
 use super::expr::{Column, Expr};
 use super::extension::UserDefinedLogicalNode;
+use crate::datasource::streaming::StreamingProvider;
 use crate::datasource::TableProvider;
 use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
+use crate::logical_plan::{DFField, DFSchema};
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::{
@@ -113,6 +115,14 @@ pub struct TableScan {
     pub filters: Vec<Expr>,
     /// Optional limit to skip reading
     pub limit: Option<usize>,
+}
+
+#[derive(Clone)]
+pub struct StreamScan {
+    pub topic_name: String,
+    pub source: Arc<dyn StreamingProvider>,
+    pub schema: DFSchemaRef,
+    pub batch_size: Option<usize>,
 }
 
 /// Apply Cross Join to two logical plans
@@ -345,6 +355,8 @@ pub enum LogicalPlan {
     Analyze(Analyze),
     /// Extension operator defined outside of DataFusion
     Extension(Extension),
+
+    StreamingScan(StreamScan),
 }
 
 impl LogicalPlan {
@@ -376,6 +388,7 @@ impl LogicalPlan {
                 input.schema()
             }
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
+            LogicalPlan::StreamingScan(StreamScan { schema, .. }) => schema,
         }
     }
 
@@ -425,6 +438,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
+            LogicalPlan::StreamingScan(StreamScan { schema, .. }) => vec![schema],
         }
     }
 
@@ -478,6 +492,7 @@ impl LogicalPlan {
             | LogicalPlan::Union(_) => {
                 vec![]
             }
+            LogicalPlan::StreamingScan(_) => vec![],
         }
     }
 
@@ -507,6 +522,7 @@ impl LogicalPlan {
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::DropTable(_) => vec![],
+            LogicalPlan::StreamingScan(_) => vec![],
         }
     }
 
@@ -659,7 +675,8 @@ impl LogicalPlan {
             | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
-            | LogicalPlan::DropTable(_) => true,
+            | LogicalPlan::DropTable(_)
+            | LogicalPlan::StreamingScan(_) => true,
         };
         if !recurse {
             return Ok(false);
@@ -989,6 +1006,9 @@ impl LogicalPlan {
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
+                    LogicalPlan::StreamingScan(s) => {
+                        write!(f, "Stream: {}", s.topic_name)
+                    }
                 }
             }
         }

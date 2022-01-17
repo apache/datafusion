@@ -221,6 +221,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
 
             utils::from_plan(plan, &expr, &new_inputs)
         }
+        LogicalPlan::StreamingScan(s) => Ok(LogicalPlan::StreamingScan(s.clone())),
     }
 }
 

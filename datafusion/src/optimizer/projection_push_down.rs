@@ -460,6 +460,7 @@ fn optimize_plan(
 
             utils::from_plan(plan, &expr, &new_inputs)
         }
+        s => Ok(s.clone()),
     }
 }
 
