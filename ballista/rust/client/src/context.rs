@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use sqlparser::ast::Statement;
 
 use ballista_core::config::BallistaConfig;
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
@@ -31,8 +32,8 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
-use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
-use datafusion::sql::parser::FileType;
+use datafusion::prelude::{AvroReadOptions, CsvReadOptions, ExecutionConfig, ExecutionContext};
+use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
 
 struct BallistaContextState {
     /// Ballista configuration
@@ -242,6 +243,36 @@ impl BallistaContext {
         }
     }
 
+
+    /// is a 'show *' sql
+    pub async fn is_show_statement(&self, sql: &str) -> Result<bool> {
+        let mut is_show_variable: bool = false;
+        let statements = DFParser::parse_sql(sql)?;
+
+        if statements.len() != 1 {
+            return Err(DataFusionError::NotImplemented(
+                "The context currently only supports a single SQL statement".to_string(),
+            ));
+        }
+
+        if let DFStatement::Statement(s) = &statements[0] {
+            let st: &Statement= s;
+            match st {
+                Statement::ShowVariable { .. } => {
+                    is_show_variable = true;
+                }
+                Statement::ShowColumns { .. } => {
+                    is_show_variable = true;
+                }
+                _ => {
+                    is_show_variable = false;
+                }
+            }
+        };
+
+        Ok(is_show_variable)
+    }
+
     /// Create a DataFrame from a SQL statement.
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
@@ -256,6 +287,12 @@ impl BallistaContext {
             )
         };
 
+        let is_show = self.is_show_statement(sql).await?;
+        // the show tables、 show columns sql can not run at scheduler because the tables is store at client
+        if is_show {
+            ctx = ExecutionContext::with_config(ExecutionConfig::new().with_information_schema(true));
+        }
+
         // register tables with DataFusion context
         {
             let state = self.state.lock().unwrap();
@@ -268,6 +305,7 @@ impl BallistaContext {
         }
 
         let plan = ctx.create_logical_plan(sql)?;
+
         match plan {
             LogicalPlan::CreateExternalTable(CreateExternalTable {
                 ref schema,
@@ -307,8 +345,13 @@ impl BallistaContext {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::TempDir;
+
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_standalone_mode() {
@@ -318,5 +361,44 @@ mod tests {
             .unwrap();
         let df = context.sql("SELECT 1;").await.unwrap();
         df.collect().await.unwrap();
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_ballista_show_tables() {
+        use super::*;
+        let context = BallistaContext::standalone(&BallistaConfig::new().unwrap(), 1)
+            .await
+            .unwrap();
+
+        let data = "Jorge,2018-12-13T12:12:10.011Z\n\
+                    Andrew,2018-11-13T17:11:10.011Z";
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("timestamps.csv");
+
+        // scope to ensure the file is closed and written
+        {
+            File::create(&file_path)
+                .expect("creating temp file")
+                .write_all(data.as_bytes())
+                .expect("writing data");
+        }
+
+        let sql = format!(
+            "CREATE EXTERNAL TABLE csv_with_timestamps (
+                  name VARCHAR,
+                  ts TIMESTAMP
+              )
+              STORED AS CSV
+              LOCATION '{}'
+              ",
+            file_path.to_str().expect("path is utf8")
+        );
+
+        context.sql(sql.as_str()).await.unwrap();
+
+        let df = context.sql("show columns from csv_with_timestamps;").await.unwrap();
+        df.show().await.unwrap();
     }
 }
