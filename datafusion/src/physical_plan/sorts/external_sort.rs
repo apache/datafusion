@@ -27,7 +27,6 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
-use crate::physical_plan::sorts::in_mem_sort::InMemSortStream;
 use crate::physical_plan::sorts::sort::sort_batch;
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::SortedStream;
@@ -136,6 +135,7 @@ impl ExternalSorter {
             &self.expr,
             self.runtime.batch_size(),
             baseline_metrics,
+            self.runtime.clone(),
         )
         .await?;
         streams.push(SortedStream::new(in_mem_stream, self.used()));
@@ -149,7 +149,7 @@ impl ExternalSorter {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         Ok(Box::pin(
-            SortPreservingMergeStream::new_from_stream(
+            SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
                 &self.expr,
@@ -229,6 +229,7 @@ impl MemoryConsumer for ExternalSorter {
             &*self.expr,
             self.runtime.batch_size(),
             baseline_metrics,
+            self.runtime.clone(),
         )
         .await;
 
@@ -256,6 +257,7 @@ async fn in_mem_partial_sort(
     expressions: &[PhysicalSortExpr],
     target_batch_size: usize,
     baseline_metrics: BaselineMetrics,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
     if sorted_bathes.len() == 1 {
         Ok(Box::pin(SizedRecordBatchStream::new(
@@ -263,15 +265,19 @@ async fn in_mem_partial_sort(
             vec![Arc::new(sorted_bathes.pop().unwrap())],
         )))
     } else {
-        let new = sorted_bathes.drain(..).collect();
+        let batches = sorted_bathes.drain(..).collect();
         assert_eq!(sorted_bathes.len(), 0);
-        Ok(Box::pin(InMemSortStream::new(
-            new,
-            schema,
-            expressions,
-            target_batch_size,
-            baseline_metrics,
-        )?))
+        Ok(Box::pin(
+            SortPreservingMergeStream::new_from_batches(
+                batches,
+                schema,
+                expressions,
+                target_batch_size,
+                baseline_metrics,
+                runtime,
+            )
+            .await,
+        ))
     }
 }
 

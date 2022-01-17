@@ -22,8 +22,7 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
 use std::any::Any;
-use std::cmp::Ordering;
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -177,7 +176,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     .unzip();
 
                 Ok(Box::pin(
-                    SortPreservingMergeStream::new_from_receiver(
+                    SortPreservingMergeStream::new_from_receivers(
                         receivers,
                         AbortOnDropMany(join_handles),
                         self.schema(),
@@ -293,7 +292,7 @@ pub(crate) struct SortPreservingMergeStream {
     ///
     /// Exhausted cursors will be popped off the front once all
     /// their rows have been yielded to the output
-    cursors: Vec<VecDeque<SortKeyCursor>>,
+    cursors: Vec<VecDeque<Arc<SortKeyCursor>>>,
 
     /// The accumulated row indexes for the next record batch
     in_progress: Vec<RowIndex>,
@@ -316,6 +315,9 @@ pub(crate) struct SortPreservingMergeStream {
     /// An index to uniquely identify the input stream batch
     next_batch_index: usize,
 
+    /// min heap for record comparison
+    min_heap: BinaryHeap<Arc<SortKeyCursor>>,
+
     /// runtime
     runtime: Arc<RuntimeEnv>,
 }
@@ -328,7 +330,7 @@ impl Drop for SortPreservingMergeStream {
 
 impl SortPreservingMergeStream {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new_from_receiver(
+    pub(crate) async fn new_from_receivers(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
         _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
@@ -338,16 +340,16 @@ impl SortPreservingMergeStream {
         partition: usize,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let cursors = (0..receivers.len())
+        let stream_count = receivers.len();
+        let cursors = (0..stream_count)
             .into_iter()
             .map(|_| VecDeque::new())
             .collect();
-
         let wrappers = receivers.into_iter().map(StreamWrapper::Receiver).collect();
         let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
         runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
 
-        Self {
+        SortPreservingMergeStream {
             schema,
             cursors,
             streams,
@@ -359,11 +361,12 @@ impl SortPreservingMergeStream {
             aborted: false,
             in_progress: vec![],
             next_batch_index: 0,
+            min_heap: BinaryHeap::with_capacity(stream_count),
             runtime,
         }
     }
 
-    pub(crate) async fn new_from_stream(
+    pub(crate) async fn new_from_streams(
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
@@ -372,16 +375,15 @@ impl SortPreservingMergeStream {
         partition: usize,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let cursors = (0..streams.len())
+        let stream_count = streams.len();
+        let cursors = (0..stream_count)
             .into_iter()
             .map(|_| VecDeque::new())
             .collect();
-
         let wrappers = streams
             .into_iter()
             .map(|s| StreamWrapper::Stream(Some(s)))
-            .collect::<Vec<_>>();
-
+            .collect();
         let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
         runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
 
@@ -397,6 +399,47 @@ impl SortPreservingMergeStream {
             aborted: false,
             in_progress: vec![],
             next_batch_index: 0,
+            min_heap: BinaryHeap::with_capacity(stream_count),
+            runtime,
+        }
+    }
+
+    pub(crate) async fn new_from_batches(
+        batches: Vec<RecordBatch>,
+        schema: SchemaRef,
+        expressions: &[PhysicalSortExpr],
+        target_batch_size: usize,
+        baseline_metrics: BaselineMetrics,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Self {
+        let batch_count = batches.len();
+        let wrappers = batches
+            .into_iter()
+            .map(|s| StreamWrapper::SingleBatch(Some(s)))
+            .collect();
+
+        let cursors = (0..batch_count)
+            .into_iter()
+            .map(|_| VecDeque::new())
+            .collect();
+
+        // We are not registering this into runtime since it's only used within
+        // an external sorter, already a registered memory consumer.
+        let streams = Arc::new(MergingStreams::new(0, wrappers, runtime.clone()));
+
+        SortPreservingMergeStream {
+            schema,
+            cursors,
+            streams,
+            _drop_helper: AbortOnDropMany(vec![]),
+            column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
+            sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
+            target_batch_size,
+            baseline_metrics,
+            aborted: false,
+            in_progress: vec![],
+            next_batch_index: 0,
+            min_heap: BinaryHeap::with_capacity(batch_count),
             runtime,
         }
     }
@@ -430,18 +473,24 @@ impl SortPreservingMergeStream {
                 return Poll::Ready(Err(e));
             }
             Some(Ok(batch)) => {
-                let cursor = match SortKeyCursor::new(
-                    self.next_batch_index, // assign this batch an ID
-                    Arc::new(batch),
-                    &self.column_expressions,
-                    self.sort_options.clone(),
-                ) {
-                    Ok(cursor) => cursor,
-                    Err(e) => {
-                        return Poll::Ready(Err(ArrowError::ExternalError(Box::new(e))));
-                    }
-                };
+                let cursor = Arc::new(
+                    match SortKeyCursor::new(
+                        idx,
+                        self.next_batch_index, // assign this batch an ID
+                        Arc::new(batch),
+                        &self.column_expressions,
+                        self.sort_options.clone(),
+                    ) {
+                        Ok(cursor) => cursor,
+                        Err(e) => {
+                            return Poll::Ready(Err(ArrowError::ExternalError(
+                                Box::new(e),
+                            )));
+                        }
+                    },
+                );
                 self.next_batch_index += 1;
+                self.min_heap.push(cursor.clone());
                 self.cursors[idx].push_back(cursor)
             }
         }
@@ -449,28 +498,13 @@ impl SortPreservingMergeStream {
         Poll::Ready(Ok(()))
     }
 
-    /// Returns the index of the next stream to pull a row from, or None
+    /// Returns the cursor of the next stream to pull a row from, or None
     /// if all cursors for all streams are exhausted
-    fn next_stream_idx(&mut self) -> Result<Option<usize>> {
-        let mut min_cursor: Option<(usize, &mut SortKeyCursor)> = None;
-        for (idx, candidate) in self.cursors.iter_mut().enumerate() {
-            if let Some(candidate) = candidate.back_mut() {
-                if candidate.is_finished() {
-                    continue;
-                }
-
-                match min_cursor {
-                    None => min_cursor = Some((idx, candidate)),
-                    Some((_, ref mut min)) => {
-                        if min.compare(candidate)? == Ordering::Greater {
-                            min_cursor = Some((idx, candidate))
-                        }
-                    }
-                }
-            }
+    fn next_cursor(&mut self) -> Result<Option<Arc<SortKeyCursor>>> {
+        match self.min_heap.pop() {
+            None => Ok(None),
+            Some(cursor) => Ok(Some(cursor)),
         }
-
-        Ok(min_cursor.map(|(idx, _)| idx))
     }
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
@@ -604,8 +638,42 @@ impl SortPreservingMergeStream {
             let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
             let _timer = elapsed_compute.timer();
 
-            let stream_idx = match self.next_stream_idx() {
-                Ok(Some(idx)) => idx,
+            match self.next_cursor() {
+                Ok(Some(cursor)) => {
+                    let stream_idx = cursor.stream_idx;
+                    let cursor_idx = self.cursors[stream_idx].len() - 1;
+                    let row_idx = cursor.advance();
+
+                    let mut cursor_finished = false;
+                    // insert the cursor back to min_heap if the record batch is not exhausted
+                    if !cursor.is_finished() {
+                        self.min_heap.push(cursor);
+                    } else {
+                        cursor_finished = true;
+                    }
+
+                    self.in_progress.push(RowIndex {
+                        stream_idx,
+                        cursor_idx,
+                        row_idx,
+                    });
+
+                    if self.in_progress.len() == self.target_batch_size {
+                        return Poll::Ready(Some(self.build_record_batch()));
+                    }
+
+                    // If removed the last row from the cursor, need to fetch a new record
+                    // batch if possible, before looping round again
+                    if cursor_finished {
+                        match futures::ready!(self.maybe_poll_stream(cx, stream_idx)) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                self.aborted = true;
+                                return Poll::Ready(Some(Err(e)));
+                            }
+                        }
+                    }
+                }
                 Ok(None) if self.in_progress.is_empty() => return Poll::Ready(None),
                 Ok(None) => return Poll::Ready(Some(self.build_record_batch())),
                 Err(e) => {
@@ -613,34 +681,6 @@ impl SortPreservingMergeStream {
                     return Poll::Ready(Some(Err(ArrowError::ExternalError(Box::new(
                         e,
                     )))));
-                }
-            };
-
-            let cursors = &mut self.cursors[stream_idx];
-            let cursor_idx = cursors.len() - 1;
-            let cursor = cursors.back_mut().unwrap();
-            let row_idx = cursor.advance();
-            let cursor_finished = cursor.is_finished();
-
-            self.in_progress.push(RowIndex {
-                stream_idx,
-                cursor_idx,
-                row_idx,
-            });
-
-            if self.in_progress.len() == self.target_batch_size {
-                return Poll::Ready(Some(self.build_record_batch()));
-            }
-
-            // If removed the last row from the cursor, need to fetch a new record
-            // batch if possible, before looping round again
-            if cursor_finished {
-                match futures::ready!(self.maybe_poll_stream(cx, stream_idx)) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        self.aborted = true;
-                        return Poll::Ready(Some(Err(e)));
-                    }
                 }
             }
         }
@@ -1257,7 +1297,7 @@ mod tests {
         let metrics = ExecutionPlanMetricsSet::new();
         let baseline_metrics = BaselineMetrics::new(&metrics, 0);
 
-        let merge_stream = SortPreservingMergeStream::new_from_receiver(
+        let merge_stream = SortPreservingMergeStream::new_from_receivers(
             receivers,
             // Use empty vector since we want to use the join handles ourselves
             AbortOnDropMany(vec![]),

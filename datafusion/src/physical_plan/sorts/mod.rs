@@ -19,6 +19,7 @@
 
 use crate::error;
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::common::batch_byte_size;
 use crate::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, DynComparator};
 use arrow::compute::SortOptions;
@@ -32,11 +33,11 @@ use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
 pub mod external_sort;
-mod in_mem_sort;
 pub mod sort;
 pub mod sort_preserving_merge;
 
@@ -50,8 +51,9 @@ pub mod sort_preserving_merge;
 /// by this row cursor, with that of another `SortKeyCursor`. A cursor stores
 /// a row comparator for each other cursor that it is compared to.
 struct SortKeyCursor {
-    columns: Vec<ArrayRef>,
-    cur_row: usize,
+    stream_idx: usize,
+    sort_columns: Vec<ArrayRef>,
+    cur_row: AtomicUsize,
     num_rows: usize,
 
     // An index uniquely identifying the record batch scanned by this cursor.
@@ -68,8 +70,8 @@ struct SortKeyCursor {
 impl<'a> std::fmt::Debug for SortKeyCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
-            .field("columns", &self.columns)
-            .field("cur_row", &self.cur_row)
+            .field("sort_columns", &self.sort_columns)
+            .field("cur_row", &self.cur_row())
             .field("num_rows", &self.num_rows)
             .field("batch_idx", &self.batch_idx)
             .field("batch", &self.batch)
@@ -80,19 +82,21 @@ impl<'a> std::fmt::Debug for SortKeyCursor {
 
 impl SortKeyCursor {
     fn new(
+        stream_idx: usize,
         batch_idx: usize,
         batch: Arc<RecordBatch>,
         sort_key: &[Arc<dyn PhysicalExpr>],
         sort_options: Arc<Vec<SortOptions>>,
     ) -> error::Result<Self> {
-        let columns = sort_key
+        let sort_columns = sort_key
             .iter()
             .map(|expr| Ok(expr.evaluate(&batch)?.into_array(batch.num_rows())))
             .collect::<error::Result<_>>()?;
         Ok(Self {
-            cur_row: 0,
+            stream_idx,
+            cur_row: AtomicUsize::new(0),
             num_rows: batch.num_rows(),
-            columns,
+            sort_columns,
             batch,
             batch_idx,
             batch_comparators: RwLock::new(HashMap::new()),
@@ -101,38 +105,41 @@ impl SortKeyCursor {
     }
 
     fn is_finished(&self) -> bool {
-        self.num_rows == self.cur_row
+        self.num_rows == self.cur_row()
     }
 
-    fn advance(&mut self) -> usize {
+    fn advance(&self) -> usize {
         assert!(!self.is_finished());
-        let t = self.cur_row;
-        self.cur_row += 1;
-        t
+        self.cur_row
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn cur_row(&self) -> usize {
+        self.cur_row.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Compares the sort key pointed to by this instance's row cursor with that of another
     fn compare(&self, other: &SortKeyCursor) -> error::Result<Ordering> {
-        if self.columns.len() != other.columns.len() {
+        if self.sort_columns.len() != other.sort_columns.len() {
             return Err(DataFusionError::Internal(format!(
                 "SortKeyCursors had inconsistent column counts: {} vs {}",
-                self.columns.len(),
-                other.columns.len()
+                self.sort_columns.len(),
+                other.sort_columns.len()
             )));
         }
 
-        if self.columns.len() != self.sort_options.len() {
+        if self.sort_columns.len() != self.sort_options.len() {
             return Err(DataFusionError::Internal(format!(
                 "Incorrect number of SortOptions provided to SortKeyCursor::compare, expected {} got {}",
-                self.columns.len(),
+                self.sort_columns.len(),
                 self.sort_options.len()
             )));
         }
 
         let zipped: Vec<((&ArrayRef, &ArrayRef), &SortOptions)> = self
-            .columns
+            .sort_columns
             .iter()
-            .zip(other.columns.iter())
+            .zip(other.sort_columns.iter())
             .zip(self.sort_options.iter())
             .collect::<Vec<_>>();
 
@@ -146,7 +153,7 @@ impl SortKeyCursor {
         })?;
 
         for (i, ((l, r), sort_options)) in zipped.iter().enumerate() {
-            match (l.is_valid(self.cur_row), r.is_valid(other.cur_row)) {
+            match (l.is_valid(self.cur_row()), r.is_valid(other.cur_row())) {
                 (false, true) if sort_options.nulls_first => return Ok(Ordering::Less),
                 (false, true) => return Ok(Ordering::Greater),
                 (true, false) if sort_options.nulls_first => {
@@ -154,7 +161,7 @@ impl SortKeyCursor {
                 }
                 (true, false) => return Ok(Ordering::Less),
                 (false, false) => {}
-                (true, true) => match cmp[i](self.cur_row, other.cur_row) {
+                (true, true) => match cmp[i](self.cur_row(), other.cur_row()) {
                     Ordering::Equal => {}
                     o if sort_options.descending => return Ok(o.reverse()),
                     o => return Ok(o),
@@ -179,7 +186,7 @@ impl SortKeyCursor {
             let cmp = map
                 .borrow_mut()
                 .entry(other.batch_idx)
-                .or_insert_with(|| Vec::with_capacity(other.columns.len()));
+                .or_insert_with(|| Vec::with_capacity(other.sort_columns.len()));
 
             for (i, ((l, r), _)) in zipped.iter().enumerate() {
                 if i >= cmp.len() {
@@ -247,14 +254,15 @@ impl SortedStream {
 enum StreamWrapper {
     Receiver(mpsc::Receiver<ArrowResult<RecordBatch>>),
     Stream(Option<SortedStream>),
+    SingleBatch(Option<RecordBatch>),
 }
 
 impl StreamWrapper {
     fn mem_used(&self) -> usize {
-        if let StreamWrapper::Stream(Some(s)) = &self {
-            s.mem_used
-        } else {
-            0
+        match &self {
+            StreamWrapper::Stream(Some(s)) => s.mem_used,
+            StreamWrapper::SingleBatch(Some(b)) => batch_byte_size(b),
+            _ => 0,
         }
     }
 }
@@ -281,6 +289,9 @@ impl Stream for StreamWrapper {
                     Poll::Pending => Poll::Pending,
                 }
             }
+            StreamWrapper::SingleBatch(ref mut ob) => {
+                Poll::Ready(Ok(ob.take()).transpose())
+            }
         }
     }
 }
@@ -290,6 +301,7 @@ impl FusedStream for StreamWrapper {
         match self {
             StreamWrapper::Receiver(receiver) => receiver.is_terminated(),
             StreamWrapper::Stream(stream) => stream.is_none(),
+            StreamWrapper::SingleBatch(b) => b.is_none(),
         }
     }
 }
