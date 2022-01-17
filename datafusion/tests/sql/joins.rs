@@ -630,7 +630,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ("id", Arc::new(Int32Array::from_slice(&[1, 2, 3])) as _),
         (
             "country",
-            Arc::new(StringArray::from(vec!["Germany", "Sweden", "Japan"])) as _,
+            Arc::new(StringArray::from_slice(&["Germany", "Sweden", "Japan"])) as _,
         ),
     ])
     .unwrap();
@@ -643,7 +643,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
         (
             "city",
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(&[
                 "Hamburg",
                 "Stockholm",
                 "Osaka",

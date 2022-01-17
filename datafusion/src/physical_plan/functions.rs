@@ -3989,8 +3989,8 @@ mod tests {
     #[test]
     fn test_array() -> Result<()> {
         generic_test_array(
-            Arc::new(StringArray::from(vec!["aa"])),
-            Arc::new(StringArray::from(vec!["bb"])),
+            Arc::new(StringArray::from_slice(&["aa"])),
+            Arc::new(StringArray::from_slice(&["bb"])),
             DataType::Utf8,
             "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
         )?;
@@ -4019,7 +4019,7 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
         let ctx_state = ExecutionContextState::new();
 
-        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr(

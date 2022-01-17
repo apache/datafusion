@@ -159,6 +159,7 @@ pub fn cast(
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::col;
     use arrow::{
         array::{
@@ -458,7 +459,7 @@ mod tests {
     fn invalid_cast_with_options_error() -> Result<()> {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let a = StringArray::from(vec!["9.1"]);
+        let a = StringArray::from_slice(&["9.1"]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let expression = cast_with_options(
             col("a", &schema)?,

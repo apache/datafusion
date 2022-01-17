@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn count_utf8() -> Result<()> {
         let a: ArrayRef =
-            Arc::new(StringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
+            Arc::new(StringArray::from_slice(&["a", "bb", "ccc", "dddd", "ad"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -221,8 +221,9 @@ mod tests {
 
     #[test]
     fn count_large_utf8() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&[
+            "a", "bb", "ccc", "dddd", "ad",
+        ]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,

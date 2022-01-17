@@ -84,6 +84,7 @@ impl PartitionEvaluator for NumRowsEvaluator {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::from_slice::FromSlice;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
@@ -105,7 +106,7 @@ mod tests {
 
     #[test]
     fn row_number_all_values() -> Result<()> {
-        let arr: ArrayRef = Arc::new(BooleanArray::from(vec![
+        let arr: ArrayRef = Arc::new(BooleanArray::from_slice(&[
             true, false, true, false, false, true, false, true,
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
