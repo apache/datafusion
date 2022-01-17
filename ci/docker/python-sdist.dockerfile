@@ -27,7 +27,7 @@ RUN apt-get update -y -q && \
         git \
         python3-pip && \
     apt-get clean && \
-    rm -rf /var/lib/apt/lists*
+    rm -rf /var/lib/apt/lists/*
 
 COPY python/requirements-build.txt \
      /arrow/python/requirements-build.txt
