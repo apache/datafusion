@@ -779,7 +779,7 @@ mod tests {
         use crate::logical_plan::{col, lit};
         // test row group predicate with an unknown (Null) expr
         //
-        // int > 1 and bool = NULL => c1_max > 1 and null
+        // int > 15 and bool = NULL => c1_max > 15 and null
         let expr = col("c1")
             .gt(lit(15))
             .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
@@ -840,7 +840,7 @@ mod tests {
         // no row group is filtered out because the predicate expression can't be evaluated
         // when a null array is generated for a statistics column,
         // because the null values propagate to the end result, making the predicate result undefined
-        assert_eq!(row_group_filter, vec![true, true]);
+        assert_eq!(row_group_filter, vec![false, true]);
 
         Ok(())
     }
