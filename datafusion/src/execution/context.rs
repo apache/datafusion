@@ -179,8 +179,7 @@ impl ExecutionContext {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let runtime_env =
-            Arc::new(RuntimeEnv::new(config.runtime_config.clone()).unwrap());
+        let runtime_env = Arc::new(RuntimeEnv::new(config.runtime.clone()).unwrap());
 
         Self {
             state: Arc::new(Mutex::new(ExecutionContextState {
@@ -872,8 +871,6 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct ExecutionConfig {
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
-    /// Default batch size when reading data sources
-    pub batch_size: usize,
     /// Responsible for optimizing a logical plan
     optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     /// Responsible for optimizing a physical execution plan
@@ -901,14 +898,13 @@ pub struct ExecutionConfig {
     /// Should Datafusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
     /// Runtime configurations such as memory threshold and local disk for spill
-    pub runtime_config: RuntimeConfig,
+    pub runtime: RuntimeConfig,
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             target_partitions: num_cpus::get(),
-            batch_size: 8192,
             optimizers: vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
@@ -936,7 +932,7 @@ impl Default for ExecutionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
-            runtime_config: RuntimeConfig::default(),
+            runtime: RuntimeConfig::default(),
         }
     }
 }
@@ -959,7 +955,7 @@ impl ExecutionConfig {
     pub fn with_batch_size(mut self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.batch_size = n;
+        self.runtime.batch_size = n;
         self
     }
 
@@ -1057,7 +1053,7 @@ impl ExecutionConfig {
 
     /// Customize runtime config
     pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
-        self.runtime_config = config;
+        self.runtime = config;
         self
     }
 }
@@ -3618,7 +3614,6 @@ mod tests {
             async fn scan(
                 &self,
                 _: &Option<Vec<usize>>,
-                _: usize,
                 _: &[Expr],
                 _: Option<usize>,
             ) -> Result<Arc<dyn ExecutionPlan>> {

@@ -1158,7 +1158,6 @@ mod tests {
         async fn scan(
             &self,
             _: &Option<Vec<usize>>,
-            _: usize,
             _: &[Expr],
             _: Option<usize>,
         ) -> Result<Arc<dyn ExecutionPlan>> {

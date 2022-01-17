@@ -64,12 +64,11 @@ impl MemTable {
     /// Create a mem table by reading from another data source
     pub async fn load(
         t: Arc<dyn TableProvider>,
-        batch_size: usize,
         output_partitions: Option<usize>,
         runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
         let schema = t.schema();
-        let exec = t.scan(&None, batch_size, &[], None).await?;
+        let exec = t.scan(&None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
         let tasks = (0..partition_count)
@@ -131,7 +130,6 @@ impl TableProvider for MemTable {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -175,7 +173,7 @@ mod tests {
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         // scan with projection
-        let exec = provider.scan(&Some(vec![2, 1]), 1024, &[], None).await?;
+        let exec = provider.scan(&Some(vec![2, 1]), &[], None).await?;
         let mut it = exec.execute(0, runtime).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
@@ -206,7 +204,7 @@ mod tests {
 
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
-        let exec = provider.scan(&None, 1024, &[], None).await?;
+        let exec = provider.scan(&None, &[], None).await?;
         let mut it = exec.execute(0, runtime).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
@@ -236,7 +234,7 @@ mod tests {
 
         let projection: Vec<usize> = vec![0, 4];
 
-        match provider.scan(&Some(projection), 1024, &[], None).await {
+        match provider.scan(&Some(projection), &[], None).await {
             Err(DataFusionError::Internal(e)) => {
                 assert_eq!("\"Projection index out of range\"", format!("{:?}", e))
             }
@@ -358,7 +356,7 @@ mod tests {
         let provider =
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
-        let exec = provider.scan(&None, 1024, &[], None).await?;
+        let exec = provider.scan(&None, &[], None).await?;
         let mut it = exec.execute(0, runtime).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());

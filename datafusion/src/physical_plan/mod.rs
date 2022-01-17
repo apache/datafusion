@@ -223,7 +223,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///              \n  CoalesceBatchesExec: target_batch_size=4096\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: files=[tests/example.csv], has_header=true, batch_size=8192, limit=None",
+///              \n        CsvExec: files=[tests/example.csv], has_header=true, limit=None",
 ///               plan_string.trim());
 /// }
 /// ```

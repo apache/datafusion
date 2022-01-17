@@ -65,23 +65,16 @@ pub struct SortPreservingMergeExec {
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
-    /// The target size of yielded batches
-    target_batch_size: usize,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
 
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
-    pub fn new(
-        expr: Vec<PhysicalSortExpr>,
-        input: Arc<dyn ExecutionPlan>,
-        target_batch_size: usize,
-    ) -> Self {
+    pub fn new(expr: Vec<PhysicalSortExpr>, input: Arc<dyn ExecutionPlan>) -> Self {
         Self {
             input,
             expr,
-            target_batch_size,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
@@ -129,7 +122,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
             1 => Ok(Arc::new(SortPreservingMergeExec::new(
                 self.expr.clone(),
                 children[0].clone(),
-                self.target_batch_size,
             ))),
             _ => Err(DataFusionError::Internal(
                 "SortPreservingMergeExec wrong number of children".to_string(),
@@ -182,7 +174,6 @@ impl ExecutionPlan for SortPreservingMergeExec {
                         AbortOnDropMany(join_handles),
                         self.schema(),
                         &self.expr,
-                        self.target_batch_size,
                         baseline_metrics,
                         partition,
                         runtime.clone(),
@@ -304,9 +295,6 @@ pub(crate) struct SortPreservingMergeStream {
     /// The sort options for each expression
     sort_options: Arc<Vec<SortOptions>>,
 
-    /// The desired RecordBatch size to yield
-    target_batch_size: usize,
-
     /// used to record execution metrics
     baseline_metrics: BaselineMetrics,
 
@@ -333,7 +321,6 @@ impl SortPreservingMergeStream {
         _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        target_batch_size: usize,
         baseline_metrics: BaselineMetrics,
         partition: usize,
         runtime: Arc<RuntimeEnv>,
@@ -354,7 +341,6 @@ impl SortPreservingMergeStream {
             _drop_helper,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
-            target_batch_size,
             baseline_metrics,
             aborted: false,
             in_progress: vec![],
@@ -367,7 +353,6 @@ impl SortPreservingMergeStream {
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        target_batch_size: usize,
         baseline_metrics: BaselineMetrics,
         partition: usize,
         runtime: Arc<RuntimeEnv>,
@@ -392,7 +377,6 @@ impl SortPreservingMergeStream {
             _drop_helper: AbortOnDropMany(vec![]),
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
-            target_batch_size,
             baseline_metrics,
             aborted: false,
             in_progress: vec![],
@@ -628,7 +612,7 @@ impl SortPreservingMergeStream {
                 row_idx,
             });
 
-            if self.in_progress.len() == self.target_batch_size {
+            if self.in_progress.len() == self.runtime.batch_size() {
                 return Poll::Ready(Some(self.build_record_batch()));
             }
 
@@ -665,7 +649,7 @@ mod tests {
     use crate::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
-    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::memory::MemoryExec;
     use crate::physical_plan::sorts::sort::SortExec;
     use crate::physical_plan::{collect, common};
@@ -673,6 +657,7 @@ mod tests {
     use crate::{assert_batches_eq, test_util};
 
     use super::*;
+    use crate::execution::runtime_env::RuntimeConfig;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::{FutureExt, SinkExt};
     use tokio_stream::StreamExt;
@@ -903,7 +888,7 @@ mod tests {
             },
         ];
         let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, runtime).await.unwrap();
         assert_batches_eq!(exp, collected.as_slice());
@@ -914,7 +899,7 @@ mod tests {
         sort: Vec<PhysicalSortExpr>,
         runtime: Arc<RuntimeEnv>,
     ) -> RecordBatch {
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, input, 1024));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
         let mut result = collect(merge, runtime).await.unwrap();
         assert_eq!(result.len(), 1);
         result.remove(0)
@@ -951,13 +936,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -1039,13 +1023,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions).unwrap();
 
         let csv = Arc::new(CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: schema,
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -1106,7 +1089,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime =
+            Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(23)).unwrap());
         let schema = test_util::aggr_test_schema();
 
         let sort = vec![
@@ -1126,7 +1110,7 @@ mod tests {
             sorted_partitioned_input(sort.clone(), &[10, 5, 13], runtime.clone()).await;
         let basic = basic_sort(input.clone(), sort.clone(), runtime.clone()).await;
 
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, input, 23));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
         let merged = collect(merge, runtime.clone()).await.unwrap();
 
         assert_eq!(merged.len(), 14);
@@ -1199,7 +1183,7 @@ mod tests {
             },
         ];
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, runtime).await.unwrap();
         assert_eq!(collected.len(), 1);
@@ -1264,7 +1248,6 @@ mod tests {
             AbortOnDropMany(vec![]),
             batches.schema(),
             sort.as_slice(),
-            1024,
             baseline_metrics,
             0,
             runtime.clone(),
@@ -1313,7 +1296,7 @@ mod tests {
             options: Default::default(),
         }];
         let exec = MemoryExec::try_new(&[vec![b1], vec![b2]], schema, None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge.clone(), runtime).await.unwrap();
         let expected = vec![
@@ -1366,7 +1349,6 @@ mod tests {
                 options: SortOptions::default(),
             }],
             blocking_exec,
-            1,
         ));
 
         let fut = collect(sort_preserving_merge_exec, runtime);
