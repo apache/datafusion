@@ -1255,7 +1255,7 @@ impl<'a> PlanConverter<'a> {
                         let s = TokomakLogicalPlan::Scalar(TokomakScalar::UInt64(Some(*size as u64)));
                         let size_id = self.egraph.add(s);
                         let expr_list = self.as_tokomak_expr_list(expr, r.input.schema())?;
-                        TokomakLogicalPlan::Hash([input, size_id, expr_list])
+                        TokomakLogicalPlan::Hash([input, expr_list, size_id])
                     },
                 }
             },
@@ -1947,7 +1947,7 @@ impl<'a> TokomakPlanConverter<'a> {
                 left.cross_join(&right)?
             }
             TokomakLogicalPlan::Limit(l) => {
-                let input = self.convert_to_builder(l[1])?;
+                let input = self.convert_to_builder(l[0])?;
                 let limit = self.extract_usize(l[1], "Limit")?;
                 input.limit(limit)?
             }
@@ -2228,4 +2228,215 @@ impl std::fmt::Display for SharedValues {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "VALUES({})", self.0.len())
     }
+}
+
+
+#[cfg(test)]
+mod test{
+    use std::sync::Arc;
+
+    use datafusion::{logical_plan::{LogicalPlan, LogicalPlanBuilder, col, Expr, lit, JoinType, Partitioning, count, sum, window_frames::{WindowFrameUnits, WindowFrameBound, WindowFrame}}, arrow::datatypes::{Schema, DataType, Field}, error::DataFusionError, datasource::empty::EmptyTable, optimizer::optimizer::OptimizerRule, execution::context::ExecutionProps, physical_plan::window_functions::{WindowFunction, BuiltInWindowFunction}};
+    use egg::{EGraph, Extractor};
+    use log::Log;
+
+    fn plan_test_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Boolean, true),
+            Field::new("c3", DataType::Float64, true),
+            Field::new("c1_non_null", DataType::Utf8, false),
+            Field::new("c2_non_null", DataType::Boolean, false),
+            Field::new("c3_non_null", DataType::Float64, false),
+        ])
+    }
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+    fn roundtrip_plan(plan: &LogicalPlan) -> TestResult {
+        let mut egraph = EGraph::default();
+        let root = crate::plan::to_tokomak_plan(plan, &mut egraph)?;
+        let ex = Extractor::new(&egraph, crate::DefaultCostFunc);
+        let (_, rec_expr_plan) = ex.find_best(root);
+        let eclass_ids = egraph.lookup_expr_ids(&rec_expr_plan).ok_or_else(|| {
+            DataFusionError::Internal(String::from(
+                "TokomakOptimizer could not extract plan from egraph.",
+            ))
+        })?;
+        let rt_plan =
+            crate::plan::convert_to_df_plan(&rec_expr_plan, &eclass_ids, &egraph)?;
+        assert_eq!(format!("{:?}", plan), format!("{:?}", rt_plan));
+        Ok(())
+    }
+    fn roundtrip_plans(plans: &[LogicalPlan])->TestResult{
+        for plan in plans{
+            roundtrip_plan(plan)?;
+        }
+        Ok(())
+    }
+
+    fn roundtrip_plan_builders(builders: &[LogicalPlanBuilder])->TestResult{
+        for b in builders{
+            let plan = b.build()?;
+            roundtrip_plan(&plan)?;
+        }
+        Ok(())
+    }
+
+    fn plan_test_scan_builder() -> LogicalPlanBuilder {
+        LogicalPlanBuilder::scan_empty(Some("test"), &plan_test_schema(), None).unwrap()
+    }
+    #[test]
+    fn roundtrip_projection()->TestResult{
+        let b = plan_test_scan_builder();
+        println!("{:?}", b.build()?);
+        let builders = vec![
+            b.project(vec![col("c3")*col("c3").alias("square"), col("c2")])?,
+            b.project_with_alias(vec![col("c3")*col("c3").alias("square"), col("c2")],Some("test2".to_string()))?
+        ];
+        roundtrip_plan_builders(&builders)
+    }
+
+    fn make_empty_scan(table_name: &str, projection: Option<Vec<usize>>, filters: Option<Vec<Expr>>, limit: Option<usize>)->Result<LogicalPlan, DataFusionError>{
+        let table_schema = plan_test_schema();
+        let source = Arc::new(EmptyTable::new(table_schema.into()));
+        let builder = LogicalPlanBuilder::scan_with_limit_and_filters(table_name, source, projection, limit, filters.unwrap_or(Vec::new()))?;
+        Ok(builder.build()?)
+    }
+
+    #[test]
+    fn roundtrip_scan()->TestResult{
+        let plans = vec![
+            make_empty_scan("test", None, None, None)?,
+            make_empty_scan("test", Some(vec![0,1]), None, None)?,
+            make_empty_scan("test", None, Some(vec![col("c1").eq(lit("test"))]), None)?,
+            make_empty_scan("test", None, None, Some(12))?,
+            make_empty_scan("test", Some(vec![5,4]), Some(vec![col("c2_non_null").eq(lit(false))]), None)?,
+            make_empty_scan("test", Some(vec![5,4]), None, Some(35))?,
+            make_empty_scan("test", Some(vec![5,4]), Some(vec![col("c2_non_null").eq(lit(false))]), Some(usize::MAX))?
+        ];
+        roundtrip_plans(&plans)
+    }
+
+    fn create_optimizer()->crate::Tokomak{
+        crate::Tokomak::with_builtin_rules(crate::RunnerSettings::default(), crate::ALL_RULES)
+    }
+    //May need to remove this test as filter expressions add expression to predicate.
+    //No gaurentee of determinism with regards to the extracted plan. Expressions may be reorderd
+    #[test]
+    fn roundtrip_filter()->TestResult{
+        let b = plan_test_scan_builder();
+        let builders = vec![
+            b.filter(col("c1").eq(lit("test")))?,
+            b.filter(col("c3").eq(lit(12.0f64)).or(col("c1").like(lit("prefix%"))))?,
+        ];
+        
+        let optimizer = create_optimizer();
+        for b in builders{
+            let plan = b.build()?;
+            let opt_plan = optimizer.optimize(&plan, &ExecutionProps::new())?;
+            let fmt_plan = format!("{:?}", plan);
+            let fmt_opt_plan = format!("{:?}", opt_plan);
+            assert_eq!(fmt_plan, fmt_opt_plan);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_joins()->TestResult{
+        let l = LogicalPlanBuilder::scan_empty(Some("left"), &Schema::new(vec![Field::new("lkey", DataType::Int64, false), Field::new("lkey2", DataType::Utf8, false), Field::new("ldata", DataType::Utf8, true)]), None)?;
+        let r = LogicalPlanBuilder::scan_empty(Some("right"), &Schema::new(vec![Field::new("rkey", DataType::Int64, false), Field::new("rkey2", DataType::Utf8, false), Field::new("rdata", DataType::Utf8,true)]), None)?.build()?;
+
+        let plans = vec![
+            l.join(&r, JoinType::Inner, (vec!["lkey"], vec!["rkey"]))?,
+            l.join(&r, JoinType::Left, (vec!["lkey"], vec!["rkey"]))?,
+            l.join(&r, JoinType::Right, (vec!["lkey"], vec!["rkey"]))?,
+            l.join(&r, JoinType::Anti, (vec!["lkey"], vec!["rkey"]))?,
+            l.join(&r, JoinType::Semi, (vec!["lkey"], vec!["rkey"]))?,
+
+            l.join_detailed(&r, JoinType::Inner, (vec!["lkey"], vec!["rkey"]), true)?,
+            l.join_detailed(&r, JoinType::Left, (vec!["lkey"], vec!["rkey"]), true)?,
+            l.join_detailed(&r, JoinType::Right, (vec!["lkey"], vec!["rkey"]), true)?,
+            l.join_detailed(&r, JoinType::Anti, (vec!["lkey"], vec!["rkey"]), true)?,
+            l.join_detailed(&r, JoinType::Semi, (vec!["lkey"], vec!["rkey"]), true)?,
+
+            l.join(&r, JoinType::Inner, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
+            l.join(&r, JoinType::Left,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
+            l.join(&r, JoinType::Right, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
+            l.join(&r, JoinType::Anti,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
+            l.join(&r, JoinType::Semi,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]))?,
+
+            l.join_detailed(&r, JoinType::Inner, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
+            l.join_detailed(&r, JoinType::Left,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
+            l.join_detailed(&r, JoinType::Right, (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
+            l.join_detailed(&r, JoinType::Anti,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
+            l.join_detailed(&r, JoinType::Semi,  (vec!["lkey","lkey2"], vec!["rkey","rkey2"]), true)?,
+        ];
+
+        roundtrip_plan_builders(&plans)
+
+    }
+    #[test]
+    fn roundtrip_limit()->TestResult{
+        let b = plan_test_scan_builder();
+        let builders = vec![
+            b.limit(0)?,
+            b.limit(1)?,
+            b.limit(12353241)?,
+            b.limit(1235135)?,
+            b.limit(11235)?,
+            b.limit(932)?,
+        ];
+        roundtrip_plan_builders(&builders)
+    }
+
+    #[test]
+    fn roundtrip_sort()->TestResult{
+        let b = plan_test_scan_builder();
+        let builders = vec![
+            b.sort(vec![col("c1").sort(false, false), col("c3").sort( false, true)])?,
+            b.sort(vec![col("c1").sort(false, false), col("c3").sort( true, false)])?,
+            b.sort(vec![col("c1").sort(false, true), col("c3").sort( false, false)])?,
+            b.sort(vec![col("c1").sort(true, false), col("c3").sort( false, false)])?,
+            b.sort(vec![col("c1").sort(false, false), col("c3").sort( true, true)])?,
+            b.sort(vec![col("c1").sort(false, true), col("c3").sort( false, false)])?,
+            b.sort(vec![col("c1").sort(true, false), col("c3").sort( false, true)])?,
+            b.sort(vec![col("c1").sort(false, true), col("c3").sort( true, true)])?,
+            b.sort(vec![col("c1").sort(true, false), col("c3").sort( true, true)])?,
+            b.sort(vec![col("c1").sort(false, true), col("c3").sort( true, true)])?,
+            b.sort(vec![col("c1").sort(true, true), col("c3").sort( true, true)])?,
+        ];
+
+        roundtrip_plan_builders(&builders)
+    }
+
+    #[test]
+    fn roundtrip_repartition()->TestResult{
+        let b = plan_test_scan_builder();
+        //Hash(Vec<Expr>, usize),
+        let builders = vec![
+            b.repartition(Partitioning::RoundRobinBatch(12))?,
+            b.repartition(Partitioning::RoundRobinBatch(72))?,
+            b.repartition(Partitioning::RoundRobinBatch(8192))?,
+            b.repartition(Partitioning::Hash(vec![col("c1"), col("c2"), col("c3")], 12))?,
+            b.repartition(Partitioning::Hash(vec![col("c1"), col("c2")], 36))?,
+            b.repartition(Partitioning::Hash(vec![col("c1")], 8192))?,
+        ];
+        roundtrip_plan_builders(&builders)
+    }
+
+    #[test]
+    fn roudtrip_window()->TestResult{
+        let b = plan_test_scan_builder();
+        let nth = WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::PercentRank);
+        let builders = vec![
+            b.window(vec![count(col("c2")), sum(col("c3"))])?,
+            b.window(vec![Expr::WindowFunction{ fun: nth.clone(), args: vec![], partition_by: vec![col("c1")], order_by: vec![col("c2")], window_frame: None }])?,
+            b.window(vec![Expr::WindowFunction{ fun: nth, args: vec![], partition_by: vec![col("c1")], order_by: vec![], window_frame: Some(WindowFrame {
+                units: WindowFrameUnits::Rows,
+                start_bound: WindowFrameBound::CurrentRow,
+                end_bound: WindowFrameBound::CurrentRow,
+            } ) }])?,
+            
+        ];
+        roundtrip_plan_builders(&builders)
+    }
+
 }
