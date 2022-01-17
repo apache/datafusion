@@ -350,10 +350,6 @@ impl BallistaContext {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::io::Write;
-    use tempfile::TempDir;
-
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_standalone_mode() {
@@ -368,6 +364,9 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_ballista_show_tables() {
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
         use super::*;
         let context = BallistaContext::standalone(&BallistaConfig::new().unwrap(), 1)
             .await
