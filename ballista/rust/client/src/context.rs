@@ -17,11 +17,11 @@
 
 //! Distributed execution context.
 
+use sqlparser::ast::Statement;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use sqlparser::ast::Statement;
 
 use ballista_core::config::BallistaConfig;
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
@@ -32,7 +32,9 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
-use datafusion::prelude::{AvroReadOptions, CsvReadOptions, ExecutionConfig, ExecutionContext};
+use datafusion::prelude::{
+    AvroReadOptions, CsvReadOptions, ExecutionConfig, ExecutionContext
+};
 use datafusion::sql::parser::{
     DFParser, FileType, Statement as DFStatement
 };
@@ -364,10 +366,10 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_ballista_show_tables() {
+        use super::*;
         use std::fs::File;
         use std::io::Write;
         use tempfile::TempDir;
-        use super::*;
         let context = BallistaContext::standalone(&BallistaConfig::new().unwrap(), 1)
             .await
             .unwrap();
