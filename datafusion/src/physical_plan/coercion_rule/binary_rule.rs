@@ -250,6 +250,8 @@ fn coercion_decimal_mathematics_type(
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (left_decimal_type, right_decimal_type) {
+        // The coercion rule from spark
+        // https://github.com/apache/spark/blob/c20af535803a7250fef047c2bf0fe30be242369d/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala#L35
         (Decimal(p1, s1), Decimal(p2, s2)) => {
             match mathematics_op {
                 Operator::Plus | Operator::Minus => {
