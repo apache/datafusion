@@ -164,7 +164,7 @@ fn get_comparison_common_decimal_type(
 
 // Convert the numeric data type to the decimal data type.
 // Now, we just support the signed integer type and floating-point type.
-fn convert_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
+fn coerce_numeric_type_to_decimal(numeric_type: &DataType) -> Option<DataType> {
     match numeric_type {
         DataType::Int8 => Some(DataType::Decimal(3, 0)),
         DataType::Int16 => Some(DataType::Decimal(5, 0)),
@@ -201,7 +201,7 @@ fn mathematics_numerical_coercion(
             coercion_decimal_mathematics_type(mathematics_op, lhs_type, rhs_type)
         }
         (Decimal(_, _), _) => {
-            let converted_decimal_type = convert_numeric_type_to_decimal(rhs_type);
+            let converted_decimal_type = coerce_numeric_type_to_decimal(rhs_type);
             match converted_decimal_type {
                 None => None,
                 Some(right_decimal_type) => coercion_decimal_mathematics_type(
@@ -212,7 +212,7 @@ fn mathematics_numerical_coercion(
             }
         }
         (_, Decimal(_, _)) => {
-            let converted_decimal_type = convert_numeric_type_to_decimal(lhs_type);
+            let converted_decimal_type = coerce_numeric_type_to_decimal(lhs_type);
             match converted_decimal_type {
                 None => None,
                 Some(left_decimal_type) => coercion_decimal_mathematics_type(
@@ -295,7 +295,7 @@ mod tests {
     use crate::error::{DataFusionError, Result};
     use crate::logical_plan::Operator;
     use crate::physical_plan::coercion_rule::binary_rule::{
-        coerce_types, coercion_decimal_mathematics_type, convert_numeric_type_to_decimal,
+        coerce_numeric_type_to_decimal, coerce_types, coercion_decimal_mathematics_type,
     };
 
     #[test]
@@ -359,27 +359,27 @@ mod tests {
     #[test]
     fn test_decimal_mathematics_op_type() {
         assert_eq!(
-            convert_numeric_type_to_decimal(&DataType::Int8).unwrap(),
+            coerce_numeric_type_to_decimal(&DataType::Int8).unwrap(),
             DataType::Decimal(3, 0)
         );
         assert_eq!(
-            convert_numeric_type_to_decimal(&DataType::Int16).unwrap(),
+            coerce_numeric_type_to_decimal(&DataType::Int16).unwrap(),
             DataType::Decimal(5, 0)
         );
         assert_eq!(
-            convert_numeric_type_to_decimal(&DataType::Int32).unwrap(),
+            coerce_numeric_type_to_decimal(&DataType::Int32).unwrap(),
             DataType::Decimal(10, 0)
         );
         assert_eq!(
-            convert_numeric_type_to_decimal(&DataType::Int64).unwrap(),
+            coerce_numeric_type_to_decimal(&DataType::Int64).unwrap(),
             DataType::Decimal(20, 0)
         );
         assert_eq!(
-            convert_numeric_type_to_decimal(&DataType::Float32).unwrap(),
+            coerce_numeric_type_to_decimal(&DataType::Float32).unwrap(),
             DataType::Decimal(14, 7)
         );
         assert_eq!(
-            convert_numeric_type_to_decimal(&DataType::Float64).unwrap(),
+            coerce_numeric_type_to_decimal(&DataType::Float64).unwrap(),
             DataType::Decimal(30, 15)
         );
 
