@@ -211,6 +211,26 @@ async fn left_join_unbalanced() -> Result<()> {
 }
 
 #[tokio::test]
+async fn left_join_filter_pushdown() -> Result<()> {
+    // Since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+-------+---------+",
+        "| t1_id | t2_id | t2_name |",
+        "+-------+-------+---------+",
+        "| 22    | 22    |         |",
+        "| 33    |       |         |",
+        "| 77    |       |         |",
+        "+-------+-------+---------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn right_join() -> Result<()> {
     let mut ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
