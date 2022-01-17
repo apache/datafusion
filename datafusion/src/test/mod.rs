@@ -46,7 +46,7 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
         dual_schema.clone(),
         vec![
             Arc::new(array::Int32Array::from_slice(&[1])),
-            Arc::new(array::StringArray::from(vec!["a"])),
+            Arc::new(array::StringArray::from_slice(&["a"])),
         ],
     )
     .unwrap();

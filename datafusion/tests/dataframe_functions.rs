@@ -45,7 +45,7 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(&[
                 "abcDEF",
                 "abc123",
                 "CBAdef",

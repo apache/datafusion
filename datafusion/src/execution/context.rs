@@ -3880,8 +3880,8 @@ mod tests {
                 Arc::new(Float64Array::from_slice(&[1.0])),
                 Arc::new(StringArray::from(vec![Some("foo")])),
                 Arc::new(LargeStringArray::from(vec![Some("bar")])),
-                Arc::new(BinaryArray::from(vec![b"foo" as &[u8]])),
-                Arc::new(LargeBinaryArray::from(vec![b"foo" as &[u8]])),
+                Arc::new(BinaryArray::from_slice(&[b"foo" as &[u8]])),
+                Arc::new(LargeBinaryArray::from_slice(&[b"foo" as &[u8]])),
                 Arc::new(TimestampNanosecondArray::from_opt_vec(
                     vec![Some(123)],
                     None,
@@ -4145,7 +4145,7 @@ mod tests {
 
                 // create mock record batch
                 let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
-                let names = Arc::new(StringArray::from(vec!["test"]));
+                let names = Arc::new(StringArray::from_slice(&["test"]));
                 let rec_batch =
                     RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
 
