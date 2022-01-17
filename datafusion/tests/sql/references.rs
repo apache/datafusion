@@ -45,12 +45,9 @@ async fn qualified_table_references() -> Result<()> {
 async fn qualified_table_references_and_fields() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
-    let c1: StringArray = vec!["foofoo", "foobar", "foobaz"]
-        .into_iter()
-        .map(Some)
-        .collect();
-    let c2: Int64Array = vec![1, 2, 3].into_iter().map(Some).collect();
-    let c3: Int64Array = vec![10, 20, 30].into_iter().map(Some).collect();
+    let c1 = StringArray::from_slice(&["foofoo", "foobar", "foobaz"]);
+    let c2 = Int64Array::from_slice(&[1, 2, 3]);
+    let c3 = Int64Array::from_slice(&[10, 20, 30]);
 
     let batch = RecordBatch::try_from_iter(vec![
         ("f.c1", Arc::new(c1) as ArrayRef),
@@ -60,7 +57,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
         ("....", Arc::new(c3) as ArrayRef),
     ])?;
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     ctx.register_table("test", Arc::new(table))?;
 
     // referring to the unquoted column is an error

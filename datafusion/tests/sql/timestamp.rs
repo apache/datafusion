@@ -24,7 +24,7 @@ async fn query_cast_timestamp_millis() -> Result<()> {
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
+        vec![Arc::new(Int64Array::from_slice(&[
             1235865600000,
             1235865660000,
             1238544000000,
@@ -56,7 +56,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
+        vec![Arc::new(Int64Array::from_slice(&[
             1235865600000000,
             1235865660000000,
             1238544000000000,
@@ -89,7 +89,7 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
-        vec![Arc::new(Int64Array::from(vec![
+        vec![Arc::new(Int64Array::from_slice(&[
             1235865600, 1235865660, 1238544000,
         ]))],
     )?;
@@ -166,7 +166,7 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
 #[tokio::test]
 async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
+    ctx.register_table("ts_secs", make_timestamp_table(TimeUnit::Second)?)?;
 
     // Original column is seconds, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_secs LIMIT 3";
@@ -216,10 +216,7 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table(
-        "ts_micros",
-        make_timestamp_table::<TimestampMicrosecondType>()?,
-    )?;
+    ctx.register_table("ts_micros", make_timestamp_table(TimeUnit::Microsecond)?)?;
 
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT to_timestamp_millis(ts) FROM ts_micros LIMIT 3";
@@ -287,10 +284,7 @@ async fn to_timestamp() -> Result<()> {
 #[tokio::test]
 async fn to_timestamp_millis() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampMillisecondType>()?,
-    )?;
+    ctx.register_table("ts_data", make_timestamp_table(TimeUnit::Millisecond)?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_millis('2020-09-08T12:00:00+00:00')";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -308,10 +302,7 @@ async fn to_timestamp_millis() -> Result<()> {
 #[tokio::test]
 async fn to_timestamp_micros() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table(
-        "ts_data",
-        make_timestamp_table::<TimestampMicrosecondType>()?,
-    )?;
+    ctx.register_table("ts_data", make_timestamp_table(TimeUnit::Microsecond)?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_micros('2020-09-08T12:00:00+00:00')";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -330,7 +321,7 @@ async fn to_timestamp_micros() -> Result<()> {
 #[tokio::test]
 async fn to_timestamp_seconds() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
+    ctx.register_table("ts_data", make_timestamp_table(TimeUnit::Second)?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
     let actual = execute_to_batches(&mut ctx, sql).await;
@@ -415,9 +406,8 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
 #[tokio::test]
 async fn timestamp_minmax() -> Result<()> {
     let mut ctx = ExecutionContext::new();
-    let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
-    let table_b =
-        make_timestamp_tz_table::<TimestampNanosecondType>(Some("UTC".to_owned()))?;
+    let table_a = make_timestamp_tz_table(TimeUnit::Millisecond, None)?;
+    let table_b = make_timestamp_tz_table(TimeUnit::Nanosecond, Some("UTC".to_owned()))?;
     ctx.register_table("table_a", table_a)?;
     ctx.register_table("table_b", table_b)?;
 
@@ -439,10 +429,9 @@ async fn timestamp_minmax() -> Result<()> {
 async fn timestamp_coercion() -> Result<()> {
     {
         let mut ctx = ExecutionContext::new();
-        let table_a =
-            make_timestamp_tz_table::<TimestampSecondType>(Some("UTC".to_owned()))?;
+        let table_a = make_timestamp_tz_table(TimeUnit::Second, Some("UTC".to_owned()))?;
         let table_b =
-            make_timestamp_tz_table::<TimestampMillisecondType>(Some("UTC".to_owned()))?;
+            make_timestamp_tz_table(TimeUnit::Millisecond, Some("UTC".to_owned()))?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -468,8 +457,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampSecondType>()?;
-        let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Second)?;
+        let table_b = make_timestamp_table(TimeUnit::Microsecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -495,8 +484,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampSecondType>()?;
-        let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Second)?;
+        let table_b = make_timestamp_table(TimeUnit::Nanosecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -522,8 +511,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
-        let table_b = make_timestamp_table::<TimestampSecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Millisecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Second)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -549,8 +538,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
-        let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Millisecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Microsecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -576,8 +565,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
-        let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Millisecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Nanosecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -603,8 +592,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
-        let table_b = make_timestamp_table::<TimestampSecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Microsecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Second)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -630,8 +619,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
-        let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Microsecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Millisecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -657,8 +646,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
-        let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Microsecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Nanosecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -684,8 +673,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
-        let table_b = make_timestamp_table::<TimestampSecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Nanosecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Second)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -711,8 +700,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
-        let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Nanosecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Millisecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -738,8 +727,8 @@ async fn timestamp_coercion() -> Result<()> {
 
     {
         let mut ctx = ExecutionContext::new();
-        let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
-        let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
+        let table_a = make_timestamp_table(TimeUnit::Nanosecond)?;
+        let table_b = make_timestamp_table(TimeUnit::Microsecond)?;
         ctx.register_table("table_a", table_a)?;
         ctx.register_table("table_b", table_b)?;
 
@@ -770,6 +759,7 @@ async fn timestamp_coercion() -> Result<()> {
 async fn group_by_timestamp_millis() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 
+    let data_type = DataType::Timestamp(TimeUnit::Millisecond, None);
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "timestamp",
@@ -791,8 +781,8 @@ async fn group_by_timestamp_millis() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+            Arc::new(Int64Array::from_slice(&timestamps).to(data_type)),
+            Arc::new(Int32Array::from_slice(&[10, 20, 30, 40, 50, 60])),
         ],
     )?;
     let t1_table = MemTable::try_new(schema, vec![vec![data]])?;
