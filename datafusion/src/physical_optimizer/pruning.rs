@@ -706,15 +706,15 @@ enum StatisticsType {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
     };
+    use std::collections::HashMap;
 
     #[derive(Debug)]
     /// Test for container stats
@@ -972,7 +972,7 @@ mod tests {
 
         // Note the statistics return binary (which can't be cast to string)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from(vec![&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::from_slice(&[&[255u8] as &[u8]]))),
             max_values: None,
             num_containers: 1,
         };

@@ -88,6 +88,7 @@ pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::col;
     use arrow::{
         array::{BooleanArray, StringArray},
@@ -110,7 +111,7 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .expect("failed to downcast to BooleanArray");
 
-        let expected = &BooleanArray::from(vec![true, false]);
+        let expected = &BooleanArray::from_slice(&[true, false]);
 
         assert_eq!(expected, result);
 

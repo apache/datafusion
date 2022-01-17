@@ -2640,11 +2640,11 @@ mod tests {
             ),
             (
                 field_b.clone(),
-                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice(&[false, false])) as ArrayRef,
             ),
             (
                 field_c.clone(),
-                Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["Hello", "Hello"])) as ArrayRef,
             ),
             (
                 field_d.clone(),
@@ -2735,11 +2735,12 @@ mod tests {
             ),
             (
                 field_b,
-                Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice(&[false, true, true])) as ArrayRef,
             ),
             (
                 field_c,
-                Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["Hello", "World", "!!!!!"]))
+                    as ArrayRef,
             ),
             (
                 field_d,
@@ -2815,7 +2816,8 @@ mod tests {
         let expected = StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(StringArray::from(vec!["First", "Second", "Third"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["First", "Second", "Third"]))
+                    as ArrayRef,
             ),
             (
                 field_primitive_list.clone(),

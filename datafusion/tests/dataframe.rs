@@ -44,7 +44,7 @@ async fn join() -> Result<()> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
             Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
@@ -52,7 +52,7 @@ async fn join() -> Result<()> {
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
+            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
             Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;

@@ -513,11 +513,12 @@ mod tests {
 
         let zero_count_values = BooleanArray::from(Vec::<bool>::new());
 
-        let one_count_values = BooleanArray::from(vec![false, false]);
+        let one_count_values = BooleanArray::from_slice(&[false, false]);
         let one_count_values_with_null =
             BooleanArray::from(vec![Some(true), Some(true), None, None]);
 
-        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
+        let two_count_values =
+            BooleanArray::from_slice(&[true, false, true, false, true]);
         let two_count_values_with_null = BooleanArray::from(vec![
             Some(true),
             Some(false),

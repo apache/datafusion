@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn max_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn max_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -799,7 +799,7 @@ mod tests {
 
     #[test]
     fn min_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -811,7 +811,7 @@ mod tests {
 
     #[test]
     fn min_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
