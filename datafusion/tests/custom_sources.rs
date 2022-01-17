@@ -20,7 +20,7 @@ use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-
+use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
@@ -72,8 +72,8 @@ macro_rules! TEST_CUSTOM_RECORD_BATCH {
         RecordBatch::try_new(
             TEST_CUSTOM_SCHEMA_REF!(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
             ],
         )
     };
@@ -288,9 +288,9 @@ async fn optimizers_catch_all_statistics() {
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(UInt64Array::from(vec![4])),
-            Arc::new(Int32Array::from(vec![1])),
-            Arc::new(Int32Array::from(vec![100])),
+            Arc::new(UInt64Array::from_slice(&[4])),
+            Arc::new(Int32Array::from_slice(&[1])),
+            Arc::new(Int32Array::from_slice(&[100])),
         ],
     )
     .unwrap();

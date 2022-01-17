@@ -210,7 +210,7 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::from_slice::FromSlice;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
@@ -564,8 +564,7 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_empty() -> Result<()> {
-        let arrays =
-            vec![Arc::new(Int32Array::from(vec![] as Vec<Option<i32>>)) as ArrayRef];
+        let arrays = vec![Arc::new(Int32Array::from_slice(&[])) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
 
@@ -578,8 +577,8 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_multiple_columns() -> Result<()> {
-        let array_int8: ArrayRef = Arc::new(Int8Array::from(vec![1, 1, 2]));
-        let array_int16: ArrayRef = Arc::new(Int16Array::from(vec![3, 3, 4]));
+        let array_int8: ArrayRef = Arc::new(Int8Array::from_slice(&[1, 1, 2]));
+        let array_int16: ArrayRef = Arc::new(Int16Array::from_slice(&[3, 3, 4]));
         let arrays = vec![array_int8, array_int16];
 
         let (states, result) = run_update_batch(&arrays)?;

@@ -1214,6 +1214,7 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::logical_plan::plan::Projection;
     use crate::logical_plan::TableScan;
     use crate::logical_plan::{binary_expr, lit, Operator};
@@ -1514,9 +1515,9 @@ mod tests {
         let partitions = vec![vec![RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
-                Arc::new(Int32Array::from(vec![3, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[3, 12, 12, 120])),
             ],
         )?]];
 
@@ -2928,43 +2929,43 @@ mod tests {
         let type_values = vec![
             (
                 DataType::Int8,
-                Arc::new(Int8Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int8Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int16,
-                Arc::new(Int16Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int16Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int32,
-                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int64,
-                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int64Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt8,
-                Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt8Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt16,
-                Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt16Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt32,
-                Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt32Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt64,
-                Arc::new(UInt64Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt64Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Float32,
-                Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef,
+                Arc::new(Float32Array::from_slice(&[1.0_f32])) as ArrayRef,
             ),
             (
                 DataType::Float64,
-                Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef,
+                Arc::new(Float64Array::from_slice(&[1.0_f64])) as ArrayRef,
             ),
         ];
 
@@ -3278,8 +3279,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
             ],
         )?;
 
@@ -3379,11 +3380,11 @@ mod tests {
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
         let mut ctx = ExecutionContext::new();
@@ -3416,11 +3417,11 @@ mod tests {
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
         let mut ctx = ExecutionContext::new();
@@ -3880,8 +3881,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![1])),
-                Arc::new(Float64Array::from(vec![1.0])),
+                Arc::new(Int32Array::from_slice(&[1])),
+                Arc::new(Float64Array::from_slice(&[1.0])),
                 Arc::new(StringArray::from(vec![Some("foo")])),
                 Arc::new(LargeStringArray::from(vec![Some("bar")])),
                 Arc::new(BinaryArray::from(vec![b"foo" as &[u8]])),
@@ -4148,7 +4149,7 @@ mod tests {
                         .unwrap();
 
                 // create mock record batch
-                let ids = Arc::new(Int32Array::from(vec![i as i32]));
+                let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
                 let names = Arc::new(StringArray::from(vec!["test"]));
                 let rec_batch =
                     RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();

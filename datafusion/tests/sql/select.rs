@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
@@ -473,7 +474,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let input = Int64Array::from(vec![1, 2, 3, 4]);
+    let input = Int64Array::from_slice(&[1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     ctx.register_table("test", Arc::new(table))?;
