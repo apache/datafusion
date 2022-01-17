@@ -2330,9 +2330,9 @@ mod test {
             source,
             projection,
             limit,
-            filters.unwrap_or(Vec::new()),
+            filters.unwrap_or_default(),
         )?;
-        Ok(builder.build()?)
+        builder.build()
     }
 
     #[test]

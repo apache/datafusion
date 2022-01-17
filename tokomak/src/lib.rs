@@ -1164,7 +1164,9 @@ mod tests {
         physical_plan::{
             aggregates::AggregateFunction,
             expressions::AvgAccumulator,
-            functions::{make_scalar_function, Signature, Volatility},
+            functions::{
+                make_scalar_function, ReturnTypeFunction, Signature, Volatility,
+            },
             udaf::AggregateUDF,
             udf::ScalarUDF,
             window_functions::WindowFunction,
@@ -1197,9 +1199,8 @@ mod tests {
             Ok(Arc::new(res))
         };
         let scalar_func_impl = make_scalar_function(func);
-        let return_type: Arc<
-            dyn Fn(&[DataType]) -> Result<Arc<DataType>, DataFusionError> + Send + Sync,
-        > = Arc::new(|_args: &[DataType]| Ok(Arc::new(DataType::Float64)));
+        let return_type: ReturnTypeFunction =
+            Arc::new(|_args: &[DataType]| Ok(Arc::new(DataType::Float64)));
         ScalarUDF::new(
             "multiply_f64",
             &Signature::exact(
