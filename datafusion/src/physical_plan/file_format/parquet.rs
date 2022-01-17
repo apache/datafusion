@@ -342,6 +342,29 @@ macro_rules! get_min_max_values {
     }}
 }
 
+// Extract the null count value on the ParquetStatistics
+macro_rules! get_null_count_values {
+    ($self:expr, $column:expr) => {{
+        let column_index =
+            if let Some((v, _)) = $self.parquet_schema.column_with_name(&$column.name) {
+                v
+            } else {
+                // Named column was not present
+                return None;
+            };
+
+        let scalar_values: Vec<ScalarValue> = $self
+            .row_group_metadata
+            .iter()
+            .flat_map(|meta| meta.column(column_index).statistics())
+            .map(|stats| ScalarValue::Int64(Some(stats.null_count().try_into().unwrap())))
+            .collect();
+
+        // ignore errors converting to arrays (e.g. different types)
+        ScalarValue::iter_to_array(scalar_values).ok()
+    }};
+}
+
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         get_min_max_values!(self, column, min, min_bytes)
@@ -353,6 +376,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
     fn num_containers(&self) -> usize {
         self.row_group_metadata.len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        get_null_count_values!(self, column)
     }
 }
 
@@ -743,7 +770,7 @@ mod tests {
             &schema_descr,
             vec![
                 ParquetStatistics::int32(Some(11), Some(20), None, 0, false),
-                ParquetStatistics::boolean(Some(false), Some(true), None, 0, false),
+                ParquetStatistics::boolean(Some(false), Some(true), None, 1, false),
             ],
         );
         let row_group_metadata = vec![rgm1, rgm2];
@@ -757,10 +784,8 @@ mod tests {
             .enumerate()
             .map(|(i, g)| row_group_predicate(g, i))
             .collect::<Vec<_>>();
-        // no row group is filtered out because the predicate expression can't be evaluated
-        // when a null array is generated for a statistics column,
-        // because the null values propagate to the end result, making the predicate result undefined
-        assert_eq!(row_group_filter, vec![true, true]);
+        // First row group was filtered out because it contains no null value on "c2".
+        assert_eq!(row_group_filter, vec![false, true]);
 
         Ok(())
     }

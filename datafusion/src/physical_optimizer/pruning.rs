@@ -37,12 +37,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
     logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
     physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
+    scalar::ScalarValue,
 };
 
 /// Interface to pass statistics information to [`PruningPredicates`]
@@ -75,6 +77,10 @@ pub trait PruningStatistics {
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize;
+
+    /// return the number of null values for the named column.
+    /// Note: the returned array must contain `num_containers()` rows.
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 }
 
 /// Evaluates filter expressions on statistics in order to
@@ -200,7 +206,7 @@ impl PruningPredicate {
 struct RequiredStatColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
-    /// * Statistics type (e.g. Min or Max)
+    /// * Statistics type (e.g. Min or Max or Null_Count)
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation
     columns: Vec<(Column, StatisticsType, Field)>,
@@ -281,6 +287,22 @@ impl RequiredStatColumns {
     ) -> Result<Expr> {
         self.stat_column_expr(column, column_expr, field, StatisticsType::Max, "max")
     }
+
+    /// rewrite col --> col_null_count
+    fn null_count_column_expr(
+        &mut self,
+        column: &Column,
+        column_expr: &Expr,
+        field: &Field,
+    ) -> Result<Expr> {
+        self.stat_column_expr(
+            column,
+            column_expr,
+            field,
+            StatisticsType::NullCount,
+            "null_count",
+        )
+    }
 }
 
 impl From<Vec<(Column, StatisticsType, Field)>> for RequiredStatColumns {
@@ -329,6 +351,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         let array = match statistics_type {
             StatisticsType::Min => statistics.min_values(column),
             StatisticsType::Max => statistics.max_values(column),
+            StatisticsType::NullCount => statistics.null_counts(column),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -421,6 +444,13 @@ impl<'a> PruningExpressionBuilder<'a> {
         &self.scalar_expr
     }
 
+    fn scalar_expr_value(&self) -> Result<&ScalarValue> {
+        match &self.scalar_expr {
+            Expr::Literal(s) => Ok(s),
+            _ => Err(DataFusionError::Plan("Not literal".to_string())),
+        }
+    }
+
     fn min_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
             .min_column_expr(&self.column, &self.column_expr, self.field)
@@ -429,6 +459,15 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn max_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
             .max_column_expr(&self.column, &self.column_expr, self.field)
+    }
+
+    fn null_count_column_expr(&mut self) -> Result<Expr> {
+        let null_count_field = &Field::new(self.field.name(), DataType::Int64, false);
+        self.required_columns.null_count_column_expr(
+            &self.column,
+            &self.column_expr,
+            null_count_field,
+        )
     }
 }
 
@@ -657,13 +696,23 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
                     .or(expr_builder.scalar_expr().clone().not_eq(max_column_expr))
             }
             Operator::Eq => {
-                // column = literal => (min, max) = literal => min <= literal && literal <= max
-                // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-                let min_column_expr = expr_builder.min_column_expr()?;
-                let max_column_expr = expr_builder.max_column_expr()?;
-                min_column_expr
-                    .lt_eq(expr_builder.scalar_expr().clone())
-                    .and(expr_builder.scalar_expr().clone().lt_eq(max_column_expr))
+                if expr_builder
+                    .scalar_expr_value()
+                    .map(|s| s.is_null())
+                    .unwrap_or(false)
+                {
+                    // column = null => null_count > 0
+                    let null_count_column_expr = expr_builder.null_count_column_expr()?;
+                    null_count_column_expr.gt(lit::<i64>(0))
+                } else {
+                    // column = literal => (min, max) = literal => min <= literal && literal <= max
+                    // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
+                    let min_column_expr = expr_builder.min_column_expr()?;
+                    let max_column_expr = expr_builder.max_column_expr()?;
+                    min_column_expr
+                        .lt_eq(expr_builder.scalar_expr().clone())
+                        .and(expr_builder.scalar_expr().clone().lt_eq(max_column_expr))
+                }
             }
             Operator::Gt => {
                 // column > literal => (min, max) > literal => max > literal
@@ -702,6 +751,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
 enum StatisticsType {
     Min,
     Max,
+    NullCount,
 }
 
 #[cfg(test)]
@@ -812,6 +862,10 @@ mod tests {
                 .map(|container_stats| container_stats.len())
                 .unwrap_or(0)
         }
+
+        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+            None
+        }
     }
 
     /// Returns the specified min/max container values
@@ -832,6 +886,10 @@ mod tests {
 
         fn num_containers(&self) -> usize {
             self.num_containers
+        }
+
+        fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+            None
         }
     }
 
