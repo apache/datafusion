@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
+use datafusion::from_slice::FromSlice;
+use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -51,7 +51,7 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
 

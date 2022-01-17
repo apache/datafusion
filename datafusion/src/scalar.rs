@@ -1663,6 +1663,22 @@ impl TryFrom<ScalarValue> for i64 {
     }
 }
 
+// special implementation for i128 because of Decimal128
+impl TryFrom<ScalarValue> for i128 {
+    type Error = DataFusionError;
+
+    fn try_from(value: ScalarValue) -> Result<Self> {
+        match value {
+            ScalarValue::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
 impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
@@ -1739,7 +1755,7 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{}", format!("{:?},{:?},{:?}", v, p, s))?;
+                write!(f, "{:?},{:?},{:?}", v, p, s)?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
@@ -1914,11 +1930,14 @@ impl ScalarType<i64> for TimestampNanosecondType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
 
     #[test]
     fn scalar_decimal_test() {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
         assert_eq!(DataType::Decimal(10, 1), decimal_value.get_datatype());
+        let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
+        assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
         let neg_decimal_value = decimal_value.arithmetic_negate();
         match neg_decimal_value {
@@ -2617,7 +2636,7 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 23])) as ArrayRef,
             ),
             (
                 field_b.clone(),
@@ -2632,11 +2651,11 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e.clone(),
-                        Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 2])) as ArrayRef,
                     ),
                     (
                         field_f.clone(),
-                        Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2712,7 +2731,7 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a,
-                Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 7, -1000])) as ArrayRef,
             ),
             (
                 field_b,
@@ -2727,11 +2746,11 @@ mod tests {
                 Arc::new(StructArray::from(vec![
                     (
                         field_e,
-                        Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 4, 6])) as ArrayRef,
                     ),
                     (
                         field_f,
-                        Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),

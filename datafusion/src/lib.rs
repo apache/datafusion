@@ -227,6 +227,8 @@ pub(crate) mod field_util;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 
+pub mod from_slice;
+
 #[cfg(test)]
 pub mod test;
 pub mod test_util;

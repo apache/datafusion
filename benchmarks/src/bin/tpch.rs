@@ -277,13 +277,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
 
-            let memtable = MemTable::load(
-                table_provider,
-                opt.batch_size,
-                Some(opt.partitions),
-                runtime.clone(),
-            )
-            .await?;
+            let memtable =
+                MemTable::load(table_provider, Some(opt.partitions), runtime.clone())
+                    .await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
                 table,
@@ -546,7 +542,7 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan ===\n{}\n",
-            displayable(physical_plan.as_ref()).indent().to_string()
+            displayable(physical_plan.as_ref()).indent()
         );
     }
     let runtime = ctx.state.lock().unwrap().runtime_env.clone();
@@ -554,9 +550,7 @@ async fn execute_query(
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
-            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref())
-                .indent()
-                .to_string()
+            DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
         );
         pretty::print_batches(&result)?;
     }

@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn equijoin() -> Result<()> {
@@ -505,7 +506,7 @@ async fn test_join_float32() -> Result<()> {
         population_schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float32Array::from(vec![838.698, 1778.934, 626.443])),
+            Arc::new(Float32Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
     let population_table =
@@ -546,7 +547,7 @@ async fn test_join_float64() -> Result<()> {
         population_schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float64Array::from(vec![838.698, 1778.934, 626.443])),
+            Arc::new(Float64Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
     let population_table =
@@ -626,7 +627,7 @@ async fn inner_join_nulls() {
 #[tokio::test]
 async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as _),
+        ("id", Arc::new(Int32Array::from_slice(&[1, 2, 3])) as _),
         (
             "country",
             Arc::new(StringArray::from(vec!["Germany", "Sweden", "Japan"])) as _,
@@ -638,7 +639,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
     let batch = RecordBatch::try_from_iter(vec![
         (
             "id",
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7])) as _,
+            Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7])) as _,
         ),
         (
             "city",
@@ -654,7 +655,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
         (
             "country_id",
-            Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2, 3, 3])) as _,
+            Arc::new(Int32Array::from_slice(&[1, 2, 3, 1, 2, 3, 3])) as _,
         ),
     ])
     .unwrap();

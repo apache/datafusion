@@ -22,6 +22,7 @@ use datafusion::arrow::{
     record_batch::RecordBatch,
 };
 
+use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::{error::Result, logical_plan::create_udaf, physical_plan::Accumulator};
 use datafusion::{prelude::*, scalar::ScalarValue};
@@ -37,11 +38,11 @@ fn create_context() -> Result<ExecutionContext> {
     // define data in two partitions
     let batch1 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from(vec![2.0, 4.0, 8.0]))],
+        vec![Arc::new(Float32Array::from_slice(&[2.0, 4.0, 8.0]))],
     )?;
     let batch2 = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float32Array::from(vec![64.0]))],
+        vec![Arc::new(Float32Array::from_slice(&[64.0]))],
     )?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession

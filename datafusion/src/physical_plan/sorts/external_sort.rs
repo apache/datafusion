@@ -153,7 +153,6 @@ impl ExternalSorter {
                 streams,
                 self.schema.clone(),
                 &self.expr,
-                self.runtime.batch_size(),
                 baseline_metrics,
                 partition,
                 self.runtime.clone(),
@@ -523,7 +522,7 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::{
         collect,
-        file_format::{CsvExec, PhysicalPlanConfig},
+        file_format::{CsvExec, FileScanConfig},
     };
     use crate::test;
     use crate::test_util;
@@ -538,13 +537,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },

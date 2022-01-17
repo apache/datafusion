@@ -36,7 +36,7 @@ use std::sync::Arc;
 use std::{fmt, str::FromStr};
 
 /// WindowFunction
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WindowFunction {
     /// window function that leverages an aggregate function
     AggregateFunction(AggregateFunction),
@@ -91,7 +91,7 @@ impl fmt::Display for WindowFunction {
 }
 
 /// An aggregate function that is part of a built-in window function
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltInWindowFunction {
     /// number of the current row within its partition, counting from 1
     RowNumber,

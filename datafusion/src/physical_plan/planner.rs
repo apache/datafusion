@@ -327,8 +327,6 @@ impl DefaultPhysicalPlanner {
         ctx_state: &'a ExecutionContextState,
     ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         async move {
-            let batch_size = ctx_state.config.batch_size;
-
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
                 LogicalPlan::TableScan (TableScan {
                     source,
@@ -342,7 +340,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(projection, batch_size, &unaliased, *limit).await
+                    source.scan(projection, &unaliased, *limit).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -1627,7 +1625,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
@@ -1674,7 +1672,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
@@ -1733,7 +1731,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }

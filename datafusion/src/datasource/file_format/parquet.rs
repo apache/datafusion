@@ -35,7 +35,7 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -104,7 +104,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
@@ -341,7 +341,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::execution::runtime_env::RuntimeEnv;
+    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampNanosecondArray,
@@ -350,9 +350,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 2, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
         let stream = exec.execute(0, runtime).await?;
 
         let tt_batches = stream
@@ -377,7 +377,7 @@ mod tests {
     async fn read_limit() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, Some(1)).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -395,7 +395,7 @@ mod tests {
     async fn read_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -432,7 +432,7 @@ mod tests {
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![1]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -461,7 +461,7 @@ mod tests {
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -487,7 +487,7 @@ mod tests {
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![10]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -513,7 +513,7 @@ mod tests {
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![6]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -542,7 +542,7 @@ mod tests {
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![7]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -571,7 +571,7 @@ mod tests {
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![9]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -599,7 +599,6 @@ mod tests {
     async fn get_exec(
         file_name: &str,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
@@ -616,13 +615,12 @@ mod tests {
         let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
         let exec = format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
                     file_schema,
                     file_groups,
                     statistics,
                     projection: projection.clone(),
-                    batch_size,
                     limit,
                     table_partition_cols: vec![],
                 },
