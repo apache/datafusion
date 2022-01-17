@@ -179,12 +179,14 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let arr: ArrayRef =
+            Arc::new(Int32Array::from_slice(&[1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;

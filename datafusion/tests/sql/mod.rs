@@ -29,6 +29,7 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::from_slice::FromSlice;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::logical_plan::TableScan;
@@ -175,7 +176,7 @@ fn create_join_context(
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
@@ -194,7 +195,7 @@ fn create_join_context(
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
@@ -220,9 +221,9 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-            Arc::new(UInt32Array::from(vec![10, 20, 30, 40])),
-            Arc::new(UInt32Array::from(vec![50, 60, 70, 80])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice(&[10, 20, 30, 40])),
+            Arc::new(UInt32Array::from_slice(&[50, 60, 70, 80])),
         ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
@@ -236,9 +237,9 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 9, 4])),
-            Arc::new(UInt32Array::from(vec![100, 200, 300, 400])),
-            Arc::new(UInt32Array::from(vec![500, 600, 700, 800])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
+            Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
+            Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
@@ -261,7 +262,7 @@ fn create_join_context_unbalanced(
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44, 77])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
@@ -281,7 +282,7 @@ fn create_join_context_unbalanced(
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
