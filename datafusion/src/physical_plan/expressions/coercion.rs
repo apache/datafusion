@@ -147,6 +147,10 @@ pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Dat
     }
 }
 
+pub(crate) fn is_dictionary(t: &DataType) -> bool {
+    matches!(t, DataType::Dictionary(_, _))
+}
+
 /// Coercion rule for numerical types: The type that both lhs and rhs
 /// can be casted to for numerical calculation, while maintaining
 /// maximum precision
@@ -159,7 +163,7 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     };
 
     // same type => all good
-    if lhs_type == rhs_type {
+    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         return Some(lhs_type.clone());
     }
 
@@ -182,7 +186,7 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
 
 // coercion rules for equality operations. This is a superset of all numerical coercion rules.
 pub fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
+    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
