@@ -269,6 +269,168 @@ mod tests {
         }};
     }
 
+    fn create_decimal_array(
+        array: &[i128],
+        precision: usize,
+        scale: usize,
+    ) -> Result<DecimalArray> {
+        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+        for value in array {
+            decimal_builder.append_value(*value)?
+        }
+        decimal_builder.append_null()?;
+        Ok(decimal_builder.finish())
+    }
+
+    #[test]
+    fn test_cast_decimal_to_decimal() -> Result<()> {
+        let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
+        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 3),
+            DecimalArray,
+            DataType::Decimal(20, 6),
+            vec![
+                Some(1_234_000_i128),
+                Some(2_222_000_i128),
+                Some(3_000_i128),
+                Some(4_000_000_i128),
+                Some(5_000_000_i128),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 3),
+            DecimalArray,
+            DataType::Decimal(10, 2),
+            vec![
+                Some(123_i128),
+                Some(222_i128),
+                Some(0_i128),
+                Some(400_i128),
+                Some(500_i128),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_cast_decimal_to_numeric() -> Result<()> {
+        let array: Vec<i128> = vec![1, 2, 3, 4, 5];
+        // decimal to i8
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int8Array,
+            DataType::Int8,
+            vec![
+                Some(1_i8),
+                Some(2_i8),
+                Some(3_i8),
+                Some(4_i8),
+                Some(5_i8),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to i16
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int16Array,
+            DataType::Int16,
+            vec![
+                Some(1_i16),
+                Some(2_i16),
+                Some(3_i16),
+                Some(4_i16),
+                Some(5_i16),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to i32
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int32Array,
+            DataType::Int32,
+            vec![
+                Some(1_i32),
+                Some(2_i32),
+                Some(3_i32),
+                Some(4_i32),
+                Some(5_i32),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to i64
+        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 0),
+            Int64Array,
+            DataType::Int64,
+            vec![
+                Some(1_i64),
+                Some(2_i64),
+                Some(3_i64),
+                Some(4_i64),
+                Some(5_i64),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to float32
+        let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
+        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(10, 3),
+            Float32Array,
+            DataType::Float32,
+            vec![
+                Some(1.234_f32),
+                Some(2.222_f32),
+                Some(0.003_f32),
+                Some(4.0_f32),
+                Some(5.0_f32),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        // decimal to float64
+        let decimal_array = create_decimal_array(&array, 20, 6)?;
+        generic_decimal_to_other_test_cast!(
+            decimal_array,
+            DataType::Decimal(20, 6),
+            Float64Array,
+            DataType::Float64,
+            vec![
+                Some(0.001234_f64),
+                Some(0.002222_f64),
+                Some(0.000003_f64),
+                Some(0.004_f64),
+                Some(0.005_f64),
+                None,
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_cast_numeric_to_decimal() -> Result<()> {
         // int8
@@ -477,128 +639,6 @@ mod tests {
                 ))
             }
         }
-        Ok(())
-    }
-
-    fn create_decimal_array(
-        array: &[i128],
-        precision: usize,
-        scale: usize,
-    ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
-        for value in array {
-            decimal_builder.append_value(*value)?
-        }
-        decimal_builder.append_null()?;
-        Ok(decimal_builder.finish())
-    }
-
-    #[test]
-    fn test_cast_decimal_to_numeric() -> Result<()> {
-        let array: Vec<i128> = vec![1, 2, 3, 4, 5];
-        // decimal to i8
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
-        generic_decimal_to_other_test_cast!(
-            decimal_array,
-            DataType::Decimal(10, 0),
-            Int8Array,
-            DataType::Int8,
-            vec![
-                Some(1_i8),
-                Some(2_i8),
-                Some(3_i8),
-                Some(4_i8),
-                Some(5_i8),
-                None,
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
-        // decimal to i16
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
-        generic_decimal_to_other_test_cast!(
-            decimal_array,
-            DataType::Decimal(10, 0),
-            Int16Array,
-            DataType::Int16,
-            vec![
-                Some(1_i16),
-                Some(2_i16),
-                Some(3_i16),
-                Some(4_i16),
-                Some(5_i16),
-                None,
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
-        // decimal to i32
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
-        generic_decimal_to_other_test_cast!(
-            decimal_array,
-            DataType::Decimal(10, 0),
-            Int32Array,
-            DataType::Int32,
-            vec![
-                Some(1_i32),
-                Some(2_i32),
-                Some(3_i32),
-                Some(4_i32),
-                Some(5_i32),
-                None,
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
-        // decimal to i64
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
-        generic_decimal_to_other_test_cast!(
-            decimal_array,
-            DataType::Decimal(10, 0),
-            Int64Array,
-            DataType::Int64,
-            vec![
-                Some(1_i64),
-                Some(2_i64),
-                Some(3_i64),
-                Some(4_i64),
-                Some(5_i64),
-                None,
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
-        // decimal to float32
-        let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
-        generic_decimal_to_other_test_cast!(
-            decimal_array,
-            DataType::Decimal(10, 3),
-            Float32Array,
-            DataType::Float32,
-            vec![
-                Some(1.234_f32),
-                Some(2.222_f32),
-                Some(0.003_f32),
-                Some(4.0_f32),
-                Some(5.0_f32),
-                None,
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
-        // decimal to float64
-        let decimal_array = create_decimal_array(&array, 20, 6)?;
-        generic_decimal_to_other_test_cast!(
-            decimal_array,
-            DataType::Decimal(20, 6),
-            Float64Array,
-            DataType::Float64,
-            vec![
-                Some(0.001234_f64),
-                Some(0.002222_f64),
-                Some(0.000003_f64),
-                Some(0.004_f64),
-                Some(0.005_f64),
-                None,
-            ],
-            DEFAULT_DATAFUSION_CAST_OPTIONS
-        );
         Ok(())
     }
 }
