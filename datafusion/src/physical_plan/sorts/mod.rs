@@ -37,7 +37,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
-pub mod external_sort;
 pub mod sort;
 pub mod sort_preserving_merge;
 
