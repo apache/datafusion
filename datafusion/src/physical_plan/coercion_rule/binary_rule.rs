@@ -331,7 +331,7 @@ fn dictionary_value_coercion(
 /// faster comparisons. However, the arrow compute kernels (e.g. eq)
 /// don't have DictionaryArray support yet, so fall back to unpacking
 /// the dictionaries
-pub fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
         (
             DataType::Dictionary(_lhs_index_type, lhs_value_type),
@@ -349,7 +349,7 @@ pub fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 
 /// Coercion rules for Strings: the type that both lhs and rhs can be
 /// casted to for the purpose of a string computation
-pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Utf8, Utf8) => Some(Utf8),
@@ -362,14 +362,14 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 
 /// coercion rules for like operations.
 /// This is a union of string coercion rules and dictionary coercion rules
-pub fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn like_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     string_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type))
 }
 
 /// Coercion rules for Temporal columns: the type that both lhs and rhs can be
 /// casted to for the purpose of a date computation
-pub fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
     use arrow::datatypes::TimeUnit;
     match (lhs_type, rhs_type) {
@@ -424,7 +424,7 @@ pub(crate) fn is_dictionary(t: &DataType) -> bool {
 /// Coercion rule for numerical types: The type that both lhs and rhs
 /// can be casted to for numerical calculation, while maintaining
 /// maximum precision
-pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
 
     // error on any non-numeric type
@@ -455,7 +455,7 @@ pub fn numerical_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
 }
 
 /// coercion rules for equality operations. This is a superset of all numerical coercion rules.
-pub fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
