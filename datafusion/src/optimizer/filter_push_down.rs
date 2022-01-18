@@ -18,7 +18,7 @@ use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection};
 use crate::logical_plan::{
-    and, replace_col, Column, CrossJoin, Limit, LogicalPlan, TableScan,
+    and, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
 };
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -83,83 +83,6 @@ fn get_predicates<'a>(
         .unzip()
 }
 
-// returns 3 (potentially overlaping) sets of predicates:
-// * pushable to left: its columns are all on the left
-// * pushable to right: its columns is all on the right
-// * keep: the set of columns is not in only either left or right
-// Note that a predicate can be both pushed to the left and to the right.
-fn get_join_predicates<'a>(
-    state: &'a State,
-    left: &DFSchema,
-    right: &DFSchema,
-) -> (
-    Vec<&'a HashSet<Column>>,
-    Vec<&'a HashSet<Column>>,
-    Predicates<'a>,
-) {
-    let left_columns = &left
-        .fields()
-        .iter()
-        .map(|f| {
-            [
-                f.qualified_column(),
-                // we need to push down filter using unqualified column as well
-                f.unqualified_column(),
-            ]
-        })
-        .flatten()
-        .collect::<HashSet<_>>();
-    let right_columns = &right
-        .fields()
-        .iter()
-        .map(|f| {
-            [
-                f.qualified_column(),
-                // we need to push down filter using unqualified column as well
-                f.unqualified_column(),
-            ]
-        })
-        .flatten()
-        .collect::<HashSet<_>>();
-
-    let filters = state
-        .filters
-        .iter()
-        .map(|(predicate, columns)| {
-            (
-                (predicate, columns),
-                (
-                    columns,
-                    left_columns.intersection(columns).collect::<HashSet<_>>(),
-                    right_columns.intersection(columns).collect::<HashSet<_>>(),
-                ),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let pushable_to_left = filters
-        .iter()
-        .filter(|(_, (columns, left, _))| left.len() == columns.len())
-        .map(|((_, b), _)| *b)
-        .collect();
-    let pushable_to_right = filters
-        .iter()
-        .filter(|(_, (columns, _, right))| right.len() == columns.len())
-        .map(|((_, b), _)| *b)
-        .collect();
-    let keep = filters
-        .iter()
-        .filter(|(_, (columns, left, right))| {
-            // predicates whose columns are not in only one side of the join need to remain
-            let all_in_left = left.len() == columns.len();
-            let all_in_right = right.len() == columns.len();
-            !all_in_left && !all_in_right
-        })
-        .map(|((a, b), _)| (a, b))
-        .unzip();
-    (pushable_to_left, pushable_to_right, keep)
-}
-
 /// Optimizes the plan
 fn push_down(state: &State, plan: &LogicalPlan) -> Result<LogicalPlan> {
     let new_inputs = plan
@@ -204,11 +127,11 @@ fn remove_filters(
 // keeps all filters from `filters` that are in `predicate_columns`
 fn keep_filters(
     filters: &[(Expr, HashSet<Column>)],
-    predicate_columns: &[&HashSet<Column>],
+    relevant_predicates: &Predicates,
 ) -> Vec<(Expr, HashSet<Column>)> {
     filters
         .iter()
-        .filter(|(_, columns)| predicate_columns.contains(&columns))
+        .filter(|(expr, _)| relevant_predicates.0.contains(&expr))
         .cloned()
         .collect::<Vec<_>>()
 }
@@ -253,33 +176,107 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
     }
 }
 
+// For a given JOIN logical plan, determine whether each side of the join is preserved.
+// We say a join side is preserved if the join returns all or a subset of the rows from
+// the relevant side - i.e. the side of the join cannot provide nulls. Returns a tuple
+// of booleans - (left_preserved, right_preserved).
+fn lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
+    match plan {
+        LogicalPlan::Join(Join { join_type, .. }) => match join_type {
+            JoinType::Inner => (true, true),
+            JoinType::Left => (true, false),
+            JoinType::Right => (false, true),
+            JoinType::Full => (false, false),
+            // No columns from the right side of the join can be referenced in output
+            // predicates for semi/anti joins, so whether we specify t/f doesn't matter.
+            JoinType::Semi | JoinType::Anti => (true, false),
+        },
+        LogicalPlan::CrossJoin(_) => (true, true),
+        _ => unreachable!("lr_is_preserved only valid for JOIN nodes"),
+    }
+}
+
+// Determine which predicates in state can be pushed down to a given side of a join.
+// To determine this, we need to know the schema of the relevant join side and whether
+// or not the side's rows are preserved when joining. If the side is not preserved, we
+// cannot push down anything. Otherwise we can push down predicates where all of the
+// relevant columns are contained on the relevant join side's schema.
+fn get_pushable_join_predicates<'a>(
+    state: &'a State,
+    schema: &DFSchema,
+    preserved: bool,
+) -> Predicates<'a> {
+    if !preserved {
+        return (vec![], vec![]);
+    }
+
+    let schema_columns = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            [
+                f.qualified_column(),
+                // we need to push down filter using unqualified column as well
+                f.unqualified_column(),
+            ]
+        })
+        .flatten()
+        .collect::<HashSet<_>>();
+
+    state
+        .filters
+        .iter()
+        .filter(|(_, columns)| {
+            let all_columns_in_schema = schema_columns
+                .intersection(columns)
+                .collect::<HashSet<_>>()
+                .len()
+                == columns.len();
+            all_columns_in_schema
+        })
+        .map(|(a, b)| (a, b))
+        .unzip()
+}
+
 fn optimize_join(
     mut state: State,
     plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
 ) -> Result<LogicalPlan> {
-    let (pushable_to_left, pushable_to_right, keep) =
-        get_join_predicates(&state, left.schema(), right.schema());
+    let (left_preserved, right_preserved) = lr_is_preserved(plan);
+    let to_left = get_pushable_join_predicates(&state, left.schema(), left_preserved);
+    let to_right = get_pushable_join_predicates(&state, right.schema(), right_preserved);
+
+    let to_keep: Predicates = state
+        .filters
+        .iter()
+        .filter(|(expr, _)| {
+            let pushed_to_left = to_left.0.contains(&expr);
+            let pushed_to_right = to_right.0.contains(&expr);
+            !pushed_to_left && !pushed_to_right
+        })
+        .map(|(a, b)| (a, b))
+        .unzip();
 
     let mut left_state = state.clone();
-    left_state.filters = keep_filters(&left_state.filters, &pushable_to_left);
+    left_state.filters = keep_filters(&left_state.filters, &to_left);
     let left = optimize(left, left_state)?;
 
     let mut right_state = state.clone();
-    right_state.filters = keep_filters(&right_state.filters, &pushable_to_right);
+    right_state.filters = keep_filters(&right_state.filters, &to_right);
     let right = optimize(right, right_state)?;
 
     // create a new Join with the new `left` and `right`
     let expr = plan.expressions();
     let plan = utils::from_plan(plan, &expr, &[left, right])?;
 
-    if keep.0.is_empty() {
+    if to_keep.0.is_empty() {
         Ok(plan)
     } else {
         // wrap the join on the filter whose predicates must be kept
-        let plan = add_filter(plan, &keep.0);
-        state.filters = remove_filters(&state.filters, &keep.1);
+        let plan = add_filter(plan, &to_keep.0);
+        state.filters = remove_filters(&state.filters, &to_keep.1);
 
         Ok(plan)
     }
