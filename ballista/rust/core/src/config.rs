@@ -136,7 +136,7 @@ impl BallistaConfig {
                     .map_err(|e| format!("{:?}", e))?;
             }
             _ => {
-                return Err(format!("not support data type: {}", data_type.to_string()));
+                return Err(format!("not support data type: {}", data_type));
             }
         }
 
