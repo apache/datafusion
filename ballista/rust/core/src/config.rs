@@ -204,7 +204,7 @@ mod tests {
     fn default_config() -> Result<()> {
         let config = BallistaConfig::new()?;
         assert_eq!(2, config.default_shuffle_partitions());
-        assert_eq!(false, config.default_with_information_schema());
+        assert!(!config.default_with_information_schema());
         Ok(())
     }
 
@@ -215,7 +215,7 @@ mod tests {
             .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
             .build()?;
         assert_eq!(123, config.default_shuffle_partitions());
-        assert_eq!(true, config.default_with_information_schema());
+        assert!(config.default_with_information_schema());
         Ok(())
     }
 
