@@ -17,12 +17,12 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
+use arrow::array::ArrayRef;
+use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
-
-use arrow::datatypes::{DataType, Field};
 
 use ahash::RandomState;
 use std::collections::HashSet;
@@ -130,8 +130,7 @@ struct DistinctCountAccumulator {
     state_data_types: Vec<DataType>,
     count_data_type: DataType,
 }
-
-impl Accumulator for DistinctCountAccumulator {
+impl DistinctCountAccumulator {
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
         // If a row has a NULL, it is not included in the final count.
         if !values.iter().any(|v| v.is_null()) {
@@ -165,7 +164,33 @@ impl Accumulator for DistinctCountAccumulator {
             self.update(&row_values)
         })
     }
+}
 
+impl Accumulator for DistinctCountAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        };
+        (0..values[0].len()).try_for_each(|index| {
+            let v = values
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.update(&v)
+        })
+    }
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        if states.is_empty() {
+            return Ok(());
+        };
+        (0..states[0].len()).try_for_each(|index| {
+            let v = states
+                .iter()
+                .map(|array| ScalarValue::try_from_array(array, index))
+                .collect::<Result<Vec<_>>>()?;
+            self.merge(&v)
+        })
+    }
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut cols_out = self
             .state_data_types
@@ -210,7 +235,7 @@ impl Accumulator for DistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::from_slice::FromSlice;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
@@ -317,9 +342,20 @@ mod tests {
 
         let mut accum = agg.create_accumulator()?;
 
-        for row in rows.iter() {
-            accum.update(row)?
-        }
+        let cols = (0..rows[0].len())
+            .map(|i| {
+                rows.iter()
+                    .map(|inner| inner[i].clone())
+                    .collect::<Vec<ScalarValue>>()
+            })
+            .collect::<Vec<_>>();
+
+        let arrays: Vec<ArrayRef> = cols
+            .iter()
+            .map(|c| ScalarValue::iter_to_array(c.clone()))
+            .collect::<Result<Vec<ArrayRef>>>()?;
+
+        accum.update_batch(&arrays)?;
 
         Ok((accum.state()?, accum.evaluate()?))
     }
@@ -513,11 +549,12 @@ mod tests {
 
         let zero_count_values = BooleanArray::from(Vec::<bool>::new());
 
-        let one_count_values = BooleanArray::from(vec![false, false]);
+        let one_count_values = BooleanArray::from_slice(&[false, false]);
         let one_count_values_with_null =
             BooleanArray::from(vec![Some(true), Some(true), None, None]);
 
-        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
+        let two_count_values =
+            BooleanArray::from_slice(&[true, false, true, false, true]);
         let two_count_values_with_null = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -564,8 +601,7 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_empty() -> Result<()> {
-        let arrays =
-            vec![Arc::new(Int32Array::from(vec![] as Vec<Option<i32>>)) as ArrayRef];
+        let arrays = vec![Arc::new(Int32Array::from_slice(&[])) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
 
@@ -578,8 +614,8 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_multiple_columns() -> Result<()> {
-        let array_int8: ArrayRef = Arc::new(Int8Array::from(vec![1, 1, 2]));
-        let array_int16: ArrayRef = Arc::new(Int16Array::from(vec![3, 3, 4]));
+        let array_int8: ArrayRef = Arc::new(Int8Array::from_slice(&[1, 1, 2]));
+        let array_int16: ArrayRef = Arc::new(Int16Array::from_slice(&[3, 3, 4]));
         let arrays = vec![array_int8, array_int16];
 
         let (states, result) = run_update_batch(&arrays)?;

@@ -246,8 +246,8 @@ impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
                             .collect::<Result<Vec<_>, _>>()?,
                         partition_count as usize,
                     ),
-                    PartitionMethod::RoundRobin(batch_size) => {
-                        Partitioning::RoundRobinBatch(batch_size as usize)
+                    PartitionMethod::RoundRobin(partition_count) => {
+                        Partitioning::RoundRobinBatch(partition_count as usize)
                     }
                 };
 

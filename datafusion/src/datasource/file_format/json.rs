@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use super::FileFormat;
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
@@ -85,7 +85,7 @@ impl FileFormat for JsonFormat {
 
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         _filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let exec = NdJsonExec::new(conf);
@@ -98,10 +98,10 @@ mod tests {
     use arrow::array::Int64Array;
 
     use super::*;
-    use crate::execution::runtime_env::RuntimeEnv;
+    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::{
         datasource::{
-            file_format::PhysicalPlanConfig,
+            file_format::FileScanConfig,
             object_store::local::{
                 local_object_reader, local_object_reader_stream,
                 local_unpartitioned_file, LocalFileSystem,
@@ -112,9 +112,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
         let projection = None;
-        let exec = get_exec(&projection, 2, None).await?;
+        let exec = get_exec(&projection, None).await?;
         let stream = exec.execute(0, runtime).await?;
 
         let tt_batches: i32 = stream
@@ -139,7 +139,7 @@ mod tests {
     async fn read_limit() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
-        let exec = get_exec(&projection, 1024, Some(1)).await?;
+        let exec = get_exec(&projection, Some(1)).await?;
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
@@ -151,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec(&projection, 1024, None).await?;
+        let exec = get_exec(&projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -168,7 +168,7 @@ mod tests {
     async fn read_int_column() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
-        let exec = get_exec(&projection, 1024, None).await?;
+        let exec = get_exec(&projection, None).await?;
 
         let batches = collect(exec, runtime).await.expect("Collect batches");
 
@@ -196,7 +196,6 @@ mod tests {
 
     async fn get_exec(
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
@@ -212,13 +211,12 @@ mod tests {
         let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];
         let exec = format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
                     file_schema,
                     file_groups,
                     statistics,
                     projection: projection.clone(),
-                    batch_size,
                     limit,
                     table_partition_cols: vec![],
                 },

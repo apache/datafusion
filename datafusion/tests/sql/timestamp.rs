@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn query_cast_timestamp_millis() -> Result<()> {
@@ -793,7 +794,7 @@ async fn group_by_timestamp_millis() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(TimestampMillisecondArray::from(timestamps)),
-            Arc::new(Int32Array::from(vec![10, 20, 30, 40, 50, 60])),
+            Arc::new(Int32Array::from_slice(&[10, 20, 30, 40, 50, 60])),
         ],
     )?;
     let t1_table = MemTable::try_new(schema, vec![vec![data]])?;

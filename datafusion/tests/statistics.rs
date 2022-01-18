@@ -73,7 +73,6 @@ impl TableProvider for StatisticsValidation {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,

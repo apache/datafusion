@@ -123,6 +123,7 @@ pub static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::from_slice::FromSlice;
 
     #[test]
     fn nullif_int32() -> Result<()> {
@@ -162,7 +163,7 @@ mod tests {
     #[test]
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
     fn nullif_int32_nonulls() -> Result<()> {
-        let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
+        let a = Int32Array::from_slice(&[1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));

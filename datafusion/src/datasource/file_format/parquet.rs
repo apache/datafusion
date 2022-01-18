@@ -35,7 +35,10 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
+use crate::arrow::array::{
+    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+};
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -47,7 +50,6 @@ use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
-use crate::scalar::ScalarValue;
 
 /// The default file exetension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -104,7 +106,7 @@ impl FileFormat for ParquetFormat {
 
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // If enable pruning then combine the filters to build the predicate.
@@ -132,7 +134,9 @@ fn summarize_min_max(
             if let DataType::Boolean = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Boolean(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(BooleanArray::from(
+                            vec![Some(*s.max())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -140,7 +144,9 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Boolean(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(BooleanArray::from(
+                            vec![Some(*s.min())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -154,7 +160,10 @@ fn summarize_min_max(
             if let DataType::Int32 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Int32(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Int32Array::from_value(
+                            *s.max(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -162,7 +171,10 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Int32(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Int32Array::from_value(
+                            *s.min(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -176,7 +188,10 @@ fn summarize_min_max(
             if let DataType::Int64 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Int64(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Int64Array::from_value(
+                            *s.max(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -184,7 +199,10 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Int64(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Int64Array::from_value(
+                            *s.min(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -198,7 +216,9 @@ fn summarize_min_max(
             if let DataType::Float32 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Float32(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Float32Array::from(
+                            vec![Some(*s.max())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -206,7 +226,9 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Float32(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Float32Array::from(
+                            vec![Some(*s.min())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -220,7 +242,9 @@ fn summarize_min_max(
             if let DataType::Float64 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Float64(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Float64Array::from(
+                            vec![Some(*s.max())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -228,7 +252,9 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Float64(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Float64Array::from(
+                            vec![Some(*s.min())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -341,7 +367,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::execution::runtime_env::RuntimeEnv;
+    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampNanosecondArray,
@@ -350,9 +376,9 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 2, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
         let stream = exec.execute(0, runtime).await?;
 
         let tt_batches = stream
@@ -377,7 +403,7 @@ mod tests {
     async fn read_limit() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, Some(1)).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, Some(1)).await?;
 
         // note: even if the limit is set, the executor rounds up to the batch size
         assert_eq!(exec.statistics().num_rows, Some(8));
@@ -395,7 +421,7 @@ mod tests {
     async fn read_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -432,7 +458,7 @@ mod tests {
     async fn read_bool_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![1]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -461,7 +487,7 @@ mod tests {
     async fn read_i32_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -487,7 +513,7 @@ mod tests {
     async fn read_i96_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![10]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -513,7 +539,7 @@ mod tests {
     async fn read_f32_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![6]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -542,7 +568,7 @@ mod tests {
     async fn read_f64_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![7]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -571,7 +597,7 @@ mod tests {
     async fn read_binary_alltypes_plain_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![9]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, 1024, None).await?;
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
 
         let batches = collect(exec, runtime).await?;
         assert_eq!(1, batches.len());
@@ -599,7 +625,6 @@ mod tests {
     async fn get_exec(
         file_name: &str,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::parquet_test_data();
@@ -616,13 +641,12 @@ mod tests {
         let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
         let exec = format
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: Arc::new(LocalFileSystem {}),
                     file_schema,
                     file_groups,
                     statistics,
                     projection: projection.clone(),
-                    batch_size,
                     limit,
                     table_partition_cols: vec![],
                 },

@@ -295,6 +295,7 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
     use arrow::array::UInt32Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -336,7 +337,7 @@ mod tests {
     fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
         RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
+            vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
         )
         .unwrap()
     }

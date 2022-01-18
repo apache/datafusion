@@ -1009,15 +1009,15 @@ fn finalize_aggregation(
 #[cfg(test)]
 mod tests {
 
-    use arrow::array::{Float64Array, UInt32Array};
-    use arrow::datatypes::DataType;
-    use futures::FutureExt;
-
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::{assert_batches_sorted_eq, physical_plan::common};
+    use arrow::array::{Float64Array, UInt32Array};
+    use arrow::datatypes::DataType;
+    use futures::FutureExt;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
@@ -1036,16 +1036,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 4, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 3, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),

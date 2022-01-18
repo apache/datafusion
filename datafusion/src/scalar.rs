@@ -1930,6 +1930,7 @@ impl ScalarType<i64> for TimestampNanosecondType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
 
     #[test]
     fn scalar_decimal_test() {
@@ -2635,26 +2636,26 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 23])) as ArrayRef,
             ),
             (
                 field_b.clone(),
-                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice(&[false, false])) as ArrayRef,
             ),
             (
                 field_c.clone(),
-                Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["Hello", "Hello"])) as ArrayRef,
             ),
             (
                 field_d.clone(),
                 Arc::new(StructArray::from(vec![
                     (
                         field_e.clone(),
-                        Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 2])) as ArrayRef,
                     ),
                     (
                         field_f.clone(),
-                        Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2730,26 +2731,27 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a,
-                Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 7, -1000])) as ArrayRef,
             ),
             (
                 field_b,
-                Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice(&[false, true, true])) as ArrayRef,
             ),
             (
                 field_c,
-                Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["Hello", "World", "!!!!!"]))
+                    as ArrayRef,
             ),
             (
                 field_d,
                 Arc::new(StructArray::from(vec![
                     (
                         field_e,
-                        Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 4, 6])) as ArrayRef,
                     ),
                     (
                         field_f,
-                        Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2814,7 +2816,8 @@ mod tests {
         let expected = StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(StringArray::from(vec!["First", "Second", "Third"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["First", "Second", "Third"]))
+                    as ArrayRef,
             ),
             (
                 field_primitive_list.clone(),

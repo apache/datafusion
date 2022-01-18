@@ -154,7 +154,7 @@ async fn avro_explain() {
             \n    CoalescePartitionsExec\
             \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], batch_size=8192, limit=None\
+            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], limit=None\
             \n",
         ],
     ];

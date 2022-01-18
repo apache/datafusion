@@ -29,7 +29,7 @@ use std::sync::Arc;
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::logical_plan::Expr;
-use crate::physical_plan::file_format::PhysicalPlanConfig;
+use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
@@ -59,7 +59,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
     /// according to this file format.
     async fn create_physical_plan(
         &self,
-        conf: PhysicalPlanConfig,
+        conf: FileScanConfig,
         filters: &[Expr],
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }

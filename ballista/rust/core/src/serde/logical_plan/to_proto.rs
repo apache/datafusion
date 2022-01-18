@@ -826,8 +826,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             partition_count: *partition_count as u64,
                         })
                     }
-                    Partitioning::RoundRobinBatch(batch_size) => {
-                        PartitionMethod::RoundRobin(*batch_size as u64)
+                    Partitioning::RoundRobinBatch(partition_count) => {
+                        PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                 };
 
@@ -1048,6 +1048,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
                     AggregateFunction::StddevPop => {
                         protobuf::AggregateFunction::StddevPop
+                    }
+                    AggregateFunction::Correlation => {
+                        protobuf::AggregateFunction::Correlation
                     }
                 };
 
@@ -1285,6 +1288,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::CovariancePop => Self::CovariancePop,
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
+            AggregateFunction::Correlation => Self::Correlation,
         }
     }
 }
