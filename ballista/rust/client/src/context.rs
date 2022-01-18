@@ -353,10 +353,6 @@ impl BallistaContext {
 
 #[cfg(test)]
 mod tests {
-    use ballista_core::config::{
-        BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
-    };
-
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_standalone_mode() {
@@ -418,6 +414,9 @@ mod tests {
         use std::fs::File;
         use std::io::Write;
         use tempfile::TempDir;
+        use ballista_core::config::{
+            BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+        };
         let config = BallistaConfigBuilder::default()
             .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
             .build()
