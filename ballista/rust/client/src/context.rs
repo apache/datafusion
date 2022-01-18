@@ -291,8 +291,11 @@ impl BallistaContext {
         let is_show = self.is_show_statement(sql).await?;
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
+            let state = self.state.lock().unwrap();
             ctx = ExecutionContext::with_config(
-                ExecutionConfig::new().with_information_schema(true),
+                ExecutionConfig::new().with_information_schema(
+                    state.config.default_with_information_schema(),
+                ),
             );
         }
 
@@ -350,6 +353,10 @@ impl BallistaContext {
 
 #[cfg(test)]
 mod tests {
+    use ballista_core::config::{
+        BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+    };
+
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_standalone_mode() {
@@ -399,10 +406,51 @@ mod tests {
 
         context.sql(sql.as_str()).await.unwrap();
 
-        let df = context
-            .sql("show columns from csv_with_timestamps;")
-            .await
+        let df = context.sql("show columns from csv_with_timestamps;").await;
+
+        assert!(df.is_err());
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_show_tables_not_with_information_schema() {
+        use super::*;
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
+        let config = BallistaConfigBuilder::default()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
+            .build()
             .unwrap();
-        df.show().await.unwrap();
+        let context = BallistaContext::standalone(&config, 1).await.unwrap();
+
+        let data = "Jorge,2018-12-13T12:12:10.011Z\n\
+                    Andrew,2018-11-13T17:11:10.011Z";
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("timestamps.csv");
+
+        // scope to ensure the file is closed and written
+        {
+            File::create(&file_path)
+                .expect("creating temp file")
+                .write_all(data.as_bytes())
+                .expect("writing data");
+        }
+
+        let sql = format!(
+            "CREATE EXTERNAL TABLE csv_with_timestamps (
+                  name VARCHAR,
+                  ts TIMESTAMP
+              )
+              STORED AS CSV
+              LOCATION '{}'
+              ",
+            file_path.to_str().expect("path is utf8")
+        );
+
+        context.sql(sql.as_str()).await.unwrap();
+        let df = context.sql("show tables;").await;
+        assert!(df.is_ok());
     }
 }
