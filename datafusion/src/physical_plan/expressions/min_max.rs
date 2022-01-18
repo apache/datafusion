@@ -440,16 +440,6 @@ impl Accumulator for MaxAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.max = max(&self.max, value)?;
-        Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.update(states)
-    }
-
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         self.update_batch(states)
     }
@@ -543,21 +533,11 @@ impl Accumulator for MinAccumulator {
         Ok(vec![self.min.clone()])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.min = min(&self.min, value)?;
-        Ok(())
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &min_batch(values)?;
         self.min = min(&self.min, delta)?;
         Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.update(states)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {

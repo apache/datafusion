@@ -36,6 +36,9 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 
 use super::FileFormat;
 use super::FileScanConfig;
+use crate::arrow::array::{
+    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
+};
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -47,7 +50,6 @@ use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
-use crate::scalar::ScalarValue;
 
 /// The default file exetension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -132,7 +134,9 @@ fn summarize_min_max(
             if let DataType::Boolean = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Boolean(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(BooleanArray::from(
+                            vec![Some(*s.max())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -140,7 +144,9 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Boolean(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(BooleanArray::from(
+                            vec![Some(*s.min())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -154,7 +160,10 @@ fn summarize_min_max(
             if let DataType::Int32 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Int32(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Int32Array::from_value(
+                            *s.max(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -162,7 +171,10 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Int32(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Int32Array::from_value(
+                            *s.min(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -176,7 +188,10 @@ fn summarize_min_max(
             if let DataType::Int64 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Int64(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Int64Array::from_value(
+                            *s.max(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -184,7 +199,10 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Int64(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Int64Array::from_value(
+                            *s.min(),
+                            1,
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -198,7 +216,9 @@ fn summarize_min_max(
             if let DataType::Float32 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Float32(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Float32Array::from(
+                            vec![Some(*s.max())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -206,7 +226,9 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Float32(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Float32Array::from(
+                            vec![Some(*s.min())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -220,7 +242,9 @@ fn summarize_min_max(
             if let DataType::Float64 = fields[i].data_type() {
                 if s.has_min_max_set() {
                     if let Some(max_value) = &mut max_values[i] {
-                        match max_value.update(&[ScalarValue::Float64(Some(*s.max()))]) {
+                        match max_value.update_batch(&[Arc::new(Float64Array::from(
+                            vec![Some(*s.max())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -228,7 +252,9 @@ fn summarize_min_max(
                         }
                     }
                     if let Some(min_value) = &mut min_values[i] {
-                        match min_value.update(&[ScalarValue::Float64(Some(*s.min()))]) {
+                        match min_value.update_batch(&[Arc::new(Float64Array::from(
+                            vec![Some(*s.min())],
+                        ))]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
