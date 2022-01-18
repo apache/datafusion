@@ -112,14 +112,6 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
-        unimplemented!("update_batch is implemented instead");
-    }
-
-    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
-        unimplemented!("merge_batch is implemented instead");
-    }
-
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let delta = &compute::sum(counts);

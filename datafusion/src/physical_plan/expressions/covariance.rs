@@ -357,14 +357,6 @@ impl Accumulator for CovarianceAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
-        unimplemented!("update_batch is implemented instead");
-    }
-
-    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
-        unimplemented!("merge_batch is implemented instead");
-    }
-
     fn evaluate(&self) -> Result<ScalarValue> {
         let count = match self.stats_type {
             StatsType::Population => self.count,
