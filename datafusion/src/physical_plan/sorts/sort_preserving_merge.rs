@@ -1127,8 +1127,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_partition_sort_streaming_input_output() {
-        let runtime =
-            Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(23)).unwrap());
         let schema = test_util::aggr_test_schema();
 
         let sort = vec![
@@ -1144,12 +1142,15 @@ mod tests {
             },
         ];
 
+        let runtime = Arc::new(RuntimeEnv::default());
         let input =
             sorted_partitioned_input(sort.clone(), &[10, 5, 13], runtime.clone()).await;
-        let basic = basic_sort(input.clone(), sort.clone(), runtime.clone()).await;
+        let basic = basic_sort(input.clone(), sort.clone(), runtime).await;
 
+        let runtime_bs_23 =
+            Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(23)).unwrap());
         let merge = Arc::new(SortPreservingMergeExec::new(sort, input));
-        let merged = collect(merge, runtime.clone()).await.unwrap();
+        let merged = collect(merge, runtime_bs_23).await.unwrap();
 
         assert_eq!(merged.len(), 14);
 
