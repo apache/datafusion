@@ -411,12 +411,12 @@ mod tests {
     #[cfg(feature = "standalone")]
     async fn test_show_tables_not_with_information_schema() {
         use super::*;
-        use std::fs::File;
-        use std::io::Write;
-        use tempfile::TempDir;
         use ballista_core::config::{
             BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
         };
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
         let config = BallistaConfigBuilder::default()
             .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
             .build()
