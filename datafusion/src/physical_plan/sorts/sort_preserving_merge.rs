@@ -167,18 +167,15 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     })
                     .unzip();
 
-                Ok(Box::pin(
-                    SortPreservingMergeStream::new_from_receivers(
-                        receivers,
-                        AbortOnDropMany(join_handles),
-                        self.schema(),
-                        &self.expr,
-                        baseline_metrics,
-                        partition,
-                        runtime.clone(),
-                    )
-                    .await,
-                ))
+                Ok(Box::pin(SortPreservingMergeStream::new_from_receivers(
+                    receivers,
+                    AbortOnDropMany(join_handles),
+                    self.schema(),
+                    &self.expr,
+                    baseline_metrics,
+                    partition,
+                    runtime,
+                )))
             }
         }
     }
@@ -318,7 +315,7 @@ impl Drop for SortPreservingMergeStream {
 
 impl SortPreservingMergeStream {
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn new_from_receivers(
+    pub(crate) fn new_from_receivers(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
         _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
@@ -352,7 +349,7 @@ impl SortPreservingMergeStream {
         }
     }
 
-    pub(crate) async fn new_from_streams(
+    pub(crate) fn new_from_streams(
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
@@ -1237,8 +1234,7 @@ mod tests {
             baseline_metrics,
             0,
             runtime.clone(),
-        )
-        .await;
+        );
 
         let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();
 

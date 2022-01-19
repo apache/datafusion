@@ -133,29 +133,25 @@ impl ExternalSorter {
                     self.schema.clone(),
                     &self.expr,
                     baseline_metrics,
-                )
-                .await?;
+                )?;
                 streams.push(SortedStream::new(in_mem_stream, self.used()));
             }
 
             let mut spills = self.spills.lock().await;
 
             for spill in spills.drain(..) {
-                let stream = read_spill_as_stream(spill, self.schema.clone()).await?;
+                let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(SortedStream::new(stream, 0));
             }
             let baseline_metrics = self.metrics.new_final_baseline(partition);
-            Ok(Box::pin(
-                SortPreservingMergeStream::new_from_streams(
-                    streams,
-                    self.schema.clone(),
-                    &self.expr,
-                    baseline_metrics,
-                    partition,
-                    self.runtime.clone(),
-                )
-                .await,
-            ))
+            Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+                streams,
+                self.schema.clone(),
+                &self.expr,
+                baseline_metrics,
+                partition,
+                self.runtime.clone(),
+            )))
         } else if in_mem_batches.len() > 0 {
             let baseline_metrics = self.metrics.new_final_baseline(partition);
             in_mem_partial_sort(
@@ -164,7 +160,6 @@ impl ExternalSorter {
                 &self.expr,
                 baseline_metrics,
             )
-            .await
         } else {
             Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
         }
@@ -236,8 +231,7 @@ impl MemoryConsumer for ExternalSorter {
             self.schema.clone(),
             &*self.expr,
             baseline_metrics,
-        )
-        .await;
+        );
 
         let total_size =
             spill_partial_sorted_stream(&mut stream?, path.clone(), self.schema.clone())
@@ -257,7 +251,7 @@ impl MemoryConsumer for ExternalSorter {
 }
 
 /// consume the non-empty `sorted_bathes` and do in_mem_sort
-async fn in_mem_partial_sort(
+fn in_mem_partial_sort(
     buffered_batches: &mut Vec<RecordBatch>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
@@ -312,7 +306,7 @@ async fn spill_partial_sorted_stream(
     }
 }
 
-async fn read_spill_as_stream(
+fn read_spill_as_stream(
     path: String,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
@@ -375,6 +369,12 @@ pub struct SortExec {
 }
 
 #[derive(Debug, Clone)]
+/// Aggregates all metrics during a complex operation, which is composed of multiple stages and
+/// each stage reports its statistics separately.
+/// Give sort as an example, when the dataset is more significant than available memory, it will report
+/// multiple in-mem sort metrics and final merge-sort  metrics from `SortPreservingMergeStream`.
+/// Therefore, We need a separation of metrics for which are final metrics (for output_rows accumulation),
+/// and which are intermediate metrics that we only account for elapsed_compute time.
 struct AggregatedMetricsSet {
     intermediate: Arc<std::sync::Mutex<Vec<ExecutionPlanMetricsSet>>>,
     final_: Arc<std::sync::Mutex<Vec<ExecutionPlanMetricsSet>>>,
@@ -402,6 +402,7 @@ impl AggregatedMetricsSet {
         result
     }
 
+    /// We should accumulate all times from all stages' reports for the total time consumption.
     fn merge_compute_time(&self, dest: &Time) {
         let time1 = self
             .intermediate
@@ -429,6 +430,7 @@ impl AggregatedMetricsSet {
         dest.add_duration(Duration::from_nanos(time2));
     }
 
+    /// We should only care about output from the final stage metrics.
     fn merge_output_count(&self, dest: &Count) {
         let count = self
             .final_
