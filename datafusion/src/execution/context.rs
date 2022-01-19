@@ -576,6 +576,7 @@ impl ExecutionContext {
             .unwrap()
             .object_store_registry
             .get_by_uri(uri)
+            .map_err(DataFusionError::from)
     }
 
     /// Registers a table using a custom `TableProvider` so that

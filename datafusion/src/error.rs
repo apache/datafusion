@@ -31,6 +31,9 @@ use sqlparser::parser::ParserError;
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T> = result::Result<T, DataFusionError>;
 
+/// Error type for generic operations that could result in DataFusionError::External
+pub type GenericError = Box<dyn error::Error + Send + Sync>;
+
 /// DataFusion error
 #[derive(Debug)]
 #[allow(missing_docs)]
@@ -64,6 +67,9 @@ pub enum DataFusionError {
     /// This error is thrown when a consumer cannot acquire memory from the Memory Manager
     /// we can just cancel the execution of the partition.
     ResourcesExhausted(String),
+    /// Errors originating from outside DataFusion's core codebase.
+    /// For example, a custom S3Error from the crate datafusion-objectstore-s3
+    External(GenericError),
 }
 
 impl DataFusionError {
@@ -104,6 +110,12 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
+impl From<GenericError> for DataFusionError {
+    fn from(err: GenericError) -> Self {
+        DataFusionError::External(err)
+    }
+}
+
 impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
@@ -134,6 +146,9 @@ impl Display for DataFusionError {
             }
             DataFusionError::ResourcesExhausted(ref desc) => {
                 write!(f, "Resources exhausted: {}", desc)
+            }
+            DataFusionError::External(ref desc) => {
+                write!(f, "External error: {}", desc)
             }
         }
     }
