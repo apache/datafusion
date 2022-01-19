@@ -21,8 +21,8 @@ use crate::arrow::datatypes::DataType;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
 use crate::physical_plan::expressions::coercion::{
-    dictionary_coercion, eq_coercion, is_numeric, like_coercion, string_coercion,
-    temporal_coercion,
+    dictionary_coercion, eq_coercion, is_dictionary, is_numeric, like_coercion,
+    string_coercion, temporal_coercion,
 };
 use crate::scalar::{MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};
 
@@ -77,7 +77,9 @@ pub(crate) fn coerce_types(
 }
 
 fn comparison_eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type == rhs_type {
+    // can't compare dictionaries directly due to
+    // https://github.com/apache/arrow-rs/issues/1201
+    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
@@ -90,7 +92,9 @@ fn comparison_order_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
-    if lhs_type == rhs_type {
+    // can't compare dictionaries directly due to
+    // https://github.com/apache/arrow-rs/issues/1201
+    if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         // same type => all good
         return Some(lhs_type.clone());
     }
