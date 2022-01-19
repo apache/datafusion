@@ -44,7 +44,6 @@ use crate::{
     logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
     physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
-    scalar::ScalarValue,
 };
 
 /// Interface to pass statistics information to [`PruningPredicates`]
@@ -446,13 +445,6 @@ impl<'a> PruningExpressionBuilder<'a> {
         &self.scalar_expr
     }
 
-    fn scalar_expr_value(&self) -> Option<&ScalarValue> {
-        match &self.scalar_expr {
-            Expr::Literal(s) => Some(s),
-            _ => None,
-        }
-    }
-
     fn min_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
             .min_column_expr(&self.column, &self.column_expr, self.field)
@@ -461,15 +453,6 @@ impl<'a> PruningExpressionBuilder<'a> {
     fn max_column_expr(&mut self) -> Result<Expr> {
         self.required_columns
             .max_column_expr(&self.column, &self.column_expr, self.field)
-    }
-
-    fn null_count_column_expr(&mut self) -> Result<Expr> {
-        let null_count_field = &Field::new(self.field.name(), DataType::UInt64, false);
-        self.required_columns.null_count_column_expr(
-            &self.column,
-            &self.column_expr,
-            null_count_field,
-        )
     }
 }
 
@@ -623,6 +606,32 @@ fn build_single_column_expr(
     }
 }
 
+/// Given an expression reference to `expr`, if `expr` is a column expression,
+/// returns a pruning expression in terms of IsNull that will evaluate to true
+/// if the column may contain null, and false if definitely does not
+/// contain null.
+fn build_is_null_column_expr(
+    expr: &Expr,
+    schema: &Schema,
+    required_columns: &mut RequiredStatColumns,
+) -> Option<Expr> {
+    match expr {
+        Expr::Column(ref col) => {
+            let field = schema.field_with_name(&col.name).ok()?;
+
+            let null_count_field = &Field::new(field.name(), DataType::UInt64, false);
+            required_columns
+                .null_count_column_expr(col, expr, null_count_field)
+                .map(|null_count_column_expr| {
+                    // IsNull(column) => null_count > 0
+                    null_count_column_expr.gt(lit::<u64>(0))
+                })
+                .ok()
+        }
+        _ => None,
+    }
+}
+
 /// Translate logical filter expression into pruning predicate
 /// expression that will evaluate to FALSE if it can be determined no
 /// rows between the min/max values could pass the predicates.
@@ -643,6 +652,11 @@ fn build_predicate_expression(
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
+        Expr::IsNull(expr) => {
+            let expr = build_is_null_column_expr(expr, schema, required_columns)
+                .unwrap_or(unhandled);
+            return Ok(expr);
+        }
         Expr::Column(col) => {
             let expr = build_single_column_expr(col, schema, required_columns, false)
                 .unwrap_or(unhandled);
@@ -698,23 +712,13 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
                     .or(expr_builder.scalar_expr().clone().not_eq(max_column_expr))
             }
             Operator::Eq => {
-                if expr_builder
-                    .scalar_expr_value()
-                    .map(|s| s.is_null())
-                    .unwrap_or(false)
-                {
-                    // column = null => null_count > 0
-                    let null_count_column_expr = expr_builder.null_count_column_expr()?;
-                    null_count_column_expr.gt(lit::<u64>(0))
-                } else {
-                    // column = literal => (min, max) = literal => min <= literal && literal <= max
-                    // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
-                    let min_column_expr = expr_builder.min_column_expr()?;
-                    let max_column_expr = expr_builder.max_column_expr()?;
-                    min_column_expr
-                        .lt_eq(expr_builder.scalar_expr().clone())
-                        .and(expr_builder.scalar_expr().clone().lt_eq(max_column_expr))
-                }
+                // column = literal => (min, max) = literal => min <= literal && literal <= max
+                // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)
+                let min_column_expr = expr_builder.min_column_expr()?;
+                let max_column_expr = expr_builder.max_column_expr()?;
+                min_column_expr
+                    .lt_eq(expr_builder.scalar_expr().clone())
+                    .and(expr_builder.scalar_expr().clone().lt_eq(max_column_expr))
             }
             Operator::Gt => {
                 // column > literal => (min, max) > literal => max > literal
