@@ -290,13 +290,13 @@ async fn spill_partial_sorted_stream(
     schema: SchemaRef,
 ) -> Result<usize> {
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
+    let path_clone = path.clone();
+    let res =
+        task::spawn_blocking(move || write_sorted(receiver, path_clone, schema)).await;
     while let Some(item) = in_mem_stream.next().await {
         sender.send(Some(item)).await.ok();
     }
     sender.send(None).await.ok();
-    let path_clone = path.clone();
-    let res =
-        task::spawn_blocking(move || write_sorted(receiver, path_clone, schema)).await;
     match res {
         Ok(r) => r,
         Err(e) => Err(DataFusionError::Execution(format!(
