@@ -27,11 +27,32 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use futures::{AsyncRead, Stream, StreamExt};
+use futures::{Stream, StreamExt};
+use tokio::io::{AsyncBufRead, AsyncSeek};
 
 use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
+
+/// Provides async access to read a file, combing [`AsyncSeek`]
+/// and [`AsyncBufRead`] so they can be used as a trait object
+///
+/// [`AsyncSeek`] is necessary because readers may need to seek around whilst
+/// reading, either because the format itself is structured (e.g. parquet)
+/// or because it needs to read metadata or infer schema as an initial step
+///
+/// [`AsyncBufRead`] is necessary because readers may wish to read data
+/// up until some delimiter (e.g. csv or newline-delimited JSON)
+///
+/// Note: the same block of data may be read multiple times
+///
+/// Implementations that fetch from object storage may wish to maintain an internal
+/// buffer of fetched data blocks, potentially discarding them or spilling them to disk
+/// based on memory pressure
+///
+/// TODO(#1614): Remove Sync
+pub trait ChunkReader: AsyncBufRead + AsyncSeek + Send + Sync + Unpin {}
+impl<T: AsyncBufRead + AsyncSeek + Send + Sync + Unpin> ChunkReader for T {}
 
 /// Object Reader for one file in an object store.
 ///
@@ -39,9 +60,9 @@ use crate::error::{DataFusionError, Result};
 /// have some performance impacts.
 #[async_trait]
 pub trait ObjectReader: Send + Sync {
-    /// Get reader for a part [start, start + length] in the file asynchronously
-    async fn chunk_reader(&self, start: u64, length: usize)
-        -> Result<Box<dyn AsyncRead>>;
+    /// Get a [`ChunkReader`] for the file, successive calls to this MUST
+    /// return readers with independent seek positions
+    async fn chunk_reader(&self) -> Result<Box<dyn ChunkReader>>;
 
     /// Get reader for a part [start, start + length] in the file
     fn sync_chunk_reader(

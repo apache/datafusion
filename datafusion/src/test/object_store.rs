@@ -24,12 +24,13 @@ use std::{
 
 use crate::{
     datasource::object_store::{
-        FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
+        ChunkReader, FileMeta, FileMetaStream, ListEntryStream, ObjectReader,
+        ObjectStore, SizedFile,
     },
     error::{DataFusionError, Result},
 };
 use async_trait::async_trait;
-use futures::{stream, AsyncRead, StreamExt};
+use futures::{stream, StreamExt};
 
 #[derive(Debug)]
 /// An object store implem that is useful for testing.
@@ -99,11 +100,7 @@ struct EmptyObjectReader(u64);
 
 #[async_trait]
 impl ObjectReader for EmptyObjectReader {
-    async fn chunk_reader(
-        &self,
-        _start: u64,
-        _length: usize,
-    ) -> Result<Box<dyn AsyncRead>> {
+    async fn chunk_reader(&self) -> Result<Box<dyn ChunkReader>> {
         unimplemented!()
     }
 

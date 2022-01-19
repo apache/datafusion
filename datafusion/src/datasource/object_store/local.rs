@@ -22,10 +22,10 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::{stream, AsyncRead, StreamExt};
+use futures::{stream, StreamExt};
 
 use crate::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+    ChunkReader, FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
 use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
@@ -67,14 +67,10 @@ impl LocalFileReader {
 
 #[async_trait]
 impl ObjectReader for LocalFileReader {
-    async fn chunk_reader(
-        &self,
-        _start: u64,
-        _length: usize,
-    ) -> Result<Box<dyn AsyncRead>> {
-        todo!(
-            "implement once async file readers are available (arrow-rs#78, arrow-rs#111)"
-        )
+    async fn chunk_reader(&self) -> Result<Box<dyn ChunkReader>> {
+        let file = tokio::fs::File::open(&self.file.path).await?;
+        let file = tokio::io::BufReader::new(file);
+        Ok(Box::new(file))
     }
 
     fn sync_chunk_reader(
