@@ -104,6 +104,7 @@ pub async fn startup(
     }
 }
 
+#[allow(clippy::clone_on_copy)]
 async fn register_executor(
     scheduler: &mut SchedulerGrpcClient<Channel>,
     executor_meta: &ExecutorRegistration,

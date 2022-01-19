@@ -169,7 +169,7 @@ impl SchedulerServer {
         // In case of there's no enough resources, reschedule the tasks of the job
         if available_executors.is_empty() {
             let tx_job = self.scheduler_env.as_ref().unwrap().tx_job.clone();
-            // TODO
+            // TODO Maybe it's better to use an exclusive runtime for this kind task scheduling
             tokio::spawn(async move {
                 warn!("Not enough available executors for task running");
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -178,27 +178,30 @@ impl SchedulerServer {
             return Ok(());
         }
 
-        let tasks_assigment = self.fetch_tasks(&mut available_executors, &job_id).await?;
-        if !tasks_assigment.is_empty() {
-            let available_executors: HashMap<String, ExecutorData> = available_executors
-                .into_iter()
-                .map(|e| (e.executor_id.clone(), e))
-                .collect();
-            for (executor_id, tasks) in tasks_assigment {
-                debug!(
-                    "Start to launch tasks {:?} to executor {:?}",
-                    tasks, executor_id
-                );
-                let mut client = {
-                    let clients = self.executors_client.read().await;
-                    info!("Size of executor clients: {:?}", clients.len());
-                    clients.get(&executor_id).unwrap().clone()
-                };
-                let executor_data = available_executors.get(&executor_id).unwrap();
-                // Update the resources first
-                self.state.save_executor_data(executor_data.clone()).await?;
-                // TODO check whether launching task is successful or not
-                client.launch_task(LaunchTaskParams { task: tasks }).await?;
+        let (tasks_assigment, num_tasks) =
+            self.fetch_tasks(&mut available_executors, &job_id).await?;
+        if num_tasks > 0 {
+            for (idx_executor, tasks) in tasks_assigment.into_iter().enumerate() {
+                if !tasks.is_empty() {
+                    let executor_data = &available_executors[idx_executor];
+                    debug!(
+                        "Start to launch tasks {:?} to executor {:?}",
+                        tasks, executor_data.executor_id
+                    );
+                    let mut client = {
+                        let clients = self.executors_client.read().await;
+                        info!("Size of executor clients: {:?}", clients.len());
+                        clients.get(&executor_data.executor_id).unwrap().clone()
+                    };
+                    // Update the resources first
+                    self.state.save_executor_data(executor_data.clone()).await?;
+                    // TODO check whether launching task is successful or not
+                    client.launch_task(LaunchTaskParams { task: tasks }).await?;
+                } else {
+                    // Since the task assignment policy is round robin,
+                    // if find tasks for one executor is empty, just break fast
+                    break;
+                }
             }
             return Ok(());
         }
@@ -210,12 +213,17 @@ impl SchedulerServer {
         &self,
         available_executors: &mut Vec<ExecutorData>,
         job_id: &str,
-    ) -> Result<HashMap<String, Vec<TaskDefinition>>, BallistaError> {
-        let mut ret: HashMap<String, Vec<TaskDefinition>> = HashMap::new();
+    ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError> {
+        let mut ret: Vec<Vec<TaskDefinition>> =
+            Vec::with_capacity(available_executors.len());
+        for _idx in 0..available_executors.len() {
+            ret.push(Vec::new());
+        }
+        let mut num_tasks = 0;
         loop {
             info!("Go inside fetching task loop");
             let mut has_tasks = true;
-            for executor in available_executors.iter_mut() {
+            for (idx, executor) in available_executors.iter_mut().enumerate() {
                 if executor.available_task_slots == 0 {
                     break;
                 }
@@ -252,17 +260,16 @@ impl SchedulerServer {
                             )));
                         };
 
-                        ret.entry(executor.executor_id.clone())
-                            .or_insert_with(Vec::new)
-                            .push(TaskDefinition {
-                                plan: Some(plan.try_into().unwrap()),
-                                task_id: status.partition_id,
-                                output_partitioning: hash_partitioning_to_proto(
-                                    output_partitioning,
-                                )
-                                .map_err(|_| Status::internal("TBD".to_string()))?,
-                            });
+                        ret[idx].push(TaskDefinition {
+                            plan: Some(plan.try_into().unwrap()),
+                            task_id: status.partition_id,
+                            output_partitioning: hash_partitioning_to_proto(
+                                output_partitioning,
+                            )
+                            .map_err(|_| Status::internal("TBD".to_string()))?,
+                        });
                         executor.available_task_slots -= 1;
+                        num_tasks += 1;
                     }
                     _ => {
                         // Indicate there's no more tasks to be scheduled
@@ -280,7 +287,7 @@ impl SchedulerServer {
                 break;
             }
         }
-        Ok(ret)
+        Ok((ret, num_tasks))
     }
 }
 
@@ -607,6 +614,7 @@ impl SchedulerGrpc for SchedulerServer {
                     error!("{}", msg);
                     tonic::Status::internal(msg)
                 })?;
+                let num_tasks = task_status.len();
                 for task_status in task_status {
                     self.state
                         .save_task_status(&task_status)
@@ -620,6 +628,27 @@ impl SchedulerGrpc for SchedulerServer {
                         jobs.insert(task_status.partition_id.unwrap().job_id.clone());
                     }
                 }
+                let mut executor_data = self
+                    .state
+                    .get_executor_data(&metadata.id)
+                    .await
+                    .map_err(|e| {
+                        let msg = format!(
+                            "Could not get metadata data for id {:?}: {}",
+                            &metadata.id, e
+                        );
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?;
+                executor_data.available_task_slots += num_tasks as u32;
+                self.state
+                    .save_executor_data(executor_data)
+                    .await
+                    .map_err(|e| {
+                        let msg = format!("Could not save metadata data: {}", e);
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?;
                 lock.unlock().await;
             }
             let tx_job = self.scheduler_env.as_ref().unwrap().tx_job.clone();
@@ -905,10 +934,7 @@ pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
 
 #[cfg(all(test, feature = "sled"))]
 mod test {
-    use std::{
-        net::{IpAddr, Ipv4Addr},
-        sync::Arc,
-    };
+    use std::sync::Arc;
 
     use tonic::Request;
 

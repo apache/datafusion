@@ -195,7 +195,7 @@ impl SchedulerState {
         Ok(res)
     }
 
-    pub async fn _get_executor_data(&self, executor_id: &str) -> Result<ExecutorData> {
+    pub async fn get_executor_data(&self, executor_id: &str) -> Result<ExecutorData> {
         let key = get_executor_data_key(&self.namespace, executor_id);
         let value = &self.config_client.get(&key).await?;
         if value.is_empty() {
