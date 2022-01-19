@@ -199,7 +199,7 @@ fn lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
 // Determine which predicates in state can be pushed down to a given side of a join.
 // To determine this, we need to know the schema of the relevant join side and whether
 // or not the side's rows are preserved when joining. If the side is not preserved, we
-// cannot push down anything. Otherwise we can push down predicates where all of the
+// do not push down anything. Otherwise we can push down predicates where all of the
 // relevant columns are contained on the relevant join side's schema.
 fn get_pushable_join_predicates<'a>(
     state: &'a State,
@@ -397,63 +397,68 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             optimize_join(state, plan, left, right)
         }
         LogicalPlan::Join(Join {
-            left, right, on, ..
+            left,
+            right,
+            join_type,
+            on,
+            ..
         }) => {
-            // duplicate filters for joined columns so filters can be pushed down to both sides.
-            // Take the following query as an example:
-            //
-            // ```sql
-            // SELECT * FROM t1 JOIN t2 on t1.id = t2.uid WHERE t1.id > 1
-            // ```
-            //
-            // `t1.id > 1` predicate needs to be pushed down to t1 table scan, while
-            // `t2.uid > 1` predicate needs to be pushed down to t2 table scan.
-            //
-            // Join clauses with `Using` constraints also take advantage of this logic to make sure
-            // predicates reference the shared join columns are pushed to both sides.
-            let join_side_filters = state
-                .filters
-                .iter()
-                .filter_map(|(predicate, columns)| {
-                    let mut join_cols_to_replace = HashMap::new();
-                    for col in columns.iter() {
-                        for (l, r) in on {
-                            if col == l {
-                                join_cols_to_replace.insert(col, r);
-                                break;
-                            } else if col == r {
-                                join_cols_to_replace.insert(col, l);
-                                break;
+            if *join_type == JoinType::Inner {
+                // duplicate filters for joined columns so filters can be pushed down to both sides.
+                // Take the following query as an example:
+                //
+                // ```sql
+                // SELECT * FROM t1 JOIN t2 on t1.id = t2.uid WHERE t1.id > 1
+                // ```
+                //
+                // `t1.id > 1` predicate needs to be pushed down to t1 table scan, while
+                // `t2.uid > 1` predicate needs to be pushed down to t2 table scan.
+                //
+                // Join clauses with `Using` constraints also take advantage of this logic to make sure
+                // predicates reference the shared join columns are pushed to both sides.
+                let join_side_filters = state
+                    .filters
+                    .iter()
+                    .filter_map(|(predicate, columns)| {
+                        let mut join_cols_to_replace = HashMap::new();
+                        for col in columns.iter() {
+                            for (l, r) in on {
+                                if col == l {
+                                    join_cols_to_replace.insert(col, r);
+                                    break;
+                                } else if col == r {
+                                    join_cols_to_replace.insert(col, l);
+                                    break;
+                                }
                             }
                         }
-                    }
 
-                    if join_cols_to_replace.is_empty() {
-                        return None;
-                    }
+                        if join_cols_to_replace.is_empty() {
+                            return None;
+                        }
 
-                    let join_side_predicate =
-                        match replace_col(predicate.clone(), &join_cols_to_replace) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                return Some(Err(e));
-                            }
-                        };
+                        let join_side_predicate =
+                            match replace_col(predicate.clone(), &join_cols_to_replace) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    return Some(Err(e));
+                                }
+                            };
 
-                    let join_side_columns = columns
-                        .clone()
-                        .into_iter()
-                        // replace keys in join_cols_to_replace with values in resulting column
-                        // set
-                        .filter(|c| !join_cols_to_replace.contains_key(c))
-                        .chain(join_cols_to_replace.iter().map(|(_, v)| (*v).clone()))
-                        .collect();
+                        let join_side_columns = columns
+                            .clone()
+                            .into_iter()
+                            // replace keys in join_cols_to_replace with values in resulting column
+                            // set
+                            .filter(|c| !join_cols_to_replace.contains_key(c))
+                            .chain(join_cols_to_replace.iter().map(|(_, v)| (*v).clone()))
+                            .collect();
 
-                    Some(Ok((join_side_predicate, join_side_columns)))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            state.filters.extend(join_side_filters);
-
+                        Some(Ok((join_side_predicate, join_side_columns)))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                state.filters.extend(join_side_filters);
+            }
             optimize_join(state, plan, left, right)
         }
         LogicalPlan::TableScan(TableScan {
@@ -1131,6 +1136,47 @@ mod tests {
         \n    Filter: #test.b <= Int64(1)\
         \n      TableScan: test projection=None\
         \n  Projection: #test2.a, #test2.c\
+        \n    TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Left join predicates on a column common to both sides is not duplicated to the
+    /// unpreserved side - and only pushed to the left side.
+    #[test]
+    fn filter_using_left_join_on_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Left,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a <= Int64(1)\
+            \n  Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to left side of the join, not the right
+        let expected = "\
+        Join: Using #test.a = #test2.a\
+        \n  Filter: #test.a <= Int64(1)\
+        \n    TableScan: test projection=None\
+        \n  Projection: #test2.a\
         \n    TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
