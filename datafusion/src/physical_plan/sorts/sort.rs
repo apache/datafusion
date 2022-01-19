@@ -33,8 +33,8 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStrea
 use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
-    DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
-    SendableRecordBatchStream, Statistics,
+    common, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
+    Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::array::ArrayRef;
 pub use arrow::compute::SortOptions;
@@ -58,30 +58,15 @@ use std::time::Duration;
 use tokio::sync::mpsc::{Receiver as TKReceiver, Sender as TKSender};
 use tokio::task;
 
-/// Sort arbitrary size of data to get an total order (may spill several times during sorting based on free memory available).
+/// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
 ///
 /// The basic architecture of the algorithm:
-///
-/// let spills = vec![];
-/// let in_mem_batches = vec![];
-/// while (input.has_next()) {
-///     let batch = input.next();
-///     // no enough memory available, spill first.
-///     if exec_memory_available < size_of(batch) {
-///         let ordered_stream = sort_preserving_merge(in_mem_batches.drain(..));
-///         let tmp_file = spill_write(ordered_stream);
-///         spills.push(tmp_file);
-///     }
-///     // sort the batch while it's probably still in cache and buffer it.
-///     let sorted = sort_by_key(batch);
-///     in_mem_batches.push(sorted);
-/// }
-///
-/// let partial_ordered_streams = vec![];
-/// let in_mem_stream = sort_preserving_merge(in_mem_batches.drain(..));
-/// partial_ordered_streams.push(in_mem_stream);
-/// partial_ordered_streams.extend(spills.drain(..).map(read_as_stream));
-/// let result = sort_preserving_merge(partial_ordered_streams);
+/// 1. get a non-empty new batch from input
+/// 2. check with the memory manager if we could buffer the batch in memory
+/// 2.1 if memory sufficient, then buffer batch in memory, go to 1.
+/// 2.2 if the memory threshold is reached, sort all buffered batches and spill to file.
+///     buffer the batch in memory, go to 1.
+/// 3. when input is exhausted, merge all in memory batches and spills to get a total order.
 struct ExternalSorter {
     id: MemoryConsumerId,
     schema: SchemaRef,
@@ -91,7 +76,6 @@ struct ExternalSorter {
     expr: Vec<PhysicalSortExpr>,
     runtime: Arc<RuntimeEnv>,
     metrics: AggregatedMetricsSet,
-    inner_metrics: BaselineMetrics,
     used: AtomicUsize,
     spilled_bytes: AtomicUsize,
     spilled_count: AtomicUsize,
@@ -105,7 +89,6 @@ impl ExternalSorter {
         metrics: AggregatedMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let inner_metrics = metrics.new_intermediate_baseline(partition_id);
         Self {
             id: MemoryConsumerId::new(partition_id),
             schema,
@@ -114,7 +97,6 @@ impl ExternalSorter {
             expr,
             runtime,
             metrics,
-            inner_metrics,
             used: AtomicUsize::new(0),
             spilled_bytes: AtomicUsize::new(0),
             spilled_count: AtomicUsize::new(0),
@@ -126,13 +108,8 @@ impl ExternalSorter {
             let size = batch_byte_size(&input);
             self.try_grow(size).await?;
             self.used.fetch_add(size, Ordering::SeqCst);
-            // sort each batch as it's inserted, more probably to be cache-resident
-            let elapsed_compute = self.inner_metrics.elapsed_compute().clone();
-            let timer = elapsed_compute.timer();
-            let sorted_batch = sort_batch(input, self.schema.clone(), &*self.expr)?;
-            timer.done();
             let mut in_mem_batches = self.in_mem_batches.lock().await;
-            in_mem_batches.push(sorted_batch);
+            in_mem_batches.push(input);
         }
         Ok(())
     }
@@ -150,15 +127,16 @@ impl ExternalSorter {
         if self.spilled_before().await {
             let baseline_metrics = self.metrics.new_intermediate_baseline(partition);
             let mut streams: Vec<SortedStream> = vec![];
-            let in_mem_stream = in_mem_partial_sort(
-                &mut *in_mem_batches,
-                self.schema.clone(),
-                &self.expr,
-                baseline_metrics,
-                self.runtime.clone(),
-            )
-            .await?;
-            streams.push(SortedStream::new(in_mem_stream, self.used()));
+            if in_mem_batches.len() > 0 {
+                let in_mem_stream = in_mem_partial_sort(
+                    &mut *in_mem_batches,
+                    self.schema.clone(),
+                    &self.expr,
+                    baseline_metrics,
+                )
+                .await?;
+                streams.push(SortedStream::new(in_mem_stream, self.used()));
+            }
 
             let mut spills = self.spills.lock().await;
 
@@ -178,16 +156,17 @@ impl ExternalSorter {
                 )
                 .await,
             ))
-        } else {
+        } else if in_mem_batches.len() > 0 {
             let baseline_metrics = self.metrics.new_final_baseline(partition);
             in_mem_partial_sort(
                 &mut *in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
                 baseline_metrics,
-                self.runtime.clone(),
             )
             .await
+        } else {
+            Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
         }
     }
 
@@ -257,7 +236,6 @@ impl MemoryConsumer for ExternalSorter {
             self.schema.clone(),
             &*self.expr,
             baseline_metrics,
-            self.runtime.clone(),
         )
         .await;
 
@@ -278,34 +256,38 @@ impl MemoryConsumer for ExternalSorter {
     }
 }
 
-/// consume the `sorted_bathes` and do in_mem_sort
+/// consume the non-empty `sorted_bathes` and do in_mem_sort
 async fn in_mem_partial_sort(
-    sorted_bathes: &mut Vec<RecordBatch>,
+    buffered_batches: &mut Vec<RecordBatch>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     baseline_metrics: BaselineMetrics,
-    runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
-    if sorted_bathes.len() == 1 {
-        Ok(Box::pin(SizedRecordBatchStream::new(
-            schema,
-            vec![Arc::new(sorted_bathes.pop().unwrap())],
-            baseline_metrics,
-        )))
-    } else {
-        let batches = sorted_bathes.drain(..).collect();
-        assert_eq!(sorted_bathes.len(), 0);
-        Ok(Box::pin(
-            SortPreservingMergeStream::new_from_batches(
-                batches,
-                schema,
-                expressions,
-                baseline_metrics,
-                runtime,
-            )
-            .await,
-        ))
-    }
+    assert_ne!(buffered_batches.len(), 0);
+
+    let result = {
+        // NB timer records time taken on drop, so there are no
+        // calls to `timer.done()` below.
+        let _timer = baseline_metrics.elapsed_compute().timer();
+
+        let pre_sort = if buffered_batches.len() == 1 {
+            buffered_batches.pop()
+        } else {
+            let batches = buffered_batches.drain(..).collect::<Vec<_>>();
+            // combine all record batches into one for each column
+            common::combine_batches(&batches, schema.clone())?
+        };
+
+        pre_sort
+            .map(|batch| sort_batch(batch, schema.clone(), expressions))
+            .transpose()?
+    };
+
+    Ok(Box::pin(SizedRecordBatchStream::new(
+        schema,
+        vec![Arc::new(result.unwrap())],
+        baseline_metrics,
+    )))
 }
 
 async fn spill_partial_sorted_stream(
@@ -386,7 +368,7 @@ pub struct SortExec {
     input: Arc<dyn ExecutionPlan>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
-    /// Containing all metrics set created for sort, such as all sets for `sort_merge_join`s
+    /// Containing all metrics set created during sort
     all_metrics: AggregatedMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
@@ -563,7 +545,7 @@ impl ExecutionPlan for SortExec {
 
         let input = self.input.execute(partition, runtime.clone()).await?;
 
-        external_sort(
+        do_sort(
             input,
             partition,
             self.expr.clone(),
@@ -636,7 +618,7 @@ fn sort_batch(
     )
 }
 
-async fn external_sort(
+async fn do_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,
     expr: Vec<PhysicalSortExpr>,
@@ -777,35 +759,6 @@ mod tests {
         let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_multi_output_batch() -> Result<()> {
-        let config = RuntimeConfig::new().with_batch_size(26);
-        let runtime = Arc::new(RuntimeEnv::new(config)?);
-        let result = sort_with_runtime(runtime).await?;
-
-        assert_eq!(result.len(), 4);
-
-        let columns_b1 = result[0].columns();
-        let columns_b3 = result[3].columns();
-
-        let c1 = as_string_array(&columns_b1[0]);
-        let c13 = as_string_array(&columns_b3[0]);
-        assert_eq!(c1.value(0), "a");
-        assert_eq!(c13.value(c13.len() - 1), "e");
-
-        let c2 = as_primitive_array::<UInt32Type>(&columns_b1[1]);
-        let c23 = as_primitive_array::<UInt32Type>(&columns_b3[1]);
-        assert_eq!(c2.value(0), 1);
-        assert_eq!(c23.value(c23.len() - 1), 5,);
-
-        let c7 = as_primitive_array::<UInt8Type>(&columns_b1[6]);
-        let c73 = as_primitive_array::<UInt8Type>(&columns_b3[6]);
-        assert_eq!(c7.value(0), 15);
-        assert_eq!(c73.value(c73.len() - 1), 254,);
 
         Ok(())
     }

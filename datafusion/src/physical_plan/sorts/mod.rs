@@ -19,7 +19,6 @@
 
 use crate::error;
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::common::batch_byte_size;
 use crate::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, DynComparator};
 use arrow::compute::SortOptions;
@@ -252,14 +251,12 @@ impl SortedStream {
 enum StreamWrapper {
     Receiver(mpsc::Receiver<ArrowResult<RecordBatch>>),
     Stream(Option<SortedStream>),
-    SingleBatch(Option<RecordBatch>),
 }
 
 impl StreamWrapper {
     fn mem_used(&self) -> usize {
         match &self {
             StreamWrapper::Stream(Some(s)) => s.mem_used,
-            StreamWrapper::SingleBatch(Some(b)) => batch_byte_size(b),
             _ => 0,
         }
     }
@@ -287,9 +284,6 @@ impl Stream for StreamWrapper {
                     Poll::Pending => Poll::Pending,
                 }
             }
-            StreamWrapper::SingleBatch(ref mut ob) => {
-                Poll::Ready(Ok(ob.take()).transpose())
-            }
         }
     }
 }
@@ -299,7 +293,6 @@ impl FusedStream for StreamWrapper {
         match self {
             StreamWrapper::Receiver(receiver) => receiver.is_terminated(),
             StreamWrapper::Stream(stream) => stream.is_none(),
-            StreamWrapper::SingleBatch(b) => b.is_none(),
         }
     }
 }
