@@ -78,7 +78,9 @@ pub trait PruningStatistics {
     /// pruned with these statistics
     fn num_containers(&self) -> usize;
 
-    /// return the number of null values for the named column.
+    /// return the number of null values for the named column as an
+    /// `Option<UInt64Array>`.
+    ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 }
@@ -444,10 +446,10 @@ impl<'a> PruningExpressionBuilder<'a> {
         &self.scalar_expr
     }
 
-    fn scalar_expr_value(&self) -> Result<&ScalarValue> {
+    fn scalar_expr_value(&self) -> Option<&ScalarValue> {
         match &self.scalar_expr {
-            Expr::Literal(s) => Ok(s),
-            _ => Err(DataFusionError::Plan("Not literal".to_string())),
+            Expr::Literal(s) => Some(s),
+            _ => None,
         }
     }
 
