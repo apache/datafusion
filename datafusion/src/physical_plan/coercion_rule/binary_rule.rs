@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Coercion rules for  matching argument types for binary operators
+//! Coercion rules for matching argument types for binary operators
 
 use crate::arrow::datatypes::DataType;
 use crate::error::{DataFusionError, Result};
