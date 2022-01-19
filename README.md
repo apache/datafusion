@@ -174,7 +174,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 
 - Begin work on design documents and plan / priorities for development
 
-### Extensions
+### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib]))
 
 - Stable S3 support
 - Begin design discussions and prototyping of a stream provider
@@ -187,7 +187,7 @@ There is no clear timeline for the below, but community members have expressed i
 
 - Custom SQL support
 - Split DataFusion into multiple crates
-- Push based query execution and code gen
+- Push based query execution and code generation
 
 ### Ballista
 
