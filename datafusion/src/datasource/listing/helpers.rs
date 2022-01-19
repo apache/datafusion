@@ -35,7 +35,7 @@ use futures::{
 use log::debug;
 
 use crate::{
-    error::{DataFusionError, Result},
+    error::Result,
     execution::context::ExecutionContext,
     logical_plan::{self, Expr, ExpressionVisitor, Recursion},
     physical_plan::functions::Volatility,
@@ -191,13 +191,12 @@ pub async fn pruned_partition_list(
         Ok(Box::pin(
             store
                 .list_file_with_suffix(table_path, file_extension)
-                // .map_err(DataFusionError::from)
                 .await?
                 .filter_map(move |f| {
                     let stream_path = stream_path.clone();
                     let table_partition_cols_stream = table_partition_cols_stream.clone();
                     async move {
-                        let file_meta = match f.map_err(DataFusionError::from) {
+                        let file_meta = match f {
                             Ok(fm) => fm,
                             Err(err) => return Some(Err(err)),
                         };
@@ -231,7 +230,6 @@ pub async fn pruned_partition_list(
             // all the files anyway. This number will need to be adjusted according to the object
             // store if we switch to a streaming-stlye pruning of the files. For instance S3 lists
             // 1000 items at a time so batches of 1000 would be ideal with S3 as store.
-            .map_err(DataFusionError::from)
             .chunks(1024)
             .map(|v| v.into_iter().collect::<Result<Vec<_>>>())
             .map(move |metas| paths_to_batch(table_partition_cols, &stream_path, &metas?))
