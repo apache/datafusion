@@ -462,7 +462,7 @@ impl<'a> PruningExpressionBuilder<'a> {
     }
 
     fn null_count_column_expr(&mut self) -> Result<Expr> {
-        let null_count_field = &Field::new(self.field.name(), DataType::Int64, false);
+        let null_count_field = &Field::new(self.field.name(), DataType::UInt64, false);
         self.required_columns.null_count_column_expr(
             &self.column,
             &self.column_expr,
@@ -703,7 +703,7 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
                 {
                     // column = null => null_count > 0
                     let null_count_column_expr = expr_builder.null_count_column_expr()?;
-                    null_count_column_expr.gt(lit::<i64>(0))
+                    null_count_column_expr.gt(lit::<u64>(0))
                 } else {
                     // column = literal => (min, max) = literal => min <= literal && literal <= max
                     // (column / 2) = 4 => (column_min / 2) <= 4 && 4 <= (column_max / 2)

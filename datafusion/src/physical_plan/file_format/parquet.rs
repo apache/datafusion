@@ -357,7 +357,9 @@ macro_rules! get_null_count_values {
             .row_group_metadata
             .iter()
             .flat_map(|meta| meta.column(column_index).statistics())
-            .map(|stats| ScalarValue::Int64(Some(stats.null_count().try_into().unwrap())))
+            .map(|stats| {
+                ScalarValue::UInt64(Some(stats.null_count().try_into().unwrap()))
+            })
             .collect();
 
         // ignore errors converting to arrays (e.g. different types)
