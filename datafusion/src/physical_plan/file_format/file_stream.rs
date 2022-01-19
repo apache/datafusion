@@ -41,7 +41,6 @@ use std::{
 };
 
 use super::PartitionColumnProjector;
-use crate::error::DataFusionError;
 
 pub type FileIter = Box<dyn Iterator<Item = PartitionedFile> + Send + Sync>;
 pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + Sync>;
@@ -125,9 +124,7 @@ impl<F: FormatReaderOpener> FileStream<F> {
                     self.object_store
                         .file_reader(f.file_meta.sized_file)
                         .and_then(|r| r.sync_reader())
-                        .map_err(|e| {
-                            ArrowError::ExternalError(Box::new(DataFusionError::from(e)))
-                        })
+                        .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                         .and_then(|f| {
                             self.batch_iter = (self.file_reader)(f, &self.remain);
                             self.next_batch().transpose()
