@@ -26,7 +26,7 @@ use crate::{
     datasource::object_store::{
         FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
     },
-    error::{DataFusionError, GenericError},
+    error::{DataFusionError, Result},
 };
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
@@ -49,7 +49,7 @@ impl TestObjectStore {
 
 #[async_trait]
 impl ObjectStore for TestObjectStore {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream, GenericError> {
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         let prefix = prefix.to_owned();
         Ok(Box::pin(
             stream::iter(
@@ -74,26 +74,23 @@ impl ObjectStore for TestObjectStore {
         &self,
         _prefix: &str,
         _delimiter: Option<String>,
-    ) -> Result<ListEntryStream, GenericError> {
+    ) -> Result<ListEntryStream> {
         unimplemented!()
     }
 
-    fn file_reader(
-        &self,
-        file: SizedFile,
-    ) -> Result<Arc<dyn ObjectReader>, GenericError> {
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         match self.files.iter().find(|item| file.path == item.0) {
             Some((_, size)) if *size == file.size => {
                 Ok(Arc::new(EmptyObjectReader(*size)))
             }
-            Some(_) => Err(Box::new(DataFusionError::IoError(io::Error::new(
+            Some(_) => Err(DataFusionError::IoError(io::Error::new(
                 io::ErrorKind::NotFound,
                 "found in test list but wrong size",
-            )))),
-            None => Err(Box::new(DataFusionError::IoError(io::Error::new(
+            ))),
+            None => Err(DataFusionError::IoError(io::Error::new(
                 io::ErrorKind::NotFound,
                 "not in provided test list",
-            )))),
+            ))),
         }
     }
 }
@@ -106,7 +103,7 @@ impl ObjectReader for EmptyObjectReader {
         &self,
         _start: u64,
         _length: usize,
-    ) -> Result<Box<dyn AsyncRead>, GenericError> {
+    ) -> Result<Box<dyn AsyncRead>> {
         unimplemented!()
     }
 
@@ -114,7 +111,7 @@ impl ObjectReader for EmptyObjectReader {
         &self,
         _start: u64,
         _length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>, GenericError> {
+    ) -> Result<Box<dyn Read + Send + Sync>> {
         Ok(Box::new(Cursor::new(vec![0; self.0 as usize])))
     }
 

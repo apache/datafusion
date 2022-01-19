@@ -344,11 +344,7 @@ impl MirroringObjectStore {
 
 #[async_trait]
 impl ObjectStore for MirroringObjectStore {
-    async fn list_file(
-        &self,
-        prefix: &str,
-    ) -> std::result::Result<FileMetaStream, Box<dyn std::error::Error + Send + Sync>>
-    {
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
         let prefix = prefix.to_owned();
         let size = self.file_size;
         Ok(Box::pin(
@@ -371,18 +367,11 @@ impl ObjectStore for MirroringObjectStore {
         &self,
         _prefix: &str,
         _delimiter: Option<String>,
-    ) -> std::result::Result<ListEntryStream, Box<dyn std::error::Error + Send + Sync>>
-    {
+    ) -> Result<ListEntryStream> {
         unimplemented!()
     }
 
-    fn file_reader(
-        &self,
-        file: SizedFile,
-    ) -> std::result::Result<
-        Arc<dyn ObjectReader>,
-        Box<dyn std::error::Error + Send + Sync>,
-    > {
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         assert_eq!(
             self.file_size, file.size,
             "Requested files should have the same size as the mirrored file"
@@ -392,10 +381,10 @@ impl ObjectStore for MirroringObjectStore {
                 path: self.mirrored_file.clone(),
                 size: self.file_size,
             })?),
-            None => Err(Box::new(DataFusionError::IoError(io::Error::new(
+            None => Err(DataFusionError::IoError(io::Error::new(
                 io::ErrorKind::NotFound,
                 "not in provided test list",
-            )))),
+            ))),
         }
     }
 }

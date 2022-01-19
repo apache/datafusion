@@ -31,7 +31,7 @@ use futures::{AsyncRead, Stream, StreamExt};
 
 use local::LocalFileSystem;
 
-use crate::error::{DataFusionError, GenericError, Result as DataFusionResult};
+use crate::error::{DataFusionError, Result};
 
 /// Object Reader for one file in an object store.
 ///
@@ -40,21 +40,18 @@ use crate::error::{DataFusionError, GenericError, Result as DataFusionResult};
 #[async_trait]
 pub trait ObjectReader: Send + Sync {
     /// Get reader for a part [start, start + length] in the file asynchronously
-    async fn chunk_reader(
-        &self,
-        start: u64,
-        length: usize,
-    ) -> Result<Box<dyn AsyncRead>, GenericError>;
+    async fn chunk_reader(&self, start: u64, length: usize)
+        -> Result<Box<dyn AsyncRead>>;
 
     /// Get reader for a part [start, start + length] in the file
     fn sync_chunk_reader(
         &self,
         start: u64,
         length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>, GenericError>;
+    ) -> Result<Box<dyn Read + Send + Sync>>;
 
     /// Get reader for the entire file
-    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>, GenericError> {
+    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
         self.sync_chunk_reader(0, self.length() as usize)
     }
 
@@ -117,35 +114,29 @@ impl std::fmt::Display for FileMeta {
 
 /// Stream of files listed from object store
 pub type FileMetaStream =
-    Pin<Box<dyn Stream<Item = DataFusionResult<FileMeta>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
 
 /// Stream of list entries obtained from object store
 pub type ListEntryStream =
-    Pin<Box<dyn Stream<Item = DataFusionResult<ListEntry>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<ListEntry>> + Send + Sync + 'static>>;
 
 /// Stream readers opened on a given object store
-pub type ObjectReaderStream = Pin<
-    Box<
-        dyn Stream<Item = Result<Arc<dyn ObjectReader>, GenericError>>
-            + Send
-            + Sync
-            + 'static,
-    >,
->;
+pub type ObjectReaderStream =
+    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
 pub trait ObjectStore: Sync + Send + Debug {
     /// Returns all the files in path `prefix`
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream, GenericError>;
+    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream>;
 
     /// Calls `list_file` with a suffix filter
     async fn list_file_with_suffix(
         &self,
         prefix: &str,
         suffix: &str,
-    ) -> Result<FileMetaStream, GenericError> {
+    ) -> Result<FileMetaStream> {
         let file_stream = self.list_file(prefix).await?;
         let suffix = suffix.to_owned();
         Ok(Box::pin(file_stream.filter(move |fr| {
@@ -163,11 +154,10 @@ pub trait ObjectStore: Sync + Send + Debug {
         &self,
         prefix: &str,
         delimiter: Option<String>,
-    ) -> Result<ListEntryStream, GenericError>;
+    ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: SizedFile)
-        -> Result<Arc<dyn ObjectReader>, GenericError>;
+    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 }
 
 static LOCAL_SCHEME: &str = "file";
@@ -239,7 +229,7 @@ impl ObjectStoreRegistry {
     pub fn get_by_uri<'a>(
         &self,
         uri: &'a str,
-    ) -> Result<(Arc<dyn ObjectStore>, &'a str), GenericError> {
+    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
         if let Some((scheme, path)) = uri.split_once("://") {
             let stores = self.object_stores.read().unwrap();
             let store = stores
