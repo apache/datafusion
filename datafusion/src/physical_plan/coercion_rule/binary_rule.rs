@@ -77,6 +77,8 @@ pub(crate) fn coerce_types(
 }
 
 fn comparison_eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    // can't compare dictionaries directly due to
+    // https://github.com/apache/arrow-rs/issues/1201
     if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         // same type => equality is possible
         return Some(lhs_type.clone());
@@ -90,6 +92,8 @@ fn comparison_order_coercion(
     lhs_type: &DataType,
     rhs_type: &DataType,
 ) -> Option<DataType> {
+    // can't compare dictionaries directly due to
+    // https://github.com/apache/arrow-rs/issues/1201
     if lhs_type == rhs_type && !is_dictionary(lhs_type) {
         // same type => all good
         return Some(lhs_type.clone());
