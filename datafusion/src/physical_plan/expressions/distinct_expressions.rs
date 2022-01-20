@@ -889,14 +889,12 @@ mod tests {
         let actual = aggregate(&batch, agg)?;
 
         match (expected, actual) {
-            (ScalarValue::List(Some(e), _), ScalarValue::List(Some(a), _)) => {
+            (ScalarValue::List(Some(mut e), _), ScalarValue::List(Some(mut a), _)) => {
                 // workaround lack of Ord of ScalarValue
                 let cmp = |a: &ScalarValue, b: &ScalarValue| {
                     a.partial_cmp(b).expect("Can compare ScalarValues")
                 };
 
-                let mut e = e.clone();
-                let mut a = a.clone();
                 e.sort_by(cmp);
                 a.sort_by(cmp);
                 // Check that the inputs are the same
