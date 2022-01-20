@@ -291,13 +291,12 @@ async fn spill_partial_sorted_stream(
 ) -> Result<usize> {
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
     let path_clone = path.clone();
-    let res =
-        task::spawn_blocking(move || write_sorted(receiver, path_clone, schema)).await;
+    let handle = task::spawn_blocking(move || write_sorted(receiver, path_clone, schema));
     while let Some(item) = in_mem_stream.next().await {
-        sender.send(Some(item)).await.ok();
+        sender.send(item).await.ok();
     }
-    sender.send(None).await.ok();
-    match res {
+    drop(sender);
+    match handle.await {
         Ok(r) => r,
         Err(e) => Err(DataFusionError::Execution(format!(
             "Error occurred while spilling {}",
@@ -328,12 +327,12 @@ fn read_spill_as_stream(
 }
 
 fn write_sorted(
-    mut receiver: TKReceiver<Option<ArrowResult<RecordBatch>>>,
+    mut receiver: TKReceiver<ArrowResult<RecordBatch>>,
     path: String,
     schema: SchemaRef,
 ) -> Result<usize> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
-    while let Some(Some(batch)) = receiver.blocking_recv() {
+    while let Some(batch) = receiver.blocking_recv() {
         writer.write(&batch?)?;
     }
     writer.finish()?;
