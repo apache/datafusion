@@ -160,7 +160,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 ### Performance Improvements
 
 - Predicate evaluation
-- Multi-column comparisons that can't be vectorized
+- Improve multi-column comparisons (that can't be vectorized at the moment)
 - Null constant support
 
 ### New Features
