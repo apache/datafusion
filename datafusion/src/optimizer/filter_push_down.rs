@@ -1141,8 +1141,88 @@ mod tests {
         Ok(())
     }
 
-    /// Left join predicates on a column common to both sides is not duplicated to the
-    /// unpreserved side - and only pushed to the left side.
+    /// post-join predicates on the right side of a left join are not pushed down
+    #[test]
+    fn filter_using_left_join() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Left,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("test2.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test2.a <= Int64(1)\
+            \n  Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter not pushed down
+        let expected = "\
+        Filter: #test2.a <= Int64(1)\
+        \n  Join: Using #test.a = #test2.a\
+        \n    TableScan: test projection=None\
+        \n    Projection: #test2.a\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-join predicates on the left side of a right join are not pushed down
+    #[test]
+    fn filter_using_right_join() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Right,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("test.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test.a <= Int64(1)\
+            \n  Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter not pushed down
+        let expected = "\
+        Filter: #test.a <= Int64(1)\
+        \n  Join: Using #test.a = #test2.a\
+        \n    TableScan: test projection=None\
+        \n    Projection: #test2.a\
+        \n      TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-left-join predicate on a column common to both sides is only pushed to the left side
+    /// i.e. - not duplicated to the right side
     #[test]
     fn filter_using_left_join_on_common() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1178,6 +1258,47 @@ mod tests {
         \n    TableScan: test projection=None\
         \n  Projection: #test2.a\
         \n    TableScan: test2 projection=None";
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// post-right-join predicate on a column common to both sides is only pushed to the right side
+    /// i.e. - not duplicated to the left side.
+    #[test]
+    fn filter_using_right_join_on_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let left = LogicalPlanBuilder::from(table_scan).build()?;
+        let right_table_scan = test_table_scan_with_name("test2")?;
+        let right = LogicalPlanBuilder::from(right_table_scan)
+            .project(vec![col("a")])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(left)
+            .join_using(
+                &right,
+                JoinType::Right,
+                vec![Column::from_name("a".to_string())],
+            )?
+            .filter(col("test2.a").lt_eq(lit(1i64)))?
+            .build()?;
+
+        // not part of the test, just good to know:
+        assert_eq!(
+            format!("{:?}", plan),
+            "\
+            Filter: #test2.a <= Int64(1)\
+            \n  Join: Using #test.a = #test2.a\
+            \n    TableScan: test projection=None\
+            \n    Projection: #test2.a\
+            \n      TableScan: test2 projection=None"
+        );
+
+        // filter sent to right side of join, not duplicated to the left
+        let expected = "\
+        Join: Using #test.a = #test2.a\
+        \n  TableScan: test projection=None\
+        \n  Projection: #test2.a\
+        \n    Filter: #test2.a <= Int64(1)\
+        \n      TableScan: test2 projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
