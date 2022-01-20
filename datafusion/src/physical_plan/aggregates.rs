@@ -398,7 +398,7 @@ mod tests {
     use crate::error::Result;
     use crate::physical_plan::expressions::{
         ApproxDistinct, ArrayAgg, Avg, Correlation, Count, Covariance, DistinctArrayAgg,
-        Max, Min, Stddev, Sum, Variance,
+        DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
 
     #[test]
