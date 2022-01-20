@@ -873,12 +873,6 @@ mod tests {
         Ok(())
     }
 
-    // Ordering is unpredictable when using ARRAY_AGG(DISTINCT). Thus we cannot test by simply
-    // checking for equality of output, and it is difficult to sort since ORD is not implemented
-    // for ScalarValue. Thus we check for equality via the following:
-    //   1. `expected` and `actual` have the same number of elements.
-    //   2. `expected` contains no duplicates.
-    //   3. `expected` and `actual` contain the same unique elements.
     fn check_distinct_array_agg(
         input: ArrayRef,
         expected: ScalarValue,
@@ -896,17 +890,17 @@ mod tests {
 
         match (expected, actual) {
             (ScalarValue::List(Some(e), _), ScalarValue::List(Some(a), _)) => {
-                // Check that the inputs are the same length.
-                assert_eq!(e.len(), a.len());
+                // workaround lack of Ord of ScalarValue
+                let cmp = |a: &ScalarValue, b: &ScalarValue| {
+                    a.partial_cmp(b).expect("Can compare ScalarValues")
+                };
 
-                let h1: HashSet<ScalarValue> = HashSet::from_iter(e.clone().into_iter());
-                let h2: HashSet<ScalarValue> = HashSet::from_iter(a.into_iter());
-
-                // Check that e's elements are unique.
-                assert_eq!(h1.len(), e.len());
-
-                // Check that a contains the same unique elements as e.
-                assert_eq!(h1, h2);
+                let mut e = e.clone();
+                let mut a = a.clone();
+                e.sort_by(cmp);
+                a.sort_by(cmp);
+                // Check that the inputs are the same
+                assert_eq!(e, a);
             }
             _ => {
                 unreachable!()
