@@ -598,7 +598,6 @@ pub mod cross_join;
 pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod display;
-pub mod distinct_expressions;
 pub mod empty;
 pub mod explain;
 pub mod expressions;
