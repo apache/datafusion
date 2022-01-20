@@ -24,7 +24,7 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use futures::stream::StreamExt;
+use futures::TryStreamExt;
 use parquet::arrow::ArrowReader;
 use parquet::arrow::ParquetFileArrowReader;
 use parquet::errors::ParquetError;
@@ -87,16 +87,23 @@ impl FileFormat for ParquetFormat {
         self
     }
 
-    async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
+    async fn infer_schema(&self, readers: ObjectReaderStream) -> Result<SchemaRef> {
         // We currently get the schema information from the first file rather than do
         // schema merging and this is a limitation.
         // See https://issues.apache.org/jira/browse/ARROW-11017
-        let first_file = readers
-            .next()
-            .await
-            .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))??;
-        let schema = fetch_schema(first_file)?;
-        Ok(Arc::new(schema))
+        let merged_schema = readers
+            .try_fold(Schema::empty(), |acc, reader| async {
+                let next_schema = fetch_schema(reader);
+                Schema::try_merge([acc, next_schema?])
+                    .map_err(|e| DataFusionError::ArrowError(e))
+            })
+            .await?;
+        // let first_file = readers
+        //     .next()
+        //     .await
+        //     .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))??;
+        // let schema = fetch_schema(first_file)?;
+        Ok(Arc::new(merged_schema))
     }
 
     async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
@@ -367,12 +374,27 @@ mod tests {
     };
 
     use super::*;
+    use crate::datasource::listing::ListingOptions;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampNanosecondArray,
     };
     use futures::StreamExt;
+
+    #[tokio::test]
+    async fn test_merge_schema() -> Result<()> {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "schema_evolution");
+        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
+        let schema = opt
+            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
+            .await?;
+
+        assert_eq!(schema.fields().len(), 5);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {

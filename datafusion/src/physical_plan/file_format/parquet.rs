@@ -51,6 +51,7 @@ use parquet::file::{
     statistics::Statistics as ParquetStatistics,
 };
 
+use arrow::array::new_null_array;
 use fmt::Debug;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 
@@ -214,9 +215,11 @@ impl ExecutionPlan for ParquetExec {
             &self.base_config.table_partition_cols,
         );
 
+        let file_schema_ref = self.base_config().file_schema.clone();
         let join_handle = task::spawn_blocking(move || {
             if let Err(e) = read_partition(
                 object_store.as_ref(),
+                file_schema_ref,
                 partition_index,
                 partition,
                 metrics,
@@ -385,9 +388,35 @@ fn build_row_group_predicate(
     }
 }
 
+// Map projections from the schema which merges all file schemas to projections on a particular
+// file
+fn map_projections(
+    merged_schema: &Schema,
+    file_schema: &Schema,
+    projections: &[usize],
+) -> Vec<usize> {
+    if merged_schema.fields().len() == file_schema.fields().len() {
+        projections.to_vec()
+    } else {
+        let mut mapped: Vec<usize> = vec![];
+        for idx in projections {
+            let field = merged_schema.field(*idx);
+            if let Ok(file_field) = file_schema.field_with_name(field.name().as_str()) {
+                if file_field.data_type() == field.data_type() {
+                    if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+                        mapped.push(mapped_idx)
+                    }
+                }
+            }
+        }
+        mapped
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn read_partition(
     object_store: &dyn ObjectStore,
+    file_schema: SchemaRef,
     partition_index: usize,
     partition: Vec<PartitionedFile>,
     metrics: ExecutionPlanMetricsSet,
@@ -400,6 +429,8 @@ fn read_partition(
 ) -> Result<()> {
     let mut total_rows = 0;
     'outer: for partitioned_file in partition {
+        debug!("Reading file {}", &partitioned_file.file_meta.path());
+
         let file_metrics = ParquetFileMetrics::new(
             partition_index,
             &*partitioned_file.file_meta.path(),
@@ -417,15 +448,49 @@ fn read_partition(
             );
             file_reader.filter_row_groups(&row_group_predicate);
         }
+
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
-        let mut batch_reader = arrow_reader
-            .get_record_reader_by_columns(projection.to_owned(), batch_size)?;
+        let mapped_projections =
+            map_projections(&file_schema, &arrow_reader.get_schema()?, projection);
+
+        let mut batch_reader =
+            arrow_reader.get_record_reader_by_columns(mapped_projections, batch_size)?;
         loop {
             match batch_reader.next() {
                 Some(Ok(batch)) => {
+                    let total_cols = &file_schema.fields().len();
+                    let batch_rows = batch.num_rows();
                     total_rows += batch.num_rows();
+
+                    let batch_schema = batch.schema();
+
+                    let merged_batch = if batch.columns().len() < projection.len() {
+                        let mut cols: Vec<ArrayRef> = Vec::with_capacity(*total_cols);
+                        let batch_cols = batch.columns().to_vec();
+
+                        for field_idx in projection {
+                            let merged_field = &file_schema.fields()[*field_idx];
+                            if let Some((batch_idx, _name)) = batch_schema
+                                .column_with_name(merged_field.name().as_str())
+                            {
+                                cols.push(batch_cols[batch_idx].clone());
+                            } else {
+                                cols.push(new_null_array(
+                                    merged_field.data_type(),
+                                    batch_rows,
+                                ))
+                            }
+                        }
+
+                        let projected_schema = file_schema.clone().project(projection)?;
+
+                        RecordBatch::try_new(Arc::new(projected_schema), cols)?
+                    } else {
+                        batch
+                    };
+
                     let proj_batch = partition_column_projector
-                        .project(batch, &partitioned_file.partition_values);
+                        .project(merged_batch, &partitioned_file.partition_values);
 
                     send_result(&response_tx, proj_batch)?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {
@@ -472,6 +537,69 @@ mod tests {
         file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics},
         schema::types::SchemaDescPtr,
     };
+
+    #[tokio::test]
+    async fn parquet_exec_with_evolved_schema() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let testdata = crate::test_util::parquet_test_data();
+        let part1 = format!("{}/schema_evolution/part1.parquet", testdata);
+        let part2 = format!("{}/schema_evolution/part2.parquet", testdata);
+        let part3 = format!("{}/schema_evolution/part3.parquet", testdata);
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![
+                    local_unpartitioned_file(part1.clone()),
+                    local_unpartitioned_file(part2.clone()),
+                    local_unpartitioned_file(part3.clone()),
+                ]],
+                file_schema: ParquetFormat::default()
+                    .infer_schema(local_object_reader_stream(vec![part1, part2, part3]))
+                    .await?,
+                statistics: Statistics::default(),
+                projection: Some(vec![0, 1, 4]),
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            None,
+        );
+
+        let mut results = parquet_exec.execute(0, runtime).await?;
+        let batch1 = results.next().await.unwrap()?;
+
+        assert_eq!(8, batch1.num_rows());
+        assert_eq!(3, batch1.num_columns());
+
+        let schema = batch1.schema();
+        let field_names: Vec<&str> =
+            schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(vec!["id", "bool_col", "string_col"], field_names);
+
+        let batch2 = results.next().await.unwrap()?;
+
+        assert_eq!(8, batch2.num_rows());
+        assert_eq!(3, batch2.num_columns());
+
+        let schema = batch2.schema();
+        let field_names: Vec<&str> =
+            schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(vec!["id", "bool_col", "string_col"], field_names);
+
+        let batch3 = results.next().await.unwrap()?;
+
+        assert_eq!(8, batch3.num_rows());
+        assert_eq!(3, batch3.num_columns());
+
+        let schema = batch3.schema();
+        let field_names: Vec<&str> =
+            schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert_eq!(vec!["id", "bool_col", "string_col"], field_names);
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn parquet_exec_with_projection() -> Result<()> {
