@@ -92,7 +92,7 @@ impl FileFormat for ParquetFormat {
             .try_fold(Schema::empty(), |acc, reader| async {
                 let next_schema = fetch_schema(reader);
                 Schema::try_merge([acc, next_schema?])
-                    .map_err(|e| DataFusionError::ArrowError(e))
+                    .map_err(DataFusionError::ArrowError)
             })
             .await?;
         Ok(Arc::new(merged_schema))
