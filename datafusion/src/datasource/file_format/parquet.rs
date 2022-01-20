@@ -88,9 +88,6 @@ impl FileFormat for ParquetFormat {
     }
 
     async fn infer_schema(&self, readers: ObjectReaderStream) -> Result<SchemaRef> {
-        // We currently get the schema information from the first file rather than do
-        // schema merging and this is a limitation.
-        // See https://issues.apache.org/jira/browse/ARROW-11017
         let merged_schema = readers
             .try_fold(Schema::empty(), |acc, reader| async {
                 let next_schema = fetch_schema(reader);
@@ -98,11 +95,6 @@ impl FileFormat for ParquetFormat {
                     .map_err(|e| DataFusionError::ArrowError(e))
             })
             .await?;
-        // let first_file = readers
-        //     .next()
-        //     .await
-        //     .ok_or_else(|| DataFusionError::Plan("No data file found".to_owned()))??;
-        // let schema = fetch_schema(first_file)?;
         Ok(Arc::new(merged_schema))
     }
 
