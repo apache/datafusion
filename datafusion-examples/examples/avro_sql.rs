@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::io::print;
+use datafusion::arrow_print;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     let results = df.collect().await?;
 
     // print the results
-    print::print(&results);
+    println!("{}", arrow_print::write(&results));
 
     Ok(())
 }

@@ -71,24 +71,21 @@ impl fmt::Display for PrintFormat {
 }
 
 fn print_batches_to_json<J: JsonFormat>(batches: &[RecordBatch]) -> Result<String> {
+    use arrow::io::json::write as json_write;
+
     if batches.is_empty() {
         return Ok("{}".to_string());
     }
     let mut bytes = vec![];
-    let schema = batches[0].schema();
-    let names = schema
-        .fields
-        .iter()
-        .map(|f| f.name.clone())
-        .collect::<Vec<String>>();
-    for batch in batches {
-        arrow::io::json::write::serialize(
-            &names,
-            batch.columns(),
-            J::default(),
-            &mut bytes,
-        );
-    }
+
+    let format = J::default();
+    let blocks = json_write::Serializer::new(
+        batches.iter().map(|r| Ok(r.clone())),
+        vec![],
+        format,
+    );
+    json_write::write(&mut bytes, format, blocks)?;
+
     let formatted = String::from_utf8(bytes)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     Ok(formatted)
