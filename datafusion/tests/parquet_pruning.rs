@@ -19,18 +19,21 @@
 // data into a parquet file and then
 use std::sync::Arc;
 
+use arrow::array::PrimitiveArray;
+use arrow::datatypes::TimeUnit;
+use arrow::error::ArrowError;
 use arrow::{
-    array::{
-        Array, ArrayRef, Date32Array, Date64Array, Float64Array, Int32Array, StringArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray,
-    },
+    array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array, Utf8Array},
     datatypes::{DataType, Field, Schema},
+    io::parquet::write::{
+        array_to_pages, to_parquet_schema, write_file, Compression, Compressor, DynIter,
+        DynStreamingIterator, Encoding, FallibleStreamingIterator, Version, WriteOptions,
+    },
     record_batch::RecordBatch,
-    util::pretty::pretty_format_batches,
 };
 use chrono::{Datelike, Duration};
 use datafusion::{
+    arrow_print,
     datasource::TableProvider,
     logical_plan::{col, lit, Expr, LogicalPlan, LogicalPlanBuilder},
     physical_plan::{
@@ -40,7 +43,6 @@ use datafusion::{
     prelude::{ExecutionConfig, ExecutionContext},
     scalar::ScalarValue,
 };
-use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};
 use tempfile::NamedTempFile;
 
 #[tokio::test]
@@ -528,7 +530,7 @@ impl ContextWithParquet {
             .collect()
             .await
             .expect("getting input");
-        let pretty_input = pretty_format_batches(&input).unwrap();
+        let pretty_input = arrow_print::write(&input);
 
         let logical_plan = self.ctx.optimize(&logical_plan).expect("optimizing plan");
         let physical_plan = self
@@ -564,7 +566,7 @@ impl ContextWithParquet {
 
         let result_rows = results.iter().map(|b| b.num_rows()).sum();
 
-        let pretty_results = pretty_format_batches(&results).unwrap();
+        let pretty_results = arrow_print::write(&results);
 
         let sql = sql.into();
         TestOutput {
@@ -584,10 +586,6 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
         .suffix(".parquet")
         .tempfile()
         .expect("tempfile creation");
-
-    let props = WriterProperties::builder()
-        .set_max_row_group_size(5)
-        .build();
 
     let batches = match scenario {
         Scenario::Timestamps => {
@@ -626,20 +624,55 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
 
     let schema = batches[0].schema();
 
-    let mut writer = ArrowWriter::try_new(
-        output_file
-            .as_file()
-            .try_clone()
-            .expect("cloning file descriptor"),
+    let options = WriteOptions {
+        compression: Compression::Uncompressed,
+        write_statistics: true,
+        version: Version::V1,
+    };
+    let parquet_schema = to_parquet_schema(schema.as_ref()).unwrap();
+    let descritors = parquet_schema.columns().to_vec().into_iter();
+
+    let row_groups = batches.iter().map(|batch| {
+        let iterator =
+            batch
+                .columns()
+                .iter()
+                .zip(descritors.clone())
+                .map(|(array, type_)| {
+                    let encoding =
+                        if let DataType::Dictionary(_, _, _) = array.data_type() {
+                            Encoding::RleDictionary
+                        } else {
+                            Encoding::Plain
+                        };
+                    array_to_pages(array.as_ref(), type_, options, encoding).map(
+                        move |pages| {
+                            let encoded_pages = DynIter::new(pages.map(|x| Ok(x?)));
+                            let compressed_pages = Compressor::new(
+                                encoded_pages,
+                                options.compression,
+                                vec![],
+                            )
+                            .map_err(ArrowError::from);
+                            DynStreamingIterator::new(compressed_pages)
+                        },
+                    )
+                });
+        let iterator = DynIter::new(iterator);
+        Ok(iterator)
+    });
+
+    let mut writer = output_file.as_file();
+
+    write_file(
+        &mut writer,
+        row_groups,
         schema,
-        Some(props),
+        parquet_schema,
+        options,
+        None,
     )
     .unwrap();
-
-    for batch in batches {
-        writer.write(&batch).expect("writing batch");
-    }
-    writer.close().unwrap();
 
     output_file
 }
@@ -697,13 +730,17 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
         .map(|(i, _)| format!("Row {} + {}", i, offset))
         .collect::<Vec<_>>();
 
-    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
-    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
-    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
-    let arr_seconds = TimestampSecondArray::from_opt_vec(ts_seconds, None);
+    let arr_nanos = PrimitiveArray::<i64>::from(ts_nanos)
+        .to(DataType::Timestamp(TimeUnit::Nanosecond, None));
+    let arr_micros = PrimitiveArray::<i64>::from(ts_micros)
+        .to(DataType::Timestamp(TimeUnit::Microsecond, None));
+    let arr_millis = PrimitiveArray::<i64>::from(ts_millis)
+        .to(DataType::Timestamp(TimeUnit::Millisecond, None));
+    let arr_seconds = PrimitiveArray::<i64>::from(ts_seconds)
+        .to(DataType::Timestamp(TimeUnit::Second, None));
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let arr_names = StringArray::from(names);
+    let arr_names = Utf8Array::<i32>::from_slice(names);
 
     let schema = Schema::new(vec![
         Field::new("nanos", arr_nanos.data_type().clone(), true),
@@ -734,7 +771,7 @@ fn make_timestamp_batch(offset: Duration) -> RecordBatch {
 fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
     let v: Vec<i32> = (start..end).collect();
-    let array = Arc::new(Int32Array::from(v)) as ArrayRef;
+    let array = Arc::new(Int32Array::from_values(v)) as ArrayRef;
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
@@ -744,7 +781,7 @@ fn make_int32_batch(start: i32, end: i32) -> RecordBatch {
 /// "f" -> Float64Array
 fn make_f64_batch(v: Vec<f64>) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![Field::new("f", DataType::Float64, true)]));
-    let array = Arc::new(Float64Array::from(v)) as ArrayRef;
+    let array = Arc::new(Float64Array::from_values(v)) as ArrayRef;
     RecordBatch::try_new(schema, vec![array.clone()]).unwrap()
 }
 
@@ -799,11 +836,11 @@ fn make_date_batch(offset: Duration) -> RecordBatch {
         })
         .collect::<Vec<_>>();
 
-    let arr_date32 = Date32Array::from(date_seconds);
-    let arr_date64 = Date64Array::from(date_millis);
+    let arr_date32 = Int32Array::from(date_seconds).to(DataType::Date32);
+    let arr_date64 = Int64Array::from(date_millis).to(DataType::Date64);
 
     let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let arr_names = StringArray::from(names);
+    let arr_names = Utf8Array::<i32>::from_slice(names);
 
     let schema = Schema::new(vec![
         Field::new("date32", arr_date32.data_type().clone(), true),

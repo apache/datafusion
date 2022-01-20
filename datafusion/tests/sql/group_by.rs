@@ -408,15 +408,18 @@ async fn csv_group_by_date() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Date32Array::from(vec![
-                Some(100),
-                Some(100),
-                Some(100),
-                Some(101),
-                Some(101),
-                Some(101),
-            ])),
-            Arc::new(Int32Array::from(vec![
+            Arc::new(
+                Int32Array::from([
+                    Some(100),
+                    Some(100),
+                    Some(100),
+                    Some(101),
+                    Some(101),
+                    Some(101),
+                ])
+                .to(DataType::Date32),
+            ),
+            Arc::new(Int32Array::from([
                 Some(1),
                 Some(2),
                 Some(3),

@@ -19,13 +19,15 @@
 
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
-
-use arrow::datatypes::{DataType, Field};
 
 use ahash::RandomState;
 use std::collections::HashSet;
+
+use arrow::{
+    array::*,
+    datatypes::{DataType, Field},
+};
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
@@ -74,7 +76,7 @@ impl DistinctCount {
 fn state_type(data_type: DataType) -> DataType {
     match data_type {
         // when aggregating dictionary values, use the underlying value type
-        DataType::Dictionary(_key_type, value_type) => *value_type,
+        DataType::Dictionary(_key_type, value_type, _) => *value_type,
         t => t,
     }
 }
@@ -96,11 +98,7 @@ impl AggregateExpr for DistinctCount {
             .map(|state_data_type| {
                 Field::new(
                     &format_state_name(&self.name, "count distinct"),
-                    DataType::List(Box::new(Field::new(
-                        "item",
-                        state_data_type.clone(),
-                        true,
-                    ))),
+                    ListArray::<i32>::default_datatype(state_data_type.clone()),
                     false,
                 )
             })
@@ -211,40 +209,7 @@ impl Accumulator for DistinctCountAccumulator {
 mod tests {
     use super::*;
 
-    use arrow::array::{
-        ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
-        UInt8Array,
-    };
-    use arrow::array::{Int32Builder, ListBuilder, UInt64Builder};
     use arrow::datatypes::DataType;
-
-    macro_rules! build_list {
-        ($LISTS:expr, $BUILDER_TYPE:ident) => {{
-            let mut builder = ListBuilder::new($BUILDER_TYPE::new(0));
-            for list in $LISTS.iter() {
-                match list {
-                    Some(values) => {
-                        for value in values.iter() {
-                            match value {
-                                Some(v) => builder.values().append_value((*v).into())?,
-                                None => builder.values().append_null()?,
-                            }
-                        }
-
-                        builder.append(true)?;
-                    }
-                    None => {
-                        builder.append(false)?;
-                    }
-                }
-            }
-
-            let array = Arc::new(builder.finish()) as ArrayRef;
-
-            Ok(array) as Result<ArrayRef>
-        }};
-    }
 
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
@@ -328,7 +293,7 @@ mod tests {
         let agg = DistinctCount::new(
             arrays
                 .iter()
-                .map(|a| a.as_any().downcast_ref::<ListArray>().unwrap())
+                .map(|a| a.as_any().downcast_ref::<ListArray<i32>>().unwrap())
                 .map(|a| a.values().data_type().clone())
                 .collect::<Vec<_>>(),
             vec![],
@@ -511,13 +476,14 @@ mod tests {
             Ok((state_vec, count))
         };
 
-        let zero_count_values = BooleanArray::from(Vec::<bool>::new());
+        let zero_count_values = BooleanArray::from_slice(&[]);
 
-        let one_count_values = BooleanArray::from(vec![false, false]);
+        let one_count_values = BooleanArray::from_slice(&[false, false]);
         let one_count_values_with_null =
             BooleanArray::from(vec![Some(true), Some(true), None, None]);
 
-        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
+        let two_count_values =
+            BooleanArray::from_slice(&[true, false, true, false, true]);
         let two_count_values_with_null = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -564,8 +530,7 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_empty() -> Result<()> {
-        let arrays =
-            vec![Arc::new(Int32Array::from(vec![] as Vec<Option<i32>>)) as ArrayRef];
+        let arrays = vec![Arc::new(Int32Array::new_empty(DataType::Int32)) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
 
@@ -578,8 +543,8 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_multiple_columns() -> Result<()> {
-        let array_int8: ArrayRef = Arc::new(Int8Array::from(vec![1, 1, 2]));
-        let array_int16: ArrayRef = Arc::new(Int16Array::from(vec![3, 3, 4]));
+        let array_int8: ArrayRef = Arc::new(Int8Array::from_slice(&[1, 1, 2]));
+        let array_int16: ArrayRef = Arc::new(Int16Array::from_slice(&[3, 3, 4]));
         let arrays = vec![array_int8, array_int16];
 
         let (states, result) = run_update_batch(&arrays)?;
@@ -668,23 +633,24 @@ mod tests {
 
     #[test]
     fn count_distinct_merge_batch() -> Result<()> {
-        let state_in1 = build_list!(
-            vec![
-                Some(vec![Some(-1_i32), Some(-1_i32), Some(-2_i32), Some(-2_i32)]),
-                Some(vec![Some(-2_i32), Some(-3_i32)]),
-            ],
-            Int32Builder
-        )?;
+        let state_in1 = vec![
+            Some(vec![Some(-1_i32), Some(-1_i32), Some(-2_i32), Some(-2_i32)]),
+            Some(vec![Some(-2_i32), Some(-3_i32)]),
+        ];
+        let mut array = MutableListArray::<i32, MutablePrimitiveArray<i32>>::new();
+        array.try_extend(state_in1)?;
+        let state_in1: ListArray<i32> = array.into();
 
-        let state_in2 = build_list!(
-            vec![
-                Some(vec![Some(5_u64), Some(6_u64), Some(5_u64), Some(7_u64)]),
-                Some(vec![Some(5_u64), Some(7_u64)]),
-            ],
-            UInt64Builder
-        )?;
+        let state_in2 = vec![
+            Some(vec![Some(5_u64), Some(6_u64), Some(5_u64), Some(7_u64)]),
+            Some(vec![Some(5_u64), Some(7_u64)]),
+        ];
+        let mut array = MutableListArray::<i32, MutablePrimitiveArray<u64>>::new();
+        array.try_extend(state_in2)?;
+        let state_in2: ListArray<i32> = array.into();
 
-        let (states, result) = run_merge_batch(&[state_in1, state_in2])?;
+        let (states, result) =
+            run_merge_batch(&[Arc::new(state_in1), Arc::new(state_in2)])?;
 
         let state_out_vec1 = state_to_vec!(&states[0], Int32, i32).unwrap();
         let state_out_vec2 = state_to_vec!(&states[1], UInt64, u64).unwrap();

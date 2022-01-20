@@ -20,15 +20,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::error::Result;
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
+
+use crate::error::Result;
+use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
+use crate::scalar::ScalarValue;
 
 use super::format_state_name;
 
@@ -108,7 +109,7 @@ impl CountAccumulator {
 impl Accumulator for CountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = &values[0];
-        self.count += (array.len() - array.data().null_count()) as u64;
+        self.count += (array.len() - array.null_count()) as u64;
         Ok(())
     }
 
@@ -132,7 +133,7 @@ impl Accumulator for CountAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let delta = &compute::sum(counts);
+        let delta = &compute::aggregate::sum_primitive(counts);
         if let Some(d) = delta {
             self.count += *d;
         }
@@ -159,7 +160,7 @@ mod tests {
 
     #[test]
     fn count_elements() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -204,8 +205,7 @@ mod tests {
 
     #[test]
     fn count_empty() -> Result<()> {
-        let a: Vec<bool> = vec![];
-        let a: ArrayRef = Arc::new(BooleanArray::from(a));
+        let a: ArrayRef = Arc::new(BooleanArray::new_empty(DataType::Boolean));
         generic_test_op!(
             a,
             DataType::Boolean,
@@ -217,8 +217,9 @@ mod tests {
 
     #[test]
     fn count_utf8() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(StringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
+        let a: ArrayRef = Arc::new(Utf8Array::<i32>::from_slice(&[
+            "a", "bb", "ccc", "dddd", "ad",
+        ]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -230,8 +231,9 @@ mod tests {
 
     #[test]
     fn count_large_utf8() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
+        let a: ArrayRef = Arc::new(Utf8Array::<i64>::from_slice(&[
+            "a", "bb", "ccc", "dddd", "ad",
+        ]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,

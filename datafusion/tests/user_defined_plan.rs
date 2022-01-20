@@ -61,13 +61,13 @@
 use futures::{Stream, StreamExt};
 
 use arrow::{
-    array::{Int64Array, StringArray},
+    array::{Int64Array, Utf8Array},
     datatypes::SchemaRef,
     error::ArrowError,
     record_batch::RecordBatch,
-    util::pretty::pretty_format_batches,
 };
 use datafusion::{
+    arrow_print::write,
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,
     execution::context::QueryPlanner,
@@ -94,7 +94,7 @@ use datafusion::logical_plan::{DFSchemaRef, Limit};
 async fn exec_sql(ctx: &mut ExecutionContext, sql: &str) -> Result<String> {
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
-    pretty_format_batches(&batches).map_err(DataFusionError::ArrowError)
+    Ok(write(&batches))
 }
 
 /// Create a test table.
@@ -538,7 +538,7 @@ fn accumulate_batch(
     let customer_id = input_batch
         .column(0)
         .as_any()
-        .downcast_ref::<StringArray>()
+        .downcast_ref::<Utf8Array<i32>>()
         .expect("Column 0 is not customer_id");
 
     let revenue = input_batch
@@ -589,8 +589,8 @@ impl Stream for TopKReader {
                 Poll::Ready(Some(RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(StringArray::from(customer)),
-                        Arc::new(Int64Array::from(revenue)),
+                        Arc::new(Utf8Array::<i32>::from_slice(customer)),
+                        Arc::new(Int64Array::from_slice(&revenue)),
                     ],
                 )))
             }

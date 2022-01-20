@@ -22,8 +22,27 @@ use std::sync::Arc;
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
+use arrow::array::*;
+use arrow::compute::sort::{SortColumn as ArrowSortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
+
+/// One column to be used in lexicographical sort
+#[derive(Clone, Debug)]
+pub struct SortColumn {
+    /// The array to be sorted
+    pub values: ArrayRef,
+    /// The options to sort the array
+    pub options: Option<SortOptions>,
+}
+
+impl<'a> From<&'a SortColumn> for ArrowSortColumn<'a> {
+    fn from(c: &'a SortColumn) -> Self {
+        Self {
+            values: c.values.as_ref(),
+            options: c.options,
+        }
+    }
+}
 
 mod approx_distinct;
 mod array_agg;
@@ -67,9 +86,7 @@ pub(crate) use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{
-    cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
-};
+pub use cast::{cast, cast_column, cast_with_options, CastExpr};
 pub use column::{col, Column};
 pub use count::Count;
 pub use cume_dist::cume_dist;

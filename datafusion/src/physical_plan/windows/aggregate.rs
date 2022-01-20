@@ -23,7 +23,7 @@ use crate::physical_plan::windows::find_ranges_in_range;
 use crate::physical_plan::{
     expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
 };
-use arrow::compute::concat;
+use arrow::compute::concatenate;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
@@ -94,7 +94,9 @@ impl AggregateWindowExpr {
             .flatten()
             .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concatenate::concatenate(&results)
+            .map(ArrayRef::from)
+            .map_err(DataFusionError::ArrowError)
     }
 
     fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
@@ -171,7 +173,7 @@ impl AggregateWindowAccumulator {
         let len = value_range.end - value_range.start;
         let values = values
             .iter()
-            .map(|v| v.slice(value_range.start, len))
+            .map(|v| ArrayRef::from(v.slice(value_range.start, len)))
             .collect::<Vec<_>>();
         self.accumulator.update_batch(&values)?;
         let value = self.accumulator.evaluate()?;

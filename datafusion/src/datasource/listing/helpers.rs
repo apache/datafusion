@@ -20,10 +20,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{
-        Array, ArrayBuilder, ArrayRef, Date64Array, Date64Builder, StringArray,
-        StringBuilder, UInt64Array, UInt64Builder,
-    },
+    array::*,
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
@@ -236,7 +233,7 @@ pub async fn pruned_partition_list(
             .try_collect()
             .await?;
 
-        let mem_table = MemTable::try_new(batches[0].schema(), vec![batches])?;
+        let mem_table = MemTable::try_new(batches[0].schema().clone(), vec![batches])?;
 
         // Filter the partitions using a local datafusion context
         // TODO having the external context would allow us to resolve `Volatility::Stable`
@@ -266,25 +263,23 @@ fn paths_to_batch(
     table_path: &str,
     metas: &[FileMeta],
 ) -> Result<RecordBatch> {
-    let mut key_builder = StringBuilder::new(metas.len());
-    let mut length_builder = UInt64Builder::new(metas.len());
-    let mut modified_builder = Date64Builder::new(metas.len());
+    let mut key_builder = MutableUtf8Array::<i32>::with_capacity(metas.len());
+    let mut length_builder = MutablePrimitiveArray::<u64>::with_capacity(metas.len());
+    let mut modified_builder = MutablePrimitiveArray::<i64>::with_capacity(metas.len());
     let mut partition_builders = table_partition_cols
         .iter()
-        .map(|_| StringBuilder::new(metas.len()))
+        .map(|_| MutableUtf8Array::<i32>::with_capacity(metas.len()))
         .collect::<Vec<_>>();
     for file_meta in metas {
         if let Some(partition_values) =
             parse_partitions_for_path(table_path, file_meta.path(), table_partition_cols)
         {
-            key_builder.append_value(file_meta.path())?;
-            length_builder.append_value(file_meta.size())?;
-            match file_meta.last_modified {
-                Some(lm) => modified_builder.append_value(lm.timestamp_millis())?,
-                None => modified_builder.append_null()?,
-            }
+            key_builder.push(Some(file_meta.path()));
+            length_builder.push(Some(file_meta.size()));
+            modified_builder
+                .push(file_meta.last_modified.map(|lm| lm.timestamp_millis()));
             for (i, part_val) in partition_values.iter().enumerate() {
-                partition_builders[i].append_value(part_val)?;
+                partition_builders[i].push(Some(part_val));
             }
         } else {
             debug!("No partitioning for path {}", file_meta.path());
@@ -292,13 +287,13 @@ fn paths_to_batch(
     }
 
     // finish all builders
-    let mut col_arrays: Vec<ArrayRef> = vec![
-        ArrayBuilder::finish(&mut key_builder),
-        ArrayBuilder::finish(&mut length_builder),
-        ArrayBuilder::finish(&mut modified_builder),
+    let mut col_arrays: Vec<Arc<dyn Array>> = vec![
+        key_builder.into_arc(),
+        length_builder.into_arc(),
+        modified_builder.to(DataType::Date64).into_arc(),
     ];
-    for mut partition_builder in partition_builders {
-        col_arrays.push(ArrayBuilder::finish(&mut partition_builder));
+    for partition_builder in partition_builders {
+        col_arrays.push(partition_builder.into_arc());
     }
 
     // put the schema together
@@ -323,7 +318,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
             let key_array = batch
                 .column(0)
                 .as_any()
-                .downcast_ref::<StringArray>()
+                .downcast_ref::<Utf8Array<i32>>()
                 .unwrap();
             let length_array = batch
                 .column(1)
@@ -333,7 +328,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
             let modified_array = batch
                 .column(2)
                 .as_any()
-                .downcast_ref::<Date64Array>()
+                .downcast_ref::<Int64Array>()
                 .unwrap();
 
             (0..batch.num_rows()).map(move |row| PartitionedFile {

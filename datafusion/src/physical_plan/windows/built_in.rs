@@ -22,7 +22,7 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr, window_functions::BuiltInWindowFunctionExpr,
     PhysicalExpr, WindowExpr,
 };
-use arrow::compute::concat;
+use arrow::compute::concatenate;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
@@ -90,6 +90,8 @@ impl WindowExpr for BuiltInWindowExpr {
             evaluator.evaluate(partition_points)?
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concatenate::concatenate(&results)
+            .map(ArrayRef::from)
+            .map_err(DataFusionError::ArrowError)
     }
 }

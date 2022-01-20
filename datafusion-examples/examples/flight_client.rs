@@ -15,23 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-
-use arrow_flight::flight_descriptor;
-use arrow_flight::flight_service_client::FlightServiceClient;
-use arrow_flight::utils::flight_data_to_arrow_batch;
-use arrow_flight::{FlightDescriptor, Ticket};
-use datafusion::arrow::util::pretty;
+use arrow::io::flight::deserialize_schemas;
+use arrow_format::flight::data::{flight_descriptor, FlightDescriptor, Ticket};
+use arrow_format::flight::service::flight_service_client::FlightServiceClient;
+use datafusion::arrow_print;
+use std::collections::HashMap;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
 /// Parquet files and executing SQL queries against them on a remote server.
 /// This example is run along-side the example `flight_server`.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     // Create Flight client
     let mut client = FlightServiceClient::connect("http://localhost:50051").await?;
@@ -44,7 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let schema_result = client.get_schema(request).await?.into_inner();
-    let schema = Schema::try_from(&schema_result)?;
+    let (schema, _) = deserialize_schemas(schema_result.schema.as_slice()).unwrap();
+    let schema = Arc::new(schema);
     println!("Schema: {:?}", schema);
 
     // Call do_get to execute a SQL query and receive results
@@ -57,23 +55,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the schema should be the first message returned, else client should error
     let flight_data = stream.message().await?.unwrap();
     // convert FlightData to a stream
-    let schema = Arc::new(Schema::try_from(&flight_data)?);
+    let (schema, ipc_schema) =
+        deserialize_schemas(flight_data.data_body.as_slice()).unwrap();
+    let schema = Arc::new(schema);
     println!("Schema: {:?}", schema);
 
     // all the remaining stream messages should be dictionary and record batches
     let mut results = vec![];
-    let dictionaries_by_field = vec![None; schema.fields().len()];
+    let dictionaries_by_field = HashMap::new();
     while let Some(flight_data) = stream.message().await? {
-        let record_batch = flight_data_to_arrow_batch(
+        let record_batch = arrow::io::flight::deserialize_batch(
             &flight_data,
             schema.clone(),
+            &ipc_schema,
             &dictionaries_by_field,
         )?;
         results.push(record_batch);
     }
 
     // print the results
-    pretty::print_batches(&results)?;
+    println!("{}", arrow_print::write(&results));
 
     Ok(())
 }

@@ -186,13 +186,12 @@ async fn csv_between_expr_negated() -> Result<()> {
 
 #[tokio::test]
 async fn like_on_strings() -> Result<()> {
-    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
-        .into_iter()
-        .collect::<StringArray>();
+    let input =
+        Utf8Array::<i32>::from(vec![Some("foo"), Some("bar"), None, Some("fazzz")]);
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -213,13 +212,14 @@ async fn like_on_strings() -> Result<()> {
 
 #[tokio::test]
 async fn like_on_string_dictionaries() -> Result<()> {
-    let input = vec![Some("foo"), Some("bar"), None, Some("fazzz")]
-        .into_iter()
-        .collect::<DictionaryArray<Int32Type>>();
+    let original_data = vec![Some("foo"), Some("bar"), None, Some("fazzz")];
+    let mut input = MutableDictionaryArray::<i32, MutableUtf8Array<i32>>::new();
+    input.try_extend(original_data)?;
+    let input: DictionaryArray<i32> = input.into();
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
@@ -240,13 +240,16 @@ async fn like_on_string_dictionaries() -> Result<()> {
 
 #[tokio::test]
 async fn test_regexp_is_match() -> Result<()> {
-    let input = vec![Some("foo"), Some("Barrr"), Some("Bazzz"), Some("ZZZZZ")]
-        .into_iter()
-        .collect::<StringArray>();
+    let input = StringArray::from(vec![
+        Some("foo"),
+        Some("Barrr"),
+        Some("Bazzz"),
+        Some("ZZZZZ"),
+    ]);
 
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 

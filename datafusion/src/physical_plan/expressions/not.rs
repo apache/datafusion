@@ -82,7 +82,7 @@ impl PhysicalExpr for NotExpr {
                             )
                         })?;
                 Ok(ColumnarValue::Array(Arc::new(
-                    arrow::compute::kernels::boolean::not(array)?,
+                    arrow::compute::boolean::not(array),
                 )))
             }
             ColumnarValue::Scalar(scalar) => {

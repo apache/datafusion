@@ -18,16 +18,6 @@
 use super::*;
 
 #[tokio::test]
-async fn query_length() -> Result<()> {
-    generic_query_length::<StringArray>(DataType::Utf8).await
-}
-
-#[tokio::test]
-async fn query_large_length() -> Result<()> {
-    generic_query_length::<LargeStringArray>(DataType::LargeUtf8).await
-}
-
-#[tokio::test]
 async fn test_unicode_expressions() -> Result<()> {
     test_expression!("char_length('')", "0");
     test_expression!("char_length('chars')", "5");

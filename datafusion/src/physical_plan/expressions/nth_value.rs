@@ -23,7 +23,7 @@ use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::array::{new_null_array, ArrayRef};
-use arrow::compute::kernels::window::shift;
+use arrow::compute::window::shift;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use std::any::Any;
@@ -174,12 +174,15 @@ impl PartitionEvaluator for NthValueEvaluator {
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
                     .flatten();
-                ScalarValue::iter_to_array(values)
+                ScalarValue::iter_to_array(values).map(ArrayRef::from)
             }
             NthValueKind::Nth(n) => {
                 let index = (n as usize) - 1;
                 if index >= num_rows {
-                    Ok(new_null_array(arr.data_type(), num_rows))
+                    Ok(ArrayRef::from(new_null_array(
+                        arr.data_type().clone(),
+                        num_rows,
+                    )))
                 } else {
                     let value =
                         ScalarValue::try_from_array(arr, partition.start + index)?;
@@ -187,7 +190,9 @@ impl PartitionEvaluator for NthValueEvaluator {
                     // because the default window frame is between unbounded preceding and current
                     // row, hence the shift because for values with indices < index they should be
                     // null. This changes when window frames other than default is implemented
-                    shift(arr.as_ref(), index as i64).map_err(DataFusionError::ArrowError)
+                    shift(arr.as_ref(), index as i64)
+                        .map_err(DataFusionError::ArrowError)
+                        .map(ArrayRef::from)
                 }
             }
         }
@@ -203,7 +208,8 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     fn test_i32_result(expr: NthValue, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let arr: ArrayRef =
+            Arc::new(Int32Array::from_slice(&[1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
@@ -223,7 +229,7 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
         );
-        test_i32_result(first_value, Int32Array::from_iter_values(vec![1; 8]))?;
+        test_i32_result(first_value, Int32Array::from_values(vec![1; 8]))?;
         Ok(())
     }
 
@@ -234,7 +240,7 @@ mod tests {
             Arc::new(Column::new("arr", 0)),
             DataType::Int32,
         );
-        test_i32_result(last_value, Int32Array::from_iter_values(vec![8; 8]))?;
+        test_i32_result(last_value, Int32Array::from_values(vec![8; 8]))?;
         Ok(())
     }
 
@@ -246,7 +252,7 @@ mod tests {
             DataType::Int32,
             1,
         )?;
-        test_i32_result(nth_value, Int32Array::from_iter_values(vec![1; 8]))?;
+        test_i32_result(nth_value, Int32Array::from_values(vec![1; 8]))?;
         Ok(())
     }
 
@@ -260,7 +266,7 @@ mod tests {
         )?;
         test_i32_result(
             nth_value,
-            Int32Array::from(vec![
+            Int32Array::from(&[
                 None,
                 Some(-2),
                 Some(-2),

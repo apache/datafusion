@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{as_primitive_array, Int32Builder, UInt64Array};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::*;
+use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
@@ -32,10 +32,8 @@ use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
-    let mut builder = Int32Builder::new(num_rows);
-    for _ in 0..num_rows {
-        builder.append_value(value)?;
-    }
+    let array =
+        Int32Array::from_trusted_len_values_iter(std::iter::repeat(value).take(num_rows));
 
     Ok(RecordBatch::try_new(
         Arc::new(Schema::new(vec![Field::new(
@@ -43,7 +41,7 @@ fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {
             DataType::Int32,
             false,
         )])),
-        vec![Arc::new(builder.finish())],
+        vec![Arc::new(array)],
     )?)
 }
 
@@ -117,7 +115,7 @@ impl TableProvider for CustomProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        self.zero_batch.schema()
+        self.zero_batch.schema().clone()
     }
 
     async fn scan(
@@ -135,7 +133,7 @@ impl TableProvider for CustomProvider {
                 };
 
                 Ok(Arc::new(CustomPlan {
-                    schema: self.zero_batch.schema(),
+                    schema: self.zero_batch.schema().clone(),
                     batches: match int_value {
                         0 => vec![Arc::new(self.zero_batch.clone())],
                         1 => vec![Arc::new(self.one_batch.clone())],
@@ -144,7 +142,7 @@ impl TableProvider for CustomProvider {
                 }))
             }
             _ => Ok(Arc::new(CustomPlan {
-                schema: self.zero_batch.schema(),
+                schema: self.zero_batch.schema().clone(),
                 batches: vec![],
             })),
         }
@@ -168,7 +166,7 @@ async fn assert_provider_row_count(value: i64, expected_count: u64) -> Result<()
         .aggregate(vec![], vec![count(col("flag"))])?;
 
     let results = df.collect().await?;
-    let result_col: &UInt64Array = as_primitive_array(results[0].column(0));
+    let result_col: &UInt64Array = results[0].column(0).as_any().downcast_ref().unwrap();
     assert_eq!(result_col.value(0), expected_count);
 
     ctx.register_table("data", Arc::new(provider))?;
@@ -178,7 +176,8 @@ async fn assert_provider_row_count(value: i64, expected_count: u64) -> Result<()
         .collect()
         .await?;
 
-    let sql_result_col: &UInt64Array = as_primitive_array(sql_results[0].column(0));
+    let sql_result_col: &UInt64Array =
+        sql_results[0].column(0).as_any().downcast_ref().unwrap();
     assert_eq!(sql_result_col.value(0), expected_count);
 
     Ok(())

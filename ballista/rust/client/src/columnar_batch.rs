@@ -21,6 +21,7 @@ use ballista_core::error::{ballista_error, Result};
 
 use datafusion::arrow::{
     array::ArrayRef,
+    compute::aggregate::estimated_bytes_size,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -50,7 +51,7 @@ impl ColumnarBatch {
             .collect();
 
         Self {
-            schema: batch.schema(),
+            schema: batch.schema().clone(),
             columns,
         }
     }
@@ -156,7 +157,7 @@ impl ColumnarValue {
 
     pub fn memory_size(&self) -> usize {
         match self {
-            ColumnarValue::Columnar(array) => array.get_array_memory_size(),
+            ColumnarValue::Columnar(array) => estimated_bytes_size(array.as_ref()),
             _ => 0,
         }
     }

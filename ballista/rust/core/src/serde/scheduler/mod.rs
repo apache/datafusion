@@ -17,9 +17,7 @@
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
-use datafusion::arrow::array::{
-    ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
-};
+use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
@@ -147,52 +145,29 @@ impl PartitionStats {
         ]
     }
 
-    pub fn to_arrow_arrayref(self) -> Result<Arc<StructArray>, BallistaError> {
-        let mut field_builders = Vec::new();
+    pub fn to_arrow_arrayref(&self) -> Result<Arc<StructArray>, BallistaError> {
+        let num_rows = Arc::new(UInt64Array::from(&[self.num_rows])) as ArrayRef;
+        let num_batches = Arc::new(UInt64Array::from(&[self.num_batches])) as ArrayRef;
+        let num_bytes = Arc::new(UInt64Array::from(&[self.num_bytes])) as ArrayRef;
+        let values = vec![num_rows, num_batches, num_bytes];
 
-        let mut num_rows_builder = UInt64Builder::new(1);
-        match self.num_rows {
-            Some(n) => num_rows_builder.append_value(n)?,
-            None => num_rows_builder.append_null()?,
-        }
-        field_builders.push(Box::new(num_rows_builder) as Box<dyn ArrayBuilder>);
-
-        let mut num_batches_builder = UInt64Builder::new(1);
-        match self.num_batches {
-            Some(n) => num_batches_builder.append_value(n)?,
-            None => num_batches_builder.append_null()?,
-        }
-        field_builders.push(Box::new(num_batches_builder) as Box<dyn ArrayBuilder>);
-
-        let mut num_bytes_builder = UInt64Builder::new(1);
-        match self.num_bytes {
-            Some(n) => num_bytes_builder.append_value(n)?,
-            None => num_bytes_builder.append_null()?,
-        }
-        field_builders.push(Box::new(num_bytes_builder) as Box<dyn ArrayBuilder>);
-
-        let mut struct_builder =
-            StructBuilder::new(self.arrow_struct_fields(), field_builders);
-        struct_builder.append(true)?;
-        Ok(Arc::new(struct_builder.finish()))
+        Ok(Arc::new(StructArray::from_data(
+            DataType::Struct(self.arrow_struct_fields()),
+            values,
+            None,
+        )))
     }
 
     pub fn from_arrow_struct_array(struct_array: &StructArray) -> PartitionStats {
-        let num_rows = struct_array
-            .column_by_name("num_rows")
-            .expect("from_arrow_struct_array expected a field num_rows")
+        let num_rows = struct_array.values()[0]
             .as_any()
             .downcast_ref::<UInt64Array>()
             .expect("from_arrow_struct_array expected num_rows to be a UInt64Array");
-        let num_batches = struct_array
-            .column_by_name("num_batches")
-            .expect("from_arrow_struct_array expected a field num_batches")
+        let num_batches = struct_array.values()[1]
             .as_any()
             .downcast_ref::<UInt64Array>()
             .expect("from_arrow_struct_array expected num_batches to be a UInt64Array");
-        let num_bytes = struct_array
-            .column_by_name("num_bytes")
-            .expect("from_arrow_struct_array expected a field num_bytes")
+        let num_bytes = struct_array.values()[2]
             .as_any()
             .downcast_ref::<UInt64Array>()
             .expect("from_arrow_struct_array expected num_bytes to be a UInt64Array");

@@ -39,25 +39,27 @@ path = "src/lib.rs"
 
 [features]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
+# FIXME: https://github.com/jorgecarleitao/arrow2/issues/580
 simd = ["arrow/simd"]
+#simd = []
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
-pyarrow = ["pyo3", "arrow/pyarrow"]
+# FIXME: add pyarrow support to arrow2 pyarrow = ["pyo3", "arrow/pyarrow"]
+pyarrow = ["pyo3"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
-avro = ["avro-rs", "num-traits"]
+avro = ["arrow/io_avro", "arrow/io_avro_async", "arrow/io_avro_compression", "num-traits", "avro-schema"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.11", features = ["raw"] }
-arrow = { version = "6.4.0", features = ["prettyprint"] }
-parquet = { version = "6.4.0", features = ["arrow"] }
+parquet = { package = "parquet2", version = "0.8", default_features = false, features = ["stream"] }
 sqlparser = "0.13"
 paste = "^1.0"
 num_cpus = "1.13.0"
-chrono = { version = "0.4", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-trait = "0.1.41"
 futures = "0.3"
 pin-project-lite= "^0.2.7"
@@ -74,14 +76,22 @@ regex = { version = "^1.4.3", optional = true }
 lazy_static = { version = "^1.4.0" }
 smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
-avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
 pyo3 = { version = "0.14", optional = true }
+avro-schema = { version = "0.2", optional = true }
+# used to print arrow arrays in a nice columnar format
+comfy-table = { version = "5.0", default-features = false }
+
+[dependencies.arrow]
+package = "arrow2"
+version="0.8"
+features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "ahash", "compute"]
 
 [dev-dependencies]
 criterion = "0.3"
 tempfile = "3"
 doc-comment = "0.3"
+parquet-format-async-temp = "0"
 
 [[bench]]
 name = "aggregate_query_sql"

@@ -536,9 +536,10 @@ mod tests {
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema: Schema = schema.into();
-        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }";
-        assert_eq!(expected, arrow_schema.to_string());
+        let expected =
+            "[Field { name: \"c0\", data_type: Boolean, nullable: true, metadata: {} }, \
+        Field { name: \"c1\", data_type: Boolean, nullable: true, metadata: {} }]";
+        assert_eq!(expected, format!("{:?}", arrow_schema.fields));
         Ok(())
     }
 

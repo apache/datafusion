@@ -57,7 +57,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
+//! let pretty_results = datafusion::arrow_print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+--------------------------+",
@@ -92,7 +92,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
+//! let pretty_results = datafusion::arrow_print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
@@ -229,7 +229,10 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
-pub(crate) mod field_util;
+pub mod arrow_print;
+mod arrow_temporal_util;
+
+pub mod field_util;
 
 #[cfg(feature = "pyarrow")]
 mod pyarrow;

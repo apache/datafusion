@@ -25,8 +25,8 @@ use std::any::type_name;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use arrow::array::{ArrayRef, GenericStringArray, StringOffsetSizeTrait};
-use arrow::compute;
+use arrow::array::*;
+use arrow::error::ArrowError;
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -34,30 +34,30 @@ use regex::Regex;
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{
         $ARG.as_any()
-            .downcast_ref::<GenericStringArray<T>>()
+            .downcast_ref::<Utf8Array<T>>()
             .ok_or_else(|| {
                 DataFusionError::Internal(format!(
                     "could not cast {} to {}",
                     $NAME,
-                    type_name::<GenericStringArray<T>>()
+                    type_name::<Utf8Array<T>>()
                 ))
             })?
     }};
 }
 
 /// extract a specific group from a string column, using a regular expression
-pub fn regexp_match<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn regexp_match<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         2 => {
             let values = downcast_string_arg!(args[0], "string", T);
             let regex = downcast_string_arg!(args[1], "pattern", T);
-            compute::regexp_match(values, regex, None).map_err(DataFusionError::ArrowError)
+            Ok(regexp_matches(values, regex, None).map(|x| Arc::new(x) as Arc<dyn Array>)?)
         }
         3 => {
             let values = downcast_string_arg!(args[0], "string", T);
             let regex = downcast_string_arg!(args[1], "pattern", T);
             let flags = Some(downcast_string_arg!(args[2], "flags", T));
-            compute::regexp_match(values, regex,  flags).map_err(DataFusionError::ArrowError)
+            Ok(regexp_matches(values, regex, flags).map(|x| Arc::new(x) as Arc<dyn Array>)?)
         }
         other => Err(DataFusionError::Internal(format!(
             "regexp_match was called with {} arguments. It requires at least 2 and at most 3.",
@@ -80,7 +80,7 @@ fn regex_replace_posix_groups(replacement: &str) -> String {
 /// Replaces substring(s) matching a POSIX regular expression.
 ///
 /// example: `regexp_replace('Thomas', '.[mN]a.', 'M') = 'ThM'`
-pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn regexp_replace<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     // creating Regex is expensive so create hashmap for memoization
     let mut patterns: HashMap<String, Regex> = HashMap::new();
 
@@ -116,7 +116,7 @@ pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arr
                 }
             _ => Ok(None)
             })
-            .collect::<Result<GenericStringArray<T>>>()?;
+            .collect::<Result<Utf8Array<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -168,7 +168,7 @@ pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arr
                 }
             _ => Ok(None)
             })
-            .collect::<Result<GenericStringArray<T>>>()?;
+            .collect::<Result<Utf8Array<T>>>()?;
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -179,57 +179,184 @@ pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arr
     }
 }
 
+/// Extract all groups matched by a regular expression for a given String array.
+pub fn regexp_matches<O: Offset>(
+    array: &Utf8Array<O>,
+    regex_array: &Utf8Array<O>,
+    flags_array: Option<&Utf8Array<O>>,
+) -> Result<ListArray<O>> {
+    let mut patterns: HashMap<String, Regex> = HashMap::new();
+
+    let complete_pattern = match flags_array {
+        Some(flags) => Box::new(regex_array.iter().zip(flags.iter()).map(
+            |(pattern, flags)| {
+                pattern.map(|pattern| match flags {
+                    Some(value) => format!("(?{}){}", value, pattern),
+                    None => pattern.to_string(),
+                })
+            },
+        )) as Box<dyn Iterator<Item = Option<String>>>,
+        None => Box::new(
+            regex_array
+                .iter()
+                .map(|pattern| pattern.map(|pattern| pattern.to_string())),
+        ),
+    };
+    let iter = array.iter().zip(complete_pattern).map(|(value, pattern)| {
+        match (value, pattern) {
+            // Required for Postgres compatibility:
+            // SELECT regexp_match('foobarbequebaz', ''); = {""}
+            (Some(_), Some(pattern)) if pattern == *"" => {
+                Result::Ok(Some(vec![Some("")].into_iter()))
+            }
+            (Some(value), Some(pattern)) => {
+                let existing_pattern = patterns.get(&pattern);
+                let re = match existing_pattern {
+                    Some(re) => re.clone(),
+                    None => {
+                        let re = Regex::new(pattern.as_str()).map_err(|e| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "Regular expression did not compile: {:?}",
+                                e
+                            ))
+                        })?;
+                        patterns.insert(pattern, re.clone());
+                        re
+                    }
+                };
+                match re.captures(value) {
+                    Some(caps) => {
+                        let a = caps
+                            .iter()
+                            .skip(1)
+                            .map(|x| x.map(|x| x.as_str()))
+                            .collect::<Vec<_>>()
+                            .into_iter();
+                        Ok(Some(a))
+                    }
+                    None => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    });
+    let mut array = MutableListArray::<O, MutableUtf8Array<O>>::new();
+    for items in iter {
+        array.try_push(items?)?;
+    }
+
+    Ok(array.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::*;
+    type StringArray = Utf8Array<i32>;
+
+    #[test]
+    fn match_single_group() -> Result<()> {
+        let array = Utf8Array::<i32>::from(&[
+            Some("abc-005-def"),
+            Some("X-7-5"),
+            Some("X545"),
+            None,
+            Some("foobarbequebaz"),
+            Some("foobarbequebaz"),
+        ]);
+
+        let patterns = Utf8Array::<i32>::from_slice(&[
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r".*-(\d*)-.*",
+            r"(bar)(bequ1e)",
+            "",
+        ]);
+
+        let result = regexp_matches(&array, &patterns, None)?;
+
+        let expected = vec![
+            Some(vec![Some("005")]),
+            Some(vec![Some("7")]),
+            None,
+            None,
+            None,
+            Some(vec![Some("")]),
+        ];
+
+        let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
+        array.try_extend(expected)?;
+        let expected: ListArray<i32> = array.into();
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn match_single_group_with_flags() -> Result<()> {
+        let array = Utf8Array::<i32>::from(&[
+            Some("abc-005-def"),
+            Some("X-7-5"),
+            Some("X545"),
+            None,
+        ]);
+
+        let patterns = Utf8Array::<i32>::from_slice(&vec![r"x.*-(\d*)-.*"; 4]);
+        let flags = Utf8Array::<i32>::from_slice(vec!["i"; 4]);
+
+        let result = regexp_matches(&array, &patterns, Some(&flags))?;
+
+        let expected = vec![None, Some(vec![Some("7")]), None, None];
+        let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
+        array.try_extend(expected)?;
+        let expected: ListArray<i32> = array.into();
+
+        assert_eq!(expected, result);
+        Ok(())
+    }
 
     #[test]
     fn test_case_sensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
+        let values = StringArray::from_slice(vec!["abc"; 5]);
         let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
-        let mut expected_builder = ListBuilder::new(elem_builder);
-        expected_builder.values().append_value("a").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.append(false).unwrap();
-        expected_builder.values().append_value("b").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.append(false).unwrap();
-        expected_builder.append(false).unwrap();
-        let expected = expected_builder.finish();
-
+            StringArray::from_slice(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let expected = vec![
+            Some(vec![Some("a")]),
+            None,
+            Some(vec![Some("b")]),
+            None,
+            None,
+        ];
+        let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
+        array.try_extend(expected).unwrap();
+        let expected = array.into_arc();
         let re = regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns)]).unwrap();
 
-        assert_eq!(re.as_ref(), &expected);
+        assert_eq!(re.as_ref(), expected.as_ref());
     }
 
     #[test]
     fn test_case_insensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
+        let values = StringArray::from_slice(vec!["abc"; 5]);
         let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-        let flags = StringArray::from(vec!["i"; 5]);
+            StringArray::from_slice(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from_slice(vec!["i"; 5]);
 
-        let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
-        let mut expected_builder = ListBuilder::new(elem_builder);
-        expected_builder.values().append_value("a").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.values().append_value("a").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.values().append_value("b").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.values().append_value("b").unwrap();
-        expected_builder.append(true).unwrap();
-        expected_builder.append(false).unwrap();
-        let expected = expected_builder.finish();
+        let expected = vec![
+            Some(vec![Some("a")]),
+            Some(vec![Some("a")]),
+            Some(vec![Some("b")]),
+            Some(vec![Some("b")]),
+            None,
+        ];
 
+        let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
+        array.try_extend(expected).unwrap();
+        let expected = array.into_arc();
         let re =
             regexp_match::<i32>(&[Arc::new(values), Arc::new(patterns), Arc::new(flags)])
                 .unwrap();
 
-        assert_eq!(re.as_ref(), &expected);
+        assert_eq!(re.as_ref(), expected.as_ref());
     }
 }

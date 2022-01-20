@@ -22,8 +22,12 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use arrow::{datatypes::SchemaRef, json};
+use arrow::datatypes::SchemaRef;
+use arrow::error::Result as ArrowResult;
+use arrow::io::json;
+use arrow::record_batch::RecordBatch;
 use std::any::Any;
+use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
 use super::file_stream::{BatchIter, FileStream};
@@ -47,6 +51,58 @@ impl NdJsonExec {
             projected_schema,
             projected_statistics,
         }
+    }
+}
+
+// TODO: implement iterator in upstream json::Reader type
+struct JsonBatchReader<R: Read> {
+    reader: R,
+    schema: SchemaRef,
+    proj: Option<Vec<String>>,
+    rows: Vec<String>,
+}
+
+impl<R: Read> JsonBatchReader<R> {
+    fn new(
+        reader: R,
+        schema: SchemaRef,
+        batch_size: usize,
+        proj: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            reader,
+            schema,
+            proj,
+            rows: vec![String::default(); batch_size],
+        }
+    }
+}
+
+impl<R: BufRead> Iterator for JsonBatchReader<R> {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // json::read::read_rows iterates on the empty vec and reads at most n rows
+        let read = json::read::read_rows(&mut self.reader, self.rows.as_mut_slice());
+        read.and_then(|records_read| {
+            if records_read > 0 {
+                let fields = if let Some(proj) = &self.proj {
+                    self.schema
+                        .fields
+                        .iter()
+                        .filter(|f| proj.contains(&f.name))
+                        .cloned()
+                        .collect()
+                } else {
+                    self.schema.fields.clone()
+                };
+                self.rows.truncate(records_read);
+                json::read::deserialize(&self.rows, fields).map(Some)
+            } else {
+                Ok(None)
+            }
+        })
+        .transpose()
     }
 }
 
@@ -90,9 +146,9 @@ impl ExecutionPlan for NdJsonExec {
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
-            Box::new(json::Reader::new(
-                file,
-                Arc::clone(&file_schema),
+            Box::new(JsonBatchReader::new(
+                BufReader::new(file),
+                file_schema.clone(),
                 batch_size,
                 proj.clone(),
             )) as BatchIter

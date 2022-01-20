@@ -26,12 +26,12 @@ use arrow::{
 };
 
 use crate::arrow::array::Array;
-use crate::arrow::compute::concat;
+use crate::arrow::compute::concatenate::concatenate;
 use crate::scalar::ScalarValue;
 use crate::{
     error::DataFusionError,
     error::Result,
-    field_util::get_indexed_field as get_data_type_field,
+    field_util::{get_indexed_field as get_data_type_field, StructArrayExt},
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
 use arrow::array::{ListArray, StructArray};
@@ -87,18 +87,18 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                 }
                 (DataType::List(_), ScalarValue::Int64(Some(i))) => {
                     let as_list_array =
-                        array.as_any().downcast_ref::<ListArray>().unwrap();
+                        array.as_any().downcast_ref::<ListArray<i32>>().unwrap();
                     if as_list_array.is_empty() {
                         let scalar_null: ScalarValue = array.data_type().try_into()?;
                         return Ok(ColumnarValue::Scalar(scalar_null))
                     }
                     let sliced_array: Vec<Arc<dyn Array>> = as_list_array
                         .iter()
-                        .filter_map(|o| o.map(|list| list.slice(*i as usize, 1)))
+                        .filter_map(|o| o.map(|list| list.slice(*i as usize, 1).into()))
                         .collect();
                     let vec = sliced_array.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
-                    let iter = concat(vec.as_slice()).unwrap();
-                    Ok(ColumnarValue::Array(iter))
+                    let iter = concatenate(vec.as_slice()).unwrap();
+                    Ok(ColumnarValue::Array(iter.into()))
                 }
                 (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                     let as_struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -107,7 +107,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
                         Some(col) => Ok(ColumnarValue::Array(col.clone()))
                     }
                 }
-                (dt, key) => Err(DataFusionError::NotImplemented(format!("get indexed field is only possible on lists with int64 indexes. Tried {} with {} index", dt, key))),
+                (dt, key) => Err(DataFusionError::NotImplemented(format!("get indexed field is only possible on lists with int64 indexes. Tried {:?} with {} index", dt, key))),
             },
             ColumnarValue::Scalar(_) => Err(DataFusionError::NotImplemented(
                 "field access is not yet implemented for scalar values".to_string(),
@@ -119,30 +119,20 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array::GenericListArray;
     use crate::error::Result;
     use crate::physical_plan::expressions::{col, lit};
     use arrow::array::{
-        Int64Array, Int64Builder, ListBuilder, StringBuilder, StructArray, StructBuilder,
+        Int64Array, MutableListArray, MutableUtf8Array, StructArray, Utf8Array,
     };
-    use arrow::{array::StringArray, datatypes::Field};
+    use arrow::array::{TryExtend, TryPush};
+    use arrow::datatypes::Field;
 
-    fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> GenericListArray<i32> {
-        let builder = StringBuilder::new(list_of_lists.len());
-        let mut lb = ListBuilder::new(builder);
+    fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> ListArray<i32> {
+        let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
         for values in list_of_lists {
-            let builder = lb.values();
-            for value in values {
-                match value {
-                    None => builder.append_null(),
-                    Some(v) => builder.append_value(v),
-                }
-                .unwrap()
-            }
-            lb.append(true).unwrap();
+            array.try_push(Some(values)).unwrap();
         }
-
-        lb.finish()
+        array.into()
     }
 
     fn get_indexed_field_test(
@@ -159,9 +149,9 @@ mod tests {
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
-            .downcast_ref::<StringArray>()
-            .expect("failed to downcast to StringArray");
-        let expected = &StringArray::from(expected);
+            .downcast_ref::<Utf8Array<i32>>()
+            .expect("failed to downcast to Utf8Array<i32>");
+        let expected = &Utf8Array::<i32>::from(expected);
         assert_eq!(expected, result);
         Ok(())
     }
@@ -196,10 +186,13 @@ mod tests {
     #[test]
     fn get_indexed_field_empty_list() -> Result<()> {
         let schema = list_schema("l");
-        let builder = StringBuilder::new(0);
-        let mut lb = ListBuilder::new(builder);
         let expr = col("l", &schema).unwrap();
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(ListArray::<i32>::new_empty(
+                schema.field(0).data_type.clone(),
+            ))],
+        )?;
         let key = ScalarValue::Int64(Some(0));
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
@@ -213,9 +206,9 @@ mod tests {
         key: ScalarValue,
         expected: &str,
     ) -> Result<()> {
-        let builder = StringBuilder::new(3);
-        let mut lb = ListBuilder::new(builder);
-        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
+        let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
+        array.try_extend(vec![Some(vec![Some("a")]), None, None])?;
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![array.into_arc()])?;
         let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
         let r = expr.evaluate(&batch).map(|_| ());
         assert!(r.is_err());
@@ -234,41 +227,27 @@ mod tests {
     fn get_indexed_field_invalid_list_index() -> Result<()> {
         let schema = list_schema("l");
         let expr = col("l", &schema).unwrap();
-        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int8(Some(0)), "This feature is not implemented: get indexed field is only possible on lists with int64 indexes. Tried List(Field { name: \"item\", data_type: Utf8, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }) with 0 index")
+        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int8(Some(0)), "This feature is not implemented: get indexed field is only possible on lists with int64 indexes. Tried List(Field { name: \"item\", data_type: Utf8, nullable: true, metadata: {} }) with 0 index")
     }
 
     fn build_struct(
         fields: Vec<Field>,
         list_of_tuples: Vec<(Option<i64>, Vec<Option<&str>>)>,
     ) -> StructArray {
-        let foo_builder = Int64Array::builder(list_of_tuples.len());
-        let str_builder = StringBuilder::new(list_of_tuples.len());
-        let bar_builder = ListBuilder::new(str_builder);
-        let mut builder = StructBuilder::new(
-            fields,
-            vec![Box::new(foo_builder), Box::new(bar_builder)],
-        );
+        let mut foo_values = Vec::new();
+        let mut bar_array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();
+
         for (int_value, list_value) in list_of_tuples {
-            let fb = builder.field_builder::<Int64Builder>(0).unwrap();
-            match int_value {
-                None => fb.append_null(),
-                Some(v) => fb.append_value(v),
-            }
-            .unwrap();
-            builder.append(true).unwrap();
-            let lb = builder
-                .field_builder::<ListBuilder<StringBuilder>>(1)
-                .unwrap();
-            for str_value in list_value {
-                match str_value {
-                    None => lb.values().append_null(),
-                    Some(v) => lb.values().append_value(v),
-                }
-                .unwrap();
-            }
-            lb.append(true).unwrap();
+            foo_values.push(int_value);
+            bar_array.try_push(Some(list_value)).unwrap();
         }
-        builder.finish()
+
+        let foo = Arc::new(Int64Array::from(foo_values));
+        StructArray::from_data(
+            DataType::Struct(fields),
+            vec![foo, bar_array.into_arc()],
+            None,
+        )
     }
 
     fn get_indexed_field_mixed_test(
@@ -316,7 +295,7 @@ mod tests {
         let result = get_list_expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
-            .downcast_ref::<ListArray>()
+            .downcast_ref::<ListArray<i32>>()
             .unwrap_or_else(|| panic!("failed to downcast to ListArray : {:?}", result));
         let expected =
             &build_utf8_lists(list_of_tuples.into_iter().map(|t| t.1).collect());
@@ -332,11 +311,11 @@ mod tests {
                 .into_array(batch.num_rows());
             let result = result
                 .as_any()
-                .downcast_ref::<StringArray>()
+                .downcast_ref::<Utf8Array<i32>>()
                 .unwrap_or_else(|| {
-                    panic!("failed to downcast to StringArray : {:?}", result)
+                    panic!("failed to downcast to Utf8Array<i32>: {:?}", result)
                 });
-            let expected = &StringArray::from(expected);
+            let expected = &Utf8Array::<i32>::from(expected);
             assert_eq!(expected, result);
         }
         Ok(())

@@ -21,7 +21,6 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -30,7 +29,8 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-use arrow::datatypes::{Field, Schema, SchemaRef};
+
+use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
@@ -70,16 +70,15 @@ impl ProjectionExec {
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
                 );
-                field.set_metadata(get_field_metadata(e, &input_schema));
+                if let Some(metadata) = get_field_metadata(e, &input_schema) {
+                    field.metadata = metadata;
+                }
 
                 Ok(field)
             })
             .collect();
 
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields?,
-            input_schema.metadata().clone(),
-        ));
+        let schema = Arc::new(Schema::new_from(fields?, input_schema.metadata().clone()));
 
         Ok(Self {
             expr,
@@ -187,7 +186,7 @@ impl ExecutionPlan for ProjectionExec {
 fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
-) -> Option<BTreeMap<String, String>> {
+) -> Option<Metadata> {
     let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
         column.name()
     } else {
@@ -197,7 +196,7 @@ fn get_field_metadata(
     input_schema
         .field_with_name(name)
         .ok()
-        .and_then(|f| f.metadata().as_ref().cloned())
+        .map(|f| f.metadata().clone())
 }
 
 fn stats_projection(
@@ -321,7 +320,7 @@ mod tests {
         )?;
 
         let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let col_metadata = col_field.metadata().clone();
         let data: &str = &col_metadata["testing"];
         assert_eq!(data, "test");
 

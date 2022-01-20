@@ -22,10 +22,7 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::{
-        Array, ArrayRef, BinaryArray, GenericStringArray, StringArray,
-        StringOffsetSizeTrait,
-    },
+    array::{Array, BinaryArray, Offset, Utf8Array},
     datatypes::DataType,
 };
 use blake2::{Blake2b, Blake2s, Digest};
@@ -82,7 +79,7 @@ fn digest_process(
 
 macro_rules! digest_to_array {
     ($METHOD:ident, $INPUT:expr) => {{
-        let binary_array: BinaryArray = $INPUT
+        let binary_array: BinaryArray<i32> = $INPUT
             .iter()
             .map(|x| {
                 x.map(|x| {
@@ -128,18 +125,19 @@ impl DigestAlgorithm {
     /// digest a string array to their hash values
     fn digest_array<T>(self, value: &dyn Array) -> Result<ColumnarValue>
     where
-        T: StringOffsetSizeTrait,
+        T: Offset,
     {
-        let input_value = value
-            .as_any()
-            .downcast_ref::<GenericStringArray<T>>()
-            .ok_or_else(|| {
-                DataFusionError::Internal(format!(
-                    "could not cast value to {}",
-                    type_name::<GenericStringArray<T>>()
-                ))
-            })?;
-        let array: ArrayRef = match self {
+        let input_value =
+            value
+                .as_any()
+                .downcast_ref::<Utf8Array<T>>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "could not cast value to {}",
+                        type_name::<Utf8Array<T>>()
+                    ))
+                })?;
+        let array: Arc<dyn Array> = match self {
             Self::Md5 => digest_to_array!(Md5, input_value),
             Self::Sha224 => digest_to_array!(Sha224, input_value),
             Self::Sha256 => digest_to_array!(Sha256, input_value),
@@ -148,7 +146,7 @@ impl DigestAlgorithm {
             Self::Blake2b => digest_to_array!(Blake2b, input_value),
             Self::Blake2s => digest_to_array!(Blake2s, input_value),
             Self::Blake3 => {
-                let binary_array: BinaryArray = input_value
+                let binary_array: BinaryArray<i32> = input_value
                     .iter()
                     .map(|opt| {
                         opt.map(|x| {
@@ -252,13 +250,13 @@ pub fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             let binary_array = array
                 .as_ref()
                 .as_any()
-                .downcast_ref::<BinaryArray>()
+                .downcast_ref::<BinaryArray<i32>>()
                 .ok_or_else(|| {
                     DataFusionError::Internal(
                         "Impossibly got non-binary array data from digest".into(),
                     )
                 })?;
-            let string_array: StringArray = binary_array
+            let string_array: Utf8Array<i32> = binary_array
                 .iter()
                 .map(|opt| opt.map(hex_encode::<_>))
                 .collect();

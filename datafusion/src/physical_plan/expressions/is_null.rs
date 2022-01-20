@@ -71,7 +71,7 @@ impl PhysicalExpr for IsNullExpr {
         let arg = self.arg.evaluate(batch)?;
         match arg {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::new(
-                compute::is_null(array.as_ref())?,
+                compute::boolean::is_null(array.as_ref()),
             ))),
             ColumnarValue::Scalar(scalar) => Ok(ColumnarValue::Scalar(
                 ScalarValue::Boolean(Some(scalar.is_null())),
@@ -90,11 +90,13 @@ mod tests {
     use super::*;
     use crate::physical_plan::expressions::col;
     use arrow::{
-        array::{BooleanArray, StringArray},
+        array::{BooleanArray, Utf8Array},
         datatypes::*,
         record_batch::RecordBatch,
     };
     use std::sync::Arc;
+
+    type StringArray = Utf8Array<i32>;
 
     #[test]
     fn is_null_op() -> Result<()> {
@@ -111,7 +113,7 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .expect("failed to downcast to BooleanArray");
 
-        let expected = &BooleanArray::from(vec![false, true]);
+        let expected = &BooleanArray::from_slice(&[false, true]);
 
         assert_eq!(expected, result);
 

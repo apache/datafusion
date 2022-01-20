@@ -57,9 +57,9 @@ use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
 };
-use arrow::compute::SortOptions;
-use arrow::datatypes::{Schema, SchemaRef};
-use arrow::{compute::can_cast_types, datatypes::DataType};
+use arrow::compute::cast::can_cast_types;
+use arrow::compute::sort::SortOptions;
+use arrow::datatypes::*;
 use async_trait::async_trait;
 use expressions::col;
 use futures::future::BoxFuture;
@@ -535,7 +535,7 @@ impl DefaultPhysicalPlanner {
                     let contains_dict = groups
                         .iter()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
-                        .any(|x| matches!(x, DataType::Dictionary(_, _)));
+                        .any(|x| matches!(x, DataType::Dictionary(_, _, _)));
 
                     let can_repartition = !groups.is_empty()
                         && ctx_state.config.target_partitions > 1
@@ -1471,8 +1471,7 @@ mod tests {
         logical_plan::{col, lit, sum, LogicalPlanBuilder},
         physical_plan::SendableRecordBatchStream,
     };
-    use arrow::datatypes::{DataType, Field, SchemaRef};
-    use async_trait::async_trait;
+    use arrow::datatypes::{DataType, Field};
     use fmt::Debug;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};
@@ -1626,7 +1625,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
@@ -1655,25 +1654,21 @@ mod tests {
                 name: \"a\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: None } }\
+                metadata: {} } }\
         ] }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
                 data_type: Int32, \
                 nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: None }\
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }
@@ -1704,7 +1699,7 @@ mod tests {
         .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8
-        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false }";
+        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8 }], negated: false }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
         // expression: "a in (true, 'a')"
@@ -1732,7 +1727,7 @@ mod tests {
             Err(e) => assert!(
                 e.to_string().contains(expected_error),
                 "Error '{}' did not contain expected error '{}'",
-                e.to_string(),
+                e,
                 expected_error
             ),
         }

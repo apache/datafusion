@@ -23,14 +23,9 @@ use crate::physical_plan::{
     hyperloglog::HyperLogLog, Accumulator, AggregateExpr, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
-use arrow::array::{
-    ArrayRef, BinaryArray, BinaryOffsetSizeTrait, GenericBinaryArray, GenericStringArray,
-    PrimitiveArray, StringOffsetSizeTrait,
-};
-use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type, Int64Type, Int8Type,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
+use arrow::array::{ArrayRef, BinaryArray, Offset, PrimitiveArray, Utf8Array};
+use arrow::datatypes::{DataType, Field};
+use arrow::types::NativeType;
 use std::any::type_name;
 use std::any::Any;
 use std::convert::TryFrom;
@@ -89,21 +84,21 @@ impl AggregateExpr for ApproxDistinct {
             // TODO u8, i8, u16, i16 shall really be done using bitmap, not HLL
             // TODO support for boolean (trivial case)
             // https://github.com/apache/arrow-datafusion/issues/1109
-            DataType::UInt8 => Box::new(NumericHLLAccumulator::<UInt8Type>::new()),
-            DataType::UInt16 => Box::new(NumericHLLAccumulator::<UInt16Type>::new()),
-            DataType::UInt32 => Box::new(NumericHLLAccumulator::<UInt32Type>::new()),
-            DataType::UInt64 => Box::new(NumericHLLAccumulator::<UInt64Type>::new()),
-            DataType::Int8 => Box::new(NumericHLLAccumulator::<Int8Type>::new()),
-            DataType::Int16 => Box::new(NumericHLLAccumulator::<Int16Type>::new()),
-            DataType::Int32 => Box::new(NumericHLLAccumulator::<Int32Type>::new()),
-            DataType::Int64 => Box::new(NumericHLLAccumulator::<Int64Type>::new()),
+            DataType::UInt8 => Box::new(NumericHLLAccumulator::<u8>::new()),
+            DataType::UInt16 => Box::new(NumericHLLAccumulator::<u16>::new()),
+            DataType::UInt32 => Box::new(NumericHLLAccumulator::<u32>::new()),
+            DataType::UInt64 => Box::new(NumericHLLAccumulator::<u64>::new()),
+            DataType::Int8 => Box::new(NumericHLLAccumulator::<i8>::new()),
+            DataType::Int16 => Box::new(NumericHLLAccumulator::<i16>::new()),
+            DataType::Int32 => Box::new(NumericHLLAccumulator::<i32>::new()),
+            DataType::Int64 => Box::new(NumericHLLAccumulator::<i64>::new()),
             DataType::Utf8 => Box::new(StringHLLAccumulator::<i32>::new()),
             DataType::LargeUtf8 => Box::new(StringHLLAccumulator::<i64>::new()),
             DataType::Binary => Box::new(BinaryHLLAccumulator::<i32>::new()),
             DataType::LargeBinary => Box::new(BinaryHLLAccumulator::<i64>::new()),
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'approx_distinct' for data type {} is not implemented",
+                    "Support for 'approx_distinct' for data type {:?} is not implemented",
                     other
                 )))
             }
@@ -119,7 +114,7 @@ impl AggregateExpr for ApproxDistinct {
 #[derive(Debug)]
 struct BinaryHLLAccumulator<T>
 where
-    T: BinaryOffsetSizeTrait,
+    T: Offset,
 {
     hll: HyperLogLog<Vec<u8>>,
     phantom_data: PhantomData<T>,
@@ -127,7 +122,7 @@ where
 
 impl<T> BinaryHLLAccumulator<T>
 where
-    T: BinaryOffsetSizeTrait,
+    T: Offset,
 {
     /// new approx_distinct accumulator
     pub fn new() -> Self {
@@ -141,7 +136,7 @@ where
 #[derive(Debug)]
 struct StringHLLAccumulator<T>
 where
-    T: StringOffsetSizeTrait,
+    T: Offset,
 {
     hll: HyperLogLog<String>,
     phantom_data: PhantomData<T>,
@@ -149,7 +144,7 @@ where
 
 impl<T> StringHLLAccumulator<T>
 where
-    T: StringOffsetSizeTrait,
+    T: Offset,
 {
     /// new approx_distinct accumulator
     pub fn new() -> Self {
@@ -163,16 +158,14 @@ where
 #[derive(Debug)]
 struct NumericHLLAccumulator<T>
 where
-    T: ArrowPrimitiveType,
-    T::Native: Hash,
+    T: NativeType + Hash,
 {
-    hll: HyperLogLog<T::Native>,
+    hll: HyperLogLog<T>,
 }
 
 impl<T> NumericHLLAccumulator<T>
 where
-    T: ArrowPrimitiveType,
-    T::Native: Hash,
+    T: NativeType + Hash,
 {
     /// new approx_distinct accumulator
     pub fn new() -> Self {
@@ -236,7 +229,10 @@ macro_rules! default_accumulator_impl {
 
         fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
             assert_eq!(1, states.len(), "expect only 1 element in the states");
-            let binary_array = states[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+            let binary_array = states[0]
+                .as_any()
+                .downcast_ref::<BinaryArray<i32>>()
+                .unwrap();
             for v in binary_array.iter() {
                 let v = v.ok_or_else(|| {
                     DataFusionError::Internal(
@@ -276,11 +272,10 @@ macro_rules! downcast_value {
 
 impl<T> Accumulator for BinaryHLLAccumulator<T>
 where
-    T: BinaryOffsetSizeTrait,
+    T: Offset,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let array: &GenericBinaryArray<T> =
-            downcast_value!(values, GenericBinaryArray, T);
+        let array: &BinaryArray<T> = downcast_value!(values, BinaryArray, T);
         // flatten because we would skip nulls
         self.hll
             .extend(array.into_iter().flatten().map(|v| v.to_vec()));
@@ -292,11 +287,10 @@ where
 
 impl<T> Accumulator for StringHLLAccumulator<T>
 where
-    T: StringOffsetSizeTrait,
+    T: Offset,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let array: &GenericStringArray<T> =
-            downcast_value!(values, GenericStringArray, T);
+        let array: &Utf8Array<T> = downcast_value!(values, Utf8Array, T);
         // flatten because we would skip nulls
         self.hll
             .extend(array.into_iter().flatten().map(|i| i.to_string()));
@@ -308,8 +302,7 @@ where
 
 impl<T> Accumulator for NumericHLLAccumulator<T>
 where
-    T: ArrowPrimitiveType + std::fmt::Debug,
-    T::Native: Hash,
+    T: NativeType + Hash,
 {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array: &PrimitiveArray<T> = downcast_value!(values, PrimitiveArray, T);

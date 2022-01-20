@@ -20,7 +20,8 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
-use arrow::compute::concat;
+use arrow::compute::aggregate::estimated_bytes_size;
+use arrow::compute::concatenate;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
@@ -96,12 +97,13 @@ pub(crate) fn combine_batches(
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                concat(
+                concatenate::concatenate(
                     &batches
                         .iter()
                         .map(|batch| batch.column(i).as_ref())
                         .collect::<Vec<_>>(),
                 )
+                .map(|x| x.into())
             })
             .collect::<ArrowResult<Vec<_>>>()?;
         Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
@@ -169,7 +171,7 @@ pub(crate) fn spawn_execution(
             Err(e) => {
                 // If send fails, plan being torn
                 // down, no place to send the error
-                let arrow_error = ArrowError::ExternalError(Box::new(e));
+                let arrow_error = ArrowError::External("".to_string(), Box::new(e));
                 output.send(Err(arrow_error)).await.ok();
                 return;
             }
@@ -199,7 +201,7 @@ pub fn compute_record_batch_statistics(
         .iter()
         .flatten()
         .flat_map(RecordBatch::columns)
-        .map(|a| a.get_array_memory_size())
+        .map(|a| estimated_bytes_size(a.as_ref()))
         .sum();
 
     let projection = match projection {
@@ -307,8 +309,8 @@ mod tests {
                 RecordBatch::try_new(
                     Arc::clone(&schema),
                     vec![
-                        Arc::new(Float32Array::from(vec![i as f32; batch_size])),
-                        Arc::new(Float64Array::from(vec![i as f64; batch_size])),
+                        Arc::new(Float32Array::from_slice(&vec![i as f32; batch_size])),
+                        Arc::new(Float64Array::from_slice(&vec![i as f64; batch_size])),
                     ],
                 )
                 .unwrap()
@@ -345,8 +347,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Float32Array::from(vec![1., 2., 3.])),
-                Arc::new(Float64Array::from(vec![9., 8., 7.])),
+                Arc::new(Float32Array::from_slice(&[1., 2., 3.])),
+                Arc::new(Float64Array::from_slice(&[9., 8., 7.])),
             ],
         )?;
         let result =
@@ -355,7 +357,8 @@ mod tests {
         let expected = Statistics {
             is_exact: true,
             num_rows: Some(3),
-            total_byte_size: Some(416), // this might change a bit if the way we compute the size changes
+            // TODO: fix this once we got https://github.com/jorgecarleitao/arrow2/issues/421
+            total_byte_size: Some(36),
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,

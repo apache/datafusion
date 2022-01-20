@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::vec;
 
 use ahash::RandomState;
 use futures::{
@@ -28,21 +27,21 @@ use futures::{
     Future,
 };
 
-use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
-use crate::scalar::ScalarValue;
-
-use arrow::{array::ArrayRef, compute, compute::cast};
-use arrow::{
-    array::{Array, UInt32Builder},
-    error::{ArrowError, Result as ArrowResult},
+use crate::{
+    error::{DataFusionError, Result},
+    scalar::ScalarValue,
 };
+
 use arrow::{
-    datatypes::{Field, Schema, SchemaRef},
+    array::*,
+    compute::{cast, concatenate, take},
+    datatypes::{DataType, Field, Schema, SchemaRef},
+    error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
 use hashbrown::raw::RawTable;
@@ -424,16 +423,17 @@ fn group_aggregate_batch(
     }
 
     // Collect all indices + offsets based on keys in this vec
-    let mut batch_indices: UInt32Builder = UInt32Builder::new(0);
+    let mut batch_indices = Vec::<u32>::new();
     let mut offsets = vec![0];
     let mut offset_so_far = 0;
     for group_idx in groups_with_rows.iter() {
         let indices = &accumulators.group_states[*group_idx].indices;
-        batch_indices.append_slice(indices)?;
+        batch_indices.extend_from_slice(indices);
         offset_so_far += indices.len();
         offsets.push(offset_so_far);
     }
-    let batch_indices = batch_indices.finish();
+    let batch_indices =
+        UInt32Array::from_data(DataType::UInt32, batch_indices.into(), None);
 
     // `Take` all values based on indices into Arrays
     let values: Vec<Vec<Arc<dyn Array>>> = aggr_input_values
@@ -441,14 +441,7 @@ fn group_aggregate_batch(
         .map(|array| {
             array
                 .iter()
-                .map(|array| {
-                    compute::take(
-                        array.as_ref(),
-                        &batch_indices,
-                        None, // None: no index check
-                    )
-                    .unwrap()
-                })
+                .map(|array| take::take(array.as_ref(), &batch_indices).unwrap().into())
                 .collect()
             // 2.3
         })
@@ -476,7 +469,7 @@ fn group_aggregate_batch(
                             .iter()
                             .map(|array| {
                                 // 2.3
-                                array.slice(offsets[0], offsets[1] - offsets[0])
+                                array.slice(offsets[0], offsets[1] - offsets[0]).into()
                             })
                             .collect::<Vec<ArrayRef>>(),
                     )
@@ -572,7 +565,7 @@ impl GroupedHashAggregateStream {
             tx.send(result).ok();
         });
 
-        Self {
+        GroupedHashAggregateStream {
             schema,
             output: rx,
             finished: false,
@@ -645,7 +638,7 @@ impl Stream for GroupedHashAggregateStream {
 
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Err(ArrowError::ExternalError(Box::new(e))), // error receiving
+                    Err(e) => Err(ArrowError::External("".to_string(), Box::new(e))), // error receiving
                     Ok(result) => result,
                 };
 
@@ -730,8 +723,7 @@ fn aggregate_expressions(
 }
 
 pin_project! {
-    /// stream struct for hash aggregation
-    pub struct HashAggregateStream {
+    struct HashAggregateStream {
         schema: SchemaRef,
         #[pin]
         output: futures::channel::oneshot::Receiver<ArrowResult<RecordBatch>>,
@@ -803,7 +795,7 @@ impl HashAggregateStream {
             tx.send(result).ok();
         });
 
-        Self {
+        HashAggregateStream {
             schema,
             output: rx,
             finished: false,
@@ -865,7 +857,7 @@ impl Stream for HashAggregateStream {
 
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Err(ArrowError::ExternalError(Box::new(e))), // error receiving
+                    Err(e) => Err(ArrowError::External("".to_string(), Box::new(e))), // error receiving
                     Ok(result) => result,
                 };
 
@@ -880,6 +872,21 @@ impl RecordBatchStream for HashAggregateStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
+}
+
+/// Given Vec<Vec<ArrayRef>>, concatenates the inners `Vec<ArrayRef>` into `ArrayRef`, returning `Vec<ArrayRef>`
+/// This assumes that `arrays` is not empty.
+#[allow(dead_code)]
+fn concatenate(arrays: Vec<Vec<ArrayRef>>) -> ArrowResult<Vec<ArrayRef>> {
+    (0..arrays[0].len())
+        .map(|column| {
+            let array_list = arrays
+                .iter()
+                .map(|a| a[column].as_ref())
+                .collect::<Vec<_>>();
+            Ok(concatenate::concatenate(&array_list)?.into())
+        })
+        .collect::<ArrowResult<Vec<_>>>()
 }
 
 /// Create a RecordBatch with all group keys and accumulator' states or values.
@@ -956,7 +963,14 @@ fn create_batch_from_map(
     let columns = columns
         .iter()
         .zip(output_schema.fields().iter())
-        .map(|(col, desired_field)| cast(col, desired_field.data_type()))
+        .map(|(col, desired_field)| {
+            cast::cast(
+                col.as_ref(),
+                desired_field.data_type(),
+                cast::CastOptions::default(),
+            )
+            .map(Arc::from)
+        })
         .collect::<ArrowResult<Vec<_>>>()?;
 
     RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
@@ -1009,10 +1023,11 @@ mod tests {
     use futures::FutureExt;
 
     use super::*;
+    use crate::assert_batches_sorted_eq;
+    use crate::physical_plan::common;
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
-    use crate::{assert_batches_sorted_eq, physical_plan::common};
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
@@ -1031,16 +1046,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 4, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 3, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),

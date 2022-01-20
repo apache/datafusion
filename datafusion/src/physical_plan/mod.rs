@@ -22,17 +22,17 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::expressions::{PhysicalSortExpr, SortColumn};
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::array::ArrayRef;
+use arrow::compute::merge_sort::SortOptions;
+use arrow::compute::partition::lexicographical_partition_ranges;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
@@ -393,7 +393,7 @@ pub enum Distribution {
 }
 
 /// Represents the result from an expression
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum ColumnarValue {
     /// Array of values
     Array(ArrayRef),
@@ -512,9 +512,14 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
+            Ok(lexicographical_partition_ranges(
+                &partition_columns
+                    .iter()
+                    .map(|x| x.into())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(DataFusionError::ArrowError)?
+            .collect())
         }
     }
 
@@ -643,6 +648,7 @@ pub mod string_expressions;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
+
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod union;

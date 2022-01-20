@@ -20,45 +20,43 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::GenericStringArray;
-use arrow::array::{
-    ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringOffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
-};
-use arrow::datatypes::ArrowPrimitiveType;
 use arrow::{
+    array::*,
+    bitmap::Bitmap,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
+    types::NativeType,
 };
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::array::*;
-use arrow::buffer::{Buffer, MutableBuffer};
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
-        let null_bit_buffer = $left.data().null_buffer().cloned();
+        let validity = $left.validity();
+        let values =
+            Bitmap::from_trusted_len_iter($left.values_iter().map(|x| $op(x, $right)));
+        Ok(BooleanArray::from_data(
+            DataType::Boolean,
+            values,
+            validity.cloned(),
+        ))
+    }};
+}
 
-        let comparison =
-            (0..$left.len()).map(|i| unsafe { $op($left.value_unchecked(i), $right) });
-        // same as $left.len()
-        let buffer = unsafe { MutableBuffer::from_trusted_len_iter_bool(comparison) };
-
-        let data = unsafe {
-            ArrayData::new_unchecked(
-                DataType::Boolean,
-                $left.len(),
-                None,
-                null_bit_buffer,
-                0,
-                vec![Buffer::from(buffer)],
-                vec![],
-            )
-        };
-        Ok(BooleanArray::from(data))
+// TODO: primitive array currently doesn't have `values_iter()`, it may
+// worth adding one there, and this specialized case could be removed.
+macro_rules! compare_primitive_op_scalar {
+    ($left: expr, $right:expr, $op:expr) => {{
+        let validity = $left.validity();
+        let values =
+            Bitmap::from_trusted_len_iter($left.values().iter().map(|x| $op(x, $right)));
+        Ok(BooleanArray::from_data(
+            DataType::Boolean,
+            values,
+            validity.cloned(),
+        ))
     }};
 }
 
@@ -181,39 +179,31 @@ macro_rules! make_contains_primitive {
 }
 
 // whether each value on the left (can be null) is contained in the non-null list
-fn in_list_primitive<T: ArrowPrimitiveType>(
+fn in_list_primitive<T: NativeType>(
     array: &PrimitiveArray<T>,
-    values: &[<T as ArrowPrimitiveType>::Native],
+    values: &[T],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(
-        array,
-        values,
-        |x, v: &[<T as ArrowPrimitiveType>::Native]| v.contains(&x)
-    )
+    compare_primitive_op_scalar!(array, values, |x, v: &[T]| v.contains(x))
 }
 
 // whether each value on the left (can be null) is contained in the non-null list
-fn not_in_list_primitive<T: ArrowPrimitiveType>(
+fn not_in_list_primitive<T: NativeType>(
     array: &PrimitiveArray<T>,
-    values: &[<T as ArrowPrimitiveType>::Native],
+    values: &[T],
 ) -> Result<BooleanArray> {
-    compare_op_scalar!(
-        array,
-        values,
-        |x, v: &[<T as ArrowPrimitiveType>::Native]| !v.contains(&x)
-    )
+    compare_primitive_op_scalar!(array, values, |x, v: &[T]| !v.contains(x))
 }
 
 // whether each value on the left (can be null) is contained in the non-null list
-fn in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
+fn in_list_utf8<OffsetSize: Offset>(
+    array: &Utf8Array<OffsetSize>,
     values: &[&str],
 ) -> Result<BooleanArray> {
     compare_op_scalar!(array, values, |x, v: &[&str]| v.contains(&x))
 }
 
-fn not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
+fn not_in_list_utf8<OffsetSize: Offset>(
+    array: &Utf8Array<OffsetSize>,
     values: &[&str],
 ) -> Result<BooleanArray> {
     compare_op_scalar!(array, values, |x, v: &[&str]| !v.contains(&x))
@@ -250,16 +240,13 @@ impl InListExpr {
 
     /// Compare for specific utf8 types
     #[allow(clippy::unnecessary_wraps)]
-    fn compare_utf8<T: StringOffsetSizeTrait>(
+    fn compare_utf8<T: Offset>(
         &self,
         array: ArrayRef,
         list_values: Vec<ColumnarValue>,
         negated: bool,
     ) -> Result<ColumnarValue> {
-        let array = array
-            .as_any()
-            .downcast_ref::<GenericStringArray<T>>()
-            .unwrap();
+        let array = array.as_any().downcast_ref::<Utf8Array<T>>().unwrap();
 
         let contains_null = list_values
             .iter()
@@ -469,7 +456,9 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
-    use arrow::{array::StringArray, datatypes::Field};
+    use arrow::{array::Utf8Array, datatypes::Field};
+
+    type StringArray = Utf8Array<i32>;
 
     use super::*;
     use crate::error::Result;

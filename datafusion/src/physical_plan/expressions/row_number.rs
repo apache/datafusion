@@ -74,9 +74,7 @@ pub(crate) struct NumRowsEvaluator {}
 impl PartitionEvaluator for NumRowsEvaluator {
     fn evaluate_partition(&self, partition: Range<usize>) -> Result<ArrayRef> {
         let num_rows = partition.end - partition.start;
-        Ok(Arc::new(UInt64Array::from_iter_values(
-            1..(num_rows as u64) + 1,
-        )))
+        Ok(Arc::new(UInt64Array::from_values(1..(num_rows as u64) + 1)))
     }
 }
 
@@ -98,14 +96,14 @@ mod tests {
         let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let result = result.values();
+        let result = result.values().as_slice();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
     }
 
     #[test]
     fn row_number_all_values() -> Result<()> {
-        let arr: ArrayRef = Arc::new(BooleanArray::from(vec![
+        let arr: ArrayRef = Arc::new(BooleanArray::from_slice(&[
             true, false, true, false, false, true, false, true,
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);
@@ -114,7 +112,7 @@ mod tests {
         let result = row_number.create_evaluator(&batch)?.evaluate(vec![0..8])?;
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let result = result.values();
+        let result = result.values().as_slice();
         assert_eq!(vec![1, 2, 3, 4, 5, 6, 7, 8], result);
         Ok(())
     }

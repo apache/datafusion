@@ -18,13 +18,11 @@
 //! Line delimited JSON format abstractions
 
 use std::any::Any;
-use std::io::BufReader;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
-use arrow::json::reader::infer_json_schema_from_iterator;
-use arrow::json::reader::ValueIter;
+use arrow::io::json;
 use async_trait::async_trait;
 use futures::StreamExt;
 
@@ -59,23 +57,17 @@ impl FileFormat for JsonFormat {
     }
 
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
-        let mut schemas = Vec::new();
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
+        let mut fields = Vec::new();
+        let records_to_read = self.schema_infer_max_rec;
         while let Some(obj_reader) = readers.next().await {
-            let mut reader = BufReader::new(obj_reader?.sync_reader()?);
-            let iter = ValueIter::new(&mut reader, None);
-            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
-                let should_take = records_to_read > 0;
-                records_to_read -= 1;
-                should_take
-            }))?;
-            if records_to_read == 0 {
-                break;
-            }
-            schemas.push(schema);
+            let mut reader = std::io::BufReader::new(obj_reader?.sync_reader()?);
+            // FIXME: return number of records read from infer_json_schema so we can enforce
+            // records_to_read
+            let schema = json::read::infer(&mut reader, records_to_read)?;
+            fields.extend(schema);
         }
 
-        let schema = Schema::try_merge(schemas)?;
+        let schema = Schema::new(fields);
         Ok(Arc::new(schema))
     }
 
@@ -166,7 +158,7 @@ mod tests {
         let projection = Some(vec![0]);
         let exec = get_exec(&projection, 1024, None).await?;
 
-        let batches = collect(exec).await.expect("Collect batches");
+        let batches = collect(exec).await?;
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());

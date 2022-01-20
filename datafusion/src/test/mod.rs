@@ -21,12 +21,8 @@ use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
-use array::{
-    Array, ArrayRef, StringArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray,
-};
-use arrow::array::{self, DecimalBuilder, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::array::*;
+use arrow::datatypes::*;
 use arrow::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
@@ -44,8 +40,8 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from(vec![1])),
-            Arc::new(array::StringArray::from(vec!["a"])),
+            Arc::new(Int32Array::from_slice(&[1])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a"])),
         ],
     )
     .unwrap();
@@ -144,9 +140,9 @@ pub fn build_table_i32(
     RecordBatch::try_new(
         Arc::new(schema),
         vec![
-            Arc::new(Int32Array::from(a.1.clone())),
-            Arc::new(Int32Array::from(b.1.clone())),
-            Arc::new(Int32Array::from(c.1.clone())),
+            Arc::new(Int32Array::from_slice(a.1)),
+            Arc::new(Int32Array::from_slice(b.1)),
+            Arc::new(Int32Array::from_slice(c.1)),
         ],
     )
     .unwrap()
@@ -164,11 +160,10 @@ pub fn table_with_sequence(
     seq_end: i32,
 ) -> Result<Arc<dyn TableProvider>> {
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
-    let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
-        vec![arr as ArrayRef],
-    )?]];
+    let arr = Arc::new(Int32Array::from_slice(
+        &(seq_start..=seq_end).collect::<Vec<_>>(),
+    ));
+    let partitions = vec![vec![RecordBatch::try_new(schema.clone(), vec![arr])?]];
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
@@ -178,8 +173,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     let seq_end = sz;
     let values = (seq_start..seq_end).collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from(values));
-    let arr = arr as ArrayRef;
+    let arr = Arc::new(Int32Array::from_slice(&values));
 
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
@@ -187,7 +181,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 /// Return a new table provider containing all of the supported timestamp types
 pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
     let batch = make_timestamps();
-    let schema = batch.schema();
+    let schema = batch.schema().clone();
     let partitions = vec![vec![batch]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
@@ -195,20 +189,20 @@ pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
 /// Return a new table which provide this decimal column
 pub fn table_with_decimal() -> Arc<dyn TableProvider> {
     let batch_decimal = make_decimal();
-    let schema = batch_decimal.schema();
+    let schema = batch_decimal.schema().clone();
     let partitions = vec![vec![batch_decimal]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    let mut data = Vec::new();
     for i in 110000..110010 {
-        decimal_builder.append_value(i as i128).unwrap();
+        data.push(Some(i as i128));
     }
     for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128).unwrap();
+        data.push(Some(-i as i128));
     }
-    let array = decimal_builder.finish();
+    let array = PrimitiveArray::<i128>::from(data).to(DataType::Decimal(10, 3));
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }
@@ -259,16 +253,18 @@ pub fn make_timestamps() -> RecordBatch {
     let names = ts_nanos
         .iter()
         .enumerate()
-        .map(|(i, _)| format!("Row {}", i))
-        .collect::<Vec<_>>();
+        .map(|(i, _)| format!("Row {}", i));
 
-    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
-    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
-    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
-    let arr_secs = TimestampSecondArray::from_opt_vec(ts_secs, None);
+    let arr_names = Utf8Array::<i32>::from_trusted_len_values_iter(names);
 
-    let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    let arr_names = StringArray::from(names);
+    let arr_nanos =
+        Int64Array::from(ts_nanos).to(DataType::Timestamp(TimeUnit::Nanosecond, None));
+    let arr_micros =
+        Int64Array::from(ts_micros).to(DataType::Timestamp(TimeUnit::Microsecond, None));
+    let arr_millis =
+        Int64Array::from(ts_millis).to(DataType::Timestamp(TimeUnit::Millisecond, None));
+    let arr_secs =
+        Int64Array::from(ts_secs).to(DataType::Timestamp(TimeUnit::Second, None));
 
     let schema = Schema::new(vec![
         Field::new("nanos", arr_nanos.data_type().clone(), true),

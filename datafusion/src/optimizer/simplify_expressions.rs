@@ -299,7 +299,7 @@ impl ConstEvaluator {
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
 
         // Need a single "input" row to produce a single output row
-        let col = new_null_array(&DataType::Null, 1);
+        let col = new_null_array(DataType::Null, 1).into();
         let input_batch =
             RecordBatch::try_new(std::sync::Arc::new(schema), vec![col]).unwrap();
 
@@ -367,7 +367,7 @@ impl ConstEvaluator {
         let phys_expr = self.planner.create_physical_expr(
             &expr,
             &self.input_schema,
-            &self.input_batch.schema(),
+            self.input_batch.schema(),
             &self.ctx_state,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
@@ -1711,8 +1711,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected =
-            "Cannot cast string '' to value of arrow::datatypes::types::Int32Type type";
+        let expected = "Could not cast Utf8[] to value of type Int32";
         let actual = get_optimized_plan_err(&plan, &Utc::now());
         assert_contains!(actual, expected);
     }

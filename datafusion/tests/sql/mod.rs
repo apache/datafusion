@@ -15,16 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryFrom;
 use std::sync::Arc;
 
-use arrow::{
-    array::*, datatypes::*, record_batch::RecordBatch,
-    util::display::array_value_to_string,
-};
 use chrono::prelude::*;
 use chrono::Duration;
 
+use datafusion::arrow::{array::*, datatypes::*, record_batch::RecordBatch};
 use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
@@ -44,6 +40,8 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
+
+type StringArray = Utf8Array<i32>;
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -175,7 +173,7 @@ fn create_join_context(
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
@@ -194,7 +192,7 @@ fn create_join_context(
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
@@ -220,9 +218,9 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 3, 4])),
-            Arc::new(UInt32Array::from(vec![10, 20, 30, 40])),
-            Arc::new(UInt32Array::from(vec![50, 60, 70, 80])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4])),
+            Arc::new(UInt32Array::from_slice(&[10, 20, 30, 40])),
+            Arc::new(UInt32Array::from_slice(&[50, 60, 70, 80])),
         ],
     )?;
     let t1_table = MemTable::try_new(t1_schema, vec![vec![t1_data]])?;
@@ -236,9 +234,9 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![1, 2, 9, 4])),
-            Arc::new(UInt32Array::from(vec![100, 200, 300, 400])),
-            Arc::new(UInt32Array::from(vec![500, 600, 700, 800])),
+            Arc::new(UInt32Array::from_slice(&[1, 2, 9, 4])),
+            Arc::new(UInt32Array::from_slice(&[100, 200, 300, 400])),
+            Arc::new(UInt32Array::from_slice(&[500, 600, 700, 800])),
         ],
     )?;
     let t2_table = MemTable::try_new(t2_schema, vec![vec![t2_data]])?;
@@ -261,7 +259,7 @@ fn create_join_context_unbalanced(
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44, 77])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
@@ -281,7 +279,7 @@ fn create_join_context_unbalanced(
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 Some("y"),
@@ -435,7 +433,7 @@ async fn register_boolean(ctx: &mut ExecutionContext) -> Result<()> {
 
     let data =
         RecordBatch::try_from_iter([("a", Arc::new(a) as _), ("b", Arc::new(b) as _)])?;
-    let table = MemTable::try_new(data.schema(), vec![vec![data]])?;
+    let table = MemTable::try_new(data.schema().clone(), vec![vec![data]])?;
     ctx.register_table("t1", Arc::new(table))?;
     Ok(())
 }
@@ -496,68 +494,25 @@ async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
     result_vec(&execute_to_batches(ctx, sql).await)
 }
 
-/// Specialised String representation
-fn col_str(column: &ArrayRef, row_index: usize) -> String {
-    if column.is_null(row_index) {
-        return "NULL".to_string();
-    }
-
-    // Special case ListArray as there is no pretty print support for it yet
-    if let DataType::FixedSizeList(_, n) = column.data_type() {
-        let array = column
-            .as_any()
-            .downcast_ref::<FixedSizeListArray>()
-            .unwrap()
-            .value(row_index);
-
-        let mut r = Vec::with_capacity(*n as usize);
-        for i in 0..*n {
-            r.push(col_str(&array, i as usize));
-        }
-        return format!("[{}]", r.join(","));
-    }
-
-    array_value_to_string(column, row_index)
-        .ok()
-        .unwrap_or_else(|| "???".to_string())
-}
-
 /// Converts the results into a 2d array of strings, `result[row][column]`
 /// Special cases nulls to NULL for testing
 fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     let mut result = vec![];
     for batch in results {
+        let display_col = batch
+            .columns()
+            .iter()
+            .map(|x| get_display(x.as_ref()))
+            .collect::<Vec<_>>();
         for row_index in 0..batch.num_rows() {
-            let row_vec = batch
-                .columns()
+            let row_vec = display_col
                 .iter()
-                .map(|column| col_str(column, row_index))
+                .map(|display_col| display_col(row_index))
                 .collect();
             result.push(row_vec);
         }
     }
     result
-}
-
-async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
-    datatype: DataType,
-) -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", datatype, false)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(T::from(vec!["", "a", "aa", "aaa"]))],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
-    let mut ctx = ExecutionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
-    let sql = "SELECT length(c1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["1"], vec!["2"], vec!["3"]];
-    assert_eq!(expected, actual);
-    Ok(())
 }
 
 async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
@@ -592,27 +547,20 @@ async fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
     .unwrap();
 }
 
-fn make_timestamp_table<A>() -> Result<Arc<MemTable>>
-where
-    A: ArrowTimestampType,
-{
-    make_timestamp_tz_table::<A>(None)
+fn make_timestamp_table(time_unit: TimeUnit) -> Result<Arc<MemTable>> {
+    make_timestamp_tz_table(time_unit, None)
 }
 
-fn make_timestamp_tz_table<A>(tz: Option<String>) -> Result<Arc<MemTable>>
-where
-    A: ArrowTimestampType,
-{
+fn make_timestamp_tz_table(
+    time_unit: TimeUnit,
+    tz: Option<String>,
+) -> Result<Arc<MemTable>> {
     let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(A::get_time_unit(), tz.clone()),
-            false,
-        ),
+        Field::new("ts", DataType::Timestamp(time_unit, tz.clone()), false),
         Field::new("value", DataType::Int32, true),
     ]));
 
-    let divisor = match A::get_time_unit() {
+    let divisor = match time_unit {
         TimeUnit::Nanosecond => 1,
         TimeUnit::Microsecond => 1000,
         TimeUnit::Millisecond => 1_000_000,
@@ -625,13 +573,14 @@ where
         1599565349190855000 / divisor,    //2020-09-08T11:42:29.190855+00:00
     ]; // 2020-09-08T11:42:29.190855+00:00
 
-    let array = PrimitiveArray::<A>::from_vec(timestamps, tz);
+    let array =
+        Int64Array::from_values(timestamps).to(DataType::Timestamp(time_unit, tz));
 
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
             Arc::new(array),
-            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3)])),
+            Arc::new(Int32Array::from_slice(&[1, 2, 3])),
         ],
     )?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
@@ -639,7 +588,7 @@ where
 }
 
 fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
-    make_timestamp_table::<TimestampNanosecondType>()
+    make_timestamp_table(TimeUnit::Nanosecond)
 }
 
 // Normalizes parts of an explain plan that vary from run to run (such as path)

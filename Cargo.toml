@@ -33,3 +33,8 @@ exclude = ["python"]
 [profile.release]
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+arrow2 = { git = "https://github.com/jorgecarleitao/arrow2.git", rev = "ef7937dfe56033c2cc491482c67587b52cd91554" }
+#arrow2 = { git = "https://github.com/blaze-init/arrow2.git", branch = "shuffle_ipc" }
+#parquet2 = { git = "https://github.com/blaze-init/parquet2.git", branch = "meta_new" }

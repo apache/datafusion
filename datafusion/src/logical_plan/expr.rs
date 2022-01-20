@@ -19,6 +19,9 @@
 //! such as `col = 5` or `SUM(col)`. See examples on the [`Expr`] struct.
 
 pub use super::Operator;
+
+use arrow::{compute::cast::can_cast_types, datatypes::DataType};
+
 use crate::error::{DataFusionError, Result};
 use crate::field_util::get_indexed_field;
 use crate::logical_plan::{
@@ -31,11 +34,11 @@ use crate::physical_plan::{
 };
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
-use arrow::{compute::can_cast_types, datatypes::DataType};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -221,7 +224,7 @@ impl fmt::Display for Column {
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, PartialOrd)]
+#[derive(Clone, PartialEq, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -370,6 +373,23 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
+}
+
+/// Fixed seed for the hashing so that Ords are consistent across runs
+const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
+
+impl PartialOrd for Expr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let mut hasher = SEED.build_hasher();
+        self.hash(&mut hasher);
+        let s = hasher.finish();
+
+        let mut hasher = SEED.build_hasher();
+        other.hash(&mut hasher);
+        let o = hasher.finish();
+
+        Some(s.cmp(&o))
+    }
 }
 
 impl Expr {
@@ -2442,8 +2462,8 @@ mod tests {
 
         assert!(exp1 < exp2);
         assert!(exp2 > exp1);
-        assert!(exp2 < exp3);
-        assert!(exp3 > exp2);
+        assert!(exp2 > exp3);
+        assert!(exp3 < exp2);
     }
 
     #[test]

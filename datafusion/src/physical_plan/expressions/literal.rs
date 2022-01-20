@@ -80,7 +80,7 @@ pub fn lit(value: ScalarValue) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use super::*;
     use crate::error::Result;
-    use arrow::array::Int32Array;
+    use arrow::array::*;
     use arrow::datatypes::*;
 
     #[test]

@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -38,7 +38,7 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+        let formatted = $crate::arrow_print::write($CHUNKS);
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -72,7 +72,7 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+        let formatted = $crate::arrow_print::write($CHUNKS);
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();
@@ -229,11 +229,11 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
 }
 
 /// Get the schema for the aggregate_test_* csv files
-pub fn aggr_test_schema() -> SchemaRef {
+pub fn aggr_test_schema() -> Arc<Schema> {
     let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(Some(BTreeMap::from_iter(
+    f1 = f1.with_metadata(BTreeMap::from_iter(
         vec![("testing".into(), "test".into())].into_iter(),
-    )));
+    ));
     let schema = Schema::new(vec![
         f1,
         Field::new("c2", DataType::UInt32, false),

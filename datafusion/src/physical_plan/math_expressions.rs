@@ -16,21 +16,24 @@
 // under the License.
 
 //! Math expressions
-use super::{ColumnarValue, ScalarValue};
-use crate::error::{DataFusionError, Result};
-use arrow::array::{Float32Array, Float64Array};
-use arrow::datatypes::DataType;
 use rand::{thread_rng, Rng};
 use std::iter;
 use std::sync::Arc;
 
+use arrow::array::Float32Array;
+use arrow::array::Float64Array;
+use arrow::compute::arity::unary;
+use arrow::datatypes::DataType;
+
+use super::{ColumnarValue, ScalarValue};
+use crate::error::{DataFusionError, Result};
+
 macro_rules! downcast_compute_op {
-    ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
+    ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident, $DT: path) => {{
         let n = $ARRAY.as_any().downcast_ref::<$TYPE>();
         match n {
             Some(array) => {
-                let res: $TYPE =
-                    arrow::compute::kernels::arity::unary(array, |x| x.$FUNC());
+                let res: $TYPE = unary(array, |x| x.$FUNC(), $DT);
                 Ok(Arc::new(res))
             }
             _ => Err(DataFusionError::Internal(format!(
@@ -46,11 +49,23 @@ macro_rules! unary_primitive_array_op {
         match ($VALUE) {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Float32 => {
-                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float32Array);
+                    let result = downcast_compute_op!(
+                        array,
+                        $NAME,
+                        $FUNC,
+                        Float32Array,
+                        DataType::Float32
+                    );
                     Ok(ColumnarValue::Array(result?))
                 }
                 DataType::Float64 => {
-                    let result = downcast_compute_op!(array, $NAME, $FUNC, Float64Array);
+                    let result = downcast_compute_op!(
+                        array,
+                        $NAME,
+                        $FUNC,
+                        Float64Array,
+                        DataType::Float64
+                    );
                     Ok(ColumnarValue::Array(result?))
                 }
                 other => Err(DataFusionError::Internal(format!(
@@ -114,7 +129,7 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     };
     let mut rng = thread_rng();
     let values = iter::repeat_with(|| rng.gen_range(0.0..1.0)).take(len);
-    let array = Float64Array::from_iter_values(values);
+    let array = Float64Array::from_trusted_len_values_iter(values);
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
@@ -122,11 +137,17 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
 
     use super::*;
-    use arrow::array::{Float64Array, NullArray};
+    use arrow::{
+        array::{Float64Array, NullArray},
+        datatypes::DataType,
+    };
 
     #[test]
     fn test_random_expression() {
-        let args = vec![ColumnarValue::Array(Arc::new(NullArray::new(1)))];
+        let args = vec![ColumnarValue::Array(Arc::new(NullArray::from_data(
+            DataType::Null,
+            1,
+        )))];
         let array = random(&args).expect("fail").into_array(1);
         let floats = array.as_any().downcast_ref::<Float64Array>().expect("fail");
 

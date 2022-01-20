@@ -27,8 +27,8 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
-pub use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
+pub use arrow::compute::sort::SortOptions;
+use arrow::compute::{sort::lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -191,15 +191,16 @@ fn sort_batch(
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
 ) -> ArrowResult<RecordBatch> {
+    let columns = expr
+        .iter()
+        .map(|e| e.evaluate_to_sort_column(&batch))
+        .collect::<Result<Vec<_>>>()
+        .map_err(DataFusionError::into_arrow_external_error)?;
+    let columns = columns.iter().map(|x| x.into()).collect::<Vec<_>>();
+
+    // sort combined record batch
     // TODO: pushup the limit expression to sort
-    let indices = lexsort_to_indices(
-        &expr
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(&batch))
-            .collect::<Result<Vec<SortColumn>>>()
-            .map_err(DataFusionError::into_arrow_external_error)?,
-        None,
-    )?;
+    let indices = lexsort_to_indices::<i32>(&columns, None)?;
 
     // reorder all rows based on sorted indices
     RecordBatch::try_new(
@@ -207,17 +208,7 @@ fn sort_batch(
         batch
             .columns()
             .iter()
-            .map(|column| {
-                take(
-                    column.as_ref(),
-                    &indices,
-                    // disable bound check overhead since indices are already generated from
-                    // the same record batch
-                    Some(TakeOptions {
-                        check_bounds: false,
-                    }),
-                )
-            })
+            .map(|column| take::take(column.as_ref(), &indices).map(|x| x.into()))
             .collect::<ArrowResult<Vec<ArrayRef>>>()?,
     )
 }
@@ -290,7 +281,9 @@ impl Stream for SortStream {
 
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))), // error receiving
+                    Err(e) => {
+                        Some(Err(ArrowError::External("".to_string(), Box::new(e))))
+                    } // error receiving
                     Ok(result) => result.transpose(),
                 };
 
@@ -376,15 +369,18 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = columns[0]
+            .as_any()
+            .downcast_ref::<Utf8Array<i32>>()
+            .unwrap();
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        let c2 = columns[1].as_any().downcast_ref::<UInt32Array>().unwrap();
         assert_eq!(c2.value(0), 1);
         assert_eq!(c2.value(c2.len() - 1), 5,);
 
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        let c7 = columns[6].as_any().downcast_ref::<UInt8Array>().unwrap();
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
@@ -403,8 +399,8 @@ mod tests {
                 .collect();
 
         let mut field = Field::new("field_name", DataType::UInt64, true);
-        field.set_metadata(Some(field_metadata.clone()));
-        let schema = Schema::new_with_metadata(vec![field], schema_metadata.clone());
+        field = field.with_metadata(field_metadata.clone());
+        let schema = Schema::new_from(vec![field], schema_metadata.clone());
         let schema = Arc::new(schema);
 
         let data: ArrayRef =
@@ -433,10 +429,7 @@ mod tests {
         assert_eq!(&vec![expected_batch], &result);
 
         // explicitlty ensure the metadata is present
-        assert_eq!(
-            result[0].schema().fields()[0].metadata(),
-            &Some(field_metadata)
-        );
+        assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
         Ok(())
@@ -510,8 +503,8 @@ mod tests {
         assert_eq!(DataType::Float32, *columns[0].data_type());
         assert_eq!(DataType::Float64, *columns[1].data_type());
 
-        let a = as_primitive_array::<Float32Type>(&columns[0]);
-        let b = as_primitive_array::<Float64Type>(&columns[1]);
+        let a = columns[0].as_any().downcast_ref::<Float32Array>().unwrap();
+        let b = columns[1].as_any().downcast_ref::<Float64Array>().unwrap();
 
         // convert result to strings to allow comparing to expected result containing NaN
         let result: Vec<(Option<String>, Option<String>)> = (0..result[0].num_rows())

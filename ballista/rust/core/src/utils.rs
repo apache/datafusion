@@ -32,14 +32,15 @@ use crate::serde::scheduler::PartitionStats;
 use crate::config::BallistaConfig;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
+use datafusion::arrow::io::ipc::write::WriteOptions;
 use datafusion::arrow::{
-    array::{
-        ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
-    },
-    datatypes::{DataType, Field, SchemaRef},
-    ipc::reader::FileReader,
-    ipc::writer::FileWriter,
+    array::*,
+    compute::aggregate::estimated_bytes_size,
+    datatypes::{DataType, Field},
+    io::ipc::read::FileReader,
+    io::ipc::write::FileWriter,
     record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
@@ -73,7 +74,7 @@ pub async fn write_stream_to_disk(
     path: &str,
     disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
-    let file = File::create(&path).map_err(|e| {
+    let mut file = File::create(&path).map_err(|e| {
         BallistaError::General(format!(
             "Failed to create partition file at {}: {:?}",
             path, e
@@ -83,7 +84,12 @@ pub async fn write_stream_to_disk(
     let mut num_rows = 0;
     let mut num_batches = 0;
     let mut num_bytes = 0;
-    let mut writer = FileWriter::try_new(file, stream.schema().as_ref())?;
+    let mut writer = FileWriter::try_new(
+        &mut file,
+        stream.schema().as_ref(),
+        None,
+        WriteOptions::default(),
+    )?;
 
     while let Some(result) = stream.next().await {
         let batch = result?;
@@ -91,14 +97,14 @@ pub async fn write_stream_to_disk(
         let batch_size_bytes: usize = batch
             .columns()
             .iter()
-            .map(|array| array.get_array_memory_size())
+            .map(|array| estimated_bytes_size(array.as_ref()))
             .sum();
         num_batches += 1;
         num_rows += batch.num_rows();
         num_bytes += batch_size_bytes;
 
         let timer = disk_write_metric.timer();
-        writer.write(&batch)?;
+        writer.write(&batch, None)?;
         timer.done();
     }
     let timer = disk_write_metric.timer();

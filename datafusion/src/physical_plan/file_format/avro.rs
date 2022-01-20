@@ -18,14 +18,13 @@
 //! Execution plan for reading line-delimited Avro files
 #[cfg(feature = "avro")]
 use crate::avro_to_arrow;
+#[cfg(feature = "avro")]
+use crate::datasource::object_store::ReadSeek;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
-#[cfg(feature = "avro")]
-use arrow::error::ArrowError;
-
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
@@ -106,19 +105,16 @@ impl ExecutionPlan for AvroExec {
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The avro reader cannot limit the number of records, so `remaining` is ignored.
-        let fun = move |file, _remaining: &Option<usize>| {
-            let reader_res = avro_to_arrow::Reader::try_new(
-                file,
-                Arc::clone(&file_schema),
-                batch_size,
-                proj.clone(),
-            );
-            match reader_res {
-                Ok(r) => Box::new(r) as BatchIter,
-                Err(e) => Box::new(
-                    vec![Err(ArrowError::ExternalError(Box::new(e)))].into_iter(),
-                ),
+        let fun = move |file: Box<dyn ReadSeek + Sync + Send>,
+                        _remaining: &Option<usize>| {
+            let mut builder = avro_to_arrow::ReaderBuilder::new()
+                .with_batch_size(batch_size)
+                .with_schema(file_schema.clone());
+            if let Some(proj) = proj.clone() {
+                builder = builder.with_projection(proj);
             }
+            let reader = builder.build(file).unwrap();
+            Box::new(reader) as BatchIter
         };
 
         Ok(Box::pin(FileStream::new(
@@ -238,7 +234,7 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![partitioned_file]],
-            file_schema: file_schema,
+            file_schema,
             statistics: Statistics::default(),
             batch_size: 1024,
             limit: None,
