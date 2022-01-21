@@ -366,7 +366,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::datasource::listing::ListingOptions;
+    
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
