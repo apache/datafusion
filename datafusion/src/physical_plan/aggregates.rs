@@ -32,7 +32,6 @@ use super::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_types};
-use crate::physical_plan::distinct_expressions;
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use expressions::{
@@ -198,14 +197,12 @@ pub fn create_aggregate_expr(
             name,
             return_type,
         )),
-        (AggregateFunction::Count, true) => {
-            Arc::new(distinct_expressions::DistinctCount::new(
-                coerced_exprs_types,
-                coerced_phy_exprs,
-                name,
-                return_type,
-            ))
-        }
+        (AggregateFunction::Count, true) => Arc::new(expressions::DistinctCount::new(
+            coerced_exprs_types,
+            coerced_phy_exprs,
+            name,
+            return_type,
+        )),
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
             coerced_phy_exprs[0].clone(),
             name,
@@ -229,9 +226,11 @@ pub fn create_aggregate_expr(
             coerced_exprs_types[0].clone(),
         )),
         (AggregateFunction::ArrayAgg, true) => {
-            return Err(DataFusionError::NotImplemented(
-                "ARRAY_AGG(DISTINCT) aggregations are not available".to_string(),
-            ));
+            Arc::new(expressions::DistinctArrayAgg::new(
+                coerced_phy_exprs[0].clone(),
+                name,
+                coerced_exprs_types[0].clone(),
+            ))
         }
         (AggregateFunction::Min, _) => Arc::new(expressions::Min::new(
             coerced_phy_exprs[0].clone(),
@@ -396,12 +395,10 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::DataFusionError::NotImplemented;
     use crate::error::Result;
-    use crate::physical_plan::distinct_expressions::DistinctCount;
     use crate::physical_plan::expressions::{
-        ApproxDistinct, ArrayAgg, Avg, Correlation, Count, Covariance, Max, Min, Stddev,
-        Sum, Variance,
+        ApproxDistinct, ArrayAgg, Avg, Correlation, Count, Covariance, DistinctArrayAgg,
+        DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
 
     #[test]
@@ -475,42 +472,40 @@ mod tests {
                     &input_phy_exprs[0..1],
                     &input_schema,
                     "c1",
-                );
+                )?;
                 match fun {
                     AggregateFunction::Count => {
-                        let result_agg_phy_exprs_distinct = result_distinct?;
-                        assert!(result_agg_phy_exprs_distinct
-                            .as_any()
-                            .is::<DistinctCount>());
-                        assert_eq!("c1", result_agg_phy_exprs_distinct.name());
+                        assert!(result_distinct.as_any().is::<DistinctCount>());
+                        assert_eq!("c1", result_distinct.name());
                         assert_eq!(
                             Field::new("c1", DataType::UInt64, true),
-                            result_agg_phy_exprs_distinct.field().unwrap()
+                            result_distinct.field().unwrap()
                         );
                     }
                     AggregateFunction::ApproxDistinct => {
-                        let result_agg_phy_exprs_distinct = result_distinct?;
-                        assert!(result_agg_phy_exprs_distinct
-                            .as_any()
-                            .is::<ApproxDistinct>());
-                        assert_eq!("c1", result_agg_phy_exprs_distinct.name());
+                        assert!(result_distinct.as_any().is::<ApproxDistinct>());
+                        assert_eq!("c1", result_distinct.name());
                         assert_eq!(
                             Field::new("c1", DataType::UInt64, false),
-                            result_agg_phy_exprs_distinct.field().unwrap()
+                            result_distinct.field().unwrap()
                         );
                     }
-                    AggregateFunction::ArrayAgg => match result_distinct {
-                        Err(NotImplemented(s)) => {
-                            assert_eq!(
-                                s,
-                                "ARRAY_AGG(DISTINCT) aggregations are not available"
-                                    .to_string()
-                            );
-                        }
-                        _ => {
-                            unreachable!()
-                        }
-                    },
+                    AggregateFunction::ArrayAgg => {
+                        assert!(result_distinct.as_any().is::<DistinctArrayAgg>());
+                        assert_eq!("c1", result_distinct.name());
+                        assert_eq!(
+                            Field::new(
+                                "c1",
+                                DataType::List(Box::new(Field::new(
+                                    "item",
+                                    data_type.clone(),
+                                    true
+                                ))),
+                                false
+                            ),
+                            result_agg_phy_exprs.field().unwrap()
+                        );
+                    }
                     _ => {}
                 };
             }

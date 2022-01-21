@@ -41,6 +41,7 @@ use arrow::compute::kernels::comparison::{
     regexp_is_match_utf8_scalar,
 };
 use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
+use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
@@ -235,12 +236,10 @@ fn is_distinct_from_decimal(
 ) -> Result<BooleanArray> {
     let mut bool_builder = BooleanBuilder::new(left.len());
     for i in 0..left.len() {
-        if left.is_null(i) && right.is_null(i) {
-            bool_builder.append_value(false)?;
-        } else if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_value(true)?;
-        } else {
-            bool_builder.append_value(left.value(i) != right.value(i))?;
+        match (left.is_null(i), right.is_null(i)) {
+            (true, true) => bool_builder.append_value(false)?,
+            (true, false) | (false, true) => bool_builder.append_value(true)?,
+            (_, _) => bool_builder.append_value(left.value(i) != right.value(i))?,
         }
     }
     Ok(bool_builder.finish())
@@ -252,15 +251,87 @@ fn is_not_distinct_from_decimal(
 ) -> Result<BooleanArray> {
     let mut bool_builder = BooleanBuilder::new(left.len());
     for i in 0..left.len() {
-        if left.is_null(i) && right.is_null(i) {
-            bool_builder.append_value(true)?;
-        } else if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_value(false)?;
-        } else {
-            bool_builder.append_value(left.value(i) == right.value(i))?;
+        match (left.is_null(i), right.is_null(i)) {
+            (true, true) => bool_builder.append_value(true)?,
+            (true, false) | (false, true) => bool_builder.append_value(false)?,
+            (_, _) => bool_builder.append_value(left.value(i) == right.value(i))?,
         }
     }
     Ok(bool_builder.finish())
+}
+
+fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else {
+            decimal_builder.append_value(left.value(i) + right.value(i))?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else {
+            decimal_builder.append_value(left.value(i) - right.value(i))?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    let divide = 10_i128.pow(left.scale() as u32);
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else {
+            decimal_builder.append_value(left.value(i) * right.value(i) / divide)?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    let mul = 10_f64.powi(left.scale() as i32);
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else if right.value(i) == 0 {
+            return Err(DataFusionError::ArrowError(DivideByZero));
+        } else {
+            let l_value = left.value(i) as f64;
+            let r_value = right.value(i) as f64;
+            let result = ((l_value / r_value) * mul) as i128;
+            decimal_builder.append_value(result)?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else if right.value(i) == 0 {
+            return Err(DataFusionError::ArrowError(DivideByZero));
+        } else {
+            decimal_builder.append_value(left.value(i) % right.value(i))?;
+        }
+    }
+    Ok(decimal_builder.finish())
 }
 
 /// Binary expression
@@ -472,6 +543,9 @@ macro_rules! binary_string_array_op {
 macro_rules! binary_primitive_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
+            // TODO support decimal type
+            // which is not the primitive type
+            DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, DecimalArray),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op!($LEFT, $RIGHT, $OP, Int32Array),
@@ -2549,6 +2623,7 @@ mod tests {
         .unwrap();
         // is distinct: float64array is distinct decimal array
         // TODO: now we do not refactor the `is distinct or is not distinct` rule of coercion.
+        // traced by https://github.com/apache/arrow-datafusion/issues/1590
         // the decimal array will be casted to float64array
         apply_logic_op(
             &schema,
@@ -2565,6 +2640,199 @@ mod tests {
             &decimal_array,
             Operator::IsNotDistinctFrom,
             BooleanArray::from(vec![Some(true), Some(false), Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_op_test() -> Result<()> {
+        let value_i128: i128 = 123;
+        let left_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )?;
+        let right_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                Some(value_i128),
+                Some(value_i128),
+                Some(value_i128),
+            ],
+            25,
+            3,
+        )?;
+        // add
+        let result = add_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect =
+            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3)?;
+        assert_eq!(expect, result);
+        // subtract
+        let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
+        assert_eq!(expect, result);
+        // multiply
+        let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
+        assert_eq!(expect, result);
+        // divide
+        let left_decimal_array = create_decimal_array(
+            &[Some(1234567), None, Some(1234567), Some(1234567)],
+            25,
+            3,
+        )?;
+        let right_decimal_array =
+            create_decimal_array(&[Some(10), Some(100), Some(55), Some(-123)], 25, 3)?;
+        let result = divide_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(
+            &[Some(123456700), None, Some(22446672), Some(-10037130)],
+            25,
+            3,
+        )?;
+        assert_eq!(expect, result);
+        // modulus
+        let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3)?;
+        assert_eq!(expect, result);
+
+        Ok(())
+    }
+
+    fn apply_arithmetic_op(
+        schema: &SchemaRef,
+        left: &ArrayRef,
+        right: &ArrayRef,
+        op: Operator,
+        expected: ArrayRef,
+    ) -> Result<()> {
+        let arithmetic_op =
+            binary_simple(col("a", schema)?, op, col("b", schema)?, schema);
+        let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
+        let batch = RecordBatch::try_new(schema.clone(), data)?;
+        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+
+        assert_eq!(result.as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_expr_test() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value as i128), // 1.23
+                None,
+                Some((value - 1) as i128), // 1.22
+                Some((value + 1) as i128), // 1.24
+            ],
+            10,
+            2,
+        )?) as ArrayRef;
+        let int32_array = Arc::new(Int32Array::from(vec![
+            Some(123),
+            Some(122),
+            Some(123),
+            Some(124),
+        ])) as ArrayRef;
+
+        // add: Int32array add decimal array
+        let expect = Arc::new(create_decimal_array(
+            &[Some(12423), None, Some(12422), Some(12524)],
+            13,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Plus,
+            expect,
+        )
+        .unwrap();
+
+        // subtract: decimal array subtract int32 array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, true),
+            Field::new("a", DataType::Decimal(10, 2), true),
+        ]));
+        let expect = Arc::new(create_decimal_array(
+            &[Some(-12177), None, Some(-12178), Some(-12276)],
+            13,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Minus,
+            expect,
+        )
+        .unwrap();
+
+        // multiply: decimal array multiply int32 array
+        let expect = Arc::new(create_decimal_array(
+            &[Some(15129), None, Some(15006), Some(15376)],
+            21,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Multiply,
+            expect,
+        )
+        .unwrap();
+        // divide: int32 array divide decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+        let expect = Arc::new(create_decimal_array(
+            &[
+                Some(10000000000000),
+                None,
+                Some(10081967213114),
+                Some(10000000000000),
+            ],
+            23,
+            11,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Divide,
+            expect,
+        )
+        .unwrap();
+        // modulus: int32 array modulus decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+        let expect = Arc::new(create_decimal_array(
+            &[Some(000), None, Some(100), Some(000)],
+            10,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Modulo,
+            expect,
         )
         .unwrap();
 

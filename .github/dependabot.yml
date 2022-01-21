@@ -3,9 +3,7 @@ updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: weekly
-      day: sunday
-      time: "7:00"
+      interval: daily
     open-pull-requests-limit: 10
     target-branch: master
     labels: [auto-dependencies]

@@ -18,7 +18,10 @@
 
 //! Ballista configuration
 
+use core::fmt;
 use std::collections::HashMap;
+use std::result;
+use std::string::ParseError;
 
 use crate::error::{BallistaError, Result};
 
@@ -26,6 +29,9 @@ use datafusion::arrow::datatypes::DataType;
 use log::warn;
 
 pub const BALLISTA_DEFAULT_SHUFFLE_PARTITIONS: &str = "ballista.shuffle.partitions";
+pub const BALLISTA_WITH_INFORMATION_SCHEMA: &str = "ballista.with_information_schema";
+
+pub type ParseResult<T> = result::Result<T, String>;
 
 /// Configuration option meta-data
 #[derive(Debug, Clone)]
@@ -103,9 +109,9 @@ impl BallistaConfig {
         for (name, entry) in &supported_entries {
             if let Some(v) = settings.get(name) {
                 // validate that we can parse the user-supplied value
-                let _ = v.parse::<usize>().map_err(|e| BallistaError::General(format!("Failed to parse user-supplied value '{}' for configuration setting '{}': {:?}", name, v, e)))?;
+                let _ = Self::parse_value(v.as_str(), entry._data_type.clone()).map_err(|e| BallistaError::General(format!("Failed to parse user-supplied value '{}' for configuration setting '{}': {}", name, v, e)))?;
             } else if let Some(v) = entry.default_value.clone() {
-                let _ = v.parse::<usize>().map_err(|e| BallistaError::General(format!("Failed to parse default value '{}' for configuration setting '{}': {:?}", name, v, e)))?;
+                let _ = Self::parse_value(v.as_str(), entry._data_type.clone()).map_err(|e| BallistaError::General(format!("Failed to parse default value '{}' for configuration setting '{}': {}", name, v, e)))?;
             } else {
                 return Err(BallistaError::General(format!(
                     "No value specified for mandatory configuration setting '{}'",
@@ -117,12 +123,35 @@ impl BallistaConfig {
         Ok(Self { settings })
     }
 
+    pub fn parse_value(val: &str, data_type: DataType) -> ParseResult<()> {
+        match data_type {
+            DataType::UInt16 => {
+                val.to_string()
+                    .parse::<usize>()
+                    .map_err(|e| format!("{:?}", e))?;
+            }
+            DataType::Boolean => {
+                val.to_string()
+                    .parse::<bool>()
+                    .map_err(|e| format!("{:?}", e))?;
+            }
+            _ => {
+                return Err(format!("not support data type: {}", data_type));
+            }
+        }
+
+        Ok(())
+    }
+
     /// All available configuration options
     pub fn valid_entries() -> HashMap<String, ConfigEntry> {
         let entries = vec![
             ConfigEntry::new(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_string(),
                 "Sets the default number of partitions to create when repartitioning query stages".to_string(),
                 DataType::UInt16, Some("2".to_string())),
+            ConfigEntry::new(BALLISTA_WITH_INFORMATION_SCHEMA.to_string(),
+                "Sets whether enable information_schema".to_string(),
+                DataType::Boolean,Some("false".to_string())),
         ];
         entries
             .iter()
@@ -138,6 +167,10 @@ impl BallistaConfig {
         self.get_usize_setting(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS)
     }
 
+    pub fn default_with_information_schema(&self) -> bool {
+        self.get_bool_setting(BALLISTA_WITH_INFORMATION_SCHEMA)
+    }
+
     fn get_usize_setting(&self, key: &str) -> usize {
         if let Some(v) = self.settings.get(key) {
             // infallible because we validate all configs in the constructor
@@ -147,6 +180,18 @@ impl BallistaConfig {
             // infallible because we validate all configs in the constructor
             let v = entries.get(key).unwrap().default_value.as_ref().unwrap();
             v.parse().unwrap()
+        }
+    }
+
+    fn get_bool_setting(&self, key: &str) -> bool {
+        if let Some(v) = self.settings.get(key) {
+            // infallible because we validate all configs in the constructor
+            v.parse::<bool>().unwrap()
+        } else {
+            let entries = Self::valid_entries();
+            // infallible because we validate all configs in the constructor
+            let v = entries.get(key).unwrap().default_value.as_ref().unwrap();
+            v.parse::<bool>().unwrap()
         }
     }
 }
@@ -159,6 +204,7 @@ mod tests {
     fn default_config() -> Result<()> {
         let config = BallistaConfig::new()?;
         assert_eq!(2, config.default_shuffle_partitions());
+        assert!(!config.default_with_information_schema());
         Ok(())
     }
 
@@ -166,8 +212,10 @@ mod tests {
     fn custom_config() -> Result<()> {
         let config = BallistaConfig::builder()
             .set(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS, "123")
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
             .build()?;
         assert_eq!(123, config.default_shuffle_partitions());
+        assert!(config.default_with_information_schema());
         Ok(())
     }
 
@@ -178,6 +226,13 @@ mod tests {
             .build();
         assert!(config.is_err());
         assert_eq!("General(\"Failed to parse user-supplied value 'ballista.shuffle.partitions' for configuration setting 'true': ParseIntError { kind: InvalidDigit }\")", format!("{:?}", config.unwrap_err()));
+
+        let config = BallistaConfig::builder()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "123")
+            .build();
+        assert!(config.is_err());
+        assert_eq!("General(\"Failed to parse user-supplied value 'ballista.with_information_schema' for configuration setting '123': ParseBoolError\")", format!("{:?}", config.unwrap_err()));
+
         Ok(())
     }
 }

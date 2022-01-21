@@ -32,7 +32,6 @@ mod average;
 mod binary;
 mod case;
 mod cast;
-pub(crate) mod coercion;
 mod column;
 mod count;
 mod cume_dist;
@@ -46,6 +45,7 @@ mod literal;
 mod min_max;
 mod correlation;
 mod covariance;
+mod distinct_expressions;
 mod negative;
 mod not;
 mod nth_value;
@@ -81,6 +81,7 @@ pub(crate) use covariance::{
     covariance_return_type, is_covariance_support_arg_type, Covariance, CovariancePop,
 };
 pub use cume_dist::cume_dist;
+pub use distinct_expressions::{DistinctArrayAgg, DistinctCount};
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
