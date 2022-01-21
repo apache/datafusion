@@ -32,7 +32,6 @@ use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
-use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
@@ -51,7 +50,7 @@ pub mod sort_preserving_merge;
 struct SortKeyCursor {
     stream_idx: usize,
     sort_columns: Vec<ArrayRef>,
-    cur_row: AtomicUsize,
+    cur_row: usize,
     num_rows: usize,
 
     // An index uniquely identifying the record batch scanned by this cursor.
@@ -69,7 +68,7 @@ impl<'a> std::fmt::Debug for SortKeyCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
             .field("sort_columns", &self.sort_columns)
-            .field("cur_row", &self.cur_row())
+            .field("cur_row", &self.cur_row)
             .field("num_rows", &self.num_rows)
             .field("batch_idx", &self.batch_idx)
             .field("batch", &self.batch)
@@ -92,7 +91,7 @@ impl SortKeyCursor {
             .collect::<error::Result<_>>()?;
         Ok(Self {
             stream_idx,
-            cur_row: AtomicUsize::new(0),
+            cur_row: 0,
             num_rows: batch.num_rows(),
             sort_columns,
             batch,
@@ -103,17 +102,14 @@ impl SortKeyCursor {
     }
 
     fn is_finished(&self) -> bool {
-        self.num_rows == self.cur_row()
+        self.num_rows == self.cur_row
     }
 
-    fn advance(&self) -> usize {
+    fn advance(&mut self) -> usize {
         assert!(!self.is_finished());
-        self.cur_row
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-    }
-
-    fn cur_row(&self) -> usize {
-        self.cur_row.load(std::sync::atomic::Ordering::SeqCst)
+        let t = self.cur_row;
+        self.cur_row += 1;
+        t
     }
 
     /// Compares the sort key pointed to by this instance's row cursor with that of another
@@ -151,7 +147,7 @@ impl SortKeyCursor {
         })?;
 
         for (i, ((l, r), sort_options)) in zipped.iter().enumerate() {
-            match (l.is_valid(self.cur_row()), r.is_valid(other.cur_row())) {
+            match (l.is_valid(self.cur_row), r.is_valid(other.cur_row)) {
                 (false, true) if sort_options.nulls_first => return Ok(Ordering::Less),
                 (false, true) => return Ok(Ordering::Greater),
                 (true, false) if sort_options.nulls_first => {
@@ -159,7 +155,7 @@ impl SortKeyCursor {
                 }
                 (true, false) => return Ok(Ordering::Less),
                 (false, false) => {}
-                (true, true) => match cmp[i](self.cur_row(), other.cur_row()) {
+                (true, true) => match cmp[i](self.cur_row, other.cur_row) {
                     Ordering::Equal => {}
                     o if sort_options.descending => return Ok(o.reverse()),
                     o => return Ok(o),
