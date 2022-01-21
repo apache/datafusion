@@ -341,6 +341,31 @@ macro_rules! get_min_max_values {
     }}
 }
 
+// Extract the null count value on the ParquetStatistics
+macro_rules! get_null_count_values {
+    ($self:expr, $column:expr) => {{
+        let column_index =
+            if let Some((v, _)) = $self.parquet_schema.column_with_name(&$column.name) {
+                v
+            } else {
+                // Named column was not present
+                return None;
+            };
+
+        let scalar_values: Vec<ScalarValue> = $self
+            .row_group_metadata
+            .iter()
+            .flat_map(|meta| meta.column(column_index).statistics())
+            .map(|stats| {
+                ScalarValue::UInt64(Some(stats.null_count().try_into().unwrap()))
+            })
+            .collect();
+
+        // ignore errors converting to arrays (e.g. different types)
+        ScalarValue::iter_to_array(scalar_values).ok()
+    }};
+}
+
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         get_min_max_values!(self, column, min, min_bytes)
@@ -352,6 +377,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
     fn num_containers(&self) -> usize {
         self.row_group_metadata.len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        get_null_count_values!(self, column)
     }
 }
 
@@ -710,21 +739,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn row_group_pruning_predicate_null_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
-        // test row group predicate with an unknown (Null) expr
-        //
-        // int > 1 and bool = NULL => c1_max > 1 and null
-        let expr = col("c1")
-            .gt(lit(15))
-            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Boolean, false),
-        ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
-
+    fn gen_row_group_meta_data_for_pruning_predicate() -> Vec<RowGroupMetaData> {
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
             ("c2", PhysicalType::BOOLEAN),
@@ -740,10 +755,56 @@ mod tests {
             &schema_descr,
             vec![
                 ParquetStatistics::int32(Some(11), Some(20), None, 0, false),
-                ParquetStatistics::boolean(Some(false), Some(true), None, 0, false),
+                ParquetStatistics::boolean(Some(false), Some(true), None, 1, false),
             ],
         );
-        let row_group_metadata = vec![rgm1, rgm2];
+        vec![rgm1, rgm2]
+    }
+
+    #[test]
+    fn row_group_pruning_predicate_null_expr() -> Result<()> {
+        use crate::logical_plan::{col, lit};
+        // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
+        let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Boolean, false),
+        ]));
+        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
+
+        let row_group_predicate = build_row_group_predicate(
+            &pruning_predicate,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
+        let row_group_filter = row_group_metadata
+            .iter()
+            .enumerate()
+            .map(|(i, g)| row_group_predicate(g, i))
+            .collect::<Vec<_>>();
+        // First row group was filtered out because it contains no null value on "c2".
+        assert_eq!(row_group_filter, vec![false, true]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_pruning_predicate_eq_null_expr() -> Result<()> {
+        use crate::logical_plan::{col, lit};
+        // test row group predicate with an unknown (Null) expr
+        //
+        // int > 1 and bool = NULL => c1_max > 1 and null
+        let expr = col("c1")
+            .gt(lit(15))
+            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Boolean, false),
+        ]));
+        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
+
         let row_group_predicate = build_row_group_predicate(
             &pruning_predicate,
             parquet_file_metrics(),
@@ -756,7 +817,6 @@ mod tests {
             .collect::<Vec<_>>();
         // no row group is filtered out because the predicate expression can't be evaluated
         // when a null array is generated for a statistics column,
-        // because the null values propagate to the end result, making the predicate result undefined
         assert_eq!(row_group_filter, vec![true, true]);
 
         Ok(())
