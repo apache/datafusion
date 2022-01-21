@@ -44,7 +44,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use log::debug;
+use log::{debug, error};
 use parquet::file::{
     metadata::RowGroupMetaData,
     reader::{FileReader, SerializedFileReader},
@@ -62,6 +62,7 @@ use tokio::{
 
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
+use parquet::errors::ParquetError;
 
 use super::PartitionColumnProjector;
 
@@ -394,21 +395,21 @@ fn map_projections(
     merged_schema: &Schema,
     file_schema: &Schema,
     projections: &[usize],
-) -> Vec<usize> {
-    if merged_schema.fields().len() == file_schema.fields().len() {
-        projections.to_vec()
-    } else {
-        let mut mapped: Vec<usize> = vec![];
-        for idx in projections {
-            let field = merged_schema.field(*idx);
-            if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
-                if file_schema.field(mapped_idx).data_type() == field.data_type() {
-                    mapped.push(mapped_idx)
-                }
+) -> Result<Vec<usize>> {
+    let mut mapped: Vec<usize> = vec![];
+    for idx in projections {
+        let field = merged_schema.field(*idx);
+        if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+            if file_schema.field(mapped_idx).data_type() == field.data_type() {
+                mapped.push(mapped_idx)
+            } else {
+                let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
+                error!("{}", msg);
+                return Err(DataFusionError::ParquetError(ParquetError::General(msg)));
             }
         }
-        mapped
     }
+    Ok(mapped)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -449,7 +450,7 @@ fn read_partition(
 
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
         let mapped_projections =
-            map_projections(&file_schema, &arrow_reader.get_schema()?, projection);
+            map_projections(&file_schema, &arrow_reader.get_schema()?, projection)?;
 
         let mut batch_reader =
             arrow_reader.get_record_reader_by_columns(mapped_projections, batch_size)?;
@@ -462,30 +463,27 @@ fn read_partition(
 
                     let batch_schema = batch.schema();
 
-                    let merged_batch = if batch.columns().len() < projection.len() {
-                        let mut cols: Vec<ArrayRef> = Vec::with_capacity(*total_cols);
-                        let batch_cols = batch.columns().to_vec();
+                    let mut cols: Vec<ArrayRef> = Vec::with_capacity(*total_cols);
+                    let batch_cols = batch.columns().to_vec();
 
-                        for field_idx in projection {
-                            let merged_field = &file_schema.fields()[*field_idx];
-                            if let Some((batch_idx, _name)) = batch_schema
-                                .column_with_name(merged_field.name().as_str())
-                            {
-                                cols.push(batch_cols[batch_idx].clone());
-                            } else {
-                                cols.push(new_null_array(
-                                    merged_field.data_type(),
-                                    batch_rows,
-                                ))
-                            }
+                    for field_idx in projection {
+                        let merged_field = &file_schema.fields()[*field_idx];
+                        if let Some((batch_idx, _name)) =
+                            batch_schema.column_with_name(merged_field.name().as_str())
+                        {
+                            cols.push(batch_cols[batch_idx].clone());
+                        } else {
+                            cols.push(new_null_array(
+                                merged_field.data_type(),
+                                batch_rows,
+                            ))
                         }
+                    }
 
-                        let projected_schema = file_schema.clone().project(projection)?;
+                    let projected_schema = file_schema.clone().project(projection)?;
 
-                        RecordBatch::try_new(Arc::new(projected_schema), cols)?
-                    } else {
-                        batch
-                    };
+                    let merged_batch =
+                        RecordBatch::try_new(Arc::new(projected_schema), cols)?;
 
                     let proj_batch = partition_column_projector
                         .project(merged_batch, &partitioned_file.partition_values);
@@ -520,34 +518,52 @@ fn read_partition(
 
 #[cfg(test)]
 mod tests {
-    use crate::{datasource::{
-        file_format::{parquet::ParquetFormat, FileFormat},
-        object_store::local::{
-            local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
+    use crate::{
+        assert_batches_sorted_eq,
+        datasource::{
+            file_format::{parquet::ParquetFormat, FileFormat},
+            object_store::local::{
+                local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
+            },
         },
-    }, assert_batches_sorted_eq, physical_plan::collect};
-
-    use super::*;
-    use arrow::{datatypes::{DataType, Field}, array::{StringArray, Int8Array, Int64Array}};
-    use futures::StreamExt;
-    use parquet::{
-        basic::Type as PhysicalType,
-        file::{metadata::RowGroupMetaData, statistics::Statistics as ParquetStatistics, properties::WriterProperties},
-        schema::types::SchemaDescPtr, arrow::ArrowWriter,
+        physical_plan::collect,
     };
 
+    use super::*;
+    use arrow::{
+        array::{Int64Array, Int8Array, StringArray},
+        datatypes::{DataType, Field},
+    };
+    use futures::StreamExt;
+    use parquet::{
+        arrow::ArrowWriter,
+        basic::Type as PhysicalType,
+        file::{
+            metadata::RowGroupMetaData, properties::WriterProperties,
+            statistics::Statistics as ParquetStatistics,
+        },
+        schema::types::SchemaDescPtr,
+    };
 
     /// writes each RecordBatch as an individual parquet file and then
     /// reads it back in to the named location.
-    async fn round_trip_to_parquet(batches: Vec<RecordBatch>, projection: Option<Vec<usize>>) -> Vec<RecordBatch> {
+    async fn round_trip_to_parquet(
+        batches: Vec<RecordBatch>,
+        projection: Option<Vec<usize>>,
+        schema: Option<SchemaRef>,
+    ) -> Vec<RecordBatch> {
         // When vec is dropped, temp files are deleted
-        let files: Vec<_> = batches.into_iter()
+        let files: Vec<_> = batches
+            .into_iter()
             .map(|batch| {
                 let output = tempfile::NamedTempFile::new().expect("creating temp file");
 
                 let props = WriterProperties::builder().build();
-                let file: std::fs::File = (*output.as_file()).try_clone().expect("cloning file descriptor");
-                let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props)).expect("creating writer");
+                let file: std::fs::File = (*output.as_file())
+                    .try_clone()
+                    .expect("cloning file descriptor");
+                let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props))
+                    .expect("creating writer");
 
                 writer.write(&batch).expect("Writing batch");
                 writer.close().unwrap();
@@ -555,20 +571,25 @@ mod tests {
             })
             .collect();
 
-        let file_names: Vec<_> = files.iter()
+        let file_names: Vec<_> = files
+            .iter()
             .map(|t| t.path().to_string_lossy().to_string())
             .collect();
 
         // Now, read the files back in
-        let file_groups: Vec<_> = file_names.iter()
+        let file_groups: Vec<_> = file_names
+            .iter()
             .map(|name| local_unpartitioned_file(name.clone()))
             .collect();
 
-        // Infer the schema
-        let file_schema = ParquetFormat::default()
-            .infer_schema(local_object_reader_stream(file_names))
-            .await
-            .expect("inferring schema");
+        // Infer the schema (if not provided)
+        let file_schema = match schema {
+            Some(provided_schema) => provided_schema,
+            None => ParquetFormat::default()
+                .infer_schema(local_object_reader_stream(file_names))
+                .await
+                .expect("inferring schema"),
+        };
 
         // prepare the scan
         let parquet_exec = ParquetExec::new(
@@ -585,13 +606,17 @@ mod tests {
         );
 
         let runtime = Arc::new(RuntimeEnv::default());
-        collect(Arc::new(parquet_exec) , runtime)
-                .await
-                .expect("reading parquet data")
+        collect(Arc::new(parquet_exec), runtime)
+            .await
+            .expect("reading parquet data")
     }
 
     // Add a new column with the specified field name to the RecordBatch
-    fn add_to_batch(batch: &RecordBatch, field_name: &str, array: ArrayRef) -> RecordBatch {
+    fn add_to_batch(
+        batch: &RecordBatch,
+        field_name: &str,
+        array: ArrayRef,
+    ) -> RecordBatch {
         let mut fields = batch.schema().fields().clone();
         fields.push(Field::new(field_name, array.data_type().clone(), true));
         let schema = Arc::new(Schema::new(fields));
@@ -601,11 +626,23 @@ mod tests {
         RecordBatch::try_new(schema, columns).expect("error; creating record batch")
     }
 
+    fn create_batch(columns: Vec<(&str, ArrayRef)>) -> RecordBatch {
+        columns.into_iter().fold(
+            RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
+            |batch, (field_name, arr)| add_to_batch(&batch, field_name, arr.clone()),
+        )
+    }
+
     #[tokio::test]
     async fn evolved_schema() {
-        let c1: ArrayRef = Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
         // batch1: c1(string)
-        let batch1 = add_to_batch(&RecordBatch::new_empty(Arc::new(Schema::new(vec![]))), "c1", c1);
+        let batch1 = add_to_batch(
+            &RecordBatch::new_empty(Arc::new(Schema::new(vec![]))),
+            "c1",
+            c1,
+        );
 
         // batch2: c1(string) and c2(int64)
         let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
@@ -616,7 +653,7 @@ mod tests {
         let batch3 = add_to_batch(&batch1, "c3", c3);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None).await;
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
@@ -635,70 +672,157 @@ mod tests {
         assert_batches_sorted_eq!(expected, &read);
     }
 
+    #[tokio::test]
+    async fn evolved_schema_inconsistent_order() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+
+        // batch1: c1(string), c2(int64), c3(int8)
+        let batch1 = create_batch(vec![
+            ("c1", c1.clone()),
+            ("c2", c2.clone()),
+            ("c3", c3.clone()),
+        ]);
+
+        // batch2: c3(int8), c2(int64), c1(string)
+        let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1)]);
+
+        // read/write them files:
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None).await;
+        let expected = vec![
+            "+-----+----+----+",
+            "| c1  | c2 | c3 |",
+            "+-----+----+----+",
+            "| Foo | 1  | 10 |",
+            "|     | 2  | 20 |",
+            "| bar |    |    |",
+            "| Foo | 1  | 10 |",
+            "|     | 2  | 20 |",
+            "| bar |    |    |",
+            "+-----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
 
     #[tokio::test]
-    async fn parquet_exec_with_evolved_schema() -> Result<()> {
+    async fn evolved_schema_intersection() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
 
-        let runtime = Arc::new(RuntimeEnv::default());
-        let testdata = crate::test_util::parquet_test_data();
-        let part1 = format!("{}/schema_evolution/part1.parquet", testdata);
-        let part2 = format!("{}/schema_evolution/part2.parquet", testdata);
-        let part3 = format!("{}/schema_evolution/part3.parquet", testdata);
-        let parquet_exec = ParquetExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_groups: vec![vec![
-                    local_unpartitioned_file(part1.clone()),
-                    local_unpartitioned_file(part2.clone()),
-                    local_unpartitioned_file(part3.clone()),
-                ]],
-                file_schema: ParquetFormat::default()
-                    .infer_schema(local_object_reader_stream(vec![part1, part2, part3]))
-                    .await?,
-                statistics: Statistics::default(),
-                projection: Some(vec![0, 1, 4]),
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            None,
-        );
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        let mut results = parquet_exec.execute(0, runtime).await?;
-        let batch1 = results.next().await.unwrap()?;
+        // batch1: c1(string), c2(int64), c3(int8)
+        let batch1 = create_batch(vec![("c1", c1), ("c3", c3.clone())]);
 
-        assert_eq!(8, batch1.num_rows());
-        assert_eq!(3, batch1.num_columns());
+        // batch2: c3(int8), c2(int64), c1(string)
+        let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
-        let schema = batch1.schema();
-        let field_names: Vec<&str> =
-            schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(vec!["id", "bool_col", "string_col"], field_names);
+        // read/write them files:
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None).await;
+        let expected = vec![
+            "+-----+----+----+",
+            "| c1  | c3 | c2 |",
+            "+-----+----+----+",
+            "| Foo | 10 |    |",
+            "|     | 20 |    |",
+            "| bar |    |    |",
+            "|     | 10 | 1  |",
+            "|     | 20 | 2  |",
+            "|     |    |    |",
+            "+-----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
 
-        let batch2 = results.next().await.unwrap()?;
+    #[tokio::test]
+    async fn evolved_schema_projection() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
 
-        assert_eq!(8, batch2.num_rows());
-        assert_eq!(3, batch2.num_columns());
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
 
-        let schema = batch2.schema();
-        let field_names: Vec<&str> =
-            schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(vec!["id", "bool_col", "string_col"], field_names);
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        let batch3 = results.next().await.unwrap()?;
+        let c4: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("baz"), Some("boo"), None]));
 
-        assert_eq!(8, batch3.num_rows());
-        assert_eq!(3, batch3.num_columns());
+        // batch1: c1(string), c2(int64), c3(int8)
+        let batch1 = create_batch(vec![
+            ("c1", c1.clone()),
+            ("c2", c2.clone()),
+            ("c3", c3.clone()),
+        ]);
 
-        let schema = batch3.schema();
-        let field_names: Vec<&str> =
-            schema.fields().iter().map(|f| f.name().as_str()).collect();
-        assert_eq!(vec!["id", "bool_col", "string_col"], field_names);
+        // batch2: c3(int8), c2(int64), c1(string), c4(string)
+        let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1), ("c4", c4)]);
 
-        let batch = results.next().await;
-        assert!(batch.is_none());
+        // read/write them files:
+        let read =
+            round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None).await;
+        let expected = vec![
+            "+-----+-----+",
+            "| c1  | c4  |",
+            "+-----+-----+",
+            "| Foo | baz |",
+            "|     | boo |",
+            "| bar |     |",
+            "| Foo |     |",
+            "|     |     |",
+            "| bar |     |",
+            "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
 
-        Ok(())
+    #[tokio::test]
+    async fn evolved_schema_incompatible_types() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+
+        let c4: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("baz"), Some("boo"), None]));
+
+        // batch1: c1(string), c2(int64), c3(int8)
+        let batch1 = create_batch(vec![
+            ("c1", c1.clone()),
+            ("c2", c2.clone()),
+            ("c3", c3.clone()),
+        ]);
+
+        // batch2: c3(int8), c2(int64), c1(string), c4(string)
+        let batch2 = create_batch(vec![("c3", c4), ("c2", c2), ("c1", c1)]);
+
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Int64, true),
+            Field::new("c3", DataType::Int8, true),
+        ]);
+
+        // read/write them files:
+        let read =
+            round_trip_to_parquet(vec![batch1, batch2], None, Some(Arc::new(schema)))
+                .await;
+        // expect on the first batch to be read
+        let expected = vec![
+            "+-----+----+----+",
+            "| c1  | c2 | c3 |",
+            "+-----+----+----+",
+            "| Foo | 1  | 10 |",
+            "|     | 2  | 20 |",
+            "| bar |    |    |",
+            "+-----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
     }
 
     #[tokio::test]
