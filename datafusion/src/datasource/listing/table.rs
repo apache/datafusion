@@ -29,7 +29,7 @@ use crate::{
     physical_plan::{
         empty::EmptyExec,
         file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
-        ExecutionPlan, Statistics,
+        project_schema, ExecutionPlan, Statistics,
     },
 };
 
@@ -179,12 +179,7 @@ impl TableProvider for ListingTable {
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let schema = self.schema();
-            let projected_schema = match &projection {
-                None => schema,
-                Some(p) => Arc::new(Schema::new(
-                    p.iter().map(|i| schema.field(*i).clone()).collect(),
-                )),
-            };
+            let projected_schema = project_schema(&schema, projection.as_ref())?;
             return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
         }
 

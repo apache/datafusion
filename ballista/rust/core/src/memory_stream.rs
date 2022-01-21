@@ -67,13 +67,12 @@ impl Stream for MemoryStream {
             let batch = &self.data[self.index - 1];
 
             // apply projection
-            match &self.projection {
-                Some(columns) => Some(RecordBatch::try_new(
-                    self.schema.clone(),
-                    columns.iter().map(|i| batch.column(*i).clone()).collect(),
-                )),
-                None => Some(Ok(batch.clone())),
-            }
+            let next_batch = match &self.projection {
+                Some(projection) => batch.project(projection)?,
+                None => batch.clone(),
+            };
+
+            Some(Ok(next_batch))
         } else {
             None
         })
