@@ -401,11 +401,9 @@ fn map_projections(
         let mut mapped: Vec<usize> = vec![];
         for idx in projections {
             let field = merged_schema.field(*idx);
-            if let Ok(file_field) = file_schema.field_with_name(field.name().as_str()) {
-                if file_field.data_type() == field.data_type() {
-                    if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
-                        mapped.push(mapped_idx)
-                    }
+            if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+                if file_schema.field(mapped_idx).data_type() == field.data_type() {
+                    mapped.push(mapped_idx)
                 }
             }
         }
