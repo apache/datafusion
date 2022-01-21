@@ -1211,6 +1211,7 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::context::QueryPlanner;
     use crate::from_slice::FromSlice;
     use crate::logical_plan::plan::Projection;
     use crate::logical_plan::TableScan;
