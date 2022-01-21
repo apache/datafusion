@@ -289,6 +289,8 @@ pub(crate) struct SortPreservingMergeStream {
     /// their rows have been yielded to the output
     batches: Vec<VecDeque<Arc<RecordBatch>>>,
 
+    /// Maintain a flag for each stream denoting if the current cursor
+    /// has finished and needs to poll from the stream
     cursor_finished: Vec<bool>,
 
     /// The accumulated row indexes for the next record batch
