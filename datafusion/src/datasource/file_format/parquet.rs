@@ -375,20 +375,6 @@ mod tests {
     use futures::StreamExt;
 
     #[tokio::test]
-    async fn test_merge_schema() -> Result<()> {
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, "schema_evolution");
-        let opt = ListingOptions::new(Arc::new(ParquetFormat::default()));
-        let schema = opt
-            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
-            .await?;
-
-        assert_eq!(schema.fields().len(), 5);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn read_small_batches() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
         let projection = None;
