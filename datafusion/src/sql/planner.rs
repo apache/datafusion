@@ -1864,16 +1864,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // Interval is tricky thing
         // 1 day is not 24 hours because timezones, 1 year != 365/364! 30 days != 1 month
         // The true way to store and calculate intervals is to store it as it defined
-        // Due the fact that Arrow supports only two types YearMonth (month) and DayTime (day, time)
-        // It's not possible to store complex intervals
-        // It's possible to do select (NOW() + INTERVAL '1 year') + INTERVAL '1 day'; as workaround
+        // It's why we there are 3 different interval types in Arrow
         if result_month != 0 && (result_days != 0 || result_millis != 0) {
-            return Err(DataFusionError::NotImplemented(format!(
-                "DF does not support intervals that have both a Year/Month part as well as Days/Hours/Mins/Seconds: {:?}. Hint: try breaking the interval into two parts, one with Year/Month and the other with Days/Hours/Mins/Seconds - e.g. (NOW() + INTERVAL '1 year') + INTERVAL '1 day'",
-                value
-            )));
+            let result: i128 = ((result_month as i128) << 96)
+                | ((result_days as i128) << 64)
+                // IntervalMonthDayNano uses nanos, but IntervalDayTime uses milles
+                | ((result_millis * 1_000_000_i64) as i128);
+
+            return Ok(Expr::Literal(ScalarValue::IntervalMonthDayNano(Some(
+                result,
+            ))));
         }
 
+        // Month interval
         if result_month != 0 {
             return Ok(Expr::Literal(ScalarValue::IntervalYearMonth(Some(
                 result_month as i32,
@@ -2808,16 +2811,6 @@ mod tests {
             r#"NotImplemented("Interval field value out of range: \"100000000000000000 day\"")"#,
             format!("{:?}", err)
         );
-    }
-
-    #[test]
-    fn select_unsupported_complex_interval() {
-        let sql = "SELECT INTERVAL '1 year 1 day'";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::NotImplemented(msg) if msg == "DF does not support intervals that have both a Year/Month part as well as Days/Hours/Mins/Seconds: \"1 year 1 day\". Hint: try breaking the interval into two parts, one with Year/Month and the other with Days/Hours/Mins/Seconds - e.g. (NOW() + INTERVAL '1 year') + INTERVAL '1 day'",
-        ));
     }
 
     #[test]
