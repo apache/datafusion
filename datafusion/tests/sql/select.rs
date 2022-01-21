@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
@@ -473,7 +474,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let input = Int64Array::from(vec![1, 2, 3, 4]);
+    let input = Int64Array::from_slice(&[1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     ctx.register_table("test", Arc::new(table))?;
@@ -495,7 +496,9 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 
     let sql = "EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM test";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual).unwrap();
+    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
+        .unwrap()
+        .to_string();
 
     // Only test that the projection exprs arecorrect, rather than entire output
     let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
@@ -652,19 +655,28 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
-    let array = vec![Some("one"), None, Some("three")]
-        .into_iter()
-        .collect::<DictionaryArray<Int32Type>>();
+    let d1: DictionaryArray<Int32Type> =
+        vec![Some("one"), None, Some("three")].into_iter().collect();
 
-    let batch =
-        RecordBatch::try_from_iter(vec![("d1", Arc::new(array) as ArrayRef)]).unwrap();
+    let d2: DictionaryArray<Int32Type> = vec![Some("blarg"), None, Some("three")]
+        .into_iter()
+        .collect();
+
+    let d3: StringArray = vec![Some("XYZ"), None, Some("three")].into_iter().collect();
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("d1", Arc::new(d1) as ArrayRef),
+        ("d2", Arc::new(d2) as ArrayRef),
+        ("d3", Arc::new(d3) as ArrayRef),
+    ])
+    .unwrap();
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
     // Basic SELECT
-    let sql = "SELECT * FROM test";
+    let sql = "SELECT d1 FROM test";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -678,7 +690,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     // basic filtering
-    let sql = "SELECT * FROM test WHERE d1 IS NOT NULL";
+    let sql = "SELECT d1 FROM test WHERE d1 IS NOT NULL";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -690,8 +702,56 @@ async fn query_on_string_dictionary() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
+    // comparison with constant
+    let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // comparison with another dictionary column
+    let sql = "SELECT d1 FROM test WHERE d1 = d2";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // order comparison with another dictionary column
+    let sql = "SELECT d1 FROM test WHERE d1 <= d2";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // comparison with a non dictionary column
+    let sql = "SELECT d1 FROM test WHERE d1 = d3";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     // filtering with constant
-    let sql = "SELECT * FROM test WHERE d1 = 'three'";
+    let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -713,6 +773,20 @@ async fn query_on_string_dictionary() -> Result<()> {
         "| -foo                         |",
         "| three-foo                    |",
         "+------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // Expression evaluation with two dictionaries
+    let sql = "SELECT concat(d1, d2) FROM test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+",
+        "| concat(test.d1,test.d2) |",
+        "+-------------------------+",
+        "| oneblarg                |",
+        "|                         |",
+        "| threethree              |",
+        "+-------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 

@@ -18,5 +18,7 @@
 //! Define coercion rules for different Expr type.
 //!
 //! Aggregate function rule
+//! Binary operation rule
 
 pub(crate) mod aggregate_rule;
+pub(crate) mod binary_rule;

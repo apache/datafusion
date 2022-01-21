@@ -49,14 +49,19 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Known Uses
 
+Projects that adapt to or serve as plugins to DataFusion:
+
+- [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
+- [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
+- [datafusion-hdfs-native](https://github.com/datafusion-contrib/datafusion-hdfs-native)
+
 Here are some of the projects known to use DataFusion:
 
 - [Ballista](ballista) Distributed Compute Platform
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
-- [datafusion-python](https://pypi.org/project/datafusion)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
-- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [ROAPI](https://github.com/roapi/roapi)
@@ -135,6 +140,60 @@ datafusion = "6.0.0"
 ## Using DataFusion as a binary
 
 DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](https://arrow.apache.org/datafusion/cli/index.html) for more information.
+
+# Roadmap
+
+A quarterly roadmap will be published to give the DataFusion community visibility into the priorities of the projects contributors. This roadmap is not binding.
+
+## 2022 Q1
+
+### DataFusion Core
+
+- Publish official Arrow2 branch
+- Implementation of memory manager (i.e. to enable spilling to disk as needed)
+
+### Benchmarking
+
+- Inclusion in Db-Benchmark with all quries covered
+- All TPCH queries covered
+
+### Performance Improvements
+
+- Predicate evaluation
+- Improve multi-column comparisons (that can't be vectorized at the moment)
+- Null constant support
+
+### New Features
+
+- Read JSON as table
+- Simplify DDL with Datafusion-Cli
+- Add Decimal128 data type and the attendant features such as Arrow Kernel and UDF support
+- Add new experimental e-graph based optimizer
+
+### Ballista
+
+- Begin work on design documents and plan / priorities for development
+
+### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib]))
+
+- Stable S3 support
+- Begin design discussions and prototyping of a stream provider
+
+## Beyond 2022 Q1
+
+There is no clear timeline for the below, but community members have expressed interest in working on these topics.
+
+### DataFusion Core
+
+- Custom SQL support
+- Split DataFusion into multiple crates
+- Push based query execution and code generation
+
+### Ballista
+
+- Evolve architecture so that it can be deployed in a multi-tenant cloud native environment
+- Ensure Ballista is scalable, elastic, and stable for production usage
+- Develop distributed ML capabilities
 
 # Status
 
@@ -256,7 +315,7 @@ DataFusion is designed to be extensible at all points. To that end, you can prov
 
 ## Rust Version Compatbility
 
-This crate is tested with the latest stable version of Rust. We do not currrently test against other, older versions of the Rust compiler.
+This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions of the Rust compiler.
 
 # Supported SQL
 
@@ -266,9 +325,9 @@ This library currently supports many SQL constructs, including
 - `SELECT ... FROM ...` together with any expression
 - `ALIAS` to name an expression
 - `CAST` to change types, including e.g. `Timestamp(Nanosecond, None)`
-- most mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
+- Many mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
 - `WHERE` to filter
-- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`
+- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `CORR`, `VAR`, `COVAR`, `STDDEV` (sample and population)
 - `ORDER BY` together with an expression and optional `ASC` or `DESC` and also optional `NULLS FIRST` or `NULLS LAST`
 
 ## Supported Functions
@@ -368,7 +427,7 @@ Please see [Roadmap](docs/source/specification/roadmap.md) for information of wh
 There is no formal document describing DataFusion's architecture yet, but the following presentations offer a good overview of its different components and how they interact together.
 
 - (March 2021): The DataFusion architecture is described in _Query Engine Design and the Rust-Based DataFusion in Apache Arrow_: [recording](https://www.youtube.com/watch?v=K6eCAVEk4kU) (DataFusion content starts [~ 15 minutes in](https://www.youtube.com/watch?v=K6eCAVEk4kU&t=875s)) and [slides](https://www.slideshare.net/influxdata/influxdb-iox-tech-talks-query-engine-design-and-the-rustbased-datafusion-in-apache-arrow-244161934)
-- (Feburary 2021): How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
+- (February 2021): How DataFusion is used within the Ballista Project is described in \*Ballista: Distributed Compute with Rust and Apache Arrow: [recording](https://www.youtube.com/watch?v=ZZHQaOap9pQ)
 
 # Developer's guide
 

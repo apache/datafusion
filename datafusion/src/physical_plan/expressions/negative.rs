@@ -29,9 +29,8 @@ use arrow::{
 };
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::coercion_rule::binary_rule::is_signed_numeric;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-
-use super::coercion;
 
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {
@@ -120,7 +119,7 @@ pub fn negative(
     input_schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let data_type = arg.data_type(input_schema)?;
-    if !coercion::is_signed_numeric(&data_type) {
+    if !is_signed_numeric(&data_type) {
         Err(DataFusionError::Internal(
             format!(
                 "(- '{:?}') can't be evaluated because the expression's type is {:?}, not signed numeric",

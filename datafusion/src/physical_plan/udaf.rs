@@ -56,7 +56,7 @@ pub struct AggregateUDF {
 }
 
 impl Debug for AggregateUDF {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("AggregateUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)
@@ -71,14 +71,10 @@ impl PartialEq for AggregateUDF {
     }
 }
 
-impl PartialOrd for AggregateUDF {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        let c = self.name.partial_cmp(&other.name);
-        if matches!(c, Some(std::cmp::Ordering::Equal)) {
-            self.signature.partial_cmp(&other.signature)
-        } else {
-            c
-        }
+impl std::hash::Hash for AggregateUDF {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.signature.hash(state);
     }
 }
 

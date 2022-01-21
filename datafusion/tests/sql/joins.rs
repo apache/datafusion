@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn equijoin() -> Result<()> {
@@ -418,32 +419,32 @@ async fn cross_join_unbalanced() {
 
     // the order of the values is not determinisitic, so we need to sort to check the values
     let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name";
+        "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name, t2_name";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
         "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 11    | a       | y       |",
-        "| 11    | a       | x       |",
         "| 11    | a       | w       |",
-        "| 22    | b       | z       |",
-        "| 22    | b       | y       |",
-        "| 22    | b       | x       |",
+        "| 11    | a       | x       |",
+        "| 11    | a       | y       |",
+        "| 11    | a       | z       |",
         "| 22    | b       | w       |",
-        "| 33    | c       | z       |",
-        "| 33    | c       | y       |",
-        "| 33    | c       | x       |",
+        "| 22    | b       | x       |",
+        "| 22    | b       | y       |",
+        "| 22    | b       | z       |",
         "| 33    | c       | w       |",
-        "| 44    | d       | z       |",
-        "| 44    | d       | y       |",
-        "| 44    | d       | x       |",
+        "| 33    | c       | x       |",
+        "| 33    | c       | y       |",
+        "| 33    | c       | z       |",
         "| 44    | d       | w       |",
-        "| 77    | e       | z       |",
-        "| 77    | e       | y       |",
-        "| 77    | e       | x       |",
+        "| 44    | d       | x       |",
+        "| 44    | d       | y       |",
+        "| 44    | d       | z       |",
         "| 77    | e       | w       |",
+        "| 77    | e       | x       |",
+        "| 77    | e       | y       |",
+        "| 77    | e       | z       |",
         "+-------+---------+---------+",
     ];
     assert_batches_eq!(expected, &actual);
@@ -505,7 +506,7 @@ async fn test_join_float32() -> Result<()> {
         population_schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float32Array::from(vec![838.698, 1778.934, 626.443])),
+            Arc::new(Float32Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
     let population_table =
@@ -546,7 +547,7 @@ async fn test_join_float64() -> Result<()> {
         population_schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
-            Arc::new(Float64Array::from(vec![838.698, 1778.934, 626.443])),
+            Arc::new(Float64Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
     let population_table =
@@ -626,10 +627,10 @@ async fn inner_join_nulls() {
 #[tokio::test]
 async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int32Array::from(vec![1, 2, 3])) as _),
+        ("id", Arc::new(Int32Array::from_slice(&[1, 2, 3])) as _),
         (
             "country",
-            Arc::new(StringArray::from(vec!["Germany", "Sweden", "Japan"])) as _,
+            Arc::new(StringArray::from_slice(&["Germany", "Sweden", "Japan"])) as _,
         ),
     ])
     .unwrap();
@@ -638,11 +639,11 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
     let batch = RecordBatch::try_from_iter(vec![
         (
             "id",
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7])) as _,
+            Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7])) as _,
         ),
         (
             "city",
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(&[
                 "Hamburg",
                 "Stockholm",
                 "Osaka",
@@ -654,7 +655,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
         (
             "country_id",
-            Arc::new(Int32Array::from(vec![1, 2, 3, 1, 2, 3, 3])) as _,
+            Arc::new(Int32Array::from_slice(&[1, 2, 3, 1, 2, 3, 3])) as _,
         ),
     ])
     .unwrap();

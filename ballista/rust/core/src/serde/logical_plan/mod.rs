@@ -24,6 +24,7 @@ mod roundtrip_tests {
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
     use core::panic;
+    use datafusion::arrow::datatypes::UnionMode;
     use datafusion::logical_plan::Repartition;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
@@ -64,7 +65,7 @@ mod roundtrip_tests {
     async fn roundtrip_repartition() -> Result<()> {
         use datafusion::logical_plan::Partitioning;
 
-        let test_batch_sizes = [usize::MIN, usize::MAX, 43256];
+        let test_partition_counts = [usize::MIN, usize::MAX, 43256];
 
         let test_expr: Vec<Expr> =
             vec![col("c1") + col("c2"), Expr::Literal((4.0).into())];
@@ -91,8 +92,8 @@ mod roundtrip_tests {
             .map_err(BallistaError::DataFusionError)?,
         );
 
-        for batch_size in test_batch_sizes.iter() {
-            let rr_repartition = Partitioning::RoundRobinBatch(*batch_size);
+        for partition_count in test_partition_counts.iter() {
+            let rr_repartition = Partitioning::RoundRobinBatch(*partition_count);
 
             let roundtrip_plan = LogicalPlan::Repartition(Repartition {
                 input: plan.clone(),
@@ -101,7 +102,7 @@ mod roundtrip_tests {
 
             roundtrip_test!(roundtrip_plan);
 
-            let h_repartition = Partitioning::Hash(test_expr.clone(), *batch_size);
+            let h_repartition = Partitioning::Hash(test_expr.clone(), *partition_count);
 
             let roundtrip_plan = LogicalPlan::Repartition(Repartition {
                 input: plan.clone(),
@@ -110,7 +111,7 @@ mod roundtrip_tests {
 
             roundtrip_test!(roundtrip_plan);
 
-            let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *batch_size);
+            let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *partition_count);
 
             let roundtrip_plan = LogicalPlan::Repartition(Repartition {
                 input: plan.clone(),
@@ -413,25 +414,31 @@ mod roundtrip_tests {
                     true,
                 ),
             ]),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ]),
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                ],
+                UnionMode::Dense,
+            ),
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                    Field::new(
+                        "nested_struct",
+                        DataType::Struct(vec![
+                            Field::new("nullable", DataType::Boolean, false),
+                            Field::new("name", DataType::Utf8, false),
+                            Field::new("datatype", DataType::Binary, false),
+                        ]),
+                        true,
+                    ),
+                ],
+                UnionMode::Sparse,
+            ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
                 Box::new(DataType::Struct(vec![
@@ -558,25 +565,31 @@ mod roundtrip_tests {
                     true,
                 ),
             ]),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Union(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ]),
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                ],
+                UnionMode::Sparse,
+            ),
+            DataType::Union(
+                vec![
+                    Field::new("nullable", DataType::Boolean, false),
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("datatype", DataType::Binary, false),
+                    Field::new(
+                        "nested_struct",
+                        DataType::Struct(vec![
+                            Field::new("nullable", DataType::Boolean, false),
+                            Field::new("name", DataType::Utf8, false),
+                            Field::new("datatype", DataType::Binary, false),
+                        ]),
+                        true,
+                    ),
+                ],
+                UnionMode::Dense,
+            ),
             DataType::Dictionary(
                 Box::new(DataType::Utf8),
                 Box::new(DataType::Struct(vec![

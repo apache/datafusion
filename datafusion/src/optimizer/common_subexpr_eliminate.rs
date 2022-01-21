@@ -69,6 +69,12 @@ impl OptimizerRule for CommonSubexprEliminate {
     }
 }
 
+impl Default for CommonSubexprEliminate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommonSubexprEliminate {
     #[allow(missing_docs)]
     pub fn new() -> Self {

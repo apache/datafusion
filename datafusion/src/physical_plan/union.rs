@@ -31,6 +31,7 @@ use super::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
@@ -91,7 +92,11 @@ impl ExecutionPlan for UnionExec {
         Ok(Arc::new(UnionExec::new(children)))
     }
 
-    async fn execute(&self, mut partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        mut partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -102,7 +107,7 @@ impl ExecutionPlan for UnionExec {
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition).await?;
+                let stream = input.execute(partition, runtime.clone()).await?;
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
             } else {
                 partition -= input.output_partitioning().partition_count();
@@ -224,7 +229,7 @@ mod tests {
     use crate::{
         physical_plan::{
             collect,
-            file_format::{CsvExec, PhysicalPlanConfig},
+            file_format::{CsvExec, FileScanConfig},
         },
         scalar::ScalarValue,
     };
@@ -232,6 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
         let fs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem {});
 
@@ -240,13 +246,12 @@ mod tests {
         let (_, files2) = test::create_partitioned_csv("aggregate_test_100.csv", 5)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::clone(&fs),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -255,13 +260,12 @@ mod tests {
         );
 
         let csv2 = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::clone(&fs),
                 file_schema: Arc::clone(&schema),
                 file_groups: files2,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -274,7 +278,7 @@ mod tests {
         // Should have 9 partitions and 9 output batches
         assert_eq!(union_exec.output_partitioning().partition_count(), 9);
 
-        let result: Vec<RecordBatch> = collect(union_exec).await?;
+        let result: Vec<RecordBatch> = collect(union_exec, runtime).await?;
         assert_eq!(result.len(), 9);
 
         Ok(())

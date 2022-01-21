@@ -86,6 +86,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::execution::context::ExecutionProps;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::{Extension, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};
 
@@ -94,7 +95,9 @@ use datafusion::logical_plan::{DFSchemaRef, Limit};
 async fn exec_sql(ctx: &mut ExecutionContext, sql: &str) -> Result<String> {
     let df = ctx.sql(sql).await?;
     let batches = df.collect().await?;
-    pretty_format_batches(&batches).map_err(DataFusionError::ArrowError)
+    pretty_format_batches(&batches)
+        .map_err(DataFusionError::ArrowError)
+        .map(|d| d.to_string())
 }
 
 /// Create a test table.
@@ -217,9 +220,9 @@ async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
     let expected = vec![
-        "| logical_plan after topk                               | TopK: k=3                                                                                  |",
-        "|                                                       |   Projection: #sales.customer_id, #sales.revenue                                           |",
-        "|                                                       |     TableScan: sales projection=Some([0, 1])                                               |",
+        "| logical_plan after topk                               | TopK: k=3                                                                     |",
+        "|                                                       |   Projection: #sales.customer_id, #sales.revenue                              |",
+        "|                                                       |     TableScan: sales projection=Some([0, 1])                                  |",
     ].join("\n");
 
     let explain_query = format!("EXPLAIN VERBOSE {}", QUERY);
@@ -453,7 +456,11 @@ impl ExecutionPlan for TopKExec {
     }
 
     /// Execute one partition and return an iterator over RecordBatch
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "TopKExec invalid partition {}",
@@ -462,7 +469,7 @@ impl ExecutionPlan for TopKExec {
         }
 
         Ok(Box::pin(TopKReader {
-            input: self.input.execute(partition).await?,
+            input: self.input.execute(partition, runtime).await?,
             k: self.k,
             done: false,
             state: BTreeMap::new(),

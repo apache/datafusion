@@ -26,6 +26,7 @@ use crate::physical_plan::{Distribution, Partitioning::*};
 use crate::{error::Result, execution::context::ExecutionConfig};
 
 /// Optimizer that introduces repartition to introduce more parallelism in the plan
+#[derive(Default)]
 pub struct Repartition {}
 
 impl Repartition {
@@ -110,7 +111,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::PartitionedFile;
-    use crate::physical_plan::file_format::{ParquetExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::Statistics;
     use crate::test::object_store::TestObjectStore;
@@ -121,13 +122,12 @@ mod tests {
         let parquet_project = ProjectionExec::try_new(
             vec![],
             Arc::new(ParquetExec::new(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: TestObjectStore::new_arc(&[("x", 100)]),
                     file_schema,
                     file_groups: vec![vec![PartitionedFile::new("x".to_string(), 100)]],
                     statistics: Statistics::default(),
                     projection: None,
-                    batch_size: 2048,
                     limit: None,
                     table_partition_cols: vec![],
                 },
@@ -160,7 +160,7 @@ mod tests {
             Arc::new(ProjectionExec::try_new(
                 vec![],
                 Arc::new(ParquetExec::new(
-                    PhysicalPlanConfig {
+                    FileScanConfig {
                         object_store: TestObjectStore::new_arc(&[("x", 100)]),
                         file_schema,
                         file_groups: vec![vec![PartitionedFile::new(
@@ -169,7 +169,6 @@ mod tests {
                         )]],
                         statistics: Statistics::default(),
                         projection: None,
-                        batch_size: 2048,
                         limit: None,
                         table_partition_cols: vec![],
                     },

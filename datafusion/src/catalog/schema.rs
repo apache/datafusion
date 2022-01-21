@@ -79,6 +79,12 @@ impl MemorySchemaProvider {
     }
 }
 
+impl Default for MemorySchemaProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchemaProvider for MemorySchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self

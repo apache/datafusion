@@ -123,7 +123,7 @@ To run the benchmarks:
 
 ```bash
 cd $ARROW_HOME/benchmarks
-cargo run --release benchmark ballista --host localhost --port 50050 --query 1 --path $(pwd)/data --format tbl
+cargo run --release --bin tpch benchmark ballista --host localhost --port 50050 --query 1 --path $(pwd)/data --format tbl
 ```
 
 ## Running the Ballista Benchmarks on docker-compose
@@ -176,6 +176,21 @@ Executing 'fare_amt_by_passenger'
 Query 'fare_amt_by_passenger' iteration 0 took 7138 ms
 Query 'fare_amt_by_passenger' iteration 1 took 7599 ms
 Query 'fare_amt_by_passenger' iteration 2 took 7969 ms
+```
+
+## Running the Ballista Loadtest
+
+```bash
+ cargo run --bin tpch -- loadtest  ballista-load 
+  --query-list 1,3,5,6,7,10,12,13 
+  --requests 200 
+  --concurrency 10  
+  --data-path /**** 
+  --format parquet 
+  --host localhost 
+  --port 50050 
+  --sql-path /***
+  --debug
 ```
 
 [1]: http://www.tpc.org/tpch/

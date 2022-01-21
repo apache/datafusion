@@ -29,7 +29,7 @@ use crate::{
     logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
-        file_format::PhysicalPlanConfig,
+        file_format::FileScanConfig,
         metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         stream::RecordBatchReceiverStream,
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
@@ -59,6 +59,7 @@ use tokio::{
     task,
 };
 
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 use super::PartitionColumnProjector;
@@ -66,7 +67,7 @@ use super::PartitionColumnProjector;
 /// Execution plan for scanning one or more Parquet partitions
 #[derive(Debug, Clone)]
 pub struct ParquetExec {
-    base_config: PhysicalPlanConfig,
+    base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
     /// Execution metrics
@@ -87,7 +88,7 @@ struct ParquetFileMetrics {
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
     /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
-    pub fn new(base_config: PhysicalPlanConfig, predicate: Option<Expr>) -> Self {
+    pub fn new(base_config: FileScanConfig, predicate: Option<Expr>) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
@@ -124,7 +125,7 @@ impl ParquetExec {
     }
 
     /// Ref to the base configs
-    pub fn base_config(&self) -> &PhysicalPlanConfig {
+    pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
     }
 }
@@ -186,7 +187,11 @@ impl ExecutionPlan for ParquetExec {
         }
     }
 
-    async fn execute(&self, partition_index: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition_index: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // because the parquet implementation is not thread-safe, it is necessary to execute
         // on a thread and communicate with channels
         let (response_tx, response_rx): (
@@ -201,7 +206,7 @@ impl ExecutionPlan for ParquetExec {
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
         let pruning_predicate = self.pruning_predicate.clone();
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.batch_size();
         let limit = self.base_config.limit;
         let object_store = Arc::clone(&self.base_config.object_store);
         let partition_col_proj = PartitionColumnProjector::new(
@@ -242,8 +247,7 @@ impl ExecutionPlan for ParquetExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "ParquetExec: batch_size={}, limit={:?}, partitions={}",
-                    self.base_config.batch_size,
+                    "ParquetExec: limit={:?}, partitions={}",
                     self.base_config.limit,
                     super::FileGroupsDisplay(&self.base_config.file_groups)
                 )
@@ -315,12 +319,8 @@ macro_rules! get_min_max_values {
         };
 
         let data_type = field.data_type();
-        let null_scalar: ScalarValue = if let Ok(v) = data_type.try_into() {
-            v
-        } else {
-            // DataFusion doesn't have support for ScalarValues of the column type
-            return None
-        };
+        // The result may be None, because DataFusion doesn't have support for ScalarValues of the column type
+        let null_scalar: ScalarValue = data_type.try_into().ok()?;
 
         let scalar_values : Vec<ScalarValue> = $self.row_group_metadata
             .iter()
@@ -341,6 +341,31 @@ macro_rules! get_min_max_values {
     }}
 }
 
+// Extract the null count value on the ParquetStatistics
+macro_rules! get_null_count_values {
+    ($self:expr, $column:expr) => {{
+        let column_index =
+            if let Some((v, _)) = $self.parquet_schema.column_with_name(&$column.name) {
+                v
+            } else {
+                // Named column was not present
+                return None;
+            };
+
+        let scalar_values: Vec<ScalarValue> = $self
+            .row_group_metadata
+            .iter()
+            .flat_map(|meta| meta.column(column_index).statistics())
+            .map(|stats| {
+                ScalarValue::UInt64(Some(stats.null_count().try_into().unwrap()))
+            })
+            .collect();
+
+        // ignore errors converting to arrays (e.g. different types)
+        ScalarValue::iter_to_array(scalar_values).ok()
+    }};
+}
+
 impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
         get_min_max_values!(self, column, min, min_bytes)
@@ -352,6 +377,10 @@ impl<'a> PruningStatistics for RowGroupPruningStatistics<'a> {
 
     fn num_containers(&self) -> usize {
         self.row_group_metadata.len()
+    }
+
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        get_null_count_values!(self, column)
     }
 }
 
@@ -436,11 +465,8 @@ fn read_partition(
                     break;
                 }
                 Some(Err(e)) => {
-                    let err_msg = format!(
-                        "Error reading batch from {}: {}",
-                        partitioned_file,
-                        e.to_string()
-                    );
+                    let err_msg =
+                        format!("Error reading batch from {}: {}", partitioned_file, e);
                     // send error to operator
                     send_result(
                         &response_tx,
@@ -478,10 +504,11 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let parquet_exec = ParquetExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
                 file_schema: ParquetFormat::default()
@@ -489,7 +516,6 @@ mod tests {
                     .await?,
                 statistics: Statistics::default(),
                 projection: Some(vec![0, 1, 2]),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -497,7 +523,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0).await?;
+        let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap()?;
 
         assert_eq!(8, batch.num_rows());
@@ -522,6 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let mut partitioned_file = local_unpartitioned_file(filename.clone());
@@ -531,7 +558,7 @@ mod tests {
             ScalarValue::Utf8(Some("26".to_owned())),
         ];
         let parquet_exec = ParquetExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_groups: vec![vec![partitioned_file]],
                 file_schema: ParquetFormat::default()
@@ -540,7 +567,6 @@ mod tests {
                 statistics: Statistics::default(),
                 // file has 10 cols so index 12 should be month
                 projection: Some(vec![0, 1, 2, 12]),
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![
                     "year".to_owned(),
@@ -552,7 +578,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0).await?;
+        let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap()?;
         let expected = vec![
             "+----+----------+-------------+-------+",
@@ -713,21 +739,7 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn row_group_pruning_predicate_null_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
-        // test row group predicate with an unknown (Null) expr
-        //
-        // int > 1 and bool = NULL => c1_max > 1 and null
-        let expr = col("c1")
-            .gt(lit(15))
-            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Int32, false),
-            Field::new("c2", DataType::Boolean, false),
-        ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
-
+    fn gen_row_group_meta_data_for_pruning_predicate() -> Vec<RowGroupMetaData> {
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
             ("c2", PhysicalType::BOOLEAN),
@@ -743,10 +755,56 @@ mod tests {
             &schema_descr,
             vec![
                 ParquetStatistics::int32(Some(11), Some(20), None, 0, false),
-                ParquetStatistics::boolean(Some(false), Some(true), None, 0, false),
+                ParquetStatistics::boolean(Some(false), Some(true), None, 1, false),
             ],
         );
-        let row_group_metadata = vec![rgm1, rgm2];
+        vec![rgm1, rgm2]
+    }
+
+    #[test]
+    fn row_group_pruning_predicate_null_expr() -> Result<()> {
+        use crate::logical_plan::{col, lit};
+        // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
+        let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Boolean, false),
+        ]));
+        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
+
+        let row_group_predicate = build_row_group_predicate(
+            &pruning_predicate,
+            parquet_file_metrics(),
+            &row_group_metadata,
+        );
+        let row_group_filter = row_group_metadata
+            .iter()
+            .enumerate()
+            .map(|(i, g)| row_group_predicate(g, i))
+            .collect::<Vec<_>>();
+        // First row group was filtered out because it contains no null value on "c2".
+        assert_eq!(row_group_filter, vec![false, true]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_pruning_predicate_eq_null_expr() -> Result<()> {
+        use crate::logical_plan::{col, lit};
+        // test row group predicate with an unknown (Null) expr
+        //
+        // int > 1 and bool = NULL => c1_max > 1 and null
+        let expr = col("c1")
+            .gt(lit(15))
+            .and(col("c2").eq(lit(ScalarValue::Boolean(None))));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Boolean, false),
+        ]));
+        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
+
         let row_group_predicate = build_row_group_predicate(
             &pruning_predicate,
             parquet_file_metrics(),
@@ -759,7 +817,6 @@ mod tests {
             .collect::<Vec<_>>();
         // no row group is filtered out because the predicate expression can't be evaluated
         // when a null array is generated for a statistics column,
-        // because the null values propagate to the end result, making the predicate result undefined
         assert_eq!(row_group_filter, vec![true, true]);
 
         Ok(())

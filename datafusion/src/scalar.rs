@@ -94,6 +94,8 @@ pub enum ScalarValue {
     IntervalYearMonth(Option<i32>),
     /// Interval with DayTime unit
     IntervalDayTime(Option<i64>),
+    /// Interval with MonthDayNano unit
+    IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
     #[allow(clippy::box_collection)]
     Struct(Option<Box<Vec<ScalarValue>>>, Box<Vec<Field>>),
@@ -168,6 +170,8 @@ impl PartialEq for ScalarValue {
             (IntervalYearMonth(_), _) => false,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
             (IntervalDayTime(_), _) => false,
+            (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
+            (IntervalMonthDayNano(_), _) => false,
             (Struct(v1, t1), Struct(v2, t2)) => v1.eq(v2) && t1.eq(t2),
             (Struct(_, _), _) => false,
         }
@@ -260,6 +264,8 @@ impl PartialOrd for ScalarValue {
             (IntervalYearMonth(_), _) => None,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
             (IntervalDayTime(_), _) => None,
+            (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
+            (IntervalMonthDayNano(_), _) => None,
             (Struct(v1, t1), Struct(v2, t2)) => {
                 if t1.eq(t2) {
                     v1.partial_cmp(v2)
@@ -318,6 +324,7 @@ impl std::hash::Hash for ScalarValue {
             TimestampNanosecond(v, _) => v.hash(state),
             IntervalYearMonth(v) => v.hash(state),
             IntervalDayTime(v) => v.hash(state),
+            IntervalMonthDayNano(v) => v.hash(state),
             Struct(v, t) => {
                 v.hash(state);
                 t.hash(state);
@@ -585,6 +592,9 @@ impl ScalarValue {
                 DataType::Interval(IntervalUnit::YearMonth)
             }
             ScalarValue::IntervalDayTime(_) => DataType::Interval(IntervalUnit::DayTime),
+            ScalarValue::IntervalMonthDayNano(_) => {
+                DataType::Interval(IntervalUnit::MonthDayNano)
+            }
             ScalarValue::Struct(_, fields) => DataType::Struct(fields.as_ref().clone()),
         }
     }
@@ -1216,11 +1226,17 @@ impl ScalarValue {
                 e,
                 size
             ),
-
             ScalarValue::IntervalYearMonth(e) => build_array_from_option!(
                 Interval,
                 IntervalUnit::YearMonth,
                 IntervalYearMonthArray,
+                e,
+                size
+            ),
+            ScalarValue::IntervalMonthDayNano(e) => build_array_from_option!(
+                Interval,
+                IntervalUnit::MonthDayNano,
+                IntervalMonthDayNanoArray,
                 e,
                 size
             ),
@@ -1510,6 +1526,9 @@ impl ScalarValue {
             ScalarValue::IntervalDayTime(val) => {
                 eq_array_primitive!(array, index, IntervalDayTimeArray, val)
             }
+            ScalarValue::IntervalMonthDayNano(val) => {
+                eq_array_primitive!(array, index, IntervalMonthDayNanoArray, val)
+            }
             ScalarValue::Struct(_, _) => unimplemented!(),
         }
     }
@@ -1663,6 +1682,22 @@ impl TryFrom<ScalarValue> for i64 {
     }
 }
 
+// special implementation for i128 because of Decimal128
+impl TryFrom<ScalarValue> for i128 {
+    type Error = DataFusionError;
+
+    fn try_from(value: ScalarValue) -> Result<Self> {
+        match value {
+            ScalarValue::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
 impl_try_from!(UInt8, u8);
 impl_try_from!(UInt16, u16);
 impl_try_from!(UInt32, u32);
@@ -1739,7 +1774,7 @@ impl fmt::Display for ScalarValue {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(v, p, s) => {
-                write!(f, "{}", format!("{:?},{:?},{:?}", v, p, s))?;
+                write!(f, "{:?},{:?},{:?}", v, p, s)?;
             }
             ScalarValue::Boolean(e) => format_option!(f, e)?,
             ScalarValue::Float32(e) => format_option!(f, e)?,
@@ -1795,6 +1830,7 @@ impl fmt::Display for ScalarValue {
             ScalarValue::Date64(e) => format_option!(f, e)?,
             ScalarValue::IntervalDayTime(e) => format_option!(f, e)?,
             ScalarValue::IntervalYearMonth(e) => format_option!(f, e)?,
+            ScalarValue::IntervalMonthDayNano(e) => format_option!(f, e)?,
             ScalarValue::Struct(e, fields) => match e {
                 Some(l) => write!(
                     f,
@@ -1813,7 +1849,7 @@ impl fmt::Display for ScalarValue {
 }
 
 impl fmt::Debug for ScalarValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({})", self),
             ScalarValue::Boolean(_) => write!(f, "Boolean({})", self),
@@ -1855,6 +1891,9 @@ impl fmt::Debug for ScalarValue {
             }
             ScalarValue::IntervalYearMonth(_) => {
                 write!(f, "IntervalYearMonth(\"{}\")", self)
+            }
+            ScalarValue::IntervalMonthDayNano(_) => {
+                write!(f, "IntervalMonthDayNano(\"{}\")", self)
             }
             ScalarValue::Struct(e, fields) => {
                 // Use Debug representation of field values
@@ -1914,11 +1953,14 @@ impl ScalarType<i64> for TimestampNanosecondType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
 
     #[test]
     fn scalar_decimal_test() {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
         assert_eq!(DataType::Decimal(10, 1), decimal_value.get_datatype());
+        let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
+        assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
         let neg_decimal_value = decimal_value.arithmetic_negate();
         match neg_decimal_value {
@@ -2617,26 +2659,26 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(Int32Array::from(vec![23, 23])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 23])) as ArrayRef,
             ),
             (
                 field_b.clone(),
-                Arc::new(BooleanArray::from(vec![false, false])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice(&[false, false])) as ArrayRef,
             ),
             (
                 field_c.clone(),
-                Arc::new(StringArray::from(vec!["Hello", "Hello"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["Hello", "Hello"])) as ArrayRef,
             ),
             (
                 field_d.clone(),
                 Arc::new(StructArray::from(vec![
                     (
                         field_e.clone(),
-                        Arc::new(Int16Array::from(vec![2, 2])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 2])) as ArrayRef,
                     ),
                     (
                         field_f.clone(),
-                        Arc::new(Int64Array::from(vec![3, 3])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 3])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2712,26 +2754,27 @@ mod tests {
         let expected = Arc::new(StructArray::from(vec![
             (
                 field_a,
-                Arc::new(Int32Array::from(vec![23, 7, -1000])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[23, 7, -1000])) as ArrayRef,
             ),
             (
                 field_b,
-                Arc::new(BooleanArray::from(vec![false, true, true])) as ArrayRef,
+                Arc::new(BooleanArray::from_slice(&[false, true, true])) as ArrayRef,
             ),
             (
                 field_c,
-                Arc::new(StringArray::from(vec!["Hello", "World", "!!!!!"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["Hello", "World", "!!!!!"]))
+                    as ArrayRef,
             ),
             (
                 field_d,
                 Arc::new(StructArray::from(vec![
                     (
                         field_e,
-                        Arc::new(Int16Array::from(vec![2, 4, 6])) as ArrayRef,
+                        Arc::new(Int16Array::from_slice(&[2, 4, 6])) as ArrayRef,
                     ),
                     (
                         field_f,
-                        Arc::new(Int64Array::from(vec![3, 5, 7])) as ArrayRef,
+                        Arc::new(Int64Array::from_slice(&[3, 5, 7])) as ArrayRef,
                     ),
                 ])) as ArrayRef,
             ),
@@ -2796,7 +2839,8 @@ mod tests {
         let expected = StructArray::from(vec![
             (
                 field_a.clone(),
-                Arc::new(StringArray::from(vec!["First", "Second", "Third"])) as ArrayRef,
+                Arc::new(StringArray::from_slice(&["First", "Second", "Third"]))
+                    as ArrayRef,
             ),
             (
                 field_primitive_list.clone(),

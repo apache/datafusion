@@ -15,15 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 #![warn(missing_docs, clippy::needless_borrow)]
-// Clippy lints, some should be disabled incrementally
-#![allow(
-    clippy::float_cmp,
-    clippy::from_over_into,
-    clippy::module_inception,
-    clippy::new_without_default,
-    clippy::type_complexity,
-    clippy::upper_case_acronyms
-)]
 
 //! [DataFusion](https://github.com/apache/arrow-datafusion)
 //! is an extensible query execution framework that uses
@@ -57,7 +48,8 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
+//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
+//!    .to_string();
 //!
 //! let expected = vec![
 //!     "+---+--------------------------+",
@@ -92,7 +84,8 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?;
+//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
+//!   .to_string();
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
@@ -233,6 +226,8 @@ pub(crate) mod field_util;
 
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
+
+pub mod from_slice;
 
 #[cfg(test)]
 pub mod test;
