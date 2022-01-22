@@ -93,6 +93,16 @@ impl From<ArrowError> for DataFusionError {
     }
 }
 
+impl From<DataFusionError> for ArrowError {
+    fn from(e: DataFusionError) -> Self {
+        match e {
+            DataFusionError::ArrowError(e) => e,
+            DataFusionError::External(e) => ArrowError::ExternalError(e),
+            other => ArrowError::ExternalError(Box::new(other)),
+        }
+    }
+}
+
 impl From<ParquetError> for DataFusionError {
     fn from(e: ParquetError) -> Self {
         DataFusionError::ParquetError(e)
