@@ -404,8 +404,8 @@ fn map_projections(
                 mapped.push(mapped_idx)
             } else {
                 let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
-                error!("{}", msg);
-                return Err(DataFusionError::ParquetError(ParquetError::General(msg)));
+                info!("{}", msg);
+                return Err(DataFusionError::Execution(msg));
             }
         }
     }
