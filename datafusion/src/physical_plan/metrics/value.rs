@@ -283,6 +283,10 @@ pub enum MetricValue {
     /// classical defintion of "cpu_time", which is the time reported
     /// from `clock_gettime(CLOCK_THREAD_CPUTIME_ID, ..)`.
     ElapsedCompute(Time),
+    /// Number of spills produced: "spill_count" metric
+    SpillCount(Count),
+    /// Total size of spilled bytes produced: "spilled_bytes" metric
+    SpilledBytes(Count),
     /// Operator defined count.
     Count {
         /// The provided name of this metric
@@ -308,6 +312,8 @@ impl MetricValue {
     pub fn name(&self) -> &str {
         match self {
             Self::OutputRows(_) => "output_rows",
+            Self::SpillCount(_) => "spill_count",
+            Self::SpilledBytes(_) => "spilled_bytes",
             Self::ElapsedCompute(_) => "elapsed_compute",
             Self::Count { name, .. } => name.borrow(),
             Self::Time { name, .. } => name.borrow(),
@@ -320,6 +326,8 @@ impl MetricValue {
     pub fn as_usize(&self) -> usize {
         match self {
             Self::OutputRows(count) => count.value(),
+            Self::SpillCount(count) => count.value(),
+            Self::SpilledBytes(bytes) => bytes.value(),
             Self::ElapsedCompute(time) => time.value(),
             Self::Count { count, .. } => count.value(),
             Self::Time { time, .. } => time.value(),
@@ -339,6 +347,8 @@ impl MetricValue {
     pub fn new_empty(&self) -> Self {
         match self {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
+            Self::SpillCount(_) => Self::SpillCount(Count::new()),
+            Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
             Self::ElapsedCompute(_) => Self::ElapsedCompute(Time::new()),
             Self::Count { name, .. } => Self::Count {
                 name: name.clone(),
@@ -365,6 +375,8 @@ impl MetricValue {
     pub fn aggregate(&mut self, other: &Self) {
         match (self, other) {
             (Self::OutputRows(count), Self::OutputRows(other_count))
+            | (Self::SpillCount(count), Self::SpillCount(other_count))
+            | (Self::SpilledBytes(count), Self::SpilledBytes(other_count))
             | (
                 Self::Count { count, .. },
                 Self::Count {
@@ -401,10 +413,12 @@ impl MetricValue {
         match self {
             Self::OutputRows(_) => 0,     // show first
             Self::ElapsedCompute(_) => 1, // show second
-            Self::Count { .. } => 2,
-            Self::Time { .. } => 3,
-            Self::StartTimestamp(_) => 4, // show timestamps last
-            Self::EndTimestamp(_) => 5,
+            Self::SpillCount(_) => 2,
+            Self::SpilledBytes(_) => 3,
+            Self::Count { .. } => 4,
+            Self::Time { .. } => 5,
+            Self::StartTimestamp(_) => 6, // show timestamps last
+            Self::EndTimestamp(_) => 7,
         }
     }
 
@@ -418,7 +432,10 @@ impl std::fmt::Display for MetricValue {
     /// Prints the value of this metric
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            Self::OutputRows(count) | Self::Count { count, .. } => {
+            Self::OutputRows(count)
+            | Self::SpillCount(count)
+            | Self::SpilledBytes(count)
+            | Self::Count { count, .. } => {
                 write!(f, "{}", count)
             }
             Self::ElapsedCompute(time) | Self::Time { time, .. } => {

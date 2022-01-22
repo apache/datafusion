@@ -76,9 +76,8 @@ struct ExternalSorter {
     expr: Vec<PhysicalSortExpr>,
     runtime: Arc<RuntimeEnv>,
     metrics: AggregatedMetricsSet,
+    inner_metrics: BaselineMetrics,
     used: AtomicUsize,
-    spilled_bytes: AtomicUsize,
-    spilled_count: AtomicUsize,
 }
 
 impl ExternalSorter {
@@ -89,6 +88,7 @@ impl ExternalSorter {
         metrics: AggregatedMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
+        let inner_metrics = metrics.new_intermediate_baseline(partition_id);
         Self {
             id: MemoryConsumerId::new(partition_id),
             schema,
@@ -97,9 +97,8 @@ impl ExternalSorter {
             expr,
             runtime,
             metrics,
+            inner_metrics,
             used: AtomicUsize::new(0),
-            spilled_bytes: AtomicUsize::new(0),
-            spilled_count: AtomicUsize::new(0),
         }
     }
 
@@ -170,11 +169,11 @@ impl ExternalSorter {
     }
 
     fn spilled_bytes(&self) -> usize {
-        self.spilled_bytes.load(Ordering::SeqCst)
+        self.inner_metrics.spilled_bytes().value()
     }
 
-    fn spilled_count(&self) -> usize {
-        self.spilled_count.load(Ordering::SeqCst)
+    fn spill_count(&self) -> usize {
+        self.inner_metrics.spill_count().value()
     }
 }
 
@@ -184,7 +183,7 @@ impl Debug for ExternalSorter {
             .field("id", &self.id())
             .field("memory_used", &self.used())
             .field("spilled_bytes", &self.spilled_bytes())
-            .field("spilled_count", &self.spilled_count())
+            .field("spill_count", &self.spill_count())
             .finish()
     }
 }
@@ -213,7 +212,7 @@ impl MemoryConsumer for ExternalSorter {
             self.name(),
             self.id(),
             self.used(),
-            self.spilled_count()
+            self.spill_count()
         );
 
         let partition = self.partition_id();
@@ -239,8 +238,7 @@ impl MemoryConsumer for ExternalSorter {
 
         let mut spills = self.spills.lock().await;
         let used = self.used.swap(0, Ordering::SeqCst);
-        self.spilled_count.fetch_add(1, Ordering::SeqCst);
-        self.spilled_bytes.fetch_add(total_size, Ordering::SeqCst);
+        self.inner_metrics.record_spill(total_size);
         spills.push(path);
         Ok(used)
     }
@@ -368,7 +366,7 @@ pub struct SortExec {
 }
 
 #[derive(Debug, Clone)]
-/// Aggregates all metrics during a complex operation, which is composed of multiple stages and
+/// Aggregates all metrics during a complex operation, which is composed of multiple steps and
 /// each stage reports its statistics separately.
 /// Give sort as an example, when the dataset is more significant than available memory, it will report
 /// multiple in-mem sort metrics and final merge-sort  metrics from `SortPreservingMergeStream`.
@@ -401,7 +399,7 @@ impl AggregatedMetricsSet {
         result
     }
 
-    /// We should accumulate all times from all stages' reports for the total time consumption.
+    /// We should accumulate all times from all steps' reports for the total time consumption.
     fn merge_compute_time(&self, dest: &Time) {
         let time1 = self
             .intermediate
@@ -427,6 +425,46 @@ impl AggregatedMetricsSet {
             .sum();
         dest.add_duration(Duration::from_nanos(time1));
         dest.add_duration(Duration::from_nanos(time2));
+    }
+
+    /// We should accumulate all count from all steps' reports for the total spill count.
+    fn merge_spill_count(&self, dest: &Count) {
+        let count1 = self
+            .intermediate
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| es.clone_inner().spill_count().map_or(0, |v| v))
+            .sum();
+        let count2 = self
+            .final_
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| es.clone_inner().spill_count().map_or(0, |v| v))
+            .sum();
+        dest.add(count1);
+        dest.add(count2);
+    }
+
+    /// We should accumulate all spilled bytes from all steps' reports for the total spilled bytes.
+    fn merge_spilled_bytes(&self, dest: &Count) {
+        let count1 = self
+            .intermediate
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| es.clone_inner().spilled_bytes().map_or(0, |v| v))
+            .sum();
+        let count2 = self
+            .final_
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|es| es.clone_inner().spilled_bytes().map_or(0, |v| v))
+            .sum();
+        dest.add(count1);
+        dest.add(count2);
     }
 
     /// We should only care about output from the final stage metrics.
@@ -561,6 +599,9 @@ impl ExecutionPlan for SortExec {
         let baseline = BaselineMetrics::new(&metrics, 0);
         self.all_metrics
             .merge_compute_time(baseline.elapsed_compute());
+        self.all_metrics.merge_spill_count(baseline.spill_count());
+        self.all_metrics
+            .merge_spilled_bytes(baseline.spilled_bytes());
         self.all_metrics.merge_output_count(baseline.output_rows());
         Some(metrics.clone_inner())
     }
@@ -668,7 +709,9 @@ mod tests {
     use futures::FutureExt;
     use std::collections::{BTreeMap, HashMap};
 
-    async fn sort_with_runtime(runtime: Arc<RuntimeEnv>) -> Result<Vec<RecordBatch>> {
+    #[tokio::test]
+    async fn test_in_mem_sort() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
@@ -709,13 +752,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
         )?);
 
-        collect(sort_exec, runtime).await
-    }
-
-    #[tokio::test]
-    async fn test_in_mem_sort() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
-        let result = sort_with_runtime(runtime).await?;
+        let result = collect(sort_exec, runtime).await?;
 
         assert_eq!(result.len(), 1);
 
@@ -743,9 +780,58 @@ mod tests {
             // trigger spill there will be 4 batches with 5.5KB for each
             .with_max_execution_memory(12288);
         let runtime = Arc::new(RuntimeEnv::new(config)?);
-        let result = sort_with_runtime(runtime).await?;
+
+        let schema = test_util::aggr_test_schema();
+        let partitions = 4;
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+
+        let csv = CsvExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        );
+
+        let sort_exec = Arc::new(SortExec::try_new(
+            vec![
+                // c1 string column
+                PhysicalSortExpr {
+                    expr: col("c1", &schema)?,
+                    options: SortOptions::default(),
+                },
+                // c2 uin32 column
+                PhysicalSortExpr {
+                    expr: col("c2", &schema)?,
+                    options: SortOptions::default(),
+                },
+                // c7 uin8 column
+                PhysicalSortExpr {
+                    expr: col("c7", &schema)?,
+                    options: SortOptions::default(),
+                },
+            ],
+            Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
+        )?);
+
+        let result = collect(sort_exec.clone(), runtime).await?;
 
         assert_eq!(result.len(), 1);
+
+        // Now, validate metrics
+        let metrics = sort_exec.metrics().unwrap();
+
+        assert_eq!(metrics.output_rows().unwrap(), 100);
+        assert!(metrics.elapsed_compute().unwrap() > 0);
+        assert!(metrics.spill_count().unwrap() > 0);
+        assert!(metrics.spilled_bytes().unwrap() > 0);
 
         let columns = result[0].columns();
 
