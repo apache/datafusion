@@ -789,11 +789,8 @@ mod tests {
 
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        let c4: ArrayRef = Arc::new(Float32Array::from(vec![
-            Some(1.0 as f32),
-            Some(2.0 as f32),
-            None,
-        ]));
+        let c4: ArrayRef =
+            Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0_f32), None]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![
