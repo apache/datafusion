@@ -170,13 +170,16 @@ impl error::Error for DataFusionError {}
 
 #[cfg(test)]
 mod test {
-    use arrow::error::ArrowError;
     use crate::error::DataFusionError;
+    use arrow::error::ArrowError;
 
     #[test]
     fn arrow_error_to_datafusion() {
         let res = return_arrow_error().unwrap_err();
-        assert_eq!(res.to_string(), "External error: Error during planning: foo");
+        assert_eq!(
+            res.to_string(),
+            "External error: Error during planning: foo"
+        );
     }
 
     #[test]
@@ -187,15 +190,16 @@ mod test {
 
     /// Model what happens when implementing SendableRecrordBatchStream:
     /// DataFusion code needs to return an ArrowError
+    #[allow(clippy::try_err)]
     fn return_arrow_error() -> arrow::error::Result<()> {
         // Expect the '?' to work
         let _foo = Err(DataFusionError::Plan("foo".to_string()))?;
         Ok(())
     }
 
-
     /// Model what happens when using arrow kernels in DataFusion
     /// code: need to turn an ArrowError into a DataFusionError
+    #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
         let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
