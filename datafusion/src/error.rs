@@ -72,15 +72,6 @@ pub enum DataFusionError {
     External(GenericError),
 }
 
-impl DataFusionError {
-    /// Wraps this [DataFusionError] as an [arrow::error::ArrowError].
-    ///
-    /// TODO this can be removed in favor if the conversion below
-    pub fn into_arrow_external_error(self) -> ArrowError {
-        ArrowError::from_external_error(Box::new(self))
-    }
-}
-
 impl From<io::Error> for DataFusionError {
     fn from(e: io::Error) -> Self {
         DataFusionError::IoError(e)
