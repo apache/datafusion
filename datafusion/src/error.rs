@@ -74,6 +74,8 @@ pub enum DataFusionError {
 
 impl DataFusionError {
     /// Wraps this [DataFusionError] as an [arrow::error::ArrowError].
+    ///
+    /// TODO this can be removed in favor if the conversion below
     pub fn into_arrow_external_error(self) -> ArrowError {
         ArrowError::from_external_error(Box::new(self))
     }
@@ -155,3 +157,40 @@ impl Display for DataFusionError {
 }
 
 impl error::Error for DataFusionError {}
+
+#[cfg(test)]
+mod test {
+    use arrow::error::ArrowError;
+    use crate::error::DataFusionError;
+
+    #[test]
+    fn arrow_error_to_datafusion() {
+        let res = return_arrow_error().unwrap_err();
+        assert_eq!(res.to_string(), "DD");
+    }
+
+    #[test]
+    fn datafusion_error_to_arrow() {
+        let res = return_datafusion_error().unwrap_err();
+        assert_eq!(res.to_string(), "DD");
+    }
+
+
+
+    /// Model what happens when implementing SendableRecrordBatchStream:
+    /// DataFusion code needs to return an ArrowError
+    fn return_arrow_error() -> arrow::error::Result<()> {
+        // Expect the '?' to work
+        let _foo = Err(DataFusionError::Internal("foo".to_string()))?;
+        Ok(())
+    }
+
+
+    /// Model what happens when using arrow kernels in DataFusion
+    /// code: need to turn an ArrowError into a DataFusionError
+    fn return_datafusion_error() -> crate::error::Result<()> {
+        // Expect the '?' to work
+        let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
+        Ok(())
+    }
+}
