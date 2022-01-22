@@ -44,7 +44,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use log::{debug, error};
+use log::{debug, info};
 use parquet::file::{
     metadata::RowGroupMetaData,
     reader::{FileReader, SerializedFileReader},
@@ -62,7 +62,7 @@ use tokio::{
 
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
-use parquet::errors::ParquetError;
+
 
 use super::PartitionColumnProjector;
 
@@ -530,6 +530,7 @@ mod tests {
     };
 
     use super::*;
+    use arrow::array::{Float32Array};
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field},
@@ -789,8 +790,11 @@ mod tests {
 
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        let c4: ArrayRef =
-            Arc::new(StringArray::from(vec![Some("baz"), Some("boo"), None]));
+        let c4: ArrayRef = Arc::new(Float32Array::from(vec![
+            Some(1.0 as f32),
+            Some(2.0 as f32),
+            None,
+        ]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![
@@ -812,7 +816,8 @@ mod tests {
         let read =
             round_trip_to_parquet(vec![batch1, batch2], None, Some(Arc::new(schema)))
                 .await;
-        // expect on the first batch to be read
+
+        // expect only the first batch to be read
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
