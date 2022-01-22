@@ -178,8 +178,23 @@ fn split_members<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
 
 // For a given JOIN logical plan, determine whether each side of the join is preserved.
 // We say a join side is preserved if the join returns all or a subset of the rows from
-// the relevant side - i.e. the side of the join cannot provide nulls. Returns a tuple
-// of booleans - (left_preserved, right_preserved).
+// the relevant side, such that each row of the output table directly maps to a row of
+// the preserved input table. If a table is not preserved, it can provide extra null rows.
+// That is, there may be rows in the output table that don't directly map to a row in the
+// input table.
+//
+// For example:
+//   - In an inner join, both sides are preserved, because each row of the output
+//     maps directly to a row from each side.
+//   - In a left join, the left side is preserved and the right is not, because
+//     there may be rows in the output that don't directly map to a row in the
+//     right input (due to nulls filling where there is no match on the right).
+//
+// This is important because we can always push down post-join filters to a preserved
+// side of the join, assuming the filter only references columns from that side. For the
+// non-preserved side it can be more tricky.
+//
+// Returns a tuple of booleans - (left_preserved, right_preserved).
 fn lr_is_preserved(plan: &LogicalPlan) -> (bool, bool) {
     match plan {
         LogicalPlan::Join(Join { join_type, .. }) => match join_type {
