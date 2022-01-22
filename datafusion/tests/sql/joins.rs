@@ -213,6 +213,8 @@ async fn left_join_unbalanced() -> Result<()> {
 #[tokio::test]
 async fn left_join_filter_pushdown() -> Result<()> {
     // Since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
+    // Note that this is only true because IS NULL does not remove nulls. For filters that
+    // remove nulls, we can rewrite the join as an inner join and then push down the filter.
     let mut ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NULL ORDER BY t1_id";
     let expected = vec![
