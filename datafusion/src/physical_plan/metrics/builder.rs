@@ -105,6 +105,24 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
+    /// Consume self and create a new counter for recording the number of spills
+    /// triggered by an operator
+    pub fn spill_count(self, partition: usize) -> Count {
+        let count = Count::new();
+        self.with_partition(partition)
+            .build(MetricValue::SpillCount(count.clone()));
+        count
+    }
+
+    /// Consume self and create a new counter for recording the total spilled bytes
+    /// triggered by an operator
+    pub fn spilled_bytes(self, partition: usize) -> Count {
+        let count = Count::new();
+        self.with_partition(partition)
+            .build(MetricValue::SpilledBytes(count.clone()));
+        count
+    }
+
     /// Consumes self and creates a new [`Count`] for recording some
     /// arbitrary metric of an operator.
     pub fn counter(
