@@ -176,22 +176,20 @@ mod test {
     #[test]
     fn arrow_error_to_datafusion() {
         let res = return_arrow_error().unwrap_err();
-        assert_eq!(res.to_string(), "DD");
+        assert_eq!(res.to_string(), "External error: Error during planning: foo");
     }
 
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_datafusion_error().unwrap_err();
-        assert_eq!(res.to_string(), "DD");
+        assert_eq!(res.to_string(), "Arrow error: Schema error: bar");
     }
-
-
 
     /// Model what happens when implementing SendableRecrordBatchStream:
     /// DataFusion code needs to return an ArrowError
     fn return_arrow_error() -> arrow::error::Result<()> {
         // Expect the '?' to work
-        let _foo = Err(DataFusionError::Internal("foo".to_string()))?;
+        let _foo = Err(DataFusionError::Plan("foo".to_string()))?;
         Ok(())
     }
 
