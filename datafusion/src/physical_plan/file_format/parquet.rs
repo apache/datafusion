@@ -63,7 +63,6 @@ use tokio::{
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
-
 use super::PartitionColumnProjector;
 
 /// Execution plan for scanning one or more Parquet partitions
@@ -530,7 +529,7 @@ mod tests {
     };
 
     use super::*;
-    use arrow::array::{Float32Array};
+    use arrow::array::Float32Array;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field},
