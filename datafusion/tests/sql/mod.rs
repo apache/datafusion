@@ -307,13 +307,15 @@ fn create_join_context_with_nulls() -> Result<ExecutionContext> {
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77])),
+            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77, 88, 99])),
             Arc::new(StringArray::from(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
                 Some("d"),
                 Some("e"),
+                None,
+                None,
             ])),
         ],
     )?;
@@ -327,12 +329,13 @@ fn create_join_context_with_nulls() -> Result<ExecutionContext> {
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55])),
+            Arc::new(UInt32Array::from(vec![11, 22, 44, 55, 99])),
             Arc::new(StringArray::from(vec![
                 Some("z"),
                 None,
                 Some("x"),
                 Some("w"),
+                Some("u"),
             ])),
         ],
     )?;
