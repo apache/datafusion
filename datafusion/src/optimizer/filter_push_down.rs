@@ -431,7 +431,6 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 //
                 // Join clauses with `Using` constraints also take advantage of this logic to make sure
                 // predicates reference the shared join columns are pushed to both sides.
-                let (left_preserved, right_preserved) = lr_is_preserved(plan);
                 let join_side_filters = state
                     .filters
                     .iter()
@@ -439,10 +438,10 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                         let mut join_cols_to_replace = HashMap::new();
                         for col in columns.iter() {
                             for (l, r) in on {
-                                if col == l && right_preserved {
+                                if col == l {
                                     join_cols_to_replace.insert(col, r);
                                     break;
-                                } else if col == r && left_preserved {
+                                } else if col == r {
                                     join_cols_to_replace.insert(col, l);
                                     break;
                                 }
