@@ -283,11 +283,11 @@ pub(crate) struct SortPreservingMergeStream {
     /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
     _drop_helper: AbortOnDropMany<()>,
 
-    /// For each input stream maintain a dequeue of SortKeyCursor
+    /// For each input stream maintain a dequeue of RecordBatches
     ///
-    /// Exhausted cursors will be popped off the front once all
+    /// Exhausted batches will be popped off the front once all
     /// their rows have been yielded to the output
-    batches: Vec<VecDeque<Arc<RecordBatch>>>,
+    batches: Vec<VecDeque<RecordBatch>>,
 
     /// Maintain a flag for each stream denoting if the current cursor
     /// has finished and needs to poll from the stream
@@ -308,8 +308,8 @@ pub(crate) struct SortPreservingMergeStream {
     /// If the stream has encountered an error
     aborted: bool,
 
-    /// An index to uniquely identify the input stream batch
-    next_batch_index: usize,
+    /// An id to uniquely identify the input stream batch
+    next_batch_id: usize,
 
     /// min heap for record comparison
     min_heap: BinaryHeap<SortKeyCursor>,
@@ -355,7 +355,7 @@ impl SortPreservingMergeStream {
             baseline_metrics,
             aborted: false,
             in_progress: vec![],
-            next_batch_index: 0,
+            next_batch_id: 0,
             min_heap: BinaryHeap::with_capacity(stream_count),
             runtime,
         }
@@ -392,7 +392,7 @@ impl SortPreservingMergeStream {
             baseline_metrics,
             aborted: false,
             in_progress: vec![],
-            next_batch_index: 0,
+            next_batch_id: 0,
             min_heap: BinaryHeap::with_capacity(stream_count),
             runtime,
         }
@@ -424,11 +424,10 @@ impl SortPreservingMergeStream {
                 return Poll::Ready(Err(e));
             }
             Some(Ok(batch)) => {
-                let batch = Arc::new(batch);
                 let cursor = match SortKeyCursor::new(
                     idx,
-                    self.next_batch_index, // assign this batch an ID
-                    batch.clone(),
+                    self.next_batch_id, // assign this batch an ID
+                    &batch,
                     &self.column_expressions,
                     self.sort_options.clone(),
                 ) {
@@ -437,7 +436,7 @@ impl SortPreservingMergeStream {
                         return Poll::Ready(Err(ArrowError::ExternalError(Box::new(e))));
                     }
                 };
-                self.next_batch_index += 1;
+                self.next_batch_id += 1;
                 self.min_heap.push(cursor);
                 self.cursor_finished[idx] = false;
                 self.batches[idx].push_back(batch)
@@ -449,7 +448,7 @@ impl SortPreservingMergeStream {
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
     ///
-    /// Will then drop any cursors for which all rows have been yielded to the output
+    /// Will then drop any batches for which all rows have been yielded to the output
     fn build_record_batch(&mut self) -> ArrowResult<RecordBatch> {
         // Mapping from stream index to the index of the first buffer from that stream
         let mut buffer_idx = 0;
@@ -486,13 +485,13 @@ impl SortPreservingMergeStream {
 
                 let first = &self.in_progress[0];
                 let mut buffer_idx =
-                    stream_to_buffer_idx[first.stream_idx] + first.cursor_idx;
+                    stream_to_buffer_idx[first.stream_idx] + first.batch_idx;
                 let mut start_row_idx = first.row_idx;
                 let mut end_row_idx = start_row_idx + 1;
 
                 for row_index in self.in_progress.iter().skip(1) {
                     let next_buffer_idx =
-                        stream_to_buffer_idx[row_index.stream_idx] + row_index.cursor_idx;
+                        stream_to_buffer_idx[row_index.stream_idx] + row_index.batch_idx;
 
                     if next_buffer_idx == buffer_idx && row_index.row_idx == end_row_idx {
                         // subsequent row in same batch
@@ -518,16 +517,16 @@ impl SortPreservingMergeStream {
         self.in_progress.clear();
 
         // New cursors are only created once the previous cursor for the stream
-        // is finished. This means all remaining rows from all but the last cursor
+        // is finished. This means all remaining rows from all but the last batch
         // for each stream have been yielded to the newly created record batch
         //
         // Additionally as `in_progress` has been drained, there are no longer
-        // any RowIndex's reliant on the cursor indexes
+        // any RowIndex's reliant on the batch indexes
         //
-        // We can therefore drop all but the last cursor for each stream
+        // We can therefore drop all but the last batch for each stream
         for batches in &mut self.batches {
             if batches.len() > 1 {
-                // Drain all but the last cursor
+                // Drain all but the last batch
                 batches.drain(0..(batches.len() - 1));
             }
         }
@@ -579,7 +578,7 @@ impl SortPreservingMergeStream {
             match self.min_heap.pop() {
                 Some(mut cursor) => {
                     let stream_idx = cursor.stream_idx;
-                    let cursor_idx = self.batches[stream_idx].len() - 1;
+                    let batch_idx = self.batches[stream_idx].len() - 1;
                     let row_idx = cursor.advance();
 
                     let mut cursor_finished = false;
@@ -593,7 +592,7 @@ impl SortPreservingMergeStream {
 
                     self.in_progress.push(RowIndex {
                         stream_idx,
-                        cursor_idx,
+                        batch_idx,
                         row_idx,
                     });
 
