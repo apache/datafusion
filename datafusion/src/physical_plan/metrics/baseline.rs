@@ -50,6 +50,12 @@ pub struct BaselineMetrics {
     /// amount of time the operator was actively trying to use the CPU
     elapsed_compute: Time,
 
+    /// count of spills during the execution of the operator
+    spill_count: Count,
+
+    /// total spilled bytes during the execution of the operator
+    spilled_bytes: Count,
+
     /// output rows: the total output rows
     output_rows: Count,
 }
@@ -63,6 +69,8 @@ impl BaselineMetrics {
         Self {
             end_time: MetricBuilder::new(metrics).end_timestamp(partition),
             elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
+            spill_count: MetricBuilder::new(metrics).spill_count(partition),
+            spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
             output_rows: MetricBuilder::new(metrics).output_rows(partition),
         }
     }
@@ -70,6 +78,22 @@ impl BaselineMetrics {
     /// return the metric for cpu time spend in this operator
     pub fn elapsed_compute(&self) -> &Time {
         &self.elapsed_compute
+    }
+
+    /// return the metric for the total number of spills triggered during execution
+    pub fn spill_count(&self) -> &Count {
+        &self.spill_count
+    }
+
+    /// return the metric for the total spilled bytes during execution
+    pub fn spilled_bytes(&self) -> &Count {
+        &self.spilled_bytes
+    }
+
+    /// Record a spill of `spilled_bytes` size.
+    pub fn record_spill(&self, spilled_bytes: usize) {
+        self.spill_count.add(1);
+        self.spilled_bytes.add(spilled_bytes);
     }
 
     /// return the metric for the total number of output rows produced
