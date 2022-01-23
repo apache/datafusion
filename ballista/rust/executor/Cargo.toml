@@ -45,6 +45,7 @@ tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
+hyper = "0.14.4"
 
 [dev-dependencies]
 

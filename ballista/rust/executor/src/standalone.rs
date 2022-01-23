@@ -62,6 +62,8 @@ pub async fn new_standalone_executor(
         id: Uuid::new_v4().to_string(), // assign this executor a unique ID
         optional_host: Some(OptionalHost::Host("localhost".to_string())),
         port: addr.port() as u32,
+        // TODO Make it configurable
+        grpc_port: 50020,
     };
     tokio::spawn(execution_loop::poll_loop(
         scheduler,

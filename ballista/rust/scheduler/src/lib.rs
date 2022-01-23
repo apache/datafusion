@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc = include_str!("../README.md")]
+#![doc = include_str ! ("../README.md")]
 
 pub mod api;
 pub mod planner;
@@ -41,21 +41,27 @@ pub mod externalscaler {
     include!(concat!(env!("OUT_DIR"), "/externalscaler.rs"));
 }
 
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::{convert::TryInto, sync::Arc};
-use std::{fmt, net::IpAddr};
 
 use ballista_core::serde::protobuf::{
     execute_query_params::Query, executor_registration::OptionalHost, job_status,
     scheduler_grpc_server::SchedulerGrpc, task_status, ExecuteQueryParams,
     ExecuteQueryResult, FailedJob, FileType, GetFileMetadataParams,
     GetFileMetadataResult, GetJobStatusParams, GetJobStatusResult, JobStatus,
-    PartitionId, PollWorkParams, PollWorkResult, QueuedJob, RunningJob, TaskDefinition,
-    TaskStatus,
+    LaunchTaskParams, PartitionId, PollWorkParams, PollWorkResult, QueuedJob,
+    RegisterExecutorParams, RegisterExecutorResult, RunningJob, SendHeartBeatParams,
+    SendHeartBeatResult, TaskDefinition, TaskStatus, UpdateTaskStatusParams,
+    UpdateTaskStatusResult,
 };
-use ballista_core::serde::scheduler::ExecutorMeta;
+use ballista_core::serde::scheduler::{
+    ExecutorData, ExecutorMeta, ExecutorSpecification,
+};
 
 use clap::arg_enum;
 use datafusion::physical_plan::ExecutionPlan;
+
 #[cfg(feature = "sled")]
 extern crate sled_package as sled;
 
@@ -81,29 +87,51 @@ use crate::externalscaler::{
 };
 use crate::planner::DistributedPlanner;
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use tonic::{Request, Response, Status};
 
 use self::state::{ConfigBackendClient, SchedulerState};
-use ballista_core::config::BallistaConfig;
+use anyhow::Context;
+use ballista_core::config::{BallistaConfig, TaskSchedulingPolicy};
+use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
+use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::{mpsc, RwLock};
+use tonic::transport::Channel;
 
 #[derive(Clone)]
 pub struct SchedulerServer {
-    caller_ip: IpAddr,
     pub(crate) state: Arc<SchedulerState>,
     start_time: u128,
+    policy: TaskSchedulingPolicy,
+    scheduler_env: Option<SchedulerEnv>,
+    executors_client: Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>,
+}
+
+#[derive(Clone)]
+pub struct SchedulerEnv {
+    pub tx_job: mpsc::Sender<String>,
 }
 
 impl SchedulerServer {
-    pub fn new(
+    pub fn new(config: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
+        SchedulerServer::new_with_policy(
+            config,
+            namespace,
+            TaskSchedulingPolicy::PullStaged,
+            None,
+        )
+    }
+
+    pub fn new_with_policy(
         config: Arc<dyn ConfigBackendClient>,
         namespace: String,
-        caller_ip: IpAddr,
+        policy: TaskSchedulingPolicy,
+        scheduler_env: Option<SchedulerEnv>,
     ) -> Self {
         let state = Arc::new(SchedulerState::new(config, namespace));
         let state_clone = state.clone();
@@ -112,17 +140,178 @@ impl SchedulerServer {
         tokio::spawn(async move { state_clone.synchronize_job_status_loop().await });
 
         Self {
-            caller_ip,
             state,
             start_time: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis(),
+            policy,
+            scheduler_env,
+            executors_client: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    pub fn set_caller_ip(&mut self, ip: IpAddr) {
-        self.caller_ip = ip;
+    async fn schedule_job(&self, job_id: String) -> Result<(), BallistaError> {
+        let alive_executors = self
+            .state
+            .get_alive_executors_metadata_within_one_minute()
+            .await?;
+        let alive_executors: HashMap<String, ExecutorMeta> = alive_executors
+            .into_iter()
+            .map(|e| (e.id.clone(), e))
+            .collect();
+        let available_executors = self.state.get_available_executors_data().await?;
+        let mut available_executors: Vec<ExecutorData> = available_executors
+            .into_iter()
+            .filter(|e| alive_executors.contains_key(&e.executor_id))
+            .collect();
+
+        // In case of there's no enough resources, reschedule the tasks of the job
+        if available_executors.is_empty() {
+            let tx_job = self.scheduler_env.as_ref().unwrap().tx_job.clone();
+            // TODO Maybe it's better to use an exclusive runtime for this kind task scheduling
+            tokio::spawn(async move {
+                warn!("Not enough available executors for task running");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                tx_job.send(job_id).await.unwrap();
+            });
+            return Ok(());
+        }
+
+        let (tasks_assigment, num_tasks) =
+            self.fetch_tasks(&mut available_executors, &job_id).await?;
+        if num_tasks > 0 {
+            for (idx_executor, tasks) in tasks_assigment.into_iter().enumerate() {
+                if !tasks.is_empty() {
+                    let executor_data = &available_executors[idx_executor];
+                    debug!(
+                        "Start to launch tasks {:?} to executor {:?}",
+                        tasks, executor_data.executor_id
+                    );
+                    let mut client = {
+                        let clients = self.executors_client.read().await;
+                        info!("Size of executor clients: {:?}", clients.len());
+                        clients.get(&executor_data.executor_id).unwrap().clone()
+                    };
+                    // Update the resources first
+                    self.state.save_executor_data(executor_data.clone()).await?;
+                    // TODO check whether launching task is successful or not
+                    client.launch_task(LaunchTaskParams { task: tasks }).await?;
+                } else {
+                    // Since the task assignment policy is round robin,
+                    // if find tasks for one executor is empty, just break fast
+                    break;
+                }
+            }
+            return Ok(());
+        }
+
+        Ok(())
+    }
+
+    async fn fetch_tasks(
+        &self,
+        available_executors: &mut Vec<ExecutorData>,
+        job_id: &str,
+    ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError> {
+        let mut ret: Vec<Vec<TaskDefinition>> =
+            Vec::with_capacity(available_executors.len());
+        for _idx in 0..available_executors.len() {
+            ret.push(Vec::new());
+        }
+        let mut num_tasks = 0;
+        loop {
+            info!("Go inside fetching task loop");
+            let mut has_tasks = true;
+            for (idx, executor) in available_executors.iter_mut().enumerate() {
+                if executor.available_task_slots == 0 {
+                    break;
+                }
+                let plan = self
+                    .state
+                    .assign_next_schedulable_job_task(&executor.executor_id, job_id)
+                    .await
+                    .map_err(|e| {
+                        let msg = format!("Error finding next assignable task: {}", e);
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?;
+                if let Some((task, _plan)) = &plan {
+                    let partition_id = task.partition_id.as_ref().unwrap();
+                    info!(
+                        "Sending new task to {}: {}/{}/{}",
+                        executor.executor_id,
+                        partition_id.job_id,
+                        partition_id.stage_id,
+                        partition_id.partition_id
+                    );
+                }
+                match plan {
+                    Some((status, plan)) => {
+                        let plan_clone = plan.clone();
+                        let output_partitioning = if let Some(shuffle_writer) =
+                            plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
+                        {
+                            shuffle_writer.shuffle_output_partitioning()
+                        } else {
+                            return Err(BallistaError::General(format!(
+                                "Task root plan was not a ShuffleWriterExec: {:?}",
+                                plan_clone
+                            )));
+                        };
+
+                        ret[idx].push(TaskDefinition {
+                            plan: Some(plan.try_into().unwrap()),
+                            task_id: status.partition_id,
+                            output_partitioning: hash_partitioning_to_proto(
+                                output_partitioning,
+                            )
+                            .map_err(|_| Status::internal("TBD".to_string()))?,
+                        });
+                        executor.available_task_slots -= 1;
+                        num_tasks += 1;
+                    }
+                    _ => {
+                        // Indicate there's no more tasks to be scheduled
+                        has_tasks = false;
+                        break;
+                    }
+                }
+            }
+            if !has_tasks {
+                break;
+            }
+            let has_executors =
+                available_executors.get(0).unwrap().available_task_slots > 0;
+            if !has_executors {
+                break;
+            }
+        }
+        Ok((ret, num_tasks))
+    }
+}
+
+pub struct TaskScheduler {
+    scheduler_server: Arc<SchedulerServer>,
+}
+
+impl TaskScheduler {
+    pub fn new(scheduler_server: Arc<SchedulerServer>) -> Self {
+        Self { scheduler_server }
+    }
+
+    pub fn start(&self, mut rx_job: mpsc::Receiver<String>) {
+        let scheduler_server = self.scheduler_server.clone();
+        tokio::spawn(async move {
+            info!("Starting the task scheduler");
+            loop {
+                let job_id = rx_job.recv().await.unwrap();
+                info!("Fetch job {:?} to be scheduled", job_id.clone());
+
+                let server = scheduler_server.clone();
+                server.schedule_job(job_id).await.unwrap();
+            }
+        });
     }
 }
 
@@ -181,6 +370,13 @@ impl SchedulerGrpc for SchedulerServer {
         &self,
         request: Request<PollWorkParams>,
     ) -> std::result::Result<Response<PollWorkResult>, tonic::Status> {
+        if let TaskSchedulingPolicy::PushStaged = self.policy {
+            error!("Poll work interface is not supported for push-based task scheduling");
+            return Err(tonic::Status::failed_precondition(
+                "Bad request because poll work is not supported for push-based task scheduling",
+            ));
+        }
+        let remote_addr = request.remote_addr();
         if let PollWorkParams {
             metadata: Some(metadata),
             can_accept_task,
@@ -195,8 +391,9 @@ impl SchedulerGrpc for SchedulerServer {
                     .map(|h| match h {
                         OptionalHost::Host(host) => host,
                     })
-                    .unwrap_or_else(|| self.caller_ip.to_string()),
+                    .unwrap_or_else(|| remote_addr.unwrap().ip().to_string()),
                 port: metadata.port as u16,
+                grpc_port: metadata.grpc_port as u16,
             };
             let mut lock = self.state.lock().await.map_err(|e| {
                 let msg = format!("Could not lock the state: {}", e);
@@ -274,6 +471,195 @@ impl SchedulerGrpc for SchedulerServer {
             warn!("Received invalid executor poll_work request");
             Err(tonic::Status::invalid_argument(
                 "Missing metadata in request",
+            ))
+        }
+    }
+
+    async fn register_executor(
+        &self,
+        request: Request<RegisterExecutorParams>,
+    ) -> Result<Response<RegisterExecutorResult>, Status> {
+        let remote_addr = request.remote_addr();
+        if let RegisterExecutorParams {
+            metadata: Some(metadata),
+            specification: Some(specification),
+        } = request.into_inner()
+        {
+            info!("Received register executor request for {:?}", metadata);
+            let metadata: ExecutorMeta = ExecutorMeta {
+                id: metadata.id,
+                host: metadata
+                    .optional_host
+                    .map(|h| match h {
+                        OptionalHost::Host(host) => host,
+                    })
+                    .unwrap_or_else(|| remote_addr.unwrap().ip().to_string()),
+                port: metadata.port as u16,
+                grpc_port: metadata.grpc_port as u16,
+            };
+            // Check whether the executor starts the grpc service
+            {
+                let executor_url =
+                    format!("http://{}:{}", metadata.host, metadata.grpc_port);
+                info!("Connect to executor {:?}", executor_url);
+                let executor_client = ExecutorGrpcClient::connect(executor_url)
+                    .await
+                    .context("Could not connect to executor")
+                    .map_err(|e| tonic::Status::internal(format!("{:?}", e)))?;
+                let mut clients = self.executors_client.write().await;
+                // TODO check duplicated registration
+                clients.insert(metadata.id.clone(), executor_client);
+                info!("Size of executor clients: {:?}", clients.len());
+            }
+            let mut lock = self.state.lock().await.map_err(|e| {
+                let msg = format!("Could not lock the state: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+            self.state
+                .save_executor_metadata(metadata.clone())
+                .await
+                .map_err(|e| {
+                    let msg = format!("Could not save executor metadata: {}", e);
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
+            let executor_spec: ExecutorSpecification = specification.into();
+            let executor_data = ExecutorData {
+                executor_id: metadata.id.clone(),
+                total_task_slots: executor_spec.task_slots,
+                available_task_slots: executor_spec.task_slots,
+            };
+            self.state
+                .save_executor_data(executor_data)
+                .await
+                .map_err(|e| {
+                    let msg = format!("Could not save executor data: {}", e);
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
+            lock.unlock().await;
+            Ok(Response::new(RegisterExecutorResult { success: true }))
+        } else {
+            warn!("Received invalid register executor request");
+            Err(tonic::Status::invalid_argument(
+                "Missing metadata in request",
+            ))
+        }
+    }
+
+    async fn send_heart_beat(
+        &self,
+        request: Request<SendHeartBeatParams>,
+    ) -> Result<Response<SendHeartBeatResult>, Status> {
+        let remote_addr = request.remote_addr();
+        if let SendHeartBeatParams {
+            metadata: Some(metadata),
+            state: Some(state),
+        } = request.into_inner()
+        {
+            debug!("Received heart beat request for {:?}", metadata);
+            trace!("Related executor state is {:?}", state);
+            let metadata: ExecutorMeta = ExecutorMeta {
+                id: metadata.id,
+                host: metadata
+                    .optional_host
+                    .map(|h| match h {
+                        OptionalHost::Host(host) => host,
+                    })
+                    .unwrap_or_else(|| remote_addr.unwrap().ip().to_string()),
+                port: metadata.port as u16,
+                grpc_port: metadata.grpc_port as u16,
+            };
+            {
+                let mut lock = self.state.lock().await.map_err(|e| {
+                    let msg = format!("Could not lock the state: {}", e);
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
+                self.state
+                    .save_executor_state(metadata, Some(state))
+                    .await
+                    .map_err(|e| {
+                        let msg = format!("Could not save executor metadata: {}", e);
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?;
+                lock.unlock().await;
+            }
+            Ok(Response::new(SendHeartBeatResult { reregister: false }))
+        } else {
+            warn!("Received invalid executor heart beat request");
+            Err(tonic::Status::invalid_argument(
+                "Missing metadata or metrics in request",
+            ))
+        }
+    }
+
+    async fn update_task_status(
+        &self,
+        request: Request<UpdateTaskStatusParams>,
+    ) -> Result<Response<UpdateTaskStatusResult>, Status> {
+        if let UpdateTaskStatusParams {
+            metadata: Some(metadata),
+            task_status,
+        } = request.into_inner()
+        {
+            debug!("Received task status update request for {:?}", metadata);
+            trace!("Related task status is {:?}", task_status);
+            let mut jobs = HashSet::new();
+            {
+                let mut lock = self.state.lock().await.map_err(|e| {
+                    let msg = format!("Could not lock the state: {}", e);
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
+                let num_tasks = task_status.len();
+                for task_status in task_status {
+                    self.state
+                        .save_task_status(&task_status)
+                        .await
+                        .map_err(|e| {
+                            let msg = format!("Could not save task status: {}", e);
+                            error!("{}", msg);
+                            tonic::Status::internal(msg)
+                        })?;
+                    if task_status.partition_id.is_some() {
+                        jobs.insert(task_status.partition_id.unwrap().job_id.clone());
+                    }
+                }
+                let mut executor_data = self
+                    .state
+                    .get_executor_data(&metadata.id)
+                    .await
+                    .map_err(|e| {
+                        let msg = format!(
+                            "Could not get metadata data for id {:?}: {}",
+                            &metadata.id, e
+                        );
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?;
+                executor_data.available_task_slots += num_tasks as u32;
+                self.state
+                    .save_executor_data(executor_data)
+                    .await
+                    .map_err(|e| {
+                        let msg = format!("Could not save metadata data: {}", e);
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?;
+                lock.unlock().await;
+            }
+            let tx_job = self.scheduler_env.as_ref().unwrap().tx_job.clone();
+            for job_id in jobs {
+                tx_job.send(job_id).await.unwrap();
+            }
+            Ok(Response::new(UpdateTaskStatusResult { success: true }))
+        } else {
+            warn!("Received invalid task status update request");
+            Err(tonic::Status::invalid_argument(
+                "Missing metadata or task status in request",
             ))
         }
     }
@@ -390,6 +776,12 @@ impl SchedulerGrpc for SchedulerServer {
 
             let state = self.state.clone();
             let job_id_spawn = job_id.clone();
+            let tx_job: Option<mpsc::Sender<String>> = match self.policy {
+                TaskSchedulingPolicy::PullStaged => None,
+                TaskSchedulingPolicy::PushStaged => {
+                    Some(self.scheduler_env.as_ref().unwrap().tx_job.clone())
+                }
+            };
             tokio::spawn(async move {
                 // create physical plan using DataFusion
                 let datafusion_ctx = create_datafusion_context(&config);
@@ -503,6 +895,11 @@ impl SchedulerGrpc for SchedulerServer {
                         ));
                     }
                 }
+
+                if let Some(tx_job) = tx_job {
+                    // Send job_id to the scheduler channel
+                    tx_job.send(job_id_spawn).await.unwrap();
+                }
             });
 
             Ok(Response::new(ExecuteQueryResult { job_id }))
@@ -537,10 +934,7 @@ pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
 
 #[cfg(all(test, feature = "sled"))]
 mod test {
-    use std::{
-        net::{IpAddr, Ipv4Addr},
-        sync::Arc,
-    };
+    use std::sync::Arc;
 
     use tonic::Request;
 
@@ -558,16 +952,13 @@ mod test {
     async fn test_poll_work() -> Result<(), BallistaError> {
         let state = Arc::new(StandaloneClient::try_new_temporary()?);
         let namespace = "default";
-        let scheduler = SchedulerServer::new(
-            state.clone(),
-            namespace.to_owned(),
-            IpAddr::V4(Ipv4Addr::LOCALHOST),
-        );
+        let scheduler = SchedulerServer::new(state.clone(), namespace.to_owned());
         let state = SchedulerState::new(state, namespace.to_string());
         let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),
             optional_host: Some(OptionalHost::Host("".to_owned())),
             port: 0,
+            grpc_port: 0,
         };
         let request: Request<PollWorkParams> = Request::new(PollWorkParams {
             metadata: Some(exec_meta.clone()),

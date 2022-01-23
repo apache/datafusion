@@ -838,6 +838,7 @@ message ExecutorMetadata {
   string id = 1;
   string host = 2;
   uint32 port = 3;
+  uint32 grpc_port = 4;
 }
 
 message ExecutorRegistration {
@@ -848,12 +849,46 @@ message ExecutorRegistration {
     string host = 2;
   }
   uint32 port = 3;
+  uint32 grpc_port = 4;
 }
 
 message ExecutorHeartbeat {
   ExecutorMetadata meta = 1;
   // Unix epoch-based timestamp in seconds
   uint64 timestamp = 2;
+  ExecutorState state = 3;
+}
+
+message ExecutorState {
+  repeated ExecutorMetric metrics = 1;
+}
+
+message ExecutorMetric {
+  // TODO add more metrics
+  oneof metric {
+    uint64 available_memory = 1;
+  }
+}
+
+message ExecutorSpecification {
+  repeated ExecutorResource resources = 1;
+}
+
+message ExecutorResource {
+  // TODO add more resources
+  oneof resource {
+    uint32 task_slots = 1;
+  }
+}
+
+message ExecutorData {
+  string executor_id = 1;
+  repeated ExecutorResourcePair resources = 2;
+}
+
+message ExecutorResourcePair {
+  ExecutorResource total = 1;
+  ExecutorResource available = 2;
 }
 
 message RunningTask {
@@ -904,6 +939,41 @@ message TaskDefinition {
 
 message PollWorkResult {
   TaskDefinition task = 1;
+}
+
+message RegisterExecutorParams {
+  ExecutorRegistration metadata = 1;
+  ExecutorSpecification specification = 2;
+}
+
+message RegisterExecutorResult {
+  bool success = 1;
+}
+
+message SendHeartBeatParams {
+  ExecutorRegistration metadata = 1;
+  ExecutorState state = 2;
+}
+
+message SendHeartBeatResult {
+  // TODO it's from Spark for BlockManager
+  bool reregister = 1;
+}
+
+message StopExecutorParams {
+}
+
+message StopExecutorResult {
+}
+
+message UpdateTaskStatusParams {
+  ExecutorRegistration metadata = 1;
+  // All tasks must be reported until they reach the failed or completed state
+  repeated TaskStatus task_status = 2;
+}
+
+message UpdateTaskStatusResult {
+  bool success = 1;
 }
 
 message ExecuteQueryParams {
@@ -965,15 +1035,39 @@ message FilePartitionMetadata {
   repeated string filename = 1;
 }
 
+message LaunchTaskParams {
+  // Allow to launch a task set to an executor at once
+  repeated TaskDefinition task = 1;
+}
+
+message LaunchTaskResult {
+  bool success = 1;
+  // TODO when part of the task set are scheduled successfully
+}
+
 service SchedulerGrpc {
   // Executors must poll the scheduler for heartbeat and to receive tasks
   rpc PollWork (PollWorkParams) returns (PollWorkResult) {}
+
+  rpc RegisterExecutor(RegisterExecutorParams) returns (RegisterExecutorResult) {}
+
+  // Push-based task scheduler will only leverage this interface
+  // rather than the PollWork interface to report executor states
+  rpc SendHeartBeat (SendHeartBeatParams) returns (SendHeartBeatResult) {}
+
+  rpc UpdateTaskStatus (UpdateTaskStatusParams) returns (UpdateTaskStatusResult) {}
 
   rpc GetFileMetadata (GetFileMetadataParams) returns (GetFileMetadataResult) {}
 
   rpc ExecuteQuery (ExecuteQueryParams) returns (ExecuteQueryResult) {}
 
   rpc GetJobStatus (GetJobStatusParams) returns (GetJobStatusResult) {}
+}
+
+service ExecutorGrpc {
+  rpc LaunchTask (LaunchTaskParams) returns (LaunchTaskResult) {}
+
+  rpc StopExecutor (StopExecutorParams) returns (StopExecutorResult) {}
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
