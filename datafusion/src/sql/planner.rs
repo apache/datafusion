@@ -216,6 +216,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             for cte in &with.cte_tables {
+                // A `WITH` block can't use the same name for many times
+                let cte_name: &str = cte.alias.name.value.as_ref();
+                if ctes.contains_key(cte_name) {
+                    return Err(DataFusionError::SQL(ParserError(format!(
+                        "WITH query name {:?} specified more than once",
+                        cte_name
+                    ))));
+                }
                 // create logical plan & pass backreferencing CTEs
                 let logical_plan = self.query_to_plan_with_alias(
                     &cte.query,
@@ -3881,6 +3889,14 @@ mod tests {
                                     \n        TableScan: orders projection=None\
                                     \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn cte_use_same_name_multiple_times() {
+        let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
+        let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
+        let result = logical_plan(sql).err().unwrap();
+        assert_eq!(expected, format!("{}", result));
     }
 }
 
