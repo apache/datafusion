@@ -27,7 +27,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.58"
 
 [dependencies]
-clap = "2.33"
+clap = "3.0"
 rustyline = "9.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
 datafusion = { path = "../datafusion", version = "6.0.0" }
