@@ -34,7 +34,7 @@ use datafusion::logical_plan::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
+    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -108,12 +108,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
     fn schema(&self) -> SchemaRef {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
-        match &self.projection {
-            None => schema,
-            Some(p) => Arc::new(Schema::new(
-                p.iter().map(|i| schema.field(*i).clone()).collect(),
-            )),
-        }
+        project_schema(&schema, self.projection.as_ref()).expect("projected schema")
     }
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)

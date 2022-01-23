@@ -23,11 +23,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::{
-    common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::error::{DataFusionError, Result};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
@@ -136,24 +136,7 @@ impl MemoryExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let projected_schema = match &projection {
-            Some(columns) => {
-                let fields: Result<Vec<Field>> = columns
-                    .iter()
-                    .map(|i| {
-                        if *i < schema.fields().len() {
-                            Ok(schema.field(*i).clone())
-                        } else {
-                            Err(DataFusionError::Internal(
-                                "Projection index out of range".to_string(),
-                            ))
-                        }
-                    })
-                    .collect();
-                Arc::new(Schema::new(fields?))
-            }
-            None => Arc::clone(&schema),
-        };
+        let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -201,14 +184,14 @@ impl Stream for MemoryStream {
         Poll::Ready(if self.index < self.data.len() {
             self.index += 1;
             let batch = &self.data[self.index - 1];
-            // apply projection
-            match &self.projection {
-                Some(columns) => Some(RecordBatch::try_new(
-                    self.schema.clone(),
-                    columns.iter().map(|i| batch.column(*i).clone()).collect(),
-                )),
-                None => Some(Ok(batch.clone())),
-            }
+
+            // return just the columns requested
+            let batch = match self.projection.as_ref() {
+                Some(columns) => batch.project(columns)?,
+                None => batch.clone(),
+            };
+
+            Some(Ok(batch))
         } else {
             None
         })

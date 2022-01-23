@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use crate::datasource::TableProvider;
 use crate::error::Result;
 use crate::logical_plan::Expr;
+use crate::physical_plan::project_schema;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
 
 /// A table with a schema but no data.
@@ -57,16 +58,7 @@ impl TableProvider for EmptyTable {
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // even though there is no data, projections apply
-        let projection = match projection.clone() {
-            Some(p) => p,
-            None => (0..self.schema.fields().len()).collect(),
-        };
-        let projected_schema = Schema::new(
-            projection
-                .iter()
-                .map(|i| self.schema.field(*i).clone())
-                .collect(),
-        );
-        Ok(Arc::new(EmptyExec::new(false, Arc::new(projected_schema))))
+        let projected_schema = project_schema(&self.schema, projection.as_ref())?;
+        Ok(Arc::new(EmptyExec::new(false, projected_schema)))
     }
 }
