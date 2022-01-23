@@ -20,10 +20,7 @@ use ballista_core::{
     BALLISTA_VERSION,
 };
 use log::info;
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::Arc,
-};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 use tonic::transport::Server;
 
@@ -35,7 +32,6 @@ pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let server = SchedulerGrpcServer::new(SchedulerServer::new(
         Arc::new(client),
         "ballista".to_string(),
-        IpAddr::V4(Ipv4Addr::LOCALHOST),
     ));
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
