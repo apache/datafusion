@@ -20,7 +20,7 @@
 
 use std::{convert::TryInto, io::Cursor};
 
-use datafusion::arrow::datatypes::UnionMode;
+use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
 use datafusion::logical_plan::{JoinConstraint, JoinType, Operator};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
@@ -315,6 +315,20 @@ impl Into<datafusion::arrow::datatypes::DataType> for protobuf::PrimitiveScalarT
                 DataType::Time64(TimeUnit::Nanosecond)
             }
             protobuf::PrimitiveScalarType::Null => DataType::Null,
+            protobuf::PrimitiveScalarType::Decimal128 => DataType::Decimal(0, 0),
+            protobuf::PrimitiveScalarType::Date64 => DataType::Date64,
+            protobuf::PrimitiveScalarType::TimeSecond => {
+                DataType::Timestamp(TimeUnit::Second, None)
+            }
+            protobuf::PrimitiveScalarType::TimeMillisecond => {
+                DataType::Timestamp(TimeUnit::Millisecond, None)
+            }
+            protobuf::PrimitiveScalarType::IntervalYearmonth => {
+                DataType::Interval(IntervalUnit::YearMonth)
+            }
+            protobuf::PrimitiveScalarType::IntervalDaytime => {
+                DataType::Interval(IntervalUnit::DayTime)
+            }
         }
     }
 }

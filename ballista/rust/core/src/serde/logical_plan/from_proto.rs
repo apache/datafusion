@@ -540,11 +540,49 @@ fn typechecked_scalar_value_conversion(
                             "Untyped scalar null is not a valid scalar value",
                         ))
                     }
+                    PrimitiveScalarType::Decimal128 => {
+                        ScalarValue::Decimal128(None, 0, 0)
+                    }
+                    PrimitiveScalarType::Date64 => ScalarValue::Date64(None),
+                    PrimitiveScalarType::TimeSecond => {
+                        ScalarValue::TimestampSecond(None, None)
+                    }
+                    PrimitiveScalarType::TimeMillisecond => {
+                        ScalarValue::TimestampMillisecond(None, None)
+                    }
+                    PrimitiveScalarType::IntervalYearmonth => {
+                        ScalarValue::IntervalYearMonth(None)
+                    }
+                    PrimitiveScalarType::IntervalDaytime => {
+                        ScalarValue::IntervalDayTime(None)
+                    }
                 };
                 scalar_value
             } else {
                 return Err(proto_error("Could not convert to the proper type"));
             }
+        }
+        (Value::Decimal128Value(val), PrimitiveScalarType::Decimal128) => {
+            ScalarValue::Decimal128(
+                Some(val.value.parse::<i128>().unwrap()),
+                val.p as usize,
+                val.s as usize,
+            )
+        }
+        (Value::Date64Value(v), PrimitiveScalarType::Date64) => {
+            ScalarValue::Date64(Some(*v))
+        }
+        (Value::TimeSecondValue(v), PrimitiveScalarType::TimeSecond) => {
+            ScalarValue::TimestampSecond(Some(*v), None)
+        }
+        (Value::TimeMillisecondValue(v), PrimitiveScalarType::TimeMillisecond) => {
+            ScalarValue::TimestampMillisecond(Some(*v), None)
+        }
+        (Value::IntervalYearmonthValue(v), PrimitiveScalarType::IntervalYearmonth) => {
+            ScalarValue::IntervalYearMonth(Some(*v))
+        }
+        (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
+            ScalarValue::IntervalDayTime(Some(*v))
         }
         _ => return Err(proto_error("Could not convert to the proper type")),
     })
@@ -606,6 +644,28 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value
                 PrimitiveScalarType::from_i32(*null_enum)
                     .ok_or_else(|| proto_error("Invalid scalar type"))?
                     .try_into()?
+            }
+            protobuf::scalar_value::Value::Decimal128Value(val) => {
+                ScalarValue::Decimal128(
+                    Some(val.value.parse::<i128>().unwrap()),
+                    val.p as usize,
+                    val.s as usize,
+                )
+            }
+            protobuf::scalar_value::Value::Date64Value(v) => {
+                ScalarValue::Date64(Some(*v))
+            }
+            protobuf::scalar_value::Value::TimeSecondValue(v) => {
+                ScalarValue::TimestampSecond(Some(*v), None)
+            }
+            protobuf::scalar_value::Value::TimeMillisecondValue(v) => {
+                ScalarValue::TimestampMillisecond(Some(*v), None)
+            }
+            protobuf::scalar_value::Value::IntervalYearmonthValue(v) => {
+                ScalarValue::IntervalYearMonth(Some(*v))
+            }
+            protobuf::scalar_value::Value::IntervalDaytimeValue(v) => {
+                ScalarValue::IntervalDayTime(Some(*v))
             }
         };
         Ok(scalar)
@@ -763,6 +823,22 @@ impl TryInto<datafusion::scalar::ScalarValue> for protobuf::PrimitiveScalarType 
             protobuf::PrimitiveScalarType::TimeNanosecond => {
                 ScalarValue::TimestampNanosecond(None, None)
             }
+            protobuf::PrimitiveScalarType::Decimal128 => {
+                ScalarValue::Decimal128(None, 0, 0)
+            }
+            protobuf::PrimitiveScalarType::Date64 => ScalarValue::Date64(None),
+            protobuf::PrimitiveScalarType::TimeSecond => {
+                ScalarValue::TimestampSecond(None, None)
+            }
+            protobuf::PrimitiveScalarType::TimeMillisecond => {
+                ScalarValue::TimestampMillisecond(None, None)
+            }
+            protobuf::PrimitiveScalarType::IntervalYearmonth => {
+                ScalarValue::IntervalYearMonth(None)
+            }
+            protobuf::PrimitiveScalarType::IntervalDaytime => {
+                ScalarValue::IntervalDayTime(None)
+            }
         })
     }
 }
@@ -844,6 +920,28 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                 let null_type_enum = protobuf::PrimitiveScalarType::from_i32(*v)
                     .ok_or_else(|| proto_error("Protobuf deserialization error found invalid enum variant for DatafusionScalar"))?;
                 null_type_enum.try_into()?
+            }
+            protobuf::scalar_value::Value::Decimal128Value(val) => {
+                ScalarValue::Decimal128(
+                    Some(val.value.parse::<i128>().unwrap()),
+                    val.p as usize,
+                    val.s as usize,
+                )
+            }
+            protobuf::scalar_value::Value::Date64Value(v) => {
+                ScalarValue::Date64(Some(*v))
+            }
+            protobuf::scalar_value::Value::TimeSecondValue(v) => {
+                ScalarValue::TimestampSecond(Some(*v), None)
+            }
+            protobuf::scalar_value::Value::TimeMillisecondValue(v) => {
+                ScalarValue::TimestampMillisecond(Some(*v), None)
+            }
+            protobuf::scalar_value::Value::IntervalYearmonthValue(v) => {
+                ScalarValue::IntervalYearMonth(Some(*v))
+            }
+            protobuf::scalar_value::Value::IntervalDaytimeValue(v) => {
+                ScalarValue::IntervalDayTime(Some(*v))
             }
         })
     }
