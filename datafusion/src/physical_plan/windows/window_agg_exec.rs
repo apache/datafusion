@@ -273,9 +273,7 @@ impl WindowAggStream {
         elapsed_compute: crate::physical_plan::metrics::Time,
     ) -> ArrowResult<RecordBatch> {
         let input_schema = input.schema();
-        let batches = common::collect(input)
-            .await
-            .map_err(DataFusionError::into_arrow_external_error)?;
+        let batches = common::collect(input).await?;
 
         // record compute time on drop
         let _timer = elapsed_compute.timer();
@@ -283,8 +281,7 @@ impl WindowAggStream {
         let batch = common::combine_batches(&batches, input_schema.clone())?;
         if let Some(batch) = batch {
             // calculate window cols
-            let mut columns = compute_window_aggregates(window_expr, &batch)
-                .map_err(DataFusionError::into_arrow_external_error)?;
+            let mut columns = compute_window_aggregates(window_expr, &batch)?;
             // combine with the original cols
             // note the setup of window aggregates is that they newly calculated window
             // expressions are always prepended to the columns

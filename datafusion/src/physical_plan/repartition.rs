@@ -416,7 +416,7 @@ impl RepartitionExec {
             Err(e) => {
                 for (_, tx) in txs {
                     let err = DataFusionError::Execution(format!("Join Error: {}", e));
-                    let err = Err(err.into_arrow_external_error());
+                    let err = Err(err.into());
                     tx.send(Some(err)).ok();
                 }
             }
@@ -425,7 +425,7 @@ impl RepartitionExec {
                 for (_, tx) in txs {
                     // wrap it because need to send error to all output partitions
                     let err = DataFusionError::Execution(e.to_string());
-                    let err = Err(err.into_arrow_external_error());
+                    let err = Err(err.into());
                     tx.send(Some(err)).ok();
                 }
             }

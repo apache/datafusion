@@ -634,8 +634,7 @@ fn sort_batch(
         &expr
             .iter()
             .map(|e| e.evaluate_to_sort_column(&batch))
-            .collect::<Result<Vec<SortColumn>>>()
-            .map_err(DataFusionError::into_arrow_external_error)?,
+            .collect::<Result<Vec<SortColumn>>>()?,
         None,
     )?;
 
