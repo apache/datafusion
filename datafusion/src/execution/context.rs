@@ -39,7 +39,6 @@ use crate::{
     },
 };
 use log::debug;
-use std::fs;
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
@@ -47,6 +46,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
 };
+use std::{fs, path::PathBuf};
 
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
@@ -94,7 +94,12 @@ use chrono::{DateTime, Utc};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use super::options::{AvroReadOptions, CsvReadOptions};
+use super::{
+    disk_manager::DiskManagerConfig,
+    memory_manager::MemoryManagerConfig,
+    options::{AvroReadOptions, CsvReadOptions},
+    DiskManager, MemoryManager,
+};
 
 /// ExecutionContext is the main interface for executing queries with DataFusion. The context
 /// provides the following functionality:
@@ -193,6 +198,11 @@ impl ExecutionContext {
                 runtime_env,
             })),
         }
+    }
+
+    /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
+    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
+        self.state.lock().unwrap().runtime_env.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -718,7 +728,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the CSV files (one per partition)
         let fs_path = Path::new(path);
-        let runtime = self.state.lock().unwrap().runtime_env.clone();
+        let runtime = self.runtime_env();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -758,7 +768,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(path);
-        let runtime = self.state.lock().unwrap().runtime_env.clone();
+        let runtime = self.runtime_env();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -1057,6 +1067,48 @@ impl ExecutionConfig {
         self.runtime = config;
         self
     }
+
+    /// Use an an existing [MemoryManager]
+    pub fn with_existing_memory_manager(mut self, existing: Arc<MemoryManager>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_memory_manager(MemoryManagerConfig::new_existing(existing));
+        self
+    }
+
+    /// Specify the total memory to use while running the DataFusion
+    /// plan to `max_memory * memory_fraction` in bytes.
+    ///
+    /// Note DataFusion does not yet respect this limit in all cases.
+    pub fn with_memory_limit(
+        mut self,
+        max_memory: usize,
+        memory_fraction: f64,
+    ) -> Result<Self> {
+        self.runtime =
+            self.runtime
+                .with_memory_manager(MemoryManagerConfig::try_new_limit(
+                    max_memory,
+                    memory_fraction,
+                )?);
+        Ok(self)
+    }
+
+    /// Use an an existing [DiskManager]
+    pub fn with_existing_disk_manager(mut self, existing: Arc<DiskManager>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_disk_manager(DiskManagerConfig::new_existing(existing));
+        self
+    }
+
+    /// Use the specified path to create any needed temporary files
+    pub fn with_temp_file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]));
+        self
+    }
 }
 
 /// Holds per-execution properties and data (such as starting timestamps, etc).
@@ -1245,6 +1297,40 @@ mod tests {
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
     use test::*;
+
+    #[tokio::test]
+    async fn shared_memory_and_disk_manager() {
+        // Demonstrate the ability to share DiskManager and
+        // MemoryManager between two different executions.
+        let ctx1 = ExecutionContext::new();
+
+        // configure with same memory / disk manager
+        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let disk_manager = ctx1.runtime_env().disk_manager.clone();
+        let config = ExecutionConfig::new()
+            .with_existing_memory_manager(memory_manager.clone())
+            .with_existing_disk_manager(disk_manager.clone());
+
+        let ctx2 = ExecutionContext::with_config(config);
+
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&memory_manager),
+            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
+        ));
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&memory_manager),
+            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
+        ));
+
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&disk_manager),
+            Arc::as_ptr(&ctx1.runtime_env().disk_manager)
+        ));
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&disk_manager),
+            Arc::as_ptr(&ctx2.runtime_env().disk_manager)
+        ));
+    }
 
     #[test]
     fn optimize_explain() {

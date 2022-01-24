@@ -17,7 +17,7 @@
 
 //! Manages all available memory during query execution
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
 use hashbrown::HashMap;
 use log::info;
@@ -27,6 +27,84 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone)]
+/// Configuration information for memory management
+pub enum MemoryManagerConfig {
+    /// Use the existing [MemoryManager]
+    Existing(Arc<MemoryManager>),
+
+    /// Create a new [MemoryManager] that will use up to some
+    /// fraction of total system memory.
+    New {
+        /// Max execution memory allowed for DataFusion.  Defaults to
+        /// `usize::MAX`, which will not attempt to limit the memory
+        /// used during plan execution.
+        max_memory: usize,
+
+        /// The fraction of `max_memory` that the memory manager will
+        /// use for execution.
+        ///
+        /// The purpose of this config is to set aside memory for
+        /// untracked data structures, and imprecise size estimation
+        /// during memory acquisition.  Defaults to 0.7
+        memory_fraction: f64,
+    },
+}
+
+impl Default for MemoryManagerConfig {
+    fn default() -> Self {
+        Self::New {
+            max_memory: usize::MAX,
+            memory_fraction: 0.7,
+        }
+    }
+}
+
+impl MemoryManagerConfig {
+    /// Create a new memory [MemoryManager] with no limit on the
+    /// memory used
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Create a configuration based on an existing [MemoryManager]
+    pub fn new_existing(existing: Arc<MemoryManager>) -> Self {
+        Self::Existing(existing)
+    }
+
+    /// Create a new [MemoryManager] with a `max_memory` and `fraction`
+    pub fn try_new_limit(max_memory: usize, memory_fraction: f64) -> Result<Self> {
+        if max_memory == 0 {
+            return Err(DataFusionError::Plan(format!(
+                "invalid max_memory. Expected greater than 0, got {}",
+                max_memory
+            )));
+        }
+        if !(memory_fraction > 0f64 && memory_fraction <= 1f64) {
+            return Err(DataFusionError::Plan(format!(
+                "invalid fraction. Expected greater than 0 and less than 1.0, got {}",
+                memory_fraction
+            )));
+        }
+
+        Ok(Self::New {
+            max_memory,
+            memory_fraction,
+        })
+    }
+
+    /// return the maximum size of the memory, in bytes, this config will allow
+    fn pool_size(&self) -> usize {
+        match self {
+            MemoryManagerConfig::Existing(existing) => existing.pool_size,
+            MemoryManagerConfig::New {
+                max_memory,
+                memory_fraction,
+            } => (*max_memory as f64 * *memory_fraction) as usize,
+        }
+    }
+}
 
 fn next_id() -> usize {
     CONSUMER_ID.fetch_add(1, Ordering::SeqCst)
@@ -165,6 +243,7 @@ The memory management architecture is the following:
 */
 
 /// Manage memory usage during physical plan execution
+#[derive(Debug)]
 pub struct MemoryManager {
     requesters: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
     trackers: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
@@ -174,19 +253,27 @@ pub struct MemoryManager {
 }
 
 impl MemoryManager {
-    /// Create new memory manager based on max available pool_size
+    /// Create new memory manager based on the configuration
     #[allow(clippy::mutex_atomic)]
-    pub fn new(pool_size: usize) -> Self {
-        info!(
-            "Creating memory manager with initial size {}",
-            human_readable_size(pool_size)
-        );
-        Self {
-            requesters: Arc::new(Mutex::new(HashMap::new())),
-            trackers: Arc::new(Mutex::new(HashMap::new())),
-            pool_size,
-            requesters_total: Arc::new(Mutex::new(0)),
-            cv: Condvar::new(),
+    pub fn new(config: MemoryManagerConfig) -> Arc<Self> {
+        let pool_size = config.pool_size();
+
+        match config {
+            MemoryManagerConfig::Existing(manager) => manager,
+            MemoryManagerConfig::New { .. } => {
+                info!(
+                    "Creating memory manager with initial size {}",
+                    human_readable_size(pool_size)
+                );
+
+                Arc::new(Self {
+                    requesters: Arc::new(Mutex::new(HashMap::new())),
+                    trackers: Arc::new(Mutex::new(HashMap::new())),
+                    pool_size,
+                    requesters_total: Arc::new(Mutex::new(0)),
+                    cv: Condvar::new(),
+                })
+            }
         }
     }
 
@@ -328,10 +415,8 @@ fn human_readable_size(size: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::error::Result;
-    use crate::execution::memory_manager::{
-        ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
-    };
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -438,11 +523,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn basic_functionalities() -> Result<()> {
+    async fn basic_functionalities() {
         let config = RuntimeConfig::new()
-            .with_memory_fraction(1.0)
-            .with_max_execution_memory(100);
-        let runtime = Arc::new(RuntimeEnv::new(config)?);
+            .with_memory_manager(MemoryManagerConfig::try_new_limit(100, 1.0).unwrap());
+        let runtime = Arc::new(RuntimeEnv::new(config).unwrap());
 
         let tracker1 = Arc::new(DummyTracker::new(0, runtime.clone(), 5));
         runtime.register_consumer(&(tracker1.clone() as Arc<dyn MemoryConsumer>));
@@ -463,8 +547,8 @@ mod tests {
         runtime.register_consumer(&(requester1.clone() as Arc<dyn MemoryConsumer>));
 
         // first requester entered, should be able to use any of the remaining 80
-        requester1.do_with_mem(40).await?;
-        requester1.do_with_mem(10).await?;
+        requester1.do_with_mem(40).await.unwrap();
+        requester1.do_with_mem(10).await.unwrap();
         assert_eq!(requester1.get_spills(), 0);
         assert_eq!(requester1.mem_used(), 50);
         assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 50);
@@ -472,17 +556,46 @@ mod tests {
         let requester2 = Arc::new(DummyRequester::new(0, runtime.clone()));
         runtime.register_consumer(&(requester2.clone() as Arc<dyn MemoryConsumer>));
 
-        requester2.do_with_mem(20).await?;
-        requester2.do_with_mem(30).await?;
+        requester2.do_with_mem(20).await.unwrap();
+        requester2.do_with_mem(30).await.unwrap();
         assert_eq!(requester2.get_spills(), 1);
         assert_eq!(requester2.mem_used(), 30);
 
-        requester1.do_with_mem(10).await?;
+        requester1.do_with_mem(10).await.unwrap();
         assert_eq!(requester1.get_spills(), 1);
         assert_eq!(requester1.mem_used(), 10);
 
         assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 40);
+    }
 
-        Ok(())
+    #[tokio::test]
+    #[should_panic(expected = "invalid max_memory. Expected greater than 0, got 0")]
+    async fn test_try_new_with_limit_0() {
+        MemoryManagerConfig::try_new_limit(0, 1.0).unwrap();
+    }
+
+    #[tokio::test]
+    #[should_panic(
+        expected = "invalid fraction. Expected greater than 0 and less than 1.0, got -9.6"
+    )]
+    async fn test_try_new_with_limit_neg_fraction() {
+        MemoryManagerConfig::try_new_limit(100, -9.6).unwrap();
+    }
+
+    #[tokio::test]
+    #[should_panic(
+        expected = "invalid fraction. Expected greater than 0 and less than 1.0, got 9.6"
+    )]
+    async fn test_try_new_with_limit_too_large() {
+        MemoryManagerConfig::try_new_limit(100, 9.6).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_try_new_with_limit_pool_size() {
+        let config = MemoryManagerConfig::try_new_limit(100, 0.5).unwrap();
+        assert_eq!(config.pool_size(), 50);
+
+        let config = MemoryManagerConfig::try_new_limit(100000, 0.1).unwrap();
+        assert_eq!(config.pool_size(), 10000);
     }
 }
