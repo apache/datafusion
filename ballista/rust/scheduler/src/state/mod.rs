@@ -429,34 +429,36 @@ impl SchedulerState {
                             .await?;
                         if task_is_dead {
                             continue 'tasks;
-                        } else if let Some(task_status::Status::Completed(
-                            CompletedTask {
+                        }
+                        match &referenced_task.status {
+                            Some(task_status::Status::Completed(CompletedTask {
                                 executor_id,
                                 partitions,
-                            },
-                        )) = &referenced_task.status
-                        {
-                            debug!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{}",
-                                shuffle_input_partition_id,
-                                partitions.iter().map(|p| format!("{}={}", p.partition_id, &p.path)).collect::<Vec<_>>().join("\n\t")
-                            );
-                            let stage_shuffle_partition_locations = partition_locations
-                                .entry(unresolved_shuffle.stage_id)
-                                .or_insert_with(HashMap::new);
-                            let executor_meta = executors
-                                .iter()
-                                .find(|exec| exec.id == *executor_id)
-                                .unwrap()
-                                .clone();
+                            })) => {
+                                debug!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{}",
+                                    shuffle_input_partition_id,
+                                    partitions.iter().map(|p| format!("{}={}", p.partition_id, &p.path)).collect::<Vec<_>>().join("\n\t")
+                                );
+                                let stage_shuffle_partition_locations =
+                                    partition_locations
+                                        .entry(unresolved_shuffle.stage_id)
+                                        .or_insert_with(HashMap::new);
+                                let executor_meta = executors
+                                    .iter()
+                                    .find(|exec| exec.id == *executor_id)
+                                    .unwrap()
+                                    .clone();
 
-                            for shuffle_write_partition in partitions {
-                                let temp = stage_shuffle_partition_locations
-                                    .entry(shuffle_write_partition.partition_id as usize)
-                                    .or_insert_with(Vec::new);
-                                let executor_meta = executor_meta.clone();
-                                let partition_location =
-                                    ballista_core::serde::scheduler::PartitionLocation {
-                                        partition_id:
+                                for shuffle_write_partition in partitions {
+                                    let temp = stage_shuffle_partition_locations
+                                        .entry(
+                                            shuffle_write_partition.partition_id as usize,
+                                        )
+                                        .or_insert_with(Vec::new);
+                                    let executor_meta = executor_meta.clone();
+                                    let partition_location =
+                                        ballista_core::serde::scheduler::PartitionLocation {
+                                            partition_id:
                                             ballista_core::serde::scheduler::PartitionId {
                                                 job_id: partition.job_id.clone(),
                                                 stage_id: unresolved_shuffle.stage_id,
@@ -464,29 +466,43 @@ impl SchedulerState {
                                                     .partition_id
                                                     as usize,
                                             },
-                                        executor_meta,
-                                        partition_stats: PartitionStats::new(
-                                            Some(shuffle_write_partition.num_rows),
-                                            Some(shuffle_write_partition.num_batches),
-                                            Some(shuffle_write_partition.num_bytes),
-                                        ),
-                                        path: shuffle_write_partition.path.clone(),
-                                    };
-                                debug!(
-                                    "Scheduler storing stage {} output partition {} path: {}",
-                                    unresolved_shuffle.stage_id,
-                                    partition_location.partition_id.partition_id,
-                                    partition_location.path
+                                            executor_meta,
+                                            partition_stats: PartitionStats::new(
+                                                Some(shuffle_write_partition.num_rows),
+                                                Some(shuffle_write_partition.num_batches),
+                                                Some(shuffle_write_partition.num_bytes),
+                                            ),
+                                            path: shuffle_write_partition.path.clone(),
+                                        };
+                                    debug!(
+                                        "Scheduler storing stage {} output partition {} path: {}",
+                                        unresolved_shuffle.stage_id,
+                                        partition_location.partition_id.partition_id,
+                                        partition_location.path
                                     );
-                                temp.push(partition_location);
+                                    temp.push(partition_location);
+                                }
                             }
-                        } else {
-                            debug!(
-                                "Stage {} input partition {} has not completed yet",
-                                unresolved_shuffle.stage_id, shuffle_input_partition_id,
-                            );
-                            continue 'tasks;
-                        }
+                            Some(task_status::Status::Failed(FailedTask { error })) => {
+                                // A task should fail when its referenced_task fails
+                                let mut status = status.clone();
+                                let err_msg = error.to_string();
+                                status.status =
+                                    Some(task_status::Status::Failed(FailedTask {
+                                        error: err_msg,
+                                    }));
+                                self.save_task_status(&status).await?;
+                                continue 'tasks;
+                            }
+                            _ => {
+                                debug!(
+                                    "Stage {} input partition {} has not completed yet",
+                                    unresolved_shuffle.stage_id,
+                                    shuffle_input_partition_id,
+                                );
+                                continue 'tasks;
+                            }
+                        };
                     }
                 }
 
