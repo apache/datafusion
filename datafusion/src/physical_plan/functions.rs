@@ -3585,6 +3585,18 @@ mod tests {
         test_function!(
             Substr,
             &[
+                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+            ],
+            Ok(Some("joséésoj")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(1))),
             ],
@@ -3675,6 +3687,61 @@ mod tests {
                 lit(ScalarValue::Int64(Some(20))),
             ],
             Ok(Some("phabet")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Ok(Some("alph")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from 5 (10 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(10))),
+            ],
+            Ok(Some("alph")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from -1 (4 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(4))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from 0 (5 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray
