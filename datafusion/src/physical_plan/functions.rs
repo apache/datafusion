@@ -3714,7 +3714,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(-1))),
             ],
             Err(DataFusionError::Execution(
-                "negative substring length not allowed".to_string(),
+                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
             )),
             &str,
             Utf8,
