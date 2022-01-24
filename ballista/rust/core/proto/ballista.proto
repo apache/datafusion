@@ -1189,7 +1189,7 @@ message ScalarValue{
 }
 
 message Decimal128{
-  string value = 1;
+  bytes value = 1;
   int64 p = 2;
   int64 s = 3;
 }
