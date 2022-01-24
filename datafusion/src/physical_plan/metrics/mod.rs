@@ -17,6 +17,7 @@
 
 //! Metrics for recording information about execution
 
+mod aggregated;
 mod baseline;
 mod builder;
 mod value;
@@ -30,6 +31,7 @@ use std::{
 use hashbrown::HashMap;
 
 // public exports
+pub use aggregated::AggregatedMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
 pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
