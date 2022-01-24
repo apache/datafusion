@@ -18,7 +18,9 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use crate::error::BallistaError;
-use crate::serde::{from_proto_binary_op, proto_error, protobuf, str_to_byte, vec_to_array};
+use crate::serde::{
+    from_proto_binary_op, proto_error, protobuf, str_to_byte, vec_to_array,
+};
 use crate::{convert_box_required, convert_required};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::datasource::file_format::avro::AvroFormat;
@@ -569,7 +571,6 @@ fn typechecked_scalar_value_conversion(
                 val.p as usize,
                 val.s as usize,
             )
-
         }
         (Value::Date64Value(v), PrimitiveScalarType::Date64) => {
             ScalarValue::Date64(Some(*v))
@@ -654,7 +655,6 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value
                     val.p as usize,
                     val.s as usize,
                 )
-
             }
             protobuf::scalar_value::Value::Date64Value(v) => {
                 ScalarValue::Date64(Some(*v))
