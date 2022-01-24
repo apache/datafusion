@@ -18,7 +18,6 @@
 use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
-use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionLocation;
 
 use async_trait::async_trait;
