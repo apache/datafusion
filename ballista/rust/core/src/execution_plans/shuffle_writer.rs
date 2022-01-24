@@ -28,7 +28,6 @@ use std::time::Instant;
 use std::{any::Any, pin::Pin};
 
 use crate::error::BallistaError;
-use crate::memory_stream::MemoryStream;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
@@ -60,6 +59,7 @@ use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
 use uuid::Uuid;
+use datafusion::physical_plan::memory::MemoryStream;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each

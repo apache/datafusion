@@ -20,6 +20,6 @@
 pub mod context;
 pub mod dataframe_impl;
 pub(crate) mod disk_manager;
-pub(crate) mod memory_manager;
+pub mod memory_manager;
 pub mod options;
 pub mod runtime_env;

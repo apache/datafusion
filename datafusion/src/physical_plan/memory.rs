@@ -147,7 +147,7 @@ impl MemoryExec {
 }
 
 /// Iterator over batches
-pub(crate) struct MemoryStream {
+pub struct MemoryStream {
     /// Vector of record batches
     data: Vec<RecordBatch>,
     /// Schema representing the data
