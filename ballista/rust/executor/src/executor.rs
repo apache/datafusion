@@ -88,8 +88,7 @@ impl Executor {
             ))
         }?;
 
-        let config = ExecutionConfig::new()
-            .with_temp_file_path(self.work_dir.clone());
+        let config = ExecutionConfig::new().with_temp_file_path(self.work_dir.clone());
         let runtime = Arc::new(RuntimeEnv::new(config.runtime)?);
 
         let partitions = exec.execute_shuffle_write(part, runtime).await?;
