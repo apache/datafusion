@@ -236,15 +236,14 @@ impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        self.expr
+        let arrays = self
+            .expr
             .iter()
             .map(|expr| expr.evaluate(batch))
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()
-            .map_or_else(
-                |e| Err(DataFusionError::into_arrow_external_error(e)),
-                |arrays| RecordBatch::try_new(self.schema.clone(), arrays),
-            )
+            .collect::<Result<Vec<_>>>()?;
+
+        RecordBatch::try_new(self.schema.clone(), arrays)
     }
 }
 
