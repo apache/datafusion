@@ -46,6 +46,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
+use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
@@ -59,7 +60,6 @@ use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
 use uuid::Uuid;
-use datafusion::physical_plan::memory::MemoryStream;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each
