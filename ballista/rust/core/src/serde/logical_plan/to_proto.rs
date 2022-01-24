@@ -566,10 +566,11 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::Decimal128(val, p, s) => {
                 match *val {
                     Some(v) => {
-                        let value_bytes = v.to_be_bytes();
+                        let array = v.to_be_bytes();
+                        let vec_val: Vec<u8> = array.iter().cloned().collect();
                         protobuf::ScalarValue {
                             value: Some(Value::Decimal128Value(protobuf::Decimal128 {
-                                value: value_bytes,
+                                value: vec_val.clone(),
                                 p: *p as i64,
                                 s: *s as i64,
                             })),
