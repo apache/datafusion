@@ -52,8 +52,8 @@ avro = ["avro-rs", "num-traits"]
 [dependencies]
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
-arrow = { version = "7.0.0", features = ["prettyprint"] }
-parquet = { version = "7.0.0", features = ["arrow"] }
+arrow = { version = "8.0.0", features = ["prettyprint"] }
+parquet = { version = "8.0.0", features = ["arrow"] }
 sqlparser = "0.13"
 paste = "^1.0"
 num_cpus = "1.13.0"
