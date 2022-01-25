@@ -564,7 +564,7 @@ async fn do_sort(
 mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::execution::runtime_env::RuntimeConfig;
+    use crate::execution::context::ExecutionConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -648,11 +648,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
-        let config = RuntimeConfig::new()
-            .with_memory_fraction(1.0)
-            // trigger spill there will be 4 batches with 5.5KB for each
-            .with_max_execution_memory(12288);
-        let runtime = Arc::new(RuntimeEnv::new(config)?);
+        // trigger spill there will be 4 batches with 5.5KB for each
+        let config = ExecutionConfig::new().with_memory_limit(12288, 1.0)?;
+        let runtime = Arc::new(RuntimeEnv::new(config.runtime)?);
 
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
