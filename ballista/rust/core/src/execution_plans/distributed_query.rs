@@ -17,6 +17,9 @@
 
 use std::any::Any;
 use std::convert::TryInto;
+use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::marker::Send;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +41,7 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 
+use crate::serde::AsLogicalPlan;
 use async_trait::async_trait;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::future;
@@ -49,27 +53,44 @@ use log::{error, info};
 /// batches directly from the executors that hold the results from the final
 /// query stage.
 #[derive(Debug, Clone)]
-pub struct DistributedQueryExec {
+pub struct DistributedQueryExec<T: 'static + AsLogicalPlan> {
     /// Ballista scheduler URL
     scheduler_url: String,
     /// Ballista configuration
     config: BallistaConfig,
     /// Logical plan to execute
     plan: LogicalPlan,
+    /// Phantom data for serializable plan message
+    plan_repr: PhantomData<T>,
 }
 
-impl DistributedQueryExec {
+impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
     pub fn new(scheduler_url: String, config: BallistaConfig, plan: LogicalPlan) -> Self {
         Self {
             scheduler_url,
             config,
             plan,
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_repr(
+        scheduler_url: String,
+        config: BallistaConfig,
+        plan: LogicalPlan,
+        plan_repr: PhantomData<T>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            plan,
+            plan_repr,
         }
     }
 }
 
 #[async_trait]
-impl ExecutionPlan for DistributedQueryExec {
+impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -90,11 +111,12 @@ impl ExecutionPlan for DistributedQueryExec {
         &self,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DistributedQueryExec::new(
-            self.scheduler_url.clone(),
-            self.config.clone(),
-            self.plan.clone(),
-        )))
+        Ok(Arc::new(DistributedQueryExec {
+            scheduler_url: self.scheduler_url.clone(),
+            config: self.config.clone(),
+            plan: self.plan.clone(),
+            plan_repr: self.plan_repr,
+        }))
     }
 
     async fn execute(
@@ -112,12 +134,22 @@ impl ExecutionPlan for DistributedQueryExec {
 
         let schema: Schema = self.plan.schema().as_ref().clone().into();
 
+        let mut buf: Vec<u8> = vec![];
+        let plan_message = T::try_from_logical_plan(&self.plan).map_err(|e| {
+            DataFusionError::Internal(format!(
+                "failed to serialize logical plan: {:?}",
+                e
+            ))
+        })?;
+        plan_message.try_encode(&mut buf);
+
         let job_id = scheduler
             .execute_query(ExecuteQueryParams {
                 query: Some(Query::LogicalPlan(
-                    (&self.plan)
-                        .try_into()
-                        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
+                    buf
+                    // (&self.plan)
+                    //     .try_into()
+                    //     .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
                 )),
                 settings: self
                     .config

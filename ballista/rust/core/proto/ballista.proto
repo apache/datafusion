@@ -979,7 +979,7 @@ message UpdateTaskStatusResult {
 
 message ExecuteQueryParams {
   oneof query {
-    LogicalPlanNode logical_plan = 1;
+    bytes logical_plan = 1;
     string sql = 2;
   }
   repeated KeyValuePair settings = 3;

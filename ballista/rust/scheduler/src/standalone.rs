@@ -16,7 +16,8 @@
 // under the License.
 
 use ballista_core::{
-    error::Result, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
+    error::Result,
+    serde::protobuf::{scheduler_grpc_server::SchedulerGrpcServer, LogicalPlanNode},
     BALLISTA_VERSION,
 };
 use log::info;
@@ -29,10 +30,10 @@ use crate::{state::StandaloneClient, SchedulerServer};
 pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
-    let server = SchedulerGrpcServer::new(SchedulerServer::new(
-        Arc::new(client),
-        "ballista".to_string(),
-    ));
+    let server: SchedulerServer<LogicalPlanNode> =
+        SchedulerServer::new(Arc::new(client), "ballista".to_string());
+
+    let server = SchedulerGrpcServer::new(server);
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;

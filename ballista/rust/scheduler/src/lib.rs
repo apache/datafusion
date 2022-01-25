@@ -43,6 +43,7 @@ pub mod externalscaler {
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::marker::PhantomData;
 use std::{convert::TryInto, sync::Arc};
 
 use ballista_core::serde::protobuf::{
@@ -104,18 +105,20 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
+use ballista_core::serde::AsLogicalPlan;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 use tonic::transport::Channel;
 
 #[derive(Clone)]
-pub struct SchedulerServer {
+pub struct SchedulerServer<T: 'static + AsLogicalPlan> {
     pub(crate) state: Arc<SchedulerState>,
     start_time: u128,
     policy: TaskSchedulingPolicy,
     scheduler_env: Option<SchedulerEnv>,
     executors_client: Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>,
+    plan_repr: PhantomData<T>,
 }
 
 #[derive(Clone)]
@@ -123,7 +126,7 @@ pub struct SchedulerEnv {
     pub tx_job: mpsc::Sender<String>,
 }
 
-impl SchedulerServer {
+impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
     pub fn new(config: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
         SchedulerServer::new_with_policy(
             config,
@@ -154,6 +157,7 @@ impl SchedulerServer {
             policy,
             scheduler_env,
             executors_client: Arc::new(RwLock::new(HashMap::new())),
+            plan_repr: PhantomData,
         }
     }
 
@@ -297,13 +301,17 @@ impl SchedulerServer {
     }
 }
 
-pub struct TaskScheduler {
-    scheduler_server: Arc<SchedulerServer>,
+pub struct TaskScheduler<T: 'static + AsLogicalPlan> {
+    scheduler_server: Arc<SchedulerServer<T>>,
+    plan_repr: PhantomData<T>,
 }
 
-impl TaskScheduler {
-    pub fn new(scheduler_server: Arc<SchedulerServer>) -> Self {
-        Self { scheduler_server }
+impl<T: 'static + AsLogicalPlan> TaskScheduler<T> {
+    pub fn new(scheduler_server: Arc<SchedulerServer<T>>) -> Self {
+        Self {
+            scheduler_server,
+            plan_repr: PhantomData,
+        }
     }
 
     pub fn start(&self, mut rx_job: mpsc::Receiver<String>) {
@@ -324,7 +332,7 @@ impl TaskScheduler {
 const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
 
 #[tonic::async_trait]
-impl ExternalScaler for SchedulerServer {
+impl<T: 'static + AsLogicalPlan> ExternalScaler for SchedulerServer<T> {
     async fn is_active(
         &self,
         _request: Request<ScaledObjectRef>,
@@ -371,7 +379,7 @@ impl ExternalScaler for SchedulerServer {
 }
 
 #[tonic::async_trait]
-impl SchedulerGrpc for SchedulerServer {
+impl<T: 'static + AsLogicalPlan> SchedulerGrpc for SchedulerServer<T> {
     async fn poll_work(
         &self,
         request: Request<PollWorkParams>,
@@ -737,13 +745,17 @@ impl SchedulerGrpc for SchedulerServer {
             })?;
 
             let plan = match query {
-                Query::LogicalPlan(logical_plan) => {
+                Query::LogicalPlan(message) => {
                     // parse protobuf
-                    (&logical_plan).try_into().map_err(|e| {
-                        let msg = format!("Could not parse logical plan protobuf: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    })?
+                    let ctx = create_datafusion_context(&config);
+                    T::try_decode(message.as_slice())
+                        .and_then(|m| m.try_into_logical_plan(&ctx))
+                        .map_err(|e| {
+                            let msg =
+                                format!("Could not parse logical plan protobuf: {}", e);
+                            error!("{}", msg);
+                            tonic::Status::internal(msg)
+                        })?
                 }
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
@@ -946,7 +958,8 @@ mod test {
 
     use ballista_core::error::BallistaError;
     use ballista_core::serde::protobuf::{
-        executor_registration::OptionalHost, ExecutorRegistration, PollWorkParams,
+        executor_registration::OptionalHost, ExecutorRegistration, LogicalPlanNode,
+        PollWorkParams,
     };
 
     use super::{
@@ -958,7 +971,8 @@ mod test {
     async fn test_poll_work() -> Result<(), BallistaError> {
         let state = Arc::new(StandaloneClient::try_new_temporary()?);
         let namespace = "default";
-        let scheduler = SchedulerServer::new(state.clone(), namespace.to_owned());
+        let scheduler: SchedulerServer<LogicalPlanNode> =
+            SchedulerServer::new(state.clone(), namespace.to_owned());
         let state = SchedulerState::new(state, namespace.to_string());
         let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),

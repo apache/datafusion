@@ -29,7 +29,8 @@ use tower::Service;
 
 use ballista_core::BALLISTA_VERSION;
 use ballista_core::{
-    print_version, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
+    print_version,
+    serde::protobuf::{scheduler_grpc_server::SchedulerGrpcServer, LogicalPlanNode},
 };
 use ballista_scheduler::api::{get_routes, EitherBody, Error};
 #[cfg(feature = "etcd")]
@@ -75,7 +76,7 @@ async fn start_server(
         "Starting Scheduler grpc server with task scheduling policy of {:?}",
         policy
     );
-    let scheduler_server = match policy {
+    let scheduler_server: SchedulerServer<LogicalPlanNode> = match policy {
         TaskSchedulingPolicy::PushStaged => {
             // TODO make the buffer size configurable
             let (tx_job, rx_job) = mpsc::channel::<String>(10000);

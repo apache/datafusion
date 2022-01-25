@@ -18,15 +18,18 @@
 //! This crate contains code generated from the Ballista Protocol Buffer Definition as well
 //! as convenience code for interacting with the generated code.
 
+use prost::bytes::{Buf, BufMut};
+use std::fmt::Debug;
 use std::{convert::TryInto, io::Cursor};
 
 use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
-use datafusion::logical_plan::{JoinConstraint, JoinType, Operator};
+use datafusion::logical_plan::{JoinConstraint, JoinType, LogicalPlan, Operator};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::prelude::ExecutionContext;
 use prost::Message;
 
 // include the generated protobuf source as a submodule
@@ -49,6 +52,26 @@ pub fn decode_protobuf(bytes: &[u8]) -> Result<BallistaAction, BallistaError> {
 
 pub(crate) fn proto_error<S: Into<String>>(message: S) -> BallistaError {
     BallistaError::General(message.into())
+}
+
+pub trait AsLogicalPlan: Debug + Send + Sync {
+    fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+
+    fn try_encode<B>(&self, buf: &mut B) -> Result<(), BallistaError>
+    where
+        B: BufMut,
+        Self: Sized;
+
+    fn try_into_logical_plan(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> Result<LogicalPlan, BallistaError>;
+
+    fn try_from_logical_plan(plan: &LogicalPlan) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
 }
 
 #[macro_export]
