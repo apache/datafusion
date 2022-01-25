@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
 use crate::client::BallistaClient;
-use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 
 use crate::utils::WrappedStream;

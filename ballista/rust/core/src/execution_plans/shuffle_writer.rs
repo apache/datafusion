@@ -28,7 +28,6 @@ use std::time::Instant;
 use std::{any::Any, pin::Pin};
 
 use crate::error::BallistaError;
-use crate::memory_stream::MemoryStream;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
@@ -47,6 +46,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
+use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };

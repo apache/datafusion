@@ -353,6 +353,7 @@ impl BallistaContext {
 
 #[cfg(test)]
 mod tests {
+
     #[tokio::test]
     #[cfg(feature = "standalone")]
     async fn test_standalone_mode() {
@@ -451,5 +452,73 @@ mod tests {
         context.sql(sql.as_str()).await.unwrap();
         let df = context.sql("show tables;").await;
         assert!(df.is_ok());
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_task_stuck_when_referenced_task_failed() {
+        use super::*;
+        use datafusion::arrow::datatypes::Schema;
+        use datafusion::arrow::util::pretty;
+        use datafusion::datasource::file_format::csv::CsvFormat;
+        use datafusion::datasource::file_format::parquet::ParquetFormat;
+        use datafusion::datasource::listing::{ListingOptions, ListingTable};
+
+        use ballista_core::config::{
+            BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+        };
+        use std::fs::File;
+        use std::io::Write;
+        use tempfile::TempDir;
+        let config = BallistaConfigBuilder::default()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
+            .build()
+            .unwrap();
+        let context = BallistaContext::standalone(&config, 1).await.unwrap();
+
+        let testdata = datafusion::test_util::parquet_test_data();
+        context
+            .register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
+            .await
+            .unwrap();
+
+        {
+            let mut guard = context.state.lock().unwrap();
+            let csv_table = guard.tables.get("single_nan");
+
+            if let Some(table_provide) = csv_table {
+                if let Some(listing_table) = table_provide
+                    .clone()
+                    .as_any()
+                    .downcast_ref::<ListingTable>()
+                {
+                    let x = listing_table.options();
+                    let error_options = ListingOptions {
+                        file_extension: x.file_extension.clone(),
+                        format: Arc::new(CsvFormat::default()),
+                        table_partition_cols: x.table_partition_cols.clone(),
+                        collect_stat: x.collect_stat,
+                        target_partitions: x.target_partitions,
+                    };
+                    let error_table = ListingTable::new(
+                        listing_table.object_store().clone(),
+                        listing_table.table_path().to_string(),
+                        Arc::new(Schema::new(vec![])),
+                        error_options,
+                    );
+                    // change the table to an error table
+                    guard
+                        .tables
+                        .insert("single_nan".to_string(), Arc::new(error_table));
+                }
+            }
+        }
+
+        let df = context
+            .sql("select count(1) from single_nan;")
+            .await
+            .unwrap();
+        let results = df.collect().await.unwrap();
+        pretty::print_batches(&results);
     }
 }
