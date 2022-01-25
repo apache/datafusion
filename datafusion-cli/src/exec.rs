@@ -24,7 +24,6 @@ use crate::{
     print_format::{all_print_formats, PrintFormat},
     print_options::PrintOptions,
 };
-use clap::SubCommand;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};

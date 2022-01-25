@@ -40,32 +40,32 @@ pub async fn main() -> Result<()> {
              Parquet files as well as querying directly against in-memory data.",
         )
         .arg(
-            Arg::with_name("data-path")
+            Arg::new("data-path")
                 .help("Path to your data, default to current directory")
-                .short("p")
+                .short('p')
                 .long("data-path")
                 .validator(is_valid_data_dir)
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("batch-size")
+            Arg::new("batch-size")
                 .help("The batch size of each query, or use DataFusion default")
-                .short("c")
+                .short('c')
                 .long("batch-size")
                 .validator(is_valid_batch_size)
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("file")
+            Arg::new("file")
                 .help("Execute commands from file(s), then exit")
-                .short("f")
+                .short('f')
                 .long("file")
-                .multiple(true)
+                .multiple_occurrences(true)
                 .validator(is_valid_file)
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("format")
+            Arg::new("format")
                 .help("Output format")
                 .long("format")
                 .default_value("table")
@@ -81,21 +81,21 @@ pub async fn main() -> Result<()> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("host")
+            Arg::new("host")
                 .help("Ballista scheduler host")
                 .long("host")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("port")
+            Arg::new("port")
                 .help("Ballista scheduler port")
                 .long("port")
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("quiet")
+            Arg::new("quiet")
                 .help("Reduce printing other than the results and work quietly")
-                .short("q")
+                .short('q')
                 .long("quiet")
                 .takes_value(false),
         )
@@ -154,23 +154,23 @@ pub async fn main() -> Result<()> {
     Ok(())
 }
 
-fn is_valid_file(dir: String) -> std::result::Result<(), String> {
-    if Path::new(&dir).is_file() {
+fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
+    if Path::new(dir).is_file() {
         Ok(())
     } else {
         Err(format!("Invalid file '{}'", dir))
     }
 }
 
-fn is_valid_data_dir(dir: String) -> std::result::Result<(), String> {
-    if Path::new(&dir).is_dir() {
+fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
+    if Path::new(dir).is_dir() {
         Ok(())
     } else {
         Err(format!("Invalid data directory '{}'", dir))
     }
 }
 
-fn is_valid_batch_size(size: String) -> std::result::Result<(), String> {
+fn is_valid_batch_size(size: &str) -> std::result::Result<(), String> {
     match size.parse::<usize>() {
         Ok(size) if size > 0 => Ok(()),
         _ => Err(format!("Invalid batch size '{}'", size)),
