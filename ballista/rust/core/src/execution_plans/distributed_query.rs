@@ -141,7 +141,9 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                 e
             ))
         })?;
-        plan_message.try_encode(&mut buf);
+        plan_message.try_encode(&mut buf).map_err(|e| {
+            DataFusionError::Execution(format!("failed to encode logical plan: {:?}", e))
+        })?;
 
         let job_id = scheduler
             .execute_query(ExecuteQueryParams {
