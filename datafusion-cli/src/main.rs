@@ -60,7 +60,7 @@ pub async fn main() -> Result<()> {
                 .help("Execute commands from file(s), then exit")
                 .short('f')
                 .long("file")
-                .multiple_values(true)
+                .multiple_occurrences(true)
                 .validator(is_valid_file)
                 .takes_value(true),
         )
@@ -163,7 +163,7 @@ fn is_valid_file(dir: &str) -> std::result::Result<(), String> {
 }
 
 fn is_valid_data_dir(dir: &str) -> std::result::Result<(), String> {
-    if Path::new(&dir).is_dir() {
+    if Path::new(dir).is_dir() {
         Ok(())
     } else {
         Err(format!("Invalid data directory '{}'", dir))
