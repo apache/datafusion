@@ -1014,7 +1014,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.a <= Int64(1)\
-            \n  Join: #test.a = #test2.a\
+            \n  Inner Join: #test.a = #test2.a\
             \n    TableScan: test projection=None\
             \n    Projection: #test2.a\
             \n      TableScan: test2 projection=None"
@@ -1022,7 +1022,7 @@ mod tests {
 
         // filter sent to side before the join
         let expected = "\
-        Join: #test.a = #test2.a\
+        Inner Join: #test.a = #test2.a\
         \n  Filter: #test.a <= Int64(1)\
         \n    TableScan: test projection=None\
         \n  Projection: #test2.a\
@@ -1055,7 +1055,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.a <= Int64(1)\
-            \n  Join: Using #test.a = #test2.a\
+            \n  Inner Join: Using #test.a = #test2.a\
             \n    TableScan: test projection=None\
             \n    Projection: #test2.a\
             \n      TableScan: test2 projection=None"
@@ -1063,7 +1063,7 @@ mod tests {
 
         // filter sent to side before the join
         let expected = "\
-        Join: Using #test.a = #test2.a\
+        Inner Join: Using #test.a = #test2.a\
         \n  Filter: #test.a <= Int64(1)\
         \n    TableScan: test projection=None\
         \n  Projection: #test2.a\
@@ -1099,7 +1099,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.c <= #test2.b\
-            \n  Join: #test.a = #test2.a\
+            \n  Inner Join: #test.a = #test2.a\
             \n    Projection: #test.a, #test.c\
             \n      TableScan: test projection=None\
             \n    Projection: #test2.a, #test2.b\
@@ -1138,7 +1138,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.b <= Int64(1)\
-            \n  Join: #test.a = #test2.a\
+            \n  Inner Join: #test.a = #test2.a\
             \n    Projection: #test.a, #test.b\
             \n      TableScan: test projection=None\
             \n    Projection: #test2.a, #test2.c\
@@ -1146,7 +1146,7 @@ mod tests {
         );
 
         let expected = "\
-        Join: #test.a = #test2.a\
+        Inner Join: #test.a = #test2.a\
         \n  Projection: #test.a, #test.b\
         \n    Filter: #test.b <= Int64(1)\
         \n      TableScan: test projection=None\
@@ -1180,7 +1180,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test2.a <= Int64(1)\
-            \n  Join: Using #test.a = #test2.a\
+            \n  Left Join: Using #test.a = #test2.a\
             \n    TableScan: test projection=None\
             \n    Projection: #test2.a\
             \n      TableScan: test2 projection=None"
@@ -1189,7 +1189,7 @@ mod tests {
         // filter not duplicated nor pushed down - i.e. noop
         let expected = "\
         Filter: #test2.a <= Int64(1)\
-        \n  Join: Using #test.a = #test2.a\
+        \n  Left Join: Using #test.a = #test2.a\
         \n    TableScan: test projection=None\
         \n    Projection: #test2.a\
         \n      TableScan: test2 projection=None";
@@ -1221,7 +1221,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.a <= Int64(1)\
-            \n  Join: Using #test.a = #test2.a\
+            \n  Right Join: Using #test.a = #test2.a\
             \n    TableScan: test projection=None\
             \n    Projection: #test2.a\
             \n      TableScan: test2 projection=None"
@@ -1230,7 +1230,7 @@ mod tests {
         // filter not duplicated nor pushed down - i.e. noop
         let expected = "\
         Filter: #test.a <= Int64(1)\
-        \n  Join: Using #test.a = #test2.a\
+        \n  Right Join: Using #test.a = #test2.a\
         \n    TableScan: test projection=None\
         \n    Projection: #test2.a\
         \n      TableScan: test2 projection=None";
@@ -1262,7 +1262,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test.a <= Int64(1)\
-            \n  Join: Using #test.a = #test2.a\
+            \n  Left Join: Using #test.a = #test2.a\
             \n    TableScan: test projection=None\
             \n    Projection: #test2.a\
             \n      TableScan: test2 projection=None"
@@ -1270,7 +1270,7 @@ mod tests {
 
         // filter sent to left side of the join, not the right
         let expected = "\
-        Join: Using #test.a = #test2.a\
+        Left Join: Using #test.a = #test2.a\
         \n  Filter: #test.a <= Int64(1)\
         \n    TableScan: test projection=None\
         \n  Projection: #test2.a\
@@ -1303,7 +1303,7 @@ mod tests {
             format!("{:?}", plan),
             "\
             Filter: #test2.a <= Int64(1)\
-            \n  Join: Using #test.a = #test2.a\
+            \n  Right Join: Using #test.a = #test2.a\
             \n    TableScan: test projection=None\
             \n    Projection: #test2.a\
             \n      TableScan: test2 projection=None"
@@ -1311,7 +1311,7 @@ mod tests {
 
         // filter sent to right side of join, not duplicated to the left
         let expected = "\
-        Join: Using #test.a = #test2.a\
+        Right Join: Using #test.a = #test2.a\
         \n  TableScan: test projection=None\
         \n  Projection: #test2.a\
         \n    Filter: #test2.a <= Int64(1)\
