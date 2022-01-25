@@ -19,30 +19,86 @@
 //! hashed among the directories listed in RuntimeConfig::local_dirs.
 
 use crate::error::{DataFusionError, Result};
-use log::info;
+use log::{debug, info};
 use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use std::collections::hash_map::DefaultHasher;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::{Builder, TempDir};
+
+/// Configuration for temporary disk access
+#[derive(Debug, Clone)]
+pub enum DiskManagerConfig {
+    /// Use the provided [DiskManager] instance
+    Existing(Arc<DiskManager>),
+
+    /// Create a new [DiskManager] that creates temporary files within
+    /// a temporary directory chosen by the OS
+    NewOs,
+
+    /// Create a new [DiskManager] that creates temporary files within
+    /// the specified directories
+    NewSpecified(Vec<PathBuf>),
+}
+
+impl Default for DiskManagerConfig {
+    fn default() -> Self {
+        Self::NewOs
+    }
+}
+
+impl DiskManagerConfig {
+    /// Create temporary files in a temporary directory chosen by the OS
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create temporary files using the provided disk manager
+    pub fn new_existing(existing: Arc<DiskManager>) -> Self {
+        Self::Existing(existing)
+    }
+
+    /// Create temporary files in the specified directories
+    pub fn new_specified(paths: Vec<PathBuf>) -> Self {
+        Self::NewSpecified(paths)
+    }
+}
 
 /// Manages files generated during query execution, e.g. spill files generated
 /// while processing dataset larger than available memory.
+#[derive(Debug)]
 pub struct DiskManager {
     local_dirs: Vec<TempDir>,
 }
 
 impl DiskManager {
-    /// Create local dirs inside user provided dirs through conf
-    pub fn new(conf_dirs: &[String]) -> Result<Self> {
-        let local_dirs = create_local_dirs(conf_dirs)?;
-        info!(
-            "Created local dirs {:?} as DataFusion working directory",
-            local_dirs
-        );
-        Ok(Self { local_dirs })
+    /// Create a DiskManager given the configuration
+    pub fn try_new(config: DiskManagerConfig) -> Result<Arc<Self>> {
+        match config {
+            DiskManagerConfig::Existing(manager) => Ok(manager),
+            DiskManagerConfig::NewOs => {
+                let tempdir = tempfile::tempdir().map_err(DataFusionError::IoError)?;
+
+                debug!(
+                    "Created directory {:?} as DataFusion working directory",
+                    tempdir
+                );
+                Ok(Arc::new(Self {
+                    local_dirs: vec![tempdir],
+                }))
+            }
+            DiskManagerConfig::NewSpecified(conf_dirs) => {
+                let local_dirs = create_local_dirs(conf_dirs)?;
+                info!(
+                    "Created local dirs {:?} as DataFusion working directory",
+                    local_dirs
+                );
+                Ok(Arc::new(Self { local_dirs }))
+            }
+        }
     }
 
     /// Create a file in conf dirs in randomized manner and return the file path
@@ -52,18 +108,16 @@ impl DiskManager {
 }
 
 /// Setup local dirs by creating one new dir in each of the given dirs
-fn create_local_dirs(local_dir: &[String]) -> Result<Vec<TempDir>> {
-    local_dir
+fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
+    local_dirs
         .iter()
-        .map(|root| create_dir(root, "datafusion-"))
+        .map(|root| {
+            Builder::new()
+                .prefix("datafusion-")
+                .tempdir_in(root)
+                .map_err(DataFusionError::IoError)
+        })
         .collect()
-}
-
-fn create_dir(root: &str, prefix: &str) -> Result<TempDir> {
-    Builder::new()
-        .prefix(prefix)
-        .tempdir_in(root)
-        .map_err(DataFusionError::IoError)
 }
 
 fn get_file(file_name: &str, local_dirs: &[TempDir]) -> String {
@@ -98,8 +152,8 @@ fn rand_name() -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::error::Result;
-    use crate::execution::disk_manager::{get_file, DiskManager};
     use tempfile::TempDir;
 
     #[test]
@@ -107,13 +161,13 @@ mod tests {
         let local_dir1 = TempDir::new()?;
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
-        let local_dirs = vec![
-            local_dir1.path().to_str().unwrap().to_string(),
-            local_dir2.path().to_str().unwrap().to_string(),
-            local_dir3.path().to_str().unwrap().to_string(),
-        ];
+        let config = DiskManagerConfig::new_specified(vec![
+            local_dir1.path().into(),
+            local_dir2.path().into(),
+            local_dir3.path().into(),
+        ]);
 
-        let dm = DiskManager::new(&local_dirs)?;
+        let dm = DiskManager::try_new(config)?;
         let actual = dm.create_tmp_file()?;
         let name = actual.rsplit_once(std::path::MAIN_SEPARATOR).unwrap().1;
 

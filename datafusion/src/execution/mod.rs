@@ -23,3 +23,6 @@ pub(crate) mod disk_manager;
 pub mod memory_manager;
 pub mod options;
 pub mod runtime_env;
+
+pub use disk_manager::DiskManager;
+pub use memory_manager::{MemoryConsumer, MemoryConsumerId, MemoryManager};
