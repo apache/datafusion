@@ -265,11 +265,10 @@ impl ShuffleWriterExec {
                                 std::fs::create_dir_all(&path)?;
 
                                 path.push(format!("data-{}.arrow", input_partition));
-                                let path = path.to_str().unwrap();
-                                info!("Writing results to {}", path);
+                                info!("Writing results to {:?}", path);
 
                                 let mut writer =
-                                    IPCWriter::new(path, stream.schema().as_ref())?;
+                                    IPCWriter::new(&path, stream.schema().as_ref())?;
 
                                 writer.write(&output_batch)?;
                                 writers[output_partition] = Some(writer);
@@ -287,7 +286,7 @@ impl ShuffleWriterExec {
                         Some(w) => {
                             w.finish()?;
                             info!(
-                                "Finished writing shuffle partition {} at {}. Batches: {}. Rows: {}. Bytes: {}.",
+                                "Finished writing shuffle partition {} at {:?}. Batches: {}. Rows: {}. Bytes: {}.",
                                 i,
                                 w.path(),
                                 w.num_batches,
@@ -297,7 +296,7 @@ impl ShuffleWriterExec {
 
                             part_locs.push(ShuffleWritePartition {
                                 partition_id: i as u64,
-                                path: w.path().to_owned(),
+                                path: w.path().to_string_lossy().to_string(),
                                 num_batches: w.num_batches,
                                 num_rows: w.num_rows,
                                 num_bytes: w.num_bytes,
