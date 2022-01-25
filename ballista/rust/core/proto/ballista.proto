@@ -1179,7 +1179,19 @@ message ScalarValue{
         ScalarType null_list_value = 18;
 
         PrimitiveScalarType null_value = 19;
+        Decimal128 decimal128_value = 20;
+        int64 date_64_value = 21;
+        int64 time_second_value = 22;
+        int64 time_millisecond_value = 23;
+        int32 interval_yearmonth_value = 24;
+        int64 interval_daytime_value = 25;
     }
+}
+
+message Decimal128{
+  bytes value = 1;
+  int64 p = 2;
+  int64 s = 3;
 }
 
 // Contains all valid datafusion scalar type except for
@@ -1203,6 +1215,13 @@ enum PrimitiveScalarType{
     TIME_MICROSECOND = 14;
     TIME_NANOSECOND = 15;
     NULL = 16;
+
+    DECIMAL128 = 17;
+    DATE64 = 20;
+    TIME_SECOND = 21;
+    TIME_MILLISECOND = 22;
+    INTERVAL_YEARMONTH = 23;
+    INTERVAL_DAYTIME = 24;
 }
 
 message ScalarType{
