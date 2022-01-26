@@ -21,9 +21,13 @@ use arrow_flight::flight_service_server::FlightServiceServer;
 use ballista_core::{
     error::Result,
     serde::protobuf::executor_registration::OptionalHost,
-    serde::protobuf::{scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration},
+    serde::protobuf::{
+        scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration,
+        PhysicalPlanNode,
+    },
     BALLISTA_VERSION,
 };
+use datafusion::prelude::ExecutionContext;
 use log::info;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -41,7 +45,9 @@ pub async fn new_standalone_executor(
         .into_os_string()
         .into_string()
         .unwrap();
-    let executor = Arc::new(Executor::new(&work_dir));
+    let ctx = Arc::new(ExecutionContext::new());
+    let executor: Arc<Executor<PhysicalPlanNode>> =
+        Arc::new(Executor::new(&work_dir, ctx));
 
     let service = BallistaFlightService::new(executor.clone());
 

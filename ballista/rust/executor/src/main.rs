@@ -30,13 +30,14 @@ use uuid::Uuid;
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::protobuf::{
     executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
-    ExecutorRegistration,
+    ExecutorRegistration, PhysicalPlanNode,
 };
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
 use config::prelude::*;
+use datafusion::prelude::ExecutionContext;
 
 #[macro_use]
 extern crate configure_me;
@@ -102,10 +103,12 @@ async fn main() -> Result<()> {
     let executor_specification = ExecutorSpecification {
         task_slots: opt.concurrent_tasks as u32,
     };
-    let executor = Arc::new(Executor::new_with_specification(
-        &work_dir,
-        executor_specification,
-    ));
+    let executor: Arc<Executor<PhysicalPlanNode>> =
+        Arc::new(Executor::new_with_specification(
+            &work_dir,
+            executor_specification,
+            Arc::new(ExecutionContext::new()),
+        ));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await

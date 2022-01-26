@@ -14,7 +14,7 @@ mod handlers;
 
 use crate::SchedulerServer;
 use anyhow::Result;
-use ballista_core::serde::AsLogicalPlan;
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use std::{
     pin::Pin,
     task::{Context as TaskContext, Poll},
@@ -74,15 +74,15 @@ fn map_option_err<T, U: Into<Error>>(
     err.map(|e| e.map_err(Into::into))
 }
 
-fn with_data_server<T: AsLogicalPlan + Clone>(
-    db: SchedulerServer<T>,
-) -> impl Filter<Extract = (SchedulerServer<T>,), Error = std::convert::Infallible> + Clone
+fn with_data_server<T: AsLogicalPlan + Clone, U: 'static + AsExecutionPlan>(
+    db: SchedulerServer<T, U>,
+) -> impl Filter<Extract = (SchedulerServer<T, U>,), Error = std::convert::Infallible> + Clone
 {
     warp::any().map(move || db.clone())
 }
 
-pub fn get_routes<T: AsLogicalPlan + Clone>(
-    scheduler_server: SchedulerServer<T>,
+pub fn get_routes<T: AsLogicalPlan + Clone, U: 'static + AsExecutionPlan>(
+    scheduler_server: SchedulerServer<T, U>,
 ) -> BoxedFilter<(impl Reply,)> {
     let routes = warp::path("state")
         .and(with_data_server(scheduler_server))

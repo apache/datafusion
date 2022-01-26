@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::marker::PhantomData;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{
-    any::type_name, collections::HashMap, convert::TryInto, sync::Arc, time::Duration,
-};
+use std::{any::type_name, collections::HashMap, sync::Arc, time::Duration};
 
 use datafusion::physical_plan::ExecutionPlan;
 use futures::{Stream, StreamExt};
@@ -28,12 +27,14 @@ use tokio::sync::OwnedMutexGuard;
 
 use ballista_core::serde::protobuf::{
     self, job_status, task_status, CompletedJob, CompletedTask, ExecutorHeartbeat,
-    ExecutorMetadata, FailedJob, FailedTask, JobStatus, PhysicalPlanNode, RunningJob,
-    RunningTask, TaskStatus,
+    ExecutorMetadata, FailedJob, FailedTask, JobStatus, RunningJob, RunningTask,
+    TaskStatus,
 };
 use ballista_core::serde::scheduler::{ExecutorData, PartitionStats};
+use ballista_core::serde::AsExecutionPlan;
 use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
 use ballista_core::{error::Result, execution_plans::UnresolvedShuffleExec};
+use datafusion::prelude::ExecutionContext;
 
 use super::planner::remove_unresolved_shuffles;
 
@@ -83,16 +84,18 @@ pub enum WatchEvent {
 }
 
 #[derive(Clone)]
-pub(super) struct SchedulerState {
+pub(super) struct SchedulerState<T: 'static + AsExecutionPlan> {
     config_client: Arc<dyn ConfigBackendClient>,
     namespace: String,
+    plan_repr: PhantomData<T>,
 }
 
-impl SchedulerState {
+impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
     pub fn new(config_client: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
         Self {
             config_client,
             namespace,
+            plan_repr: PhantomData,
         }
     }
 
@@ -271,8 +274,12 @@ impl SchedulerState {
     ) -> Result<()> {
         let key = get_stage_plan_key(&self.namespace, job_id, stage_id);
         let value = {
-            let proto: PhysicalPlanNode = plan.try_into()?;
-            encode_protobuf(&proto)?
+            let mut buf: Vec<u8> = vec![];
+            let proto = T::try_from_physical_plan(plan)?;
+            proto.try_encode(&mut buf)?;
+            // let proto: PhysicalPlanNode = plan.try_into()?;
+            // encode_protobuf(&proto)?
+            buf
         };
         self.config_client.clone().put(key, value).await
     }
@@ -281,6 +288,7 @@ impl SchedulerState {
         &self,
         job_id: &str,
         stage_id: usize,
+        ctx: &ExecutionContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let key = get_stage_plan_key(&self.namespace, job_id, stage_id);
         let value = &self.config_client.get(&key).await?;
@@ -290,8 +298,11 @@ impl SchedulerState {
                 key
             )));
         }
-        let value: PhysicalPlanNode = decode_protobuf(value)?;
-        Ok((&value).try_into()?)
+        let value = T::try_decode(value.as_slice())?;
+        let plan = value.try_into_physical_plan(&ctx)?;
+        // let value: PhysicalPlanNode = decode_protobuf(value)?;
+        // Ok((&value).try_into()?)
+        Ok(plan)
     }
 
     pub async fn get_job_tasks(
@@ -352,9 +363,10 @@ impl SchedulerState {
     pub async fn assign_next_schedulable_task(
         &self,
         executor_id: &str,
+        ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         let tasks = self.get_all_tasks().await?;
-        self.assign_next_schedulable_task_inner(executor_id, tasks)
+        self.assign_next_schedulable_task_inner(executor_id, tasks, &ctx)
             .await
     }
 
@@ -362,9 +374,10 @@ impl SchedulerState {
         &self,
         executor_id: &str,
         job_id: &str,
+        ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         let job_tasks = self.get_job_tasks(job_id).await?;
-        self.assign_next_schedulable_task_inner(executor_id, job_tasks)
+        self.assign_next_schedulable_task_inner(executor_id, job_tasks, &ctx)
             .await
     }
 
@@ -372,8 +385,9 @@ impl SchedulerState {
         &self,
         executor_id: &str,
         tasks: HashMap<String, TaskStatus>,
+        ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
-        match self.get_next_schedulable_task(tasks).await? {
+        match self.get_next_schedulable_task(tasks, &ctx).await? {
             Some((status, plan)) => {
                 let mut status = status.clone();
                 status.status = Some(task_status::Status::Running(RunningTask {
@@ -389,6 +403,7 @@ impl SchedulerState {
     async fn get_next_schedulable_task(
         &self,
         tasks: HashMap<String, TaskStatus>,
+        ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         // TODO: Make the duration a configurable parameter
         let executors = self
@@ -398,7 +413,7 @@ impl SchedulerState {
             if status.status.is_none() {
                 let partition = status.partition_id.as_ref().unwrap();
                 let plan = self
-                    .get_stage_plan(&partition.job_id, partition.stage_id as usize)
+                    .get_stage_plan(&partition.job_id, partition.stage_id as usize, &ctx)
                     .await?;
 
                 // Let's try to resolve any unresolved shuffles we find
@@ -779,7 +794,7 @@ mod test {
 
     use ballista_core::serde::protobuf::{
         job_status, task_status, CompletedTask, FailedTask, JobStatus, PartitionId,
-        QueuedJob, RunningJob, RunningTask, TaskStatus,
+        PhysicalPlanNode, QueuedJob, RunningJob, RunningTask, TaskStatus,
     };
     use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
 
@@ -790,7 +805,7 @@ mod test {
 
     #[tokio::test]
     async fn executor_metadata() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -813,7 +828,7 @@ mod test {
 
     #[tokio::test]
     async fn job_metadata() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -832,7 +847,7 @@ mod test {
 
     #[tokio::test]
     async fn job_metadata_non_existant() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -847,7 +862,7 @@ mod test {
 
     #[tokio::test]
     async fn task_status() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -873,7 +888,7 @@ mod test {
 
     #[tokio::test]
     async fn task_status_non_existant() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -895,7 +910,7 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_queued() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -912,7 +927,7 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_running() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -952,7 +967,7 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_running2() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -990,7 +1005,7 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_completed() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -1034,7 +1049,7 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_completed2() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );
@@ -1078,7 +1093,7 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_failed() -> Result<(), BallistaError> {
-        let state = SchedulerState::new(
+        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
             Arc::new(StandaloneClient::try_new_temporary()?),
             "test".to_string(),
         );

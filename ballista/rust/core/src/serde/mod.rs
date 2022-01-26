@@ -20,6 +20,7 @@
 
 use prost::bytes::{Buf, BufMut};
 use std::fmt::Debug;
+use std::sync::Arc;
 use std::{convert::TryInto, io::Cursor};
 
 use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
@@ -29,6 +30,7 @@ use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::ExecutionContext;
 use prost::Message;
 
@@ -54,7 +56,7 @@ pub(crate) fn proto_error<S: Into<String>>(message: S) -> BallistaError {
     BallistaError::General(message.into())
 }
 
-pub trait AsLogicalPlan: Debug + Send + Sync {
+pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
     where
         Self: Sized;
@@ -70,6 +72,28 @@ pub trait AsLogicalPlan: Debug + Send + Sync {
     ) -> Result<LogicalPlan, BallistaError>;
 
     fn try_from_logical_plan(plan: &LogicalPlan) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+}
+
+pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
+    fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+
+    fn try_encode<B>(&self, buf: &mut B) -> Result<(), BallistaError>
+    where
+        B: BufMut,
+        Self: Sized;
+
+    fn try_into_physical_plan(
+        &self,
+        ctx: &ExecutionContext,
+    ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
+
+    fn try_from_physical_plan(
+        plan: Arc<dyn ExecutionPlan>,
+    ) -> Result<Self, BallistaError>
     where
         Self: Sized;
 }

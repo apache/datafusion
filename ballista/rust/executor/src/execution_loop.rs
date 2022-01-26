@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryInto;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::{sync::Arc, time::Duration};
@@ -34,10 +34,11 @@ use crate::as_task_status;
 use crate::executor::Executor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+use ballista_core::serde::AsExecutionPlan;
 
-pub async fn poll_loop(
+pub async fn poll_loop<T: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
-    executor: Arc<Executor>,
+    executor: Arc<Executor<T>>,
     executor_meta: ExecutorRegistration,
     concurrent_tasks: usize,
 ) {
@@ -102,8 +103,8 @@ pub async fn poll_loop(
     }
 }
 
-async fn run_received_tasks(
-    executor: Arc<Executor>,
+async fn run_received_tasks<T: 'static + AsExecutionPlan>(
+    executor: Arc<Executor<T>>,
     executor_id: String,
     available_tasks_slots: Arc<AtomicUsize>,
     task_status_sender: Sender<TaskStatus>,
@@ -116,7 +117,8 @@ async fn run_received_tasks(
     );
     info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
-    let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
+    let plan: Arc<dyn ExecutionPlan> =
+        task.plan.unwrap().try_into_physical_plan(&executor.ctx)?; //(&task.plan.unwrap()).try_into().unwrap();
     let shuffle_output_partitioning =
         parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
 

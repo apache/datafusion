@@ -37,14 +37,15 @@ use ballista_core::serde::protobuf::{
     UpdateTaskStatusParams,
 };
 use ballista_core::serde::scheduler::{ExecutorSpecification, ExecutorState};
+use ballista_core::serde::AsExecutionPlan;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::as_task_status;
 use crate::executor::Executor;
 
-pub async fn startup(
+pub async fn startup<T: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
-    executor: Arc<Executor>,
+    executor: Arc<Executor<T>>,
     executor_meta: ExecutorRegistration,
 ) {
     // TODO make the buffer size configurable
@@ -126,9 +127,9 @@ async fn register_executor(
 }
 
 #[derive(Clone)]
-pub struct ExecutorServer {
+pub struct ExecutorServer<T: 'static + AsExecutionPlan> {
     _start_time: u128,
-    executor: Arc<Executor>,
+    executor: Arc<Executor<T>>,
     executor_meta: ExecutorRegistration,
     scheduler: SchedulerGrpcClient<Channel>,
     executor_env: ExecutorEnv,
@@ -141,10 +142,10 @@ struct ExecutorEnv {
 
 unsafe impl Sync for ExecutorEnv {}
 
-impl ExecutorServer {
+impl<T: 'static + AsExecutionPlan> ExecutorServer<T> {
     fn new(
         scheduler: SchedulerGrpcClient<Channel>,
-        executor: Arc<Executor>,
+        executor: Arc<Executor<T>>,
         executor_meta: ExecutorRegistration,
         executor_env: ExecutorEnv,
     ) -> Self {
@@ -221,12 +222,12 @@ impl ExecutorServer {
     }
 }
 
-struct Heartbeater {
-    executor_server: Arc<ExecutorServer>,
+struct Heartbeater<T: 'static + AsExecutionPlan> {
+    executor_server: Arc<ExecutorServer<T>>,
 }
 
-impl Heartbeater {
-    fn new(executor_server: Arc<ExecutorServer>) -> Self {
+impl<T: 'static + AsExecutionPlan> Heartbeater<T> {
+    fn new(executor_server: Arc<ExecutorServer<T>>) -> Self {
         Self { executor_server }
     }
 
@@ -242,12 +243,12 @@ impl Heartbeater {
     }
 }
 
-struct TaskRunnerPool {
-    executor_server: Arc<ExecutorServer>,
+struct TaskRunnerPool<T: 'static + AsExecutionPlan> {
+    executor_server: Arc<ExecutorServer<T>>,
 }
 
-impl TaskRunnerPool {
-    fn new(executor_server: Arc<ExecutorServer>) -> Self {
+impl<T: 'static + AsExecutionPlan> TaskRunnerPool<T> {
+    fn new(executor_server: Arc<ExecutorServer<T>>) -> Self {
         Self { executor_server }
     }
 
@@ -269,7 +270,7 @@ impl TaskRunnerPool {
 }
 
 #[tonic::async_trait]
-impl ExecutorGrpc for ExecutorServer {
+impl<T: 'static + AsExecutionPlan> ExecutorGrpc for ExecutorServer<T> {
     async fn launch_task(
         &self,
         request: Request<LaunchTaskParams>,

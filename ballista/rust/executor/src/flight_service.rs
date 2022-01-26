@@ -24,8 +24,8 @@ use std::sync::Arc;
 use crate::executor::Executor;
 use arrow_flight::SchemaAsIpc;
 use ballista_core::error::BallistaError;
-use ballista_core::serde::decode_protobuf;
 use ballista_core::serde::scheduler::Action as BallistaAction;
+use ballista_core::serde::{decode_protobuf, AsExecutionPlan};
 
 use arrow_flight::{
     flight_service_server::FlightService, Action, ActionType, Criteria, Empty,
@@ -52,13 +52,13 @@ type FlightDataReceiver = Receiver<Result<FlightData, Status>>;
 
 /// Service implementing the Apache Arrow Flight Protocol
 #[derive(Clone)]
-pub struct BallistaFlightService {
+pub struct BallistaFlightService<T: 'static + AsExecutionPlan> {
     /// Executor
-    _executor: Arc<Executor>,
+    _executor: Arc<Executor<T>>,
 }
 
-impl BallistaFlightService {
-    pub fn new(_executor: Arc<Executor>) -> Self {
+impl<T: 'static + AsExecutionPlan> BallistaFlightService<T> {
+    pub fn new(_executor: Arc<Executor<T>>) -> Self {
         Self { _executor }
     }
 }
@@ -67,7 +67,7 @@ type BoxedFlightStream<T> =
     Pin<Box<dyn Stream<Item = Result<T, Status>> + Send + Sync + 'static>>;
 
 #[tonic::async_trait]
-impl FlightService for BallistaFlightService {
+impl<T: 'static + AsExecutionPlan> FlightService for BallistaFlightService<T> {
     type DoActionStream = BoxedFlightStream<arrow_flight::Result>;
     type DoExchangeStream = BoxedFlightStream<FlightData>;
     type DoGetStream = BoxedFlightStream<FlightData>;

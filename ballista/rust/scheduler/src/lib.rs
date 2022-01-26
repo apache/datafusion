@@ -105,19 +105,20 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::AsLogicalPlan;
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 use tonic::transport::Channel;
 
 #[derive(Clone)]
-pub struct SchedulerServer<T: 'static + AsLogicalPlan> {
-    pub(crate) state: Arc<SchedulerState>,
+pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    pub(crate) state: Arc<SchedulerState<U>>,
     start_time: u128,
     policy: TaskSchedulingPolicy,
     scheduler_env: Option<SchedulerEnv>,
     executors_client: Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>,
+    ctx: Arc<RwLock<ExecutionContext>>,
     plan_repr: PhantomData<T>,
 }
 
@@ -126,13 +127,18 @@ pub struct SchedulerEnv {
     pub tx_job: mpsc::Sender<String>,
 }
 
-impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
-    pub fn new(config: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T, U> {
+    pub fn new(
+        config: Arc<dyn ConfigBackendClient>,
+        namespace: String,
+        ctx: Arc<RwLock<ExecutionContext>>,
+    ) -> Self {
         SchedulerServer::new_with_policy(
             config,
             namespace,
             TaskSchedulingPolicy::PullStaged,
             None,
+            ctx,
         )
     }
 
@@ -141,6 +147,7 @@ impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
         namespace: String,
         policy: TaskSchedulingPolicy,
         scheduler_env: Option<SchedulerEnv>,
+        ctx: Arc<RwLock<ExecutionContext>>,
     ) -> Self {
         let state = Arc::new(SchedulerState::new(config, namespace));
         let state_clone = state.clone();
@@ -157,6 +164,7 @@ impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
             policy,
             scheduler_env,
             executors_client: Arc::new(RwLock::new(HashMap::new())),
+            ctx,
             plan_repr: PhantomData,
         }
     }
@@ -230,6 +238,7 @@ impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
             ret.push(Vec::new());
         }
         let mut num_tasks = 0;
+        let ctx = self.ctx.read().await;
         loop {
             info!("Go inside fetching task loop");
             let mut has_tasks = true;
@@ -239,7 +248,7 @@ impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
                 }
                 let plan = self
                     .state
-                    .assign_next_schedulable_job_task(&executor.executor_id, job_id)
+                    .assign_next_schedulable_job_task(&executor.executor_id, job_id, &ctx)
                     .await
                     .map_err(|e| {
                         let msg = format!("Error finding next assignable task: {}", e);
@@ -301,16 +310,18 @@ impl<T: 'static + AsLogicalPlan> SchedulerServer<T> {
     }
 }
 
-pub struct TaskScheduler<T: 'static + AsLogicalPlan> {
-    scheduler_server: Arc<SchedulerServer<T>>,
+pub struct TaskScheduler<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    scheduler_server: Arc<SchedulerServer<T, U>>,
     plan_repr: PhantomData<T>,
+    exec_repr: PhantomData<U>,
 }
 
-impl<T: 'static + AsLogicalPlan> TaskScheduler<T> {
-    pub fn new(scheduler_server: Arc<SchedulerServer<T>>) -> Self {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler<T, U> {
+    pub fn new(scheduler_server: Arc<SchedulerServer<T, U>>) -> Self {
         Self {
             scheduler_server,
             plan_repr: PhantomData,
+            exec_repr: PhantomData,
         }
     }
 
@@ -332,7 +343,9 @@ impl<T: 'static + AsLogicalPlan> TaskScheduler<T> {
 const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
 
 #[tonic::async_trait]
-impl<T: 'static + AsLogicalPlan> ExternalScaler for SchedulerServer<T> {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExternalScaler
+    for SchedulerServer<T, U>
+{
     async fn is_active(
         &self,
         _request: Request<ScaledObjectRef>,
@@ -379,7 +392,9 @@ impl<T: 'static + AsLogicalPlan> ExternalScaler for SchedulerServer<T> {
 }
 
 #[tonic::async_trait]
-impl<T: 'static + AsLogicalPlan> SchedulerGrpc for SchedulerServer<T> {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
+    for SchedulerServer<T, U>
+{
     async fn poll_work(
         &self,
         request: Request<PollWorkParams>,
@@ -433,9 +448,10 @@ impl<T: 'static + AsLogicalPlan> SchedulerGrpc for SchedulerServer<T> {
                     })?;
             }
             let task: Result<Option<_>, Status> = if can_accept_task {
+                let ctx = self.ctx.read().await;
                 let plan = self
                     .state
-                    .assign_next_schedulable_task(&metadata.id)
+                    .assign_next_schedulable_task(&metadata.id, &ctx)
                     .await
                     .map_err(|e| {
                         let msg = format!("Error finding next assignable task: {}", e);
@@ -747,7 +763,8 @@ impl<T: 'static + AsLogicalPlan> SchedulerGrpc for SchedulerServer<T> {
             let plan = match query {
                 Query::LogicalPlan(message) => {
                     // parse protobuf
-                    let ctx = create_datafusion_context(&config);
+                    // let ctx = create_datafusion_context(&config);
+                    let ctx = self.ctx.read().await;
                     T::try_decode(message.as_slice())
                         .and_then(|m| m.try_into_logical_plan(&ctx))
                         .map_err(|e| {
@@ -760,7 +777,7 @@ impl<T: 'static + AsLogicalPlan> SchedulerGrpc for SchedulerServer<T> {
                 Query::Sql(sql) => {
                     //TODO we can't just create a new context because we need a context that has
                     // tables registered from previous SQL statements that have been executed
-                    let mut ctx = create_datafusion_context(&config);
+                    let mut ctx = self.ctx.write().await; //create_datafusion_context(&config);
                     let df = ctx.sql(&sql).await.map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -953,14 +970,16 @@ pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
 #[cfg(all(test, feature = "sled"))]
 mod test {
     use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     use tonic::Request;
 
     use ballista_core::error::BallistaError;
     use ballista_core::serde::protobuf::{
         executor_registration::OptionalHost, ExecutorRegistration, LogicalPlanNode,
-        PollWorkParams,
+        PhysicalPlanNode, PollWorkParams,
     };
+    use datafusion::prelude::ExecutionContext;
 
     use super::{
         state::{SchedulerState, StandaloneClient},
@@ -971,9 +990,14 @@ mod test {
     async fn test_poll_work() -> Result<(), BallistaError> {
         let state = Arc::new(StandaloneClient::try_new_temporary()?);
         let namespace = "default";
-        let scheduler: SchedulerServer<LogicalPlanNode> =
-            SchedulerServer::new(state.clone(), namespace.to_owned());
-        let state = SchedulerState::new(state, namespace.to_string());
+        let scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerServer::new(
+                state.clone(),
+                namespace.to_owned(),
+                Arc::new(RwLock::new(ExecutionContext::new())),
+            );
+        let state: SchedulerState<PhysicalPlanNode> =
+            SchedulerState::new(state, namespace.to_string());
         let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),
             optional_host: Some(OptionalHost::Host("".to_owned())),
