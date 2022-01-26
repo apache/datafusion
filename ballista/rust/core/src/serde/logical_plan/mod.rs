@@ -24,21 +24,18 @@ mod roundtrip_tests {
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
     use core::panic;
-    use datafusion::arrow::datatypes::UnionMode;
-    use datafusion::logical_plan::Repartition;
     use datafusion::{
-        arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
+        arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
         datasource::object_store::local::LocalFileSystem,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder,
-            Partitioning, ToDFSchema,
+            Partitioning, Repartition, ToDFSchema,
         },
-        physical_plan::functions::BuiltinScalarFunction::Sqrt,
+        physical_plan::{aggregates, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
         scalar::ScalarValue,
         sql::parser::FileType,
     };
-    use datafusion::{logical_plan::Repartition, physical_plan::aggregates};
     use protobuf::arrow_type;
     use std::{convert::TryInto, sync::Arc};
 
