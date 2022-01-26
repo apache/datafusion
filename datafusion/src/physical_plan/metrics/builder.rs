@@ -20,7 +20,7 @@
 use std::{borrow::Cow, sync::Arc};
 
 use super::{
-    Count, ExecutionPlanMetricsSet, Label, Metric, MetricValue, Time, Timestamp,
+    Count, ExecutionPlanMetricsSet, Gauge, Label, Metric, MetricValue, Time, Timestamp,
 };
 
 /// Structure for constructing metrics, counters, timers, etc.
@@ -123,6 +123,14 @@ impl<'a> MetricBuilder<'a> {
         count
     }
 
+    /// Consume self and create a new gauge for reporting current memory usage
+    pub fn mem_used(self, partition: usize) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_partition(partition)
+            .build(MetricValue::CurrentMemoryUsage(gauge.clone()));
+        gauge
+    }
+
     /// Consumes self and creates a new [`Count`] for recording some
     /// arbitrary metric of an operator.
     pub fn counter(
@@ -131,6 +139,16 @@ impl<'a> MetricBuilder<'a> {
         partition: usize,
     ) -> Count {
         self.with_partition(partition).global_counter(counter_name)
+    }
+
+    /// Consumes self and creates a new [`Gauge`] for reporting some
+    /// arbitrary metric of an operator.
+    pub fn gauge(
+        self,
+        gauge_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Gauge {
+        self.with_partition(partition).global_gauge(gauge_name)
     }
 
     /// Consumes self and creates a new [`Count`] for recording a
@@ -142,6 +160,17 @@ impl<'a> MetricBuilder<'a> {
             count: count.clone(),
         });
         count
+    }
+
+    /// Consumes self and creates a new [`Gauge`] for reporting a
+    /// metric of an overall operator (not per partition)
+    pub fn global_gauge(self, gauge_name: impl Into<Cow<'static, str>>) -> Gauge {
+        let gauge = Gauge::new();
+        self.build(MetricValue::Gauge {
+            name: gauge_name.into(),
+            gauge: gauge.clone(),
+        });
+        gauge
     }
 
     /// Consume self and create a new Timer for recording the elapsed

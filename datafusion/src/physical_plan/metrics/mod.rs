@@ -34,7 +34,7 @@ use hashbrown::HashMap;
 pub use aggregated::AggregatedMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
