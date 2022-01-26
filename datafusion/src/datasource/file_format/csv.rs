@@ -33,6 +33,8 @@ use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
+/// The default file extension of csv files
+pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
 /// Character Separated Value `FileFormat` implementation.
 #[derive(Debug)]
 pub struct CsvFormat {

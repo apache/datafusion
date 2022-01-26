@@ -25,6 +25,7 @@ use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat},
     listing::ListingOptions,
 };
+use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 
 /// CSV file read option
 #[derive(Copy, Clone)]
@@ -173,7 +174,7 @@ impl<'a> Default for NdJsonReadOptions<'a> {
         Self {
             schema: None,
             schema_infer_max_records: 1000,
-            file_extension: ".json",
+            file_extension: DEFAULT_JSON_EXTENSION,
         }
     }
 }
