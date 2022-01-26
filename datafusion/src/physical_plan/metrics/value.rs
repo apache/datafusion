@@ -83,7 +83,7 @@ impl Count {
 /// Note `clone`ing gauge update the same underlying metrics
 #[derive(Debug, Clone)]
 pub struct Gauge {
-    /// value of the metric counter
+    /// value of the metric gauge
     value: std::sync::Arc<AtomicUsize>,
 }
 
