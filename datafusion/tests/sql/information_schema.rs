@@ -15,6 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use async_trait::async_trait;
+use datafusion::{
+    catalog::{
+        catalog::MemoryCatalogProvider,
+        schema::{MemorySchemaProvider, SchemaProvider},
+    },
+    datasource::{TableProvider, TableType},
+    logical_plan::Expr,
+};
+
 use super::*;
 
 #[tokio::test]
@@ -36,8 +46,7 @@ async fn information_schema_tables_no_tables() {
         ExecutionConfig::new().with_information_schema(true),
     );
 
-    let result =
-        plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -59,11 +68,10 @@ async fn information_schema_tables_tables_default_catalog() {
     );
 
     // Now, register an empty table
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result =
-        plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -79,11 +87,10 @@ async fn information_schema_tables_tables_default_catalog() {
     assert_batches_sorted_eq!(expected, &result);
 
     // Newly added tables should appear
-    ctx.register_table("t2", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t2", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result =
-        plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -108,10 +115,10 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
     schema
-        .register_table("t1".to_owned(), test::table_with_sequence(1, 1).unwrap())
+        .register_table("t1".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
     schema
-        .register_table("t2".to_owned(), test::table_with_sequence(1, 1).unwrap())
+        .register_table("t2".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
     catalog.register_schema("my_schema", Arc::new(schema));
     ctx.register_catalog("my_catalog", Arc::new(catalog));
@@ -119,13 +126,12 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
     schema
-        .register_table("t3".to_owned(), test::table_with_sequence(1, 1).unwrap())
+        .register_table("t3".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
     catalog.register_schema("my_other_schema", Arc::new(schema));
     ctx.register_catalog("my_other_catalog", Arc::new(catalog));
 
-    let result =
-        plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -186,8 +192,7 @@ async fn information_schema_tables_table_types() {
     ctx.register_table("temp", Arc::new(TestTable(TableType::Temporary)))
         .unwrap();
 
-    let result =
-        plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -209,7 +214,7 @@ async fn information_schema_tables_table_types() {
 async fn information_schema_show_tables_no_information_schema() {
     let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     // use show tables alias
@@ -224,7 +229,7 @@ async fn information_schema_show_tables() {
         ExecutionConfig::new().with_information_schema(true),
     );
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     // use show tables alias
@@ -250,7 +255,7 @@ async fn information_schema_show_tables() {
 async fn information_schema_show_columns_no_information_schema() {
     let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     let err = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t")
@@ -264,7 +269,7 @@ async fn information_schema_show_columns_no_information_schema() {
 async fn information_schema_show_columns_like_where() {
     let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     let expected =
@@ -275,8 +280,7 @@ async fn information_schema_show_columns_like_where() {
         .unwrap_err();
     assert_eq!(err.to_string(), expected);
 
-    let err =
-        plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t WHERE column_name = 'bar'")
+    let err = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t WHERE column_name = 'bar'")
         .await
         .unwrap_err();
     assert_eq!(err.to_string(), expected);
@@ -288,7 +292,7 @@ async fn information_schema_show_columns() {
         ExecutionConfig::new().with_information_schema(true),
     );
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     let result = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t")
@@ -326,7 +330,7 @@ async fn information_schema_show_columns_full_extended() {
         ExecutionConfig::new().with_information_schema(true),
     );
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     let result = plan_and_collect(&mut ctx, "SHOW FULL COLUMNS FROM t")
@@ -353,7 +357,7 @@ async fn information_schema_show_table_table_names() {
         ExecutionConfig::new().with_information_schema(true),
     );
 
-    ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     let result = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM public.t")
@@ -385,7 +389,10 @@ async fn information_schema_show_table_table_names() {
     let err = plan_and_collect(&mut ctx, "SHOW columns from datafusion.public.t2")
         .await
         .unwrap_err();
-    assert_eq!(err.to_string(), "Error during planning: Unknown relation for SHOW COLUMNS: datafusion.public.t2");
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Unknown relation for SHOW COLUMNS: datafusion.public.t2"
+    );
 }
 
 #[tokio::test]
@@ -411,7 +418,6 @@ async fn information_schema_columns_not_exist_by_default() {
         "Error during planning: Table or CTE with name 'information_schema.columns' not found"
     );
 }
-
 
 fn table_with_many_types() -> Arc<dyn TableProvider> {
     let schema = Schema::new(vec![
@@ -443,7 +449,7 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
             )),
         ],
     )
-        .unwrap();
+    .unwrap();
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
     Arc::new(provider)
 }
@@ -457,7 +463,7 @@ async fn information_schema_columns() {
     let schema = MemorySchemaProvider::new();
 
     schema
-        .register_table("t1".to_owned(), test::table_with_sequence(1, 1).unwrap())
+        .register_table("t1".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     schema
@@ -466,8 +472,7 @@ async fn information_schema_columns() {
     catalog.register_schema("my_schema", Arc::new(schema));
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
-    let result =
-        plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
+    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
         .await
         .unwrap();
 
@@ -486,4 +491,12 @@ async fn information_schema_columns() {
         "+---------------+--------------+------------+------------------+------------------+----------------+-------------+-----------------------------+--------------------------+------------------------+-------------------+-------------------------+---------------+--------------------+---------------+",
     ];
     assert_batches_sorted_eq!(expected, &result);
+}
+
+/// Execute SQL and return results
+async fn plan_and_collect(
+    ctx: &mut ExecutionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
 }

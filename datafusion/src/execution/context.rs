@@ -1277,14 +1277,13 @@ mod tests {
         logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::{empty::EmptyTable, MemTable, TableType},
+        datasource::{empty::EmptyTable, MemTable},
         logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::{
-        Array, ArrayRef, BinaryArray, DictionaryArray, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-        LargeStringArray, StringArray, TimestampNanosecondArray, UInt16Array,
+        Array, ArrayRef, DictionaryArray, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray, UInt16Array,
         UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::compute::add;
