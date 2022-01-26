@@ -51,10 +51,9 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tokio::sync::mpsc::{Receiver as TKReceiver, Sender as TKSender};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
 
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
@@ -76,7 +75,6 @@ struct ExternalSorter {
     runtime: Arc<RuntimeEnv>,
     metrics: AggregatedMetricsSet,
     inner_metrics: BaselineMetrics,
-    used: AtomicUsize,
 }
 
 impl ExternalSorter {
@@ -97,7 +95,6 @@ impl ExternalSorter {
             runtime,
             metrics,
             inner_metrics,
-            used: AtomicUsize::new(0),
         }
     }
 
@@ -105,7 +102,7 @@ impl ExternalSorter {
         if input.num_rows() > 0 {
             let size = batch_byte_size(&input);
             self.try_grow(size).await?;
-            self.used.fetch_add(size, Ordering::SeqCst);
+            self.inner_metrics.mem_used().add(size);
             let mut in_mem_batches = self.in_mem_batches.lock().await;
             in_mem_batches.push(input);
         }
@@ -132,7 +129,8 @@ impl ExternalSorter {
                     &self.expr,
                     baseline_metrics,
                 )?;
-                streams.push(SortedStream::new(in_mem_stream, self.used()));
+                let prev_used = self.inner_metrics.mem_used().set(0);
+                streams.push(SortedStream::new(in_mem_stream, prev_used));
             }
 
             let mut spills = self.spills.lock().await;
@@ -152,19 +150,22 @@ impl ExternalSorter {
             )))
         } else if in_mem_batches.len() > 0 {
             let baseline_metrics = self.metrics.new_final_baseline(partition);
-            in_mem_partial_sort(
+            let result = in_mem_partial_sort(
                 &mut *in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
                 baseline_metrics,
-            )
+            );
+            self.inner_metrics.mem_used().set(0);
+            // TODO: the result size is not tracked
+            result
         } else {
             Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
         }
     }
 
     fn used(&self) -> usize {
-        self.used.load(Ordering::SeqCst)
+        self.inner_metrics.mem_used().value()
     }
 
     fn spilled_bytes(&self) -> usize {
@@ -231,22 +232,17 @@ impl MemoryConsumer for ExternalSorter {
             baseline_metrics,
         );
 
-        let total_size = spill_partial_sorted_stream(
-            &mut stream?,
-            spillfile.path(),
-            self.schema.clone(),
-        )
-        .await?;
-
+        spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
+            .await?;
         let mut spills = self.spills.lock().await;
-        let used = self.used.swap(0, Ordering::SeqCst);
-        self.inner_metrics.record_spill(total_size);
+        let used = self.inner_metrics.mem_used().set(0);
+        self.inner_metrics.record_spill(used);
         spills.push(spillfile);
         Ok(used)
     }
 
     fn mem_used(&self) -> usize {
-        self.used.load(Ordering::SeqCst)
+        self.inner_metrics.mem_used().value()
     }
 }
 
@@ -288,7 +284,7 @@ async fn spill_partial_sorted_stream(
     in_mem_stream: &mut SendableRecordBatchStream,
     path: &Path,
     schema: SchemaRef,
-) -> Result<usize> {
+) -> Result<()> {
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
     let path: PathBuf = path.into();
     let handle = task::spawn_blocking(move || write_sorted(receiver, path, schema));
@@ -310,8 +306,8 @@ fn read_spill_as_stream(
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
     let (sender, receiver): (
-        TKSender<ArrowResult<RecordBatch>>,
-        TKReceiver<ArrowResult<RecordBatch>>,
+        Sender<ArrowResult<RecordBatch>>,
+        Receiver<ArrowResult<RecordBatch>>,
     ) = tokio::sync::mpsc::channel(2);
     let join_handle = task::spawn_blocking(move || {
         if let Err(e) = read_spill(sender, path.path()) {
@@ -326,10 +322,10 @@ fn read_spill_as_stream(
 }
 
 fn write_sorted(
-    mut receiver: TKReceiver<ArrowResult<RecordBatch>>,
+    mut receiver: Receiver<ArrowResult<RecordBatch>>,
     path: PathBuf,
     schema: SchemaRef,
-) -> Result<usize> {
+) -> Result<()> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
     while let Some(batch) = receiver.blocking_recv() {
         writer.write(&batch?)?;
@@ -339,10 +335,10 @@ fn write_sorted(
         "Spilled {} batches of total {} rows to disk, memory released {}",
         writer.num_batches, writer.num_rows, writer.num_bytes
     );
-    Ok(writer.num_bytes as usize)
+    Ok(())
 }
 
-fn read_spill(sender: TKSender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
+fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(&path)?);
     let reader = FileReader::try_new(file)?;
     for batch in reader {

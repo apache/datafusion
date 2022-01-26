@@ -77,6 +77,62 @@ impl Count {
     }
 }
 
+/// A gauge is the simplest metrics type. It just returns a value.
+/// For example, you can easily expose current memory consumption with a gauge.
+///
+/// Note `clone`ing gauge update the same underlying metrics
+#[derive(Debug, Clone)]
+pub struct Gauge {
+    /// value of the metric gauge
+    value: std::sync::Arc<AtomicUsize>,
+}
+
+impl PartialEq for Gauge {
+    fn eq(&self, other: &Self) -> bool {
+        self.value().eq(&other.value())
+    }
+}
+
+impl Display for Gauge {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.value())
+    }
+}
+
+impl Default for Gauge {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Gauge {
+    /// create a new gauge
+    pub fn new() -> Self {
+        Self {
+            value: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Add `n` to the metric's value
+    pub fn add(&self, n: usize) {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.value.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Set the metric's value to `n` and return the previous value
+    pub fn set(&self, n: usize) -> usize {
+        // relaxed ordering for operations on `value` poses no issues
+        // we're purely using atomic ops with no associated memory ops
+        self.value.swap(n, Ordering::Relaxed)
+    }
+
+    /// Get the current value
+    pub fn value(&self) -> usize {
+        self.value.load(Ordering::Relaxed)
+    }
+}
+
 /// Measure a potentially non contiguous duration of time
 #[derive(Debug, Clone)]
 pub struct Time {
@@ -287,12 +343,21 @@ pub enum MetricValue {
     SpillCount(Count),
     /// Total size of spilled bytes produced: "spilled_bytes" metric
     SpilledBytes(Count),
+    /// Current memory used
+    CurrentMemoryUsage(Gauge),
     /// Operator defined count.
     Count {
         /// The provided name of this metric
         name: Cow<'static, str>,
         /// The value of the metric
         count: Count,
+    },
+    /// Operator defined gauge.
+    Gauge {
+        /// The provided name of this metric
+        name: Cow<'static, str>,
+        /// The value of the metric
+        gauge: Gauge,
     },
     /// Operator defined time
     Time {
@@ -314,8 +379,10 @@ impl MetricValue {
             Self::OutputRows(_) => "output_rows",
             Self::SpillCount(_) => "spill_count",
             Self::SpilledBytes(_) => "spilled_bytes",
+            Self::CurrentMemoryUsage(_) => "mem_used",
             Self::ElapsedCompute(_) => "elapsed_compute",
             Self::Count { name, .. } => name.borrow(),
+            Self::Gauge { name, .. } => name.borrow(),
             Self::Time { name, .. } => name.borrow(),
             Self::StartTimestamp(_) => "start_timestamp",
             Self::EndTimestamp(_) => "end_timestamp",
@@ -328,8 +395,10 @@ impl MetricValue {
             Self::OutputRows(count) => count.value(),
             Self::SpillCount(count) => count.value(),
             Self::SpilledBytes(bytes) => bytes.value(),
+            Self::CurrentMemoryUsage(used) => used.value(),
             Self::ElapsedCompute(time) => time.value(),
             Self::Count { count, .. } => count.value(),
+            Self::Gauge { gauge, .. } => gauge.value(),
             Self::Time { time, .. } => time.value(),
             Self::StartTimestamp(timestamp) => timestamp
                 .value()
@@ -349,10 +418,15 @@ impl MetricValue {
             Self::OutputRows(_) => Self::OutputRows(Count::new()),
             Self::SpillCount(_) => Self::SpillCount(Count::new()),
             Self::SpilledBytes(_) => Self::SpilledBytes(Count::new()),
+            Self::CurrentMemoryUsage(_) => Self::CurrentMemoryUsage(Gauge::new()),
             Self::ElapsedCompute(_) => Self::ElapsedCompute(Time::new()),
             Self::Count { name, .. } => Self::Count {
                 name: name.clone(),
                 count: Count::new(),
+            },
+            Self::Gauge { name, .. } => Self::Gauge {
+                name: name.clone(),
+                gauge: Gauge::new(),
             },
             Self::Time { name, .. } => Self::Time {
                 name: name.clone(),
@@ -383,6 +457,13 @@ impl MetricValue {
                     count: other_count, ..
                 },
             ) => count.add(other_count.value()),
+            (Self::CurrentMemoryUsage(gauge), Self::CurrentMemoryUsage(other_gauge))
+            | (
+                Self::Gauge { gauge, .. },
+                Self::Gauge {
+                    gauge: other_gauge, ..
+                },
+            ) => gauge.add(other_gauge.value()),
             (Self::ElapsedCompute(time), Self::ElapsedCompute(other_time))
             | (
                 Self::Time { time, .. },
@@ -415,10 +496,12 @@ impl MetricValue {
             Self::ElapsedCompute(_) => 1, // show second
             Self::SpillCount(_) => 2,
             Self::SpilledBytes(_) => 3,
-            Self::Count { .. } => 4,
-            Self::Time { .. } => 5,
-            Self::StartTimestamp(_) => 6, // show timestamps last
-            Self::EndTimestamp(_) => 7,
+            Self::CurrentMemoryUsage(_) => 4,
+            Self::Count { .. } => 5,
+            Self::Gauge { .. } => 6,
+            Self::Time { .. } => 7,
+            Self::StartTimestamp(_) => 8, // show timestamps last
+            Self::EndTimestamp(_) => 9,
         }
     }
 
@@ -437,6 +520,9 @@ impl std::fmt::Display for MetricValue {
             | Self::SpilledBytes(count)
             | Self::Count { count, .. } => {
                 write!(f, "{}", count)
+            }
+            Self::CurrentMemoryUsage(gauge) | Self::Gauge { gauge, .. } => {
+                write!(f, "{}", gauge)
             }
             Self::ElapsedCompute(time) | Self::Time { time, .. } => {
                 // distinguish between no time recorded and very small
