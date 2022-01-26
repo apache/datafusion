@@ -21,7 +21,7 @@ use std::task::Poll;
 
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 
-use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
+use super::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time, Timestamp};
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
@@ -56,6 +56,9 @@ pub struct BaselineMetrics {
     /// total spilled bytes during the execution of the operator
     spilled_bytes: Count,
 
+    /// current memory usage for the operator
+    mem_used: Gauge,
+
     /// output rows: the total output rows
     output_rows: Count,
 }
@@ -71,6 +74,7 @@ impl BaselineMetrics {
             elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
             spill_count: MetricBuilder::new(metrics).spill_count(partition),
             spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
+            mem_used: MetricBuilder::new(metrics).mem_used(partition),
             output_rows: MetricBuilder::new(metrics).output_rows(partition),
         }
     }
@@ -88,6 +92,11 @@ impl BaselineMetrics {
     /// return the metric for the total spilled bytes during execution
     pub fn spilled_bytes(&self) -> &Count {
         &self.spilled_bytes
+    }
+
+    /// return the metric for current memory usage
+    pub fn mem_used(&self) -> &Gauge {
+        &self.mem_used
     }
 
     /// Record a spill of `spilled_bytes` size.
