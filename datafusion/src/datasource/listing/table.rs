@@ -266,6 +266,8 @@ impl ListingTable {
 mod tests {
     use arrow::datatypes::DataType;
 
+    use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+    use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -274,8 +276,6 @@ mod tests {
         logical_plan::{col, lit},
         test::{columns, object_store::TestObjectStore},
     };
-    use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
-    use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 
     use super::*;
 

@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::datasource::file_format::parquet::{DEFAULT_PARQUET_EXTENSION, ParquetFormat};
+use datafusion::datasource::file_format::parquet::{
+    ParquetFormat, DEFAULT_PARQUET_EXTENSION,
+};
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::error::Result;
 use datafusion::prelude::*;

@@ -21,11 +21,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 
+use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat},
     listing::ListingOptions,
 };
-use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 
 /// CSV file read option
 #[derive(Copy, Clone)]

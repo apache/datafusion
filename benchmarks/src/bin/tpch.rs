@@ -54,9 +54,9 @@ use datafusion::{
     },
 };
 
-use structopt::StructOpt;
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
 #[global_allocator]
