@@ -20,7 +20,8 @@ use std::{any::Any, sync::Arc};
 use arrow::array::TimestampMillisecondArray;
 use arrow::array::*;
 use arrow::compute::kernels::arithmetic::{
-    add, divide, divide_scalar, modulus, modulus_scalar, multiply, subtract,
+    add, add_scalar, divide, divide_scalar, modulus, modulus_scalar, multiply,
+    multiply_scalar, subtract, subtract_scalar,
 };
 use arrow::compute::kernels::boolean::{and_kleene, not, or_kleene};
 use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq};
@@ -904,6 +905,15 @@ impl BinaryExpr {
             }
             Operator::NotLike => {
                 binary_string_array_op_scalar!(array, scalar.clone(), nlike)
+            }
+            Operator::Plus => {
+                binary_primitive_array_op_scalar!(array, scalar.clone(), add)
+            }
+            Operator::Minus => {
+                binary_primitive_array_op_scalar!(array, scalar.clone(), subtract)
+            }
+            Operator::Multiply => {
+                binary_primitive_array_op_scalar!(array, scalar.clone(), multiply)
             }
             Operator::Divide => {
                 binary_primitive_array_op_scalar!(array, scalar.clone(), divide)
