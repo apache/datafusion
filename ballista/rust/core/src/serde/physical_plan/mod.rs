@@ -121,19 +121,19 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                scan.base_conf.as_ref().unwrap().try_into()?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), &ctx)?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
                 Ok(Arc::new(ParquetExec::new(
-                    scan.base_conf.as_ref().unwrap().try_into()?,
+                    decode_scan_config(scan.base_conf.as_ref().unwrap(), &ctx)?,
                     // TODO predicate should be de-serialized
                     None,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
-                scan.base_conf.as_ref().unwrap().try_into()?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), &ctx)?,
             ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =
