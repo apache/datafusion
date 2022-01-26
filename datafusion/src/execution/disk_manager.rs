@@ -20,14 +20,10 @@
 
 use crate::error::{DataFusionError, Result};
 use log::{debug, info};
-use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
-use std::collections::hash_map::DefaultHasher;
-use std::fs::File;
-use std::hash::{Hash, Hasher};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
-use tempfile::{Builder, TempDir};
+use tempfile::{Builder, NamedTempFile, TempDir};
 
 /// Configuration for temporary disk access
 #[derive(Debug, Clone)]
@@ -101,8 +97,8 @@ impl DiskManager {
         }
     }
 
-    /// Create a file in conf dirs in randomized manner and return the file path
-    pub fn create_tmp_file(&self) -> Result<String> {
+    /// Return a temporary file from a randomized choice in the configured locations
+    pub fn create_tmp_file(&self) -> Result<NamedTempFile> {
         create_tmp_file(&self.local_dirs)
     }
 }
@@ -120,34 +116,15 @@ fn create_local_dirs(local_dirs: Vec<PathBuf>) -> Result<Vec<TempDir>> {
         .collect()
 }
 
-fn get_file(file_name: &str, local_dirs: &[TempDir]) -> String {
-    let mut hasher = DefaultHasher::new();
-    file_name.hash(&mut hasher);
-    let hash = hasher.finish();
-    let dir = &local_dirs[hash.rem_euclid(local_dirs.len() as u64) as usize];
-    let mut path = PathBuf::new();
-    path.push(dir);
-    path.push(file_name);
-    path.to_str().unwrap().to_string()
-}
+fn create_tmp_file(local_dirs: &[TempDir]) -> Result<NamedTempFile> {
+    let dir_index = thread_rng().gen_range(0..local_dirs.len());
+    let dir = local_dirs.get(dir_index).ok_or_else(|| {
+        DataFusionError::Internal("No directories available to DiskManager".into())
+    })?;
 
-fn create_tmp_file(local_dirs: &[TempDir]) -> Result<String> {
-    let name = rand_name();
-    let mut path = get_file(&*name, local_dirs);
-    while Path::new(path.as_str()).exists() {
-        path = get_file(&rand_name(), local_dirs);
-    }
-    File::create(&path)?;
-    Ok(path)
-}
-
-/// Return a random string suitable for use as a database name
-fn rand_name() -> String {
-    thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .map(char::from)
-        .collect()
+    Builder::new()
+        .tempfile_in(dir)
+        .map_err(DataFusionError::IoError)
 }
 
 #[cfg(test)]
@@ -161,19 +138,28 @@ mod tests {
         let local_dir1 = TempDir::new()?;
         let local_dir2 = TempDir::new()?;
         let local_dir3 = TempDir::new()?;
-        let config = DiskManagerConfig::new_specified(vec![
-            local_dir1.path().into(),
-            local_dir2.path().into(),
-            local_dir3.path().into(),
-        ]);
+        let local_dirs = vec![local_dir1.path(), local_dir2.path(), local_dir3.path()];
+        let config = DiskManagerConfig::new_specified(
+            local_dirs.iter().map(|p| p.into()).collect(),
+        );
 
         let dm = DiskManager::try_new(config)?;
         let actual = dm.create_tmp_file()?;
-        let name = actual.rsplit_once(std::path::MAIN_SEPARATOR).unwrap().1;
 
-        let expected = get_file(name, &dm.local_dirs);
-        // file should be located in dir by it's name hash
-        assert_eq!(actual, expected);
+        // the file should be in one of the specified local directories
+        let found = local_dirs.iter().any(|p| {
+            actual
+                .path()
+                .ancestors()
+                .any(|candidate_path| *p == candidate_path)
+        });
+
+        assert!(
+            found,
+            "Can't find {:?} in specified local dirs: {:?}",
+            actual, local_dirs
+        );
+
         Ok(())
     }
 }
