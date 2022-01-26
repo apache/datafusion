@@ -50,8 +50,10 @@ use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc::{Receiver, Sender};
+use tempfile::NamedTempFile;
 use tokio::task;
 
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
@@ -67,7 +69,7 @@ struct ExternalSorter {
     id: MemoryConsumerId,
     schema: SchemaRef,
     in_mem_batches: Mutex<Vec<RecordBatch>>,
-    spills: Mutex<Vec<String>>,
+    spills: Mutex<Vec<NamedTempFile>>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     runtime: Arc<RuntimeEnv>,
@@ -222,7 +224,7 @@ impl MemoryConsumer for ExternalSorter {
 
         let baseline_metrics = self.metrics.new_intermediate_baseline(partition);
 
-        let path = self.runtime.disk_manager.create_tmp_file()?;
+        let spillfile = self.runtime.disk_manager.create_tmp_file()?;
         let stream = in_mem_partial_sort(
             &mut *in_mem_batches,
             self.schema.clone(),
@@ -230,12 +232,11 @@ impl MemoryConsumer for ExternalSorter {
             baseline_metrics,
         );
 
-        spill_partial_sorted_stream(&mut stream?, path.clone(), self.schema.clone())
-            .await?;
+        spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone()).await?;
         let mut spills = self.spills.lock().await;
         let used = self.inner_metrics.mem_used().set(0);
         self.inner_metrics.record_spill(used);
-        spills.push(path);
+        spills.push(spillfile);
         Ok(used)
     }
 
@@ -280,12 +281,12 @@ fn in_mem_partial_sort(
 
 async fn spill_partial_sorted_stream(
     in_mem_stream: &mut SendableRecordBatchStream,
-    path: String,
+    path: &Path,
     schema: SchemaRef,
 ) -> Result<()> {
     let (sender, receiver) = tokio::sync::mpsc::channel(2);
-    let path_clone = path.clone();
-    let handle = task::spawn_blocking(move || write_sorted(receiver, path_clone, schema));
+    let path: PathBuf = path.into();
+    let handle = task::spawn_blocking(move || write_sorted(receiver, path, schema));
     while let Some(item) = in_mem_stream.next().await {
         sender.send(item).await.ok();
     }
@@ -300,17 +301,16 @@ async fn spill_partial_sorted_stream(
 }
 
 fn read_spill_as_stream(
-    path: String,
+    path: NamedTempFile,
     schema: SchemaRef,
 ) -> Result<SendableRecordBatchStream> {
     let (sender, receiver): (
         Sender<ArrowResult<RecordBatch>>,
         Receiver<ArrowResult<RecordBatch>>,
     ) = tokio::sync::mpsc::channel(2);
-    let path_clone = path.clone();
     let join_handle = task::spawn_blocking(move || {
-        if let Err(e) = read_spill(sender, path_clone) {
-            error!("Failure while reading spill file: {}. Error: {}", path, e);
+        if let Err(e) = read_spill(sender, path.path()) {
+            error!("Failure while reading spill file: {:?}. Error: {}", path, e);
         }
     });
     Ok(RecordBatchReceiverStream::create(
@@ -322,7 +322,7 @@ fn read_spill_as_stream(
 
 fn write_sorted(
     mut receiver: Receiver<ArrowResult<RecordBatch>>,
-    path: String,
+    path: PathBuf,
     schema: SchemaRef,
 ) -> Result<()> {
     let mut writer = IPCWriter::new(path.as_ref(), schema.as_ref())?;
@@ -337,7 +337,7 @@ fn write_sorted(
     Ok(())
 }
 
-fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: String) -> Result<()> {
+fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
     let file = BufReader::new(File::open(&path)?);
     let reader = FileReader::try_new(file)?;
     for batch in reader {

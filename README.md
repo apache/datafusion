@@ -67,6 +67,7 @@ Here are some of the projects known to use DataFusion:
 - [ROAPI](https://github.com/roapi/roapi)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [Squirtle](https://github.com/DSLAM-UMD/Squirtle)
+- [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 
 (if you know of another project, please submit a PR to add a link!)
 
