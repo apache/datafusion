@@ -746,19 +746,19 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
     ) -> std::result::Result<Response<ExecuteQueryResult>, tonic::Status> {
         if let ExecuteQueryParams {
             query: Some(query),
-            settings,
+            settings: _,
         } = request.into_inner()
         {
             // parse config
-            let mut config_builder = BallistaConfig::builder();
-            for kv_pair in &settings {
-                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
-            }
-            let config = config_builder.build().map_err(|e| {
-                let msg = format!("Could not parse configs: {}", e);
-                error!("{}", msg);
-                tonic::Status::internal(msg)
-            })?;
+            // let mut config_builder = BallistaConfig::builder();
+            // for kv_pair in &settings {
+            //     config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            // }
+            // let config = config_builder.build().map_err(|e| {
+            //     let msg = format!("Could not parse configs: {}", e);
+            //     error!("{}", msg);
+            //     tonic::Status::internal(msg)
+            // })?;
 
             let plan = match query {
                 Query::LogicalPlan(message) => {
@@ -817,9 +817,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     Some(self.scheduler_env.as_ref().unwrap().tx_job.clone())
                 }
             };
+            let datafusion_ctx = self.ctx.read().await.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                let datafusion_ctx = create_datafusion_context(&config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {

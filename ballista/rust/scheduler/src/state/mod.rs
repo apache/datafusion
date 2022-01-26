@@ -299,7 +299,7 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
             )));
         }
         let value = T::try_decode(value.as_slice())?;
-        let plan = value.try_into_physical_plan(&ctx)?;
+        let plan = value.try_into_physical_plan(ctx)?;
         // let value: PhysicalPlanNode = decode_protobuf(value)?;
         // Ok((&value).try_into()?)
         Ok(plan)
@@ -366,7 +366,7 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
         ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         let tasks = self.get_all_tasks().await?;
-        self.assign_next_schedulable_task_inner(executor_id, tasks, &ctx)
+        self.assign_next_schedulable_task_inner(executor_id, tasks, ctx)
             .await
     }
 
@@ -377,7 +377,7 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
         ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         let job_tasks = self.get_job_tasks(job_id).await?;
-        self.assign_next_schedulable_task_inner(executor_id, job_tasks, &ctx)
+        self.assign_next_schedulable_task_inner(executor_id, job_tasks, ctx)
             .await
     }
 
@@ -387,7 +387,7 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
         tasks: HashMap<String, TaskStatus>,
         ctx: &ExecutionContext,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
-        match self.get_next_schedulable_task(tasks, &ctx).await? {
+        match self.get_next_schedulable_task(tasks, ctx).await? {
             Some((status, plan)) => {
                 let mut status = status.clone();
                 status.status = Some(task_status::Status::Running(RunningTask {
@@ -413,7 +413,7 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
             if status.status.is_none() {
                 let partition = status.partition_id.as_ref().unwrap();
                 let plan = self
-                    .get_stage_plan(&partition.job_id, partition.stage_id as usize, &ctx)
+                    .get_stage_plan(&partition.job_id, partition.stage_id as usize, ctx)
                     .await?;
 
                 // Let's try to resolve any unresolved shuffles we find
