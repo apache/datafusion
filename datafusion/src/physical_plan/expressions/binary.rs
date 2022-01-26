@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
 use arrow::array::TimestampMillisecondArray;
@@ -27,6 +28,18 @@ use arrow::compute::kernels::comparison::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow::compute::kernels::comparison::{
     eq_bool, eq_bool_scalar, gt_bool, gt_bool_scalar, gt_eq_bool, gt_eq_bool_scalar,
     lt_bool, lt_bool_scalar, lt_eq_bool, lt_eq_bool_scalar, neq_bool, neq_bool_scalar,
+};
+use arrow::compute::kernels::comparison::{
+    eq_dyn_bool_scalar, gt_dyn_bool_scalar, gt_eq_dyn_bool_scalar, lt_dyn_bool_scalar,
+    lt_eq_dyn_bool_scalar, neq_dyn_bool_scalar,
+};
+use arrow::compute::kernels::comparison::{
+    eq_dyn_scalar, gt_dyn_scalar, gt_eq_dyn_scalar, lt_dyn_scalar, lt_eq_dyn_scalar,
+    neq_dyn_scalar,
+};
+use arrow::compute::kernels::comparison::{
+    eq_dyn_utf8_scalar, gt_dyn_utf8_scalar, gt_eq_dyn_utf8_scalar, lt_dyn_utf8_scalar,
+    lt_eq_dyn_utf8_scalar, neq_dyn_utf8_scalar,
 };
 use arrow::compute::kernels::comparison::{
     eq_scalar, gt_eq_scalar, gt_scalar, lt_eq_scalar, lt_scalar, neq_scalar,
@@ -429,6 +442,24 @@ macro_rules! compute_utf8_op_scalar {
     }};
 }
 
+/// Invoke a compute kernel on a data array and a scalar value
+macro_rules! compute_utf8_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_utf8_scalar>]}(
+                $LEFT,
+                &string_value,
+            )?))
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
+                stringify!($OP),
+                $RIGHT
+            )))
+        }
+    }};
+}
+
 /// Invoke a compute kernel on a boolean data array and a scalar value
 macro_rules! compute_bool_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
@@ -441,6 +472,18 @@ macro_rules! compute_bool_op_scalar {
         // (which could have a value of lt) and the suffix _scalar
         Ok(Arc::new(paste::expr! {[<$OP _bool_scalar>]}(
             &ll,
+            $RIGHT.try_into()?,
+        )?))
+    }};
+}
+
+/// Invoke a compute kernel on a boolean data array and a scalar value
+macro_rules! compute_bool_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        // generate the scalar function name, such as lt_dyn_bool_scalar, from the $OP parameter
+        // (which could have a value of lt) and the suffix _scalar
+        Ok(Arc::new(paste::expr! {[<$OP _dyn_bool_scalar>]}(
+            $LEFT,
             $RIGHT.try_into()?,
         )?))
     }};
@@ -474,7 +517,7 @@ macro_rules! compute_bool_op {
 /// LEFT is array, RIGHT is scalar value
 macro_rules! compute_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        use std::convert::TryInto;
+        // use std::convert::TryInto;
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
@@ -484,6 +527,19 @@ macro_rules! compute_op_scalar {
         Ok(Arc::new(paste::expr! {[<$OP _scalar>]}(
             &ll,
             $RIGHT.try_into()?,
+        )?))
+    }};
+}
+
+/// Invoke a dyn compute kernel on a data array and a scalar value
+/// LEFT is Primitive or Dictionart array of numeric values, RIGHT is scalar value
+macro_rules! compute_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        // generate the scalar function name, such as lt_dyn_scalar, from the $OP parameter
+        // (which could have a value of lt_dyn) and the suffix _scalar
+        Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(
+            $LEFT,
+            $RIGHT,
         )?))
     }};
 }
@@ -878,26 +934,90 @@ impl PhysicalExpr for BinaryExpr {
     }
 }
 
+/// The binary_array_op_scalar macro includes types that extend beyond the primitive,
+/// such as Utf8 strings.
+#[macro_export]
+macro_rules! binary_array_op_dyn_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
+        let is_numeric = DataType::is_numeric($LEFT.data_type());
+        let is_numeric_dict = match $LEFT.data_type() {
+            DataType::Dictionary(_, val_type) => DataType::is_numeric(val_type),
+            _ => false
+        };
+        let numeric_like = is_numeric | is_numeric_dict;
+
+        let is_string = ($LEFT.data_type() == &DataType::Utf8) | ($LEFT.data_type() == &DataType::LargeUtf8);
+        let is_string_dict = match $LEFT.data_type() {
+            DataType::Dictionary(_, val_type) => match **val_type {
+                DataType::Utf8 | DataType::LargeUtf8 => true,
+                _ => false
+            }
+        };
+        let string_like = is_string | is_string_dict;
+
+        let result: Result<Arc<dyn Array>> = if numeric_like {
+            compute_op_dyn_scalar!($LEFT, $RIGHT, $OP)
+        } else if string_like {
+            compute_utf8_op_dyn_scalar!($LEFT, $RIGHT, $OP)
+        } else {
+            let r: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+                DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
+                DataType::Boolean => compute_bool_op_dyn_scalar!($LEFT, $RIGHT, $OP),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
+                }
+                DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
+                }
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray)
+                }
+                DataType::Date32 => {
+                    compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array)
+                }
+                DataType::Date64 => {
+                    compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array)
+                }
+                other => Err(DataFusionError::Internal(format!(
+                    "Data type {:?} not supported for scalar operation '{}' on dyn array",
+                    other, stringify!($OP)
+                ))),
+            };
+          r
+        };
+        Some(result)
+    }}
+}
+
 impl BinaryExpr {
     /// Evaluate the expression of the left input is an array and
     /// right is literal - use scalar operations
     fn evaluate_array_scalar(
         &self,
-        array: &ArrayRef,
+        array: &dyn Array,
         scalar: &ScalarValue,
     ) -> Result<Option<Result<ArrayRef>>> {
         let scalar_result = match &self.op {
-            Operator::Lt => binary_array_op_scalar!(array, scalar.clone(), lt),
+            Operator::Lt => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt)
+            }
             Operator::LtEq => {
-                binary_array_op_scalar!(array, scalar.clone(), lt_eq)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), lt_eq)
             }
-            Operator::Gt => binary_array_op_scalar!(array, scalar.clone(), gt),
+            Operator::Gt => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt)
+            }
             Operator::GtEq => {
-                binary_array_op_scalar!(array, scalar.clone(), gt_eq)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), gt_eq)
             }
-            Operator::Eq => binary_array_op_scalar!(array, scalar.clone(), eq),
+            Operator::Eq => {
+                binary_array_op_dyn_scalar!(array, scalar.clone(), eq)
+            }
             Operator::NotEq => {
-                binary_array_op_scalar!(array, scalar.clone(), neq)
+                binary_array_op_dyn_scalar!(array, scalar.clone(), neq)
             }
             Operator::Like => {
                 binary_string_array_op_scalar!(array, scalar.clone(), like)
