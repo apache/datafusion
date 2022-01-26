@@ -50,9 +50,9 @@ impl FileFormat for AvroFormat {
             let mut reader = obj_reader?.sync_reader()?;
             let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
+            break;
         }
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
+        Ok(Arc::new(schemas.first().unwrap().clone()))
     }
 
     async fn infer_stats(&self, _reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
