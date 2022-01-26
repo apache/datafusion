@@ -52,8 +52,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::mpsc::{Receiver, Sender};
 use tempfile::NamedTempFile;
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
 
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
@@ -232,7 +232,8 @@ impl MemoryConsumer for ExternalSorter {
             baseline_metrics,
         );
 
-        spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone()).await?;
+        spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
+            .await?;
         let mut spills = self.spills.lock().await;
         let used = self.inner_metrics.mem_used().set(0);
         self.inner_metrics.record_spill(used);
