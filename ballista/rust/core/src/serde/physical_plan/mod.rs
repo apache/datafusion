@@ -95,7 +95,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         match plan {
             PhysicalPlanType::Projection(projection) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(projection.input, &ctx)?;
+                    into_physical_plan!(projection.input, ctx)?;
                 let exprs = projection
                     .expr
                     .iter()
@@ -107,7 +107,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Filter(filter) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(filter.input, &ctx)?;
+                    into_physical_plan!(filter.input, ctx)?;
                 let predicate = filter
                     .expr
                     .as_ref()
@@ -121,23 +121,23 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap(), &ctx)?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
                 Ok(Arc::new(ParquetExec::new(
-                    decode_scan_config(scan.base_conf.as_ref().unwrap(), &ctx)?,
+                    decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
                     // TODO predicate should be de-serialized
                     None,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap(), &ctx)?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
             ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(coalesce_batches.input, &ctx)?;
+                    into_physical_plan!(coalesce_batches.input, ctx)?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
                     coalesce_batches.target_batch_size as usize,
@@ -145,12 +145,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, &ctx)?;
+                    into_physical_plan!(merge.input, ctx)?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(repart.input, &ctx)?;
+                    into_physical_plan!(repart.input, ctx)?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
                         let expr = hash_part
@@ -190,12 +190,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, &ctx)?;
+                    into_physical_plan!(limit.input, ctx)?;
                 Ok(Arc::new(GlobalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::LocalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, &ctx)?;
+                    into_physical_plan!(limit.input, ctx)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
@@ -247,7 +247,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::HashAggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hash_agg.input, &ctx)?;
+                    into_physical_plan!(hash_agg.input, ctx)?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(|| {
                     proto_error(format!(
                         "Received a HashAggregateNode message with unknown AggregateMode {}",
@@ -332,9 +332,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
                 let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.left, &ctx)?;
+                    into_physical_plan!(hashjoin.left, ctx)?;
                 let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.right, &ctx)?;
+                    into_physical_plan!(hashjoin.right, ctx)?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
                     .iter()
@@ -375,9 +375,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.left, &ctx)?;
+                    into_physical_plan!(crossjoin.left, ctx)?;
                 let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.right, &ctx)?;
+                    into_physical_plan!(crossjoin.right, ctx)?;
                 Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
             }
             PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
@@ -417,8 +417,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(EmptyExec::new(empty.produce_one_row, schema)))
             }
             PhysicalPlanType::Sort(sort) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, &ctx)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(sort.input, ctx)?;
                 let exprs = sort
                     .expr
                     .iter()
