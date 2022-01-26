@@ -17,6 +17,7 @@
 
 //! Metrics for recording information about execution
 
+mod aggregated;
 mod baseline;
 mod builder;
 mod value;
@@ -30,6 +31,7 @@ use std::{
 use hashbrown::HashMap;
 
 // public exports
+pub use aggregated::AggregatedMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
 pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
@@ -188,6 +190,20 @@ impl MetricsSet {
     /// across partitions or None if no metric is present
     pub fn output_rows(&self) -> Option<usize> {
         self.sum(|metric| matches!(metric.value(), MetricValue::OutputRows(_)))
+            .map(|v| v.as_usize())
+    }
+
+    /// convenience: return the count of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spill_count(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpillCount(_)))
+            .map(|v| v.as_usize())
+    }
+
+    /// convenience: return the total byte size of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spilled_bytes(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpilledBytes(_)))
             .map(|v| v.as_usize())
     }
 

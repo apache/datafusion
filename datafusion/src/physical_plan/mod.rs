@@ -223,7 +223,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///              \n  CoalesceBatchesExec: target_batch_size=4096\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: files=[tests/example.csv], has_header=true, batch_size=8192, limit=None",
+///              \n        CsvExec: files=[tests/example.csv], has_header=true, limit=None",
 ///               plan_string.trim());
 /// }
 /// ```
@@ -566,9 +566,9 @@ pub trait WindowExpr: Send + Sync + Debug {
 /// generically accumulates values.
 ///
 /// An accumulator knows how to:
-/// * update its state from inputs via `update`
+/// * update its state from inputs via `update_batch`
 /// * convert its internal state to a vector of scalar values
-/// * update its state from multiple accumulators' states via `merge`
+/// * update its state from multiple accumulators' states via `merge_batch`
 /// * compute the final value from its internal state via `evaluate`
 pub trait Accumulator: Send + Sync + Debug {
     /// Returns the state of the accumulator at the end of the accumulation.
@@ -576,57 +576,54 @@ pub trait Accumulator: Send + Sync + Debug {
     // of two values, sum and n.
     fn state(&self) -> Result<Vec<ScalarValue>>;
 
-    /// Updates the accumulator's state from a vector of scalars
-    /// (called by default implementation of [`update_batch`]).
-    ///
-    /// Note: this method is often the simplest to implement and is
-    /// backwards compatible to help to lower the barrier to entry for
-    /// new users to write `Accumulators`
-    ///
-    /// You should always implement `update_batch` instead of this
-    /// method for production aggregators or if you find yourself
-    /// wanting to use mathematical kernels for [`ScalarValue`] such as
-    /// `ScalarValue::add`, `ScalarValue::mul`, etc
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()>;
-
     /// updates the accumulator's state from a vector of arrays.
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        };
-        (0..values[0].len()).try_for_each(|index| {
-            let v = values
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.update(&v)
-        })
-    }
-
-    /// Updates the accumulator's state from a vector of scalars.
-    /// (called by default implementation of [`merge`]).
-    ///
-    /// You should always implement `merge_batch` instead of this
-    /// method for production aggregators. Please see notes on
-    /// [`update`] for more detail and rationale.
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()>;
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
 
     /// updates the accumulator's state from a vector of states.
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        };
-        (0..states[0].len()).try_for_each(|index| {
-            let v = states
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.merge(&v)
-        })
-    }
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+}
+
+/// Applies an optional projection to a [`SchemaRef`], returning the
+/// projected schema
+///
+/// Example:
+/// ```
+/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use datafusion::physical_plan::project_schema;
+///
+/// // Schema with columns 'a', 'b', and 'c'
+/// let schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("a", DataType::Int32, true),
+///   Field::new("b", DataType::Int64, true),
+///   Field::new("c", DataType::Utf8, true),
+/// ]));
+///
+/// // Pick columns 'c' and 'b'
+/// let projection = Some(vec![2,1]);
+/// let projected_schema = project_schema(
+///    &schema,
+///    projection.as_ref()
+///  ).unwrap();
+///
+/// let expected_schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("c", DataType::Utf8, true),
+///   Field::new("b", DataType::Int64, true),
+/// ]));
+///
+/// assert_eq!(projected_schema, expected_schema);
+/// ```
+pub fn project_schema(
+    schema: &SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<SchemaRef> {
+    let schema = match projection {
+        Some(columns) => Arc::new(schema.project(columns)?),
+        None => Arc::clone(schema),
+    };
+    Ok(schema)
 }
 
 pub mod aggregates;
@@ -641,7 +638,6 @@ pub mod cross_join;
 pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod display;
-pub mod distinct_expressions;
 pub mod empty;
 pub mod explain;
 pub mod expressions;

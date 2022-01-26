@@ -35,8 +35,6 @@ use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use std::task::{Context, Poll};
 
-pub mod external_sort;
-mod in_mem_sort;
 pub mod sort;
 pub mod sort_preserving_merge;
 
@@ -50,13 +48,13 @@ pub mod sort_preserving_merge;
 /// by this row cursor, with that of another `SortKeyCursor`. A cursor stores
 /// a row comparator for each other cursor that it is compared to.
 struct SortKeyCursor {
-    columns: Vec<ArrayRef>,
+    stream_idx: usize,
+    sort_columns: Vec<ArrayRef>,
     cur_row: usize,
     num_rows: usize,
 
-    // An index uniquely identifying the record batch scanned by this cursor.
-    batch_idx: usize,
-    batch: Arc<RecordBatch>,
+    // An id uniquely identifying the record batch scanned by this cursor.
+    batch_id: usize,
 
     // A collection of comparators that compare rows in this cursor's batch to
     // the cursors in other batches. Other batches are uniquely identified by
@@ -68,11 +66,10 @@ struct SortKeyCursor {
 impl<'a> std::fmt::Debug for SortKeyCursor {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.debug_struct("SortKeyCursor")
-            .field("columns", &self.columns)
+            .field("sort_columns", &self.sort_columns)
             .field("cur_row", &self.cur_row)
             .field("num_rows", &self.num_rows)
-            .field("batch_idx", &self.batch_idx)
-            .field("batch", &self.batch)
+            .field("batch_id", &self.batch_id)
             .field("batch_comparators", &"<FUNC>")
             .finish()
     }
@@ -80,21 +77,22 @@ impl<'a> std::fmt::Debug for SortKeyCursor {
 
 impl SortKeyCursor {
     fn new(
-        batch_idx: usize,
-        batch: Arc<RecordBatch>,
+        stream_idx: usize,
+        batch_id: usize,
+        batch: &RecordBatch,
         sort_key: &[Arc<dyn PhysicalExpr>],
         sort_options: Arc<Vec<SortOptions>>,
     ) -> error::Result<Self> {
-        let columns = sort_key
+        let sort_columns = sort_key
             .iter()
-            .map(|expr| Ok(expr.evaluate(&batch)?.into_array(batch.num_rows())))
+            .map(|expr| Ok(expr.evaluate(batch)?.into_array(batch.num_rows())))
             .collect::<error::Result<_>>()?;
         Ok(Self {
+            stream_idx,
             cur_row: 0,
             num_rows: batch.num_rows(),
-            columns,
-            batch,
-            batch_idx,
+            sort_columns,
+            batch_id,
             batch_comparators: RwLock::new(HashMap::new()),
             sort_options,
         })
@@ -113,35 +111,35 @@ impl SortKeyCursor {
 
     /// Compares the sort key pointed to by this instance's row cursor with that of another
     fn compare(&self, other: &SortKeyCursor) -> error::Result<Ordering> {
-        if self.columns.len() != other.columns.len() {
+        if self.sort_columns.len() != other.sort_columns.len() {
             return Err(DataFusionError::Internal(format!(
                 "SortKeyCursors had inconsistent column counts: {} vs {}",
-                self.columns.len(),
-                other.columns.len()
+                self.sort_columns.len(),
+                other.sort_columns.len()
             )));
         }
 
-        if self.columns.len() != self.sort_options.len() {
+        if self.sort_columns.len() != self.sort_options.len() {
             return Err(DataFusionError::Internal(format!(
                 "Incorrect number of SortOptions provided to SortKeyCursor::compare, expected {} got {}",
-                self.columns.len(),
+                self.sort_columns.len(),
                 self.sort_options.len()
             )));
         }
 
         let zipped: Vec<((&ArrayRef, &ArrayRef), &SortOptions)> = self
-            .columns
+            .sort_columns
             .iter()
-            .zip(other.columns.iter())
+            .zip(other.sort_columns.iter())
             .zip(self.sort_options.iter())
             .collect::<Vec<_>>();
 
         self.init_cmp_if_needed(other, &zipped)?;
         let map = self.batch_comparators.read().unwrap();
-        let cmp = map.get(&other.batch_idx).ok_or_else(|| {
+        let cmp = map.get(&other.batch_id).ok_or_else(|| {
             DataFusionError::Execution(format!(
                 "Failed to find comparator for {} cmp {}",
-                self.batch_idx, other.batch_idx
+                self.batch_id, other.batch_id
             ))
         })?;
 
@@ -173,13 +171,13 @@ impl SortKeyCursor {
         zipped: &[((&ArrayRef, &ArrayRef), &SortOptions)],
     ) -> Result<()> {
         let hm = self.batch_comparators.read().unwrap();
-        if !hm.contains_key(&other.batch_idx) {
+        if !hm.contains_key(&other.batch_id) {
             drop(hm);
             let mut map = self.batch_comparators.write().unwrap();
             let cmp = map
                 .borrow_mut()
-                .entry(other.batch_idx)
-                .or_insert_with(|| Vec::with_capacity(other.columns.len()));
+                .entry(other.batch_id)
+                .or_insert_with(|| Vec::with_capacity(other.sort_columns.len()));
 
             for (i, ((l, r), _)) in zipped.iter().enumerate() {
                 if i >= cmp.len() {
@@ -193,7 +191,7 @@ impl SortKeyCursor {
 }
 
 impl Ord for SortKeyCursor {
-    /// Needed by min-heap comparison in `in_mem_sort` and reverse the order at the same time.
+    /// Needed by min-heap comparison and reverse the order at the same time.
     fn cmp(&self, other: &Self) -> Ordering {
         other.compare(self).unwrap()
     }
@@ -219,9 +217,8 @@ impl PartialOrd for SortKeyCursor {
 struct RowIndex {
     /// The index of the stream
     stream_idx: usize,
-    /// For sort_preserving_merge, it's the index of the cursor within the stream's VecDequeue.
-    /// For in_mem_sort which have only one batch for each stream, cursor_idx always 0
-    cursor_idx: usize,
+    /// The index of the batch within the stream's VecDequeue.
+    batch_idx: usize,
     /// The row index
     row_idx: usize,
 }
@@ -251,10 +248,9 @@ enum StreamWrapper {
 
 impl StreamWrapper {
     fn mem_used(&self) -> usize {
-        if let StreamWrapper::Stream(Some(s)) = &self {
-            s.mem_used
-        } else {
-            0
+        match &self {
+            StreamWrapper::Stream(Some(s)) => s.mem_used,
+            _ => 0,
         }
     }
 }

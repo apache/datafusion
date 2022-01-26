@@ -26,7 +26,6 @@ use crate::error::{BallistaError, Result};
 use crate::execution_plans::{
     DistributedQueryExec, ShuffleWriterExec, UnresolvedShuffleExec,
 };
-use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
@@ -46,7 +45,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
-use datafusion::logical_plan::{LogicalPlan, Operator};
+use datafusion::logical_plan::{LogicalPlan, Operator, TableScan};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
@@ -248,7 +247,8 @@ pub fn create_df_ctx_with_ballista_query_planner(
             scheduler_url,
             config.clone(),
         )))
-        .with_target_partitions(config.default_shuffle_partitions());
+        .with_target_partitions(config.default_shuffle_partitions())
+        .with_information_schema(true);
     ExecutionContext::with_config(config)
 }
 

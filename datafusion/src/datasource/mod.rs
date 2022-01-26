@@ -71,7 +71,7 @@ pub async fn get_statistics_with_limit(
 
                 if let Some(max_value) = &mut max_values[i] {
                     if let Some(file_max) = cs.max_value.clone() {
-                        match max_value.update(&[file_max]) {
+                        match max_value.update_batch(&[file_max.to_array()]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -82,7 +82,7 @@ pub async fn get_statistics_with_limit(
 
                 if let Some(min_value) = &mut min_values[i] {
                     if let Some(file_min) = cs.min_value.clone() {
-                        match min_value.update(&[file_min]) {
+                        match min_value.update_batch(&[file_min.to_array()]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;

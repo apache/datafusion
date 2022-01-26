@@ -333,29 +333,28 @@ impl ConstEvaluator {
         // at plan time
         match expr {
             // Has no runtime cost, but needed during planning
-            Expr::Alias(..) => false,
-            Expr::AggregateFunction { .. } => false,
-            Expr::AggregateUDF { .. } => false,
-            Expr::ScalarVariable(_) => false,
-            Expr::Column(_) => false,
+            Expr::Alias(..)
+            | Expr::AggregateFunction { .. }
+            | Expr::AggregateUDF { .. }
+            | Expr::ScalarVariable(_)
+            | Expr::Column(_)
+            | Expr::WindowFunction { .. }
+            | Expr::Sort { .. }
+            | Expr::Wildcard => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
-            Expr::WindowFunction { .. } => false,
-            Expr::Sort { .. } => false,
-            Expr::Wildcard => false,
-
-            Expr::Literal(_) => true,
-            Expr::BinaryExpr { .. } => true,
-            Expr::Not(_) => true,
-            Expr::IsNotNull(_) => true,
-            Expr::IsNull(_) => true,
-            Expr::Negative(_) => true,
-            Expr::Between { .. } => true,
-            Expr::Case { .. } => true,
-            Expr::Cast { .. } => true,
-            Expr::TryCast { .. } => true,
-            Expr::InList { .. } => true,
-            Expr::GetIndexedField { .. } => true,
+            Expr::Literal(_)
+            | Expr::BinaryExpr { .. }
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::Between { .. }
+            | Expr::Case { .. }
+            | Expr::Cast { .. }
+            | Expr::TryCast { .. }
+            | Expr::InList { .. }
+            | Expr::GetIndexedField { .. } => true,
         }
     }
 

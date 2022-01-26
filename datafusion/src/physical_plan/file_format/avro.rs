@@ -33,19 +33,19 @@ use std::sync::Arc;
 
 #[cfg(feature = "avro")]
 use super::file_stream::{BatchIter, FileStream};
-use super::PhysicalPlanConfig;
+use super::FileScanConfig;
 
 /// Execution plan for scanning Avro data source
 #[derive(Debug, Clone)]
 pub struct AvroExec {
-    base_config: PhysicalPlanConfig,
+    base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
 }
 
 impl AvroExec {
     /// Create a new Avro reader execution plan provided base configurations
-    pub fn new(base_config: PhysicalPlanConfig) -> Self {
+    pub fn new(base_config: FileScanConfig) -> Self {
         let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
@@ -55,7 +55,7 @@ impl AvroExec {
         }
     }
     /// Ref to the base configs
-    pub fn base_config(&self) -> &PhysicalPlanConfig {
+    pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
     }
 }
@@ -107,11 +107,11 @@ impl ExecutionPlan for AvroExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = self.base_config.batch_size;
+        let batch_size = runtime.batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The avro reader cannot limit the number of records, so `remaining` is ignored.
@@ -149,9 +149,8 @@ impl ExecutionPlan for AvroExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "AvroExec: files={}, batch_size={}, limit={:?}",
+                    "AvroExec: files={}, limit={:?}",
                     super::FileGroupsDisplay(&self.base_config.file_groups),
-                    self.base_config.batch_size,
                     self.base_config.limit,
                 )
             }
@@ -180,7 +179,7 @@ mod tests {
     async fn avro_exec_without_partition() -> Result<()> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
-        let avro_exec = AvroExec::new(PhysicalPlanConfig {
+        let avro_exec = AvroExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
             file_schema: AvroFormat {}
@@ -188,7 +187,6 @@ mod tests {
                 .await?,
             statistics: Statistics::default(),
             projection: Some(vec![0, 1, 2]),
-            batch_size: 1024,
             limit: None,
             table_partition_cols: vec![],
         });
@@ -241,7 +239,7 @@ mod tests {
             .infer_schema(local_object_reader_stream(vec![filename]))
             .await?;
 
-        let avro_exec = AvroExec::new(PhysicalPlanConfig {
+        let avro_exec = AvroExec::new(FileScanConfig {
             // select specific columns of the files as well as the partitioning
             // column which is supposed to be the last column in the table schema.
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
@@ -249,7 +247,6 @@ mod tests {
             file_groups: vec![vec![partitioned_file]],
             file_schema: file_schema,
             statistics: Statistics::default(),
-            batch_size: 1024,
             limit: None,
             table_partition_cols: vec!["date".to_owned()],
         });

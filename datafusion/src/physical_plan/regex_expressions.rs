@@ -182,13 +182,14 @@ pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use arrow::array::*;
 
     #[test]
     fn test_case_sensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
+        let values = StringArray::from_slice(&["abc"; 5]);
         let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+            StringArray::from_slice(&["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
 
         let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
         let mut expected_builder = ListBuilder::new(elem_builder);
@@ -208,10 +209,10 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
+        let values = StringArray::from_slice(&["abc"; 5]);
         let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-        let flags = StringArray::from(vec!["i"; 5]);
+            StringArray::from_slice(&["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from_slice(&["i"; 5]);
 
         let elem_builder: GenericStringBuilder<i32> = GenericStringBuilder::new(0);
         let mut expected_builder = ListBuilder::new(elem_builder);

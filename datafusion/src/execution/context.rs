@@ -39,7 +39,6 @@ use crate::{
     },
 };
 use log::debug;
-use std::fs;
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
@@ -47,6 +46,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
 };
+use std::{fs, path::PathBuf};
 
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
@@ -94,7 +94,12 @@ use chrono::{DateTime, Utc};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-use super::options::{AvroReadOptions, CsvReadOptions};
+use super::{
+    disk_manager::DiskManagerConfig,
+    memory_manager::MemoryManagerConfig,
+    options::{AvroReadOptions, CsvReadOptions},
+    DiskManager, MemoryManager,
+};
 
 /// ExecutionContext is the main interface for executing queries with DataFusion. The context
 /// provides the following functionality:
@@ -179,8 +184,7 @@ impl ExecutionContext {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
-        let runtime_env =
-            Arc::new(RuntimeEnv::new(config.runtime_config.clone()).unwrap());
+        let runtime_env = Arc::new(RuntimeEnv::new(config.runtime.clone()).unwrap());
 
         Self {
             state: Arc::new(Mutex::new(ExecutionContextState {
@@ -194,6 +198,11 @@ impl ExecutionContext {
                 runtime_env,
             })),
         }
+    }
+
+    /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
+    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
+        self.state.lock().unwrap().runtime_env.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -577,6 +586,7 @@ impl ExecutionContext {
             .unwrap()
             .object_store_registry
             .get_by_uri(uri)
+            .map_err(DataFusionError::from)
     }
 
     /// Registers a table using a custom `TableProvider` so that
@@ -718,7 +728,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the CSV files (one per partition)
         let fs_path = Path::new(path);
-        let runtime = self.state.lock().unwrap().runtime_env.clone();
+        let runtime = self.runtime_env();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -758,7 +768,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(path);
-        let runtime = self.state.lock().unwrap().runtime_env.clone();
+        let runtime = self.runtime_env();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -872,8 +882,6 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct ExecutionConfig {
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
-    /// Default batch size when reading data sources
-    pub batch_size: usize,
     /// Responsible for optimizing a logical plan
     optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     /// Responsible for optimizing a physical execution plan
@@ -901,14 +909,13 @@ pub struct ExecutionConfig {
     /// Should Datafusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
     /// Runtime configurations such as memory threshold and local disk for spill
-    pub runtime_config: RuntimeConfig,
+    pub runtime: RuntimeConfig,
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             target_partitions: num_cpus::get(),
-            batch_size: 8192,
             optimizers: vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
@@ -936,7 +943,7 @@ impl Default for ExecutionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
-            runtime_config: RuntimeConfig::default(),
+            runtime: RuntimeConfig::default(),
         }
     }
 }
@@ -959,7 +966,7 @@ impl ExecutionConfig {
     pub fn with_batch_size(mut self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.batch_size = n;
+        self.runtime.batch_size = n;
         self
     }
 
@@ -1057,7 +1064,49 @@ impl ExecutionConfig {
 
     /// Customize runtime config
     pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
-        self.runtime_config = config;
+        self.runtime = config;
+        self
+    }
+
+    /// Use an an existing [MemoryManager]
+    pub fn with_existing_memory_manager(mut self, existing: Arc<MemoryManager>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_memory_manager(MemoryManagerConfig::new_existing(existing));
+        self
+    }
+
+    /// Specify the total memory to use while running the DataFusion
+    /// plan to `max_memory * memory_fraction` in bytes.
+    ///
+    /// Note DataFusion does not yet respect this limit in all cases.
+    pub fn with_memory_limit(
+        mut self,
+        max_memory: usize,
+        memory_fraction: f64,
+    ) -> Result<Self> {
+        self.runtime =
+            self.runtime
+                .with_memory_manager(MemoryManagerConfig::try_new_limit(
+                    max_memory,
+                    memory_fraction,
+                )?);
+        Ok(self)
+    }
+
+    /// Use an an existing [DiskManager]
+    pub fn with_existing_disk_manager(mut self, existing: Arc<DiskManager>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_disk_manager(DiskManagerConfig::new_existing(existing));
+        self
+    }
+
+    /// Use the specified path to create any needed temporary files
+    pub fn with_temp_file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]));
         self
     }
 }
@@ -1214,6 +1263,8 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::context::QueryPlanner;
+    use crate::from_slice::FromSlice;
     use crate::logical_plan::plan::Projection;
     use crate::logical_plan::TableScan;
     use crate::logical_plan::{binary_expr, lit, Operator};
@@ -1246,6 +1297,40 @@ mod tests {
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
     use test::*;
+
+    #[tokio::test]
+    async fn shared_memory_and_disk_manager() {
+        // Demonstrate the ability to share DiskManager and
+        // MemoryManager between two different executions.
+        let ctx1 = ExecutionContext::new();
+
+        // configure with same memory / disk manager
+        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let disk_manager = ctx1.runtime_env().disk_manager.clone();
+        let config = ExecutionConfig::new()
+            .with_existing_memory_manager(memory_manager.clone())
+            .with_existing_disk_manager(disk_manager.clone());
+
+        let ctx2 = ExecutionContext::with_config(config);
+
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&memory_manager),
+            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
+        ));
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&memory_manager),
+            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
+        ));
+
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&disk_manager),
+            Arc::as_ptr(&ctx1.runtime_env().disk_manager)
+        ));
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&disk_manager),
+            Arc::as_ptr(&ctx2.runtime_env().disk_manager)
+        ));
+    }
 
     #[test]
     fn optimize_explain() {
@@ -1514,9 +1599,9 @@ mod tests {
         let partitions = vec![vec![RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
-                Arc::new(Int32Array::from(vec![3, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[3, 12, 12, 120])),
             ],
         )?]];
 
@@ -2928,43 +3013,43 @@ mod tests {
         let type_values = vec![
             (
                 DataType::Int8,
-                Arc::new(Int8Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int8Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int16,
-                Arc::new(Int16Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int16Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int32,
-                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Int64,
-                Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int64Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt8,
-                Arc::new(UInt8Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt8Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt16,
-                Arc::new(UInt16Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt16Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt32,
-                Arc::new(UInt32Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt32Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::UInt64,
-                Arc::new(UInt64Array::from(vec![1])) as ArrayRef,
+                Arc::new(UInt64Array::from_slice(&[1])) as ArrayRef,
             ),
             (
                 DataType::Float32,
-                Arc::new(Float32Array::from(vec![1.0_f32])) as ArrayRef,
+                Arc::new(Float32Array::from_slice(&[1.0_f32])) as ArrayRef,
             ),
             (
                 DataType::Float64,
-                Arc::new(Float64Array::from(vec![1.0_f64])) as ArrayRef,
+                Arc::new(Float64Array::from_slice(&[1.0_f64])) as ArrayRef,
             ),
         ];
 
@@ -3278,8 +3363,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
             ],
         )?;
 
@@ -3379,11 +3464,11 @@ mod tests {
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
         let mut ctx = ExecutionContext::new();
@@ -3416,11 +3501,11 @@ mod tests {
 
         let batch1 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
         )?;
         let batch2 = RecordBatch::try_new(
             Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from(vec![4, 5]))],
+            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
         let mut ctx = ExecutionContext::new();
@@ -3617,7 +3702,6 @@ mod tests {
             async fn scan(
                 &self,
                 _: &Option<Vec<usize>>,
-                _: usize,
                 _: &[Expr],
                 _: Option<usize>,
             ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -3880,12 +3964,12 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
             vec![
-                Arc::new(Int32Array::from(vec![1])),
-                Arc::new(Float64Array::from(vec![1.0])),
+                Arc::new(Int32Array::from_slice(&[1])),
+                Arc::new(Float64Array::from_slice(&[1.0])),
                 Arc::new(StringArray::from(vec![Some("foo")])),
                 Arc::new(LargeStringArray::from(vec![Some("bar")])),
-                Arc::new(BinaryArray::from(vec![b"foo" as &[u8]])),
-                Arc::new(LargeBinaryArray::from(vec![b"foo" as &[u8]])),
+                Arc::new(BinaryArray::from_slice(&[b"foo" as &[u8]])),
+                Arc::new(LargeBinaryArray::from_slice(&[b"foo" as &[u8]])),
                 Arc::new(TimestampNanosecondArray::from_opt_vec(
                     vec![Some(123)],
                     None,
@@ -4148,8 +4232,8 @@ mod tests {
                         .unwrap();
 
                 // create mock record batch
-                let ids = Arc::new(Int32Array::from(vec![i as i32]));
-                let names = Arc::new(StringArray::from(vec!["test"]));
+                let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
+                let names = Arc::new(StringArray::from_slice(&["test"]));
                 let rec_batch =
                     RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
 

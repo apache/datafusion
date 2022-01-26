@@ -32,7 +32,6 @@ mod average;
 mod binary;
 mod case;
 mod cast;
-pub(crate) mod coercion;
 mod column;
 mod count;
 mod cume_dist;
@@ -44,7 +43,9 @@ mod lead_lag;
 mod literal;
 #[macro_use]
 mod min_max;
+mod correlation;
 mod covariance;
+mod distinct_expressions;
 mod negative;
 mod not;
 mod nth_value;
@@ -72,11 +73,15 @@ pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 pub use column::{col, Column};
+pub(crate) use correlation::{
+    correlation_return_type, is_correlation_support_arg_type, Correlation,
+};
 pub use count::Count;
 pub(crate) use covariance::{
     covariance_return_type, is_covariance_support_arg_type, Covariance, CovariancePop,
 };
 pub use cume_dist::cume_dist;
+pub use distinct_expressions::{DistinctArrayAgg, DistinctCount};
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};

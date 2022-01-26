@@ -331,8 +331,7 @@ fn build_batch(
             let scalar = ScalarValue::try_from_array(arr, left_index)?;
             Ok(scalar.to_array_of_size(batch.num_rows()))
         })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|x| x.into_arrow_external_error())?;
+        .collect::<Result<Vec<_>>>()?;
 
     RecordBatch::try_new(
         Arc::new(schema.clone()),

@@ -36,6 +36,7 @@ use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::fmt;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -221,7 +222,7 @@ impl fmt::Display for Column {
 ///   assert_eq!(op, Operator::Eq);
 /// }
 /// ```
-#[derive(Clone, PartialEq, PartialOrd)]
+#[derive(Clone, PartialEq, Hash)]
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
@@ -372,6 +373,23 @@ pub enum Expr {
     Wildcard,
 }
 
+/// Fixed seed for the hashing so that Ords are consistent across runs
+const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
+
+impl PartialOrd for Expr {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        let mut hasher = SEED.build_hasher();
+        self.hash(&mut hasher);
+        let s = hasher.finish();
+
+        let mut hasher = SEED.build_hasher();
+        other.hash(&mut hasher);
+        let o = hasher.finish();
+
+        Some(s.cmp(&o))
+    }
+}
+
 impl Expr {
     /// Returns the [arrow::datatypes::DataType] of the expression based on [arrow::datatypes::Schema].
     ///
@@ -382,13 +400,16 @@ impl Expr {
     /// the expression is incorrectly typed (e.g. `[utf8] + [bool]`).
     pub fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(expr, _) => expr.get_type(schema),
+            Expr::Alias(expr, _) | Expr::Sort { expr, .. } | Expr::Negative(expr) => {
+                expr.get_type(schema)
+            }
             Expr::Column(c) => Ok(schema.field_from_column(c)?.data_type().clone()),
             Expr::ScalarVariable(_) => Ok(DataType::Utf8),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
-            Expr::Cast { data_type, .. } => Ok(data_type.clone()),
-            Expr::TryCast { data_type, .. } => Ok(data_type.clone()),
+            Expr::Cast { data_type, .. } | Expr::TryCast { data_type, .. } => {
+                Ok(data_type.clone())
+            }
             Expr::ScalarUDF { fun, args } => {
                 let data_types = args
                     .iter()
@@ -424,10 +445,11 @@ impl Expr {
                     .collect::<Result<Vec<_>>>()?;
                 Ok((fun.return_type)(&data_types)?.as_ref().clone())
             }
-            Expr::Not(_) => Ok(DataType::Boolean),
-            Expr::Negative(expr) => expr.get_type(schema),
-            Expr::IsNull(_) => Ok(DataType::Boolean),
-            Expr::IsNotNull(_) => Ok(DataType::Boolean),
+            Expr::Not(_)
+            | Expr::IsNull(_)
+            | Expr::Between { .. }
+            | Expr::InList { .. }
+            | Expr::IsNotNull(_) => Ok(DataType::Boolean),
             Expr::BinaryExpr {
                 ref left,
                 ref right,
@@ -437,9 +459,6 @@ impl Expr {
                 op,
                 &right.get_type(schema)?,
             ),
-            Expr::Sort { ref expr, .. } => expr.get_type(schema),
-            Expr::Between { .. } => Ok(DataType::Boolean),
-            Expr::InList { .. } => Ok(DataType::Boolean),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
@@ -459,10 +478,14 @@ impl Expr {
     /// This happens when the expression refers to a column that does not exist in the schema.
     pub fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
         match self {
-            Expr::Alias(expr, _) => expr.nullable(input_schema),
+            Expr::Alias(expr, _)
+            | Expr::Not(expr)
+            | Expr::Negative(expr)
+            | Expr::Sort { expr, .. }
+            | Expr::Between { expr, .. }
+            | Expr::InList { expr, .. } => expr.nullable(input_schema),
             Expr::Column(c) => Ok(input_schema.field_from_column(c)?.is_nullable()),
             Expr::Literal(value) => Ok(value.is_null()),
-            Expr::ScalarVariable(_) => Ok(true),
             Expr::Case {
                 when_then_expr,
                 else_expr,
@@ -482,24 +505,19 @@ impl Expr {
                 }
             }
             Expr::Cast { expr, .. } => expr.nullable(input_schema),
-            Expr::TryCast { .. } => Ok(true),
-            Expr::ScalarFunction { .. } => Ok(true),
-            Expr::ScalarUDF { .. } => Ok(true),
-            Expr::WindowFunction { .. } => Ok(true),
-            Expr::AggregateFunction { .. } => Ok(true),
-            Expr::AggregateUDF { .. } => Ok(true),
-            Expr::Not(expr) => expr.nullable(input_schema),
-            Expr::Negative(expr) => expr.nullable(input_schema),
-            Expr::IsNull(_) => Ok(false),
-            Expr::IsNotNull(_) => Ok(false),
+            Expr::ScalarVariable(_)
+            | Expr::TryCast { .. }
+            | Expr::ScalarFunction { .. }
+            | Expr::ScalarUDF { .. }
+            | Expr::WindowFunction { .. }
+            | Expr::AggregateFunction { .. }
+            | Expr::AggregateUDF { .. } => Ok(true),
+            Expr::IsNull(_) | Expr::IsNotNull(_) => Ok(false),
             Expr::BinaryExpr {
                 ref left,
                 ref right,
                 ..
             } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
-            Expr::Sort { ref expr, .. } => expr.nullable(input_schema),
-            Expr::Between { ref expr, .. } => expr.nullable(input_schema),
-            Expr::InList { ref expr, .. } => expr.nullable(input_schema),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
@@ -705,18 +723,23 @@ impl Expr {
 
         // recurse (and cover all expression types)
         let visitor = match self {
-            Expr::Alias(expr, _) => expr.accept(visitor),
-            Expr::Column(_) => Ok(visitor),
-            Expr::ScalarVariable(..) => Ok(visitor),
-            Expr::Literal(..) => Ok(visitor),
+            Expr::Alias(expr, _)
+            | Expr::Not(expr)
+            | Expr::IsNotNull(expr)
+            | Expr::IsNull(expr)
+            | Expr::Negative(expr)
+            | Expr::Cast { expr, .. }
+            | Expr::TryCast { expr, .. }
+            | Expr::Sort { expr, .. }
+            | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
+            Expr::Column(_)
+            | Expr::ScalarVariable(_)
+            | Expr::Literal(_)
+            | Expr::Wildcard => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
             }
-            Expr::Not(expr) => expr.accept(visitor),
-            Expr::IsNotNull(expr) => expr.accept(visitor),
-            Expr::IsNull(expr) => expr.accept(visitor),
-            Expr::Negative(expr) => expr.accept(visitor),
             Expr::Between {
                 expr, low, high, ..
             } => {
@@ -747,13 +770,10 @@ impl Expr {
                     Ok(visitor)
                 }
             }
-            Expr::Cast { expr, .. } => expr.accept(visitor),
-            Expr::TryCast { expr, .. } => expr.accept(visitor),
-            Expr::Sort { expr, .. } => expr.accept(visitor),
-            Expr::ScalarFunction { args, .. } => args
-                .iter()
-                .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::ScalarUDF { args, .. } => args
+            Expr::ScalarFunction { args, .. }
+            | Expr::ScalarUDF { args, .. }
+            | Expr::AggregateFunction { args, .. }
+            | Expr::AggregateUDF { args, .. } => args
                 .iter()
                 .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
             Expr::WindowFunction {
@@ -773,19 +793,11 @@ impl Expr {
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))?;
                 Ok(visitor)
             }
-            Expr::AggregateFunction { args, .. } => args
-                .iter()
-                .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
-            Expr::AggregateUDF { args, .. } => args
-                .iter()
-                .try_fold(visitor, |visitor, arg| arg.accept(visitor)),
             Expr::InList { expr, list, .. } => {
                 let visitor = expr.accept(visitor)?;
                 list.iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))
             }
-            Expr::Wildcard => Ok(visitor),
-            Expr::GetIndexedField { ref expr, .. } => expr.accept(visitor),
         }?;
 
         visitor.post_visit(self)
@@ -2434,7 +2446,7 @@ mod tests {
 
     #[test]
     fn test_partial_ord() {
-        // Test validates that partial ord is defined for Expr, not
+        // Test validates that partial ord is defined for Expr using hashes, not
         // intended to exhaustively test all possibilities
         let exp1 = col("a") + lit(1);
         let exp2 = col("a") + lit(2);
@@ -2442,8 +2454,8 @@ mod tests {
 
         assert!(exp1 < exp2);
         assert!(exp2 > exp1);
-        assert!(exp2 < exp3);
-        assert!(exp3 > exp2);
+        assert!(exp2 > exp3);
+        assert!(exp3 < exp2);
     }
 
     #[test]
