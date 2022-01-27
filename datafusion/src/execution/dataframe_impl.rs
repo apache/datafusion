@@ -29,6 +29,7 @@ use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
+use crate::scalar::ScalarValue;
 use crate::{
     dataframe::*,
     physical_plan::{collect, collect_partitioned},
@@ -98,34 +99,42 @@ impl TableProvider for DataFrameImpl {
     /// parallelized or distributed.
     async fn scan(
         &self,
-        _projection: &Option<Vec<usize>>,
+        projection: &Option<Vec<usize>>,
         _batch_size: usize,
-        _filters: &[Expr],
+        filters: &[Expr],
         // limit can be used to reduce the amount scanned
         // from the datasource as a performance optimization.
         // If set, it contains the amount of rows needed by the `LogicalPlan`,
         // The datasource should return *at least* this number of rows if available.
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.create_physical_plan().await
-        // let schema = TableProvider::schema(self);
-        // let expr = projection
-        //     .map_or(Ok(self), |projection| {
-        //         let names = projection
-        //             .iter()
-        //             .copied()
-        //             .map(|i| &schema.field(i).name()[..])
-        //             .collect::<Vec<_>>();
-        //         self.select_columns(&names)
-        //     })?
-        //     .filter(filters.iter().fold(
-        //         Expr::Literal(ScalarValue::Boolean(Some(true))),
-        //         |acc, &new| acc.and(new),
-        //     ))?;
-        // limit
-        //     .map_or(Ok(expr), |n| expr.limit(n))?
-        //     .create_physical_plan()
-        //     .await
+        let schema = TableProvider::schema(self);
+        let expr = projection
+            .as_ref()
+            .map_or_else(
+                || {
+                    Ok(Arc::new(Self::new(self.ctx_state.clone(), &self.plan))
+                        as Arc<dyn DataFrame>)
+                },
+                |projection| {
+                    let names = projection
+                        .iter()
+                        .copied()
+                        .map(|i| &schema.field(i).name()[..])
+                        .collect::<Vec<_>>();
+                    self.select_columns(&names)
+                },
+            )?
+            .filter(filters.iter().fold(
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+                |acc, new| acc.and(new.clone()),
+            ))?;
+        let plan = limit
+            .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
+            .to_logical_plan();
+        DataFrameImpl::new(self.ctx_state.clone(), &plan)
+            .create_physical_plan()
+            .await
     }
 }
 
