@@ -54,16 +54,11 @@ ahash = {version = "0.7", default-features = false}
 arrow = {version = "8.0.0", features = ["prettyprint"]}
 async-trait = "0.1.41"
 avro-rs = {version = "0.13", features = ["snappy"], optional = true}
-avro-rs = {version = "0.13", features = ["snappy"], optional = true}
-blake2 = {version = "^0.9.2", optional = true}
 blake2 = {version = "^0.10.2", optional = true}
 blake3 = {version = "1.0", optional = true}
-blake3 = {version = "1.0", optional = true}
-chrono = {version = "0.4", default-features = false}
 chrono = {version = "0.4", default-features = false}
 futures = "0.3"
 hashbrown = {version = "0.12", features = ["raw"]}
-hashbrown = {version = "0.11", features = ["raw"]}
 lazy_static = {version = "^1.4.0"}
 log = "^0.4"
 md-5 = {version = "^0.10.0", optional = true}
@@ -72,14 +67,13 @@ num-traits = {version = "0.2", optional = true}
 num_cpus = "1.13.0"
 ordered-float = "2.0"
 parquet = {version = "8.0.0", features = ["arrow"]}
-parquet = {version = "7.0.0", features = ["arrow"]}
-paste = "^1.0"
 paste = "^1.0"
 pin-project-lite = "^0.2.7"
-pyo3 = {version = "0.14", optional = true}
 pyo3 = {version = "0.15", optional = true}
 rand = "0.8"
+regex = {version = "^1.4.3", optional = true}
 sha2 = {version = "^0.10.1", optional = true}
+smallvec = {version = "1.6", features = ["union"]}
 sqlparser = "0.13"
 tempfile = "3"
 tokio = {version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"]}

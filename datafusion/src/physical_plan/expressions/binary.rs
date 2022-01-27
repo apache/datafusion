@@ -57,6 +57,8 @@ use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
+use num::ToPrimitive;
+
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
 use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
@@ -952,15 +954,17 @@ macro_rules! binary_array_op_dyn_scalar {
                 DataType::Utf8 | DataType::LargeUtf8 => true,
                 _ => false
             }
+            _ => false
         };
         let string_like = is_string | is_string_dict;
 
         let result: Result<Arc<dyn Array>> = if numeric_like {
-            compute_op_dyn_scalar!($LEFT, $RIGHT, $OP)
+            compute_op_dyn_scalar!($LEFT, $RIGHT.try_into()?, $OP)
         } else if string_like {
             compute_utf8_op_dyn_scalar!($LEFT, $RIGHT, $OP)
         } else {
             let r: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+
                 DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
                 DataType::Boolean => compute_bool_op_dyn_scalar!($LEFT, $RIGHT, $OP),
                 DataType::Timestamp(TimeUnit::Nanosecond, _) => {
