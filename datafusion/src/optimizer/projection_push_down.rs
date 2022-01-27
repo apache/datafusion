@@ -593,7 +593,7 @@ mod tests {
 
         // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b, #test2.c1\
-        \n  Join: #test.a = #test2.c1\
+        \n  Left Join: #test.a = #test2.c1\
         \n    TableScan: test projection=Some([0, 1])\
         \n    TableScan: test2 projection=Some([0])";
 
@@ -634,7 +634,7 @@ mod tests {
 
         // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b\
-        \n  Join: #test.a = #test2.c1\
+        \n  Left Join: #test.a = #test2.c1\
         \n    TableScan: test projection=Some([0, 1])\
         \n    TableScan: test2 projection=Some([0])";
 
@@ -673,7 +673,7 @@ mod tests {
 
         // make sure projections are pushed down to table scan
         let expected = "Projection: #test.a, #test.b\
-        \n  Join: Using #test.a = #test2.a\
+        \n  Left Join: Using #test.a = #test2.a\
         \n    TableScan: test projection=Some([0, 1])\
         \n    TableScan: test2 projection=Some([0])";
 
