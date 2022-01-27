@@ -17,8 +17,11 @@
 
 //! Implementation of DataFrame API.
 
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
+use crate::arrow::datatypes::Schema;
+use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::execution::context::{ExecutionContext, ExecutionContextState};
@@ -32,6 +35,8 @@ use crate::{
 };
 
 use crate::arrow::util::pretty;
+use crate::datasource::TableProvider;
+use crate::datasource::TableType;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
@@ -59,6 +64,68 @@ impl DataFrameImpl {
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
         ctx.create_physical_plan(&plan).await
+    }
+}
+
+#[async_trait]
+impl TableProvider for DataFrameImpl {
+    /// Returns the table provider as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Get a reference to the schema for this table
+    fn schema(&self) -> SchemaRef {
+        Arc::new(Schema::new(
+            self.plan
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.field().clone())
+                .collect(),
+        ))
+    }
+
+    /// Get the type of this table for metadata/catalog purposes.
+    fn table_type(&self) -> TableType {
+        TableType::View
+    }
+
+    /// Create an ExecutionPlan that will scan the table.
+    /// The table provider will be usually responsible of grouping
+    /// the source data into partitions that can be efficiently
+    /// parallelized or distributed.
+    async fn scan(
+        &self,
+        _projection: &Option<Vec<usize>>,
+        _batch_size: usize,
+        _filters: &[Expr],
+        // limit can be used to reduce the amount scanned
+        // from the datasource as a performance optimization.
+        // If set, it contains the amount of rows needed by the `LogicalPlan`,
+        // The datasource should return *at least* this number of rows if available.
+        _limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.create_physical_plan().await
+        // let schema = TableProvider::schema(self);
+        // let expr = projection
+        //     .map_or(Ok(self), |projection| {
+        //         let names = projection
+        //             .iter()
+        //             .copied()
+        //             .map(|i| &schema.field(i).name()[..])
+        //             .collect::<Vec<_>>();
+        //         self.select_columns(&names)
+        //     })?
+        //     .filter(filters.iter().fold(
+        //         Expr::Literal(ScalarValue::Boolean(Some(true))),
+        //         |acc, &new| acc.and(new),
+        //     ))?;
+        // limit
+        //     .map_or(Ok(expr), |n| expr.limit(n))?
+        //     .create_physical_plan()
+        //     .await
     }
 }
 
