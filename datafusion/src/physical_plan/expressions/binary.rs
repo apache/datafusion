@@ -21,9 +21,11 @@ use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute;
 use arrow::datatypes::{DataType, Schema};
+use arrow::error::ArrowError::DivideByZero;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
+use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
 use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
@@ -66,6 +68,263 @@ fn is_not_distinct_from_bool(left: &dyn Array, right: &dyn Array) -> BooleanArra
         .zip(right.iter())
         .map(|(left, right)| Some(left == right))
         .collect()
+}
+
+// TODO add iter for decimal array
+// TODO move this to arrow-rs
+// https://github.com/apache/arrow-rs/issues/1083
+pub(super) fn eq_decimal_scalar(
+    left: &DecimalArray,
+    right: i128,
+) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) == right)?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+pub(super) fn eq_decimal(
+    left: &DecimalArray,
+    right: &DecimalArray,
+) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) == right.value(i))?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn neq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) != right)?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn neq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) != right.value(i))?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn lt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) < right)?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn lt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) < right.value(i))?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn lt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) <= right)?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn lt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) <= right.value(i))?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn gt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) > right)?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn gt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) > right.value(i))?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn gt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) >= right)?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn gt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            bool_builder.append_null()?;
+        } else {
+            bool_builder.append_value(left.value(i) >= right.value(i))?;
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn is_distinct_from_decimal(
+    left: &DecimalArray,
+    right: &DecimalArray,
+) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        match (left.is_null(i), right.is_null(i)) {
+            (true, true) => bool_builder.append_value(false)?,
+            (true, false) | (false, true) => bool_builder.append_value(true)?,
+            (_, _) => bool_builder.append_value(left.value(i) != right.value(i))?,
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn is_not_distinct_from_decimal(
+    left: &DecimalArray,
+    right: &DecimalArray,
+) -> Result<BooleanArray> {
+    let mut bool_builder = BooleanBuilder::new(left.len());
+    for i in 0..left.len() {
+        match (left.is_null(i), right.is_null(i)) {
+            (true, true) => bool_builder.append_value(true)?,
+            (true, false) | (false, true) => bool_builder.append_value(false)?,
+            (_, _) => bool_builder.append_value(left.value(i) == right.value(i))?,
+        }
+    }
+    Ok(bool_builder.finish())
+}
+
+fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else {
+            decimal_builder.append_value(left.value(i) + right.value(i))?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else {
+            decimal_builder.append_value(left.value(i) - right.value(i))?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    let divide = 10_i128.pow(left.scale() as u32);
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else {
+            decimal_builder.append_value(left.value(i) * right.value(i) / divide)?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    let mul = 10_f64.powi(left.scale() as i32);
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else if right.value(i) == 0 {
+            return Err(DataFusionError::ArrowError(DivideByZero));
+        } else {
+            let l_value = left.value(i) as f64;
+            let r_value = right.value(i) as f64;
+            let result = ((l_value / r_value) * mul) as i128;
+            decimal_builder.append_value(result)?;
+        }
+    }
+    Ok(decimal_builder.finish())
+}
+
+fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
+    let mut decimal_builder =
+        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            decimal_builder.append_null()?;
+        } else if right.value(i) == 0 {
+            return Err(DataFusionError::ArrowError(DivideByZero));
+        } else {
+            decimal_builder.append_value(left.value(i) % right.value(i))?;
+        }
+    }
+    Ok(decimal_builder.finish())
 }
 
 /// Binary expression
@@ -430,56 +689,6 @@ fn evaluate_inverse_scalar(
     }
 }
 
-/// Coercion rules for all binary operators. Returns the output type
-/// of applying `op` to an argument of `lhs_type` and `rhs_type`.
-fn common_binary_type(
-    lhs_type: &DataType,
-    op: &Operator,
-    rhs_type: &DataType,
-) -> Result<DataType> {
-    // This result MUST be compatible with `binary_coerce`
-    let result = match op {
-        Operator::And | Operator::Or => match (lhs_type, rhs_type) {
-            // logical binary boolean operators can only be evaluated in bools
-            (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
-            _ => None,
-        },
-        // logical equality operators have their own rules, and always return a boolean
-        Operator::Eq | Operator::NotEq => eq_coercion(lhs_type, rhs_type),
-        // "like" operators operate on strings and always return a boolean
-        Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
-        // order-comparison operators have their own rules
-        Operator::Lt | Operator::Gt | Operator::GtEq | Operator::LtEq => {
-            order_coercion(lhs_type, rhs_type)
-        }
-        // for math expressions, the final value of the coercion is also the return type
-        // because coercion favours higher information types
-        Operator::Plus
-        | Operator::Minus
-        | Operator::Modulo
-        | Operator::Divide
-        | Operator::Multiply => numerical_coercion(lhs_type, rhs_type),
-        Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
-        Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
-            eq_coercion(lhs_type, rhs_type)
-        }
-    };
-
-    // re-write the error message of failed coercions to include the operator's information
-    match result {
-        None => Err(DataFusionError::Plan(
-            format!(
-                "'{:?} {} {:?}' can't be evaluated because there isn't a common type to coerce the types to",
-                lhs_type, op, rhs_type
-            ),
-        )),
-        Some(t) => Ok(t)
-    }
-}
-
 /// Returns the return type of a binary operator or an error when the binary operator cannot
 /// perform the computation between the argument's types, even after type coercion.
 ///
@@ -491,7 +700,7 @@ pub fn binary_operator_data_type(
 ) -> Result<DataType> {
     // validate that it is possible to perform the operation on incoming types.
     // (or the return datatype cannot be inferred)
-    let common_type = common_binary_type(lhs_type, op, rhs_type)?;
+    let result_type = coerce_types(lhs_type, op, rhs_type)?;
 
     match op {
         // operators that return a boolean
@@ -516,7 +725,7 @@ pub fn binary_operator_data_type(
         | Operator::Minus
         | Operator::Divide
         | Operator::Multiply
-        | Operator::Modulo => Ok(common_type),
+        | Operator::Modulo => Ok(result_type),
     }
 }
 
@@ -747,11 +956,11 @@ fn binary_cast(
     let lhs_type = &lhs.data_type(input_schema)?;
     let rhs_type = &rhs.data_type(input_schema)?;
 
-    let cast_type = common_binary_type(lhs_type, op, rhs_type)?;
+    let result_type = coerce_types(lhs_type, op, rhs_type)?;
 
     Ok((
-        try_cast(lhs, input_schema, cast_type.clone())?,
-        try_cast(rhs, input_schema, cast_type)?,
+        try_cast(lhs, input_schema, result_type.clone())?,
+        try_cast(rhs, input_schema, result_type)?,
     ))
 }
 
@@ -777,6 +986,8 @@ mod tests {
     use crate::error::Result;
     use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, lit};
+    use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
+    use arrow::util::display::array_value_to_string;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -784,8 +995,9 @@ mod tests {
         l: Arc<dyn PhysicalExpr>,
         op: Operator,
         r: Arc<dyn PhysicalExpr>,
+        input_schema: &Schema,
     ) -> Arc<dyn PhysicalExpr> {
-        Arc::new(BinaryExpr::new(l, op, r))
+        binary(l, op, r, input_schema).unwrap()
     }
 
     #[test]
@@ -798,7 +1010,12 @@ mod tests {
         let b = Int32Array::from_slice(&[1, 2, 4, 8, 16]);
 
         // expression: "a < b"
-        let lt = binary_simple(col("a", &schema)?, Operator::Lt, col("b", &schema)?);
+        let lt = binary_simple(
+            col("a", &schema)?,
+            Operator::Lt,
+            col("b", &schema)?,
+            &schema,
+        );
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
 
@@ -828,9 +1045,20 @@ mod tests {
 
         // expression: "a < b OR a == b"
         let expr = binary_simple(
-            binary_simple(col("a", &schema)?, Operator::Lt, col("b", &schema)?),
+            binary_simple(
+                col("a", &schema)?,
+                Operator::Lt,
+                col("b", &schema)?,
+                &schema,
+            ),
             Operator::Or,
-            binary_simple(col("a", &schema)?, Operator::Eq, col("b", &schema)?),
+            binary_simple(
+                col("a", &schema)?,
+                Operator::Eq,
+                col("b", &schema)?,
+                &schema,
+            ),
+            &schema,
         );
         let batch =
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a), Arc::new(b)])?;
@@ -1140,7 +1368,8 @@ mod tests {
         op: Operator,
         expected: PrimitiveArray<T>,
     ) -> Result<()> {
-        let arithmetic_op = binary_simple(col("a", &schema)?, op, col("b", &schema)?);
+        let arithmetic_op =
+            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
         let batch = RecordBatch::try_new(schema, data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
@@ -1155,9 +1384,10 @@ mod tests {
         op: Operator,
         expected: BooleanArray,
     ) -> Result<()> {
-        let arithmetic_op = binary_simple(col("a", &schema)?, op, col("b", &schema)?);
-        let data: Vec<ArrayRef> = vec![Arc::new(left), Arc::new(right)];
-        let batch = RecordBatch::try_new(schema, data)?;
+        let arithmetic_op =
+            binary_simple(col("a", schema)?, op, col("b", schema)?, schema);
+        let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
+        let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
         assert_eq!(expected, result.as_ref());
@@ -1186,14 +1416,14 @@ mod tests {
     // Test `scalar <op> arr` produces expected
     fn apply_logic_op_scalar_arr(
         schema: &SchemaRef,
-        scalar: bool,
+        scalar: &ScalarValue,
         arr: &ArrayRef,
         op: Operator,
         expected: &BooleanArray,
     ) -> Result<()> {
-        let scalar = lit(scalar.into());
+        let scalar = lit(scalar.clone());
 
-        let arithmetic_op = binary_simple(scalar, op, col("a", schema)?);
+        let arithmetic_op = binary_simple(scalar, op, col("a", schema)?, schema);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected as &dyn Array);
@@ -1205,13 +1435,13 @@ mod tests {
     fn apply_logic_op_arr_scalar(
         schema: &SchemaRef,
         arr: &ArrayRef,
-        scalar: bool,
+        scalar: &ScalarValue,
         op: Operator,
         expected: &BooleanArray,
     ) -> Result<()> {
-        let scalar = lit(scalar.into());
+        let scalar = lit(scalar.clone());
 
-        let arithmetic_op = binary_simple(col("a", schema)?, op, scalar);
+        let arithmetic_op = binary_simple(col("a", schema)?, op, scalar, schema);
         let batch = RecordBatch::try_new(Arc::clone(schema), vec![Arc::clone(arr)])?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
         assert_eq!(result.as_ref(), expected as &dyn Array);
@@ -1225,7 +1455,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Boolean, true),
         ]);
-        let a = BooleanArray::from(vec![
+        let a = Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),
             None,
@@ -1235,8 +1465,8 @@ mod tests {
             Some(true),
             Some(false),
             None,
-        ]);
-        let b = BooleanArray::from(vec![
+        ])) as ArrayRef;
+        let b = Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(true),
             Some(true),
@@ -1246,7 +1476,7 @@ mod tests {
             None,
             None,
             None,
-        ]);
+        ])) as ArrayRef;
 
         let expected = BooleanArray::from(vec![
             Some(true),
@@ -1259,7 +1489,7 @@ mod tests {
             Some(false),
             None,
         ]);
-        apply_logic_op(Arc::new(schema), a, b, Operator::And, expected)?;
+        apply_logic_op(&Arc::new(schema), &a, &b, Operator::And, expected)?;
 
         Ok(())
     }
@@ -1270,7 +1500,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Boolean, true),
         ]);
-        let a = BooleanArray::from(vec![
+        let a = Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(false),
             None,
@@ -1280,8 +1510,8 @@ mod tests {
             Some(true),
             Some(false),
             None,
-        ]);
-        let b = BooleanArray::from(vec![
+        ])) as ArrayRef;
+        let b = Arc::new(BooleanArray::from(vec![
             Some(true),
             Some(true),
             Some(true),
@@ -1291,7 +1521,7 @@ mod tests {
             None,
             None,
             None,
-        ]);
+        ])) as ArrayRef;
 
         let expected = BooleanArray::from(vec![
             Some(true),
@@ -1304,7 +1534,7 @@ mod tests {
             None,
             None,
         ]);
-        apply_logic_op(Arc::new(schema), a, b, Operator::Or, expected)?;
+        apply_logic_op(&Arc::new(schema), &a, &b, Operator::Or, expected)?;
 
         Ok(())
     }
@@ -1313,12 +1543,12 @@ mod tests {
     ///
     /// a: [true, true, true,  NULL, NULL, NULL,  false, false, false]
     /// b: [true, NULL, false, true, NULL, false, true,  NULL,  false]
-    fn bool_test_arrays() -> (SchemaRef, BooleanArray, BooleanArray) {
+    fn bool_test_arrays() -> (SchemaRef, ArrayRef, ArrayRef) {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Boolean, false),
             Field::new("b", DataType::Boolean, false),
         ]);
-        let a = [
+        let a: BooleanArray = [
             Some(true),
             Some(true),
             Some(true),
@@ -1331,7 +1561,7 @@ mod tests {
         ]
         .iter()
         .collect();
-        let b = [
+        let b: BooleanArray = [
             Some(true),
             None,
             Some(false),
@@ -1344,7 +1574,7 @@ mod tests {
         ]
         .iter()
         .collect();
-        (Arc::new(schema), a, b)
+        (Arc::new(schema), Arc::new(a), Arc::new(b))
     }
 
     /// Returns (schema, BooleanArray) with [true, NULL, false]
@@ -1370,19 +1600,47 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::Eq, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::Eq, expected).unwrap();
     }
 
     #[test]
     fn eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::Eq, &expected).unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::Eq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::Eq, &expected).unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::Eq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::Eq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1401,21 +1659,47 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::NotEq, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::NotEq, expected).unwrap();
     }
 
     #[test]
     fn neq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::NotEq, &expected).unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::NotEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::NotEq, &expected)
-            .unwrap();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::NotEq, &expected)
-            .unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::NotEq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1434,23 +1718,51 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::Lt, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::Lt, expected).unwrap();
     }
 
     #[test]
     fn lt_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::Lt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::Lt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::Lt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::Lt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::Lt,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1469,23 +1781,51 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::LtEq, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::LtEq, expected).unwrap();
     }
 
     #[test]
     fn lt_eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::LtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::LtEq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1504,23 +1844,51 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::Gt, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::Gt, expected).unwrap();
     }
 
     #[test]
     fn gt_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::Gt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::Gt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(false)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::Gt, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::Gt, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::Gt,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1539,23 +1907,51 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::GtEq, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::GtEq, expected).unwrap();
     }
 
     #[test]
     fn gt_eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, true, &a, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(true),
+            &a,
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(false)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, true, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(true),
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(false), None, Some(true)].iter().collect();
-        apply_logic_op_scalar_arr(&schema, false, &a, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_scalar_arr(
+            &schema,
+            &ScalarValue::from(false),
+            &a,
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
 
         let expected = [Some(true), None, Some(true)].iter().collect();
-        apply_logic_op_arr_scalar(&schema, &a, false, Operator::GtEq, &expected).unwrap();
+        apply_logic_op_arr_scalar(
+            &schema,
+            &a,
+            &ScalarValue::from(false),
+            Operator::GtEq,
+            &expected,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1574,7 +1970,7 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::IsDistinctFrom, expected).unwrap();
+        apply_logic_op(&schema, &a, &b, Operator::IsDistinctFrom, expected).unwrap();
     }
 
     #[test]
@@ -1593,22 +1989,7 @@ mod tests {
         ]
         .iter()
         .collect();
-        apply_logic_op(schema, a, b, Operator::IsNotDistinctFrom, expected).unwrap();
-    }
-
-    #[test]
-    fn test_coersion_error() -> Result<()> {
-        let expr =
-            common_binary_type(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
-
-        if let Err(DataFusionError::Plan(e)) = expr {
-            assert_eq!(e, "'Float32 + Utf8' can't be evaluated because there isn't a common type to coerce the types to");
-            Ok(())
-        } else {
-            Err(DataFusionError::Internal(
-                "Coercion should have returned an DataFusionError::Internal".to_string(),
-            ))
-        }
+        apply_logic_op(&schema, &a, &b, Operator::IsNotDistinctFrom, expected).unwrap();
     }
 
     #[test]
@@ -1629,7 +2010,7 @@ mod tests {
         let expr = (0..tree_depth)
             .into_iter()
             .map(|_| col("a", schema.as_ref()).unwrap())
-            .reduce(|l, r| binary_simple(l, Operator::Plus, r))
+            .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema))
             .unwrap();
 
         let result = expr
@@ -1642,5 +2023,543 @@ mod tests {
             .map(|i| i.map(|i| i * tree_depth))
             .collect();
         assert_eq!(result.as_ref(), &expected as &dyn Array);
+    }
+
+    fn create_decimal_array(
+        array: &[Option<i128>],
+        precision: usize,
+        scale: usize,
+    ) -> Result<DecimalArray> {
+        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+        for value in array {
+            match value {
+                None => {
+                    decimal_builder.append_null()?;
+                }
+                Some(v) => {
+                    decimal_builder.append_value(*v)?;
+                }
+            }
+        }
+        Ok(decimal_builder.finish())
+    }
+
+    #[test]
+    fn comparison_decimal_op_test() -> Result<()> {
+        let value_i128: i128 = 123;
+        let decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )?;
+        // eq: array = i128
+        let result = eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            result
+        );
+        // neq: array != i128
+        let result = neq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            result
+        );
+        // lt: array < i128
+        let result = lt_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            result
+        );
+        // lt_eq: array <= i128
+        let result = lt_eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            result
+        );
+        // gt: array > i128
+        let result = gt_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            result
+        );
+        // gt_eq: array >= i128
+        let result = gt_eq_decimal_scalar(&decimal_array, value_i128)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            result
+        );
+
+        let left_decimal_array = decimal_array;
+        let right_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128 - 1),
+                Some(value_i128),
+                Some(value_i128 + 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )?;
+        // eq: left == right
+        let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            result
+        );
+        // neq: left != right
+        let result = neq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            result
+        );
+        // lt: left < right
+        let result = lt_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            result
+        );
+        // lt_eq: left <= right
+        let result = lt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            result
+        );
+        // gt: left > right
+        let result = gt_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            result
+        );
+        // gt_eq: left >= right
+        let result = gt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]),
+            result
+        );
+        // is_distinct: left distinct right
+        let result =
+            is_not_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
+        assert_eq!(
+            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]),
+            result
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn comparison_decimal_expr_test() -> Result<()> {
+        let decimal_scalar = ScalarValue::Decimal128(Some(123_456), 10, 3);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        // scalar == array
+        apply_logic_op_scalar_arr(
+            &schema,
+            &decimal_scalar,
+            &(Arc::new(Int64Array::from(vec![Some(124), None])) as ArrayRef),
+            Operator::Eq,
+            &BooleanArray::from(vec![Some(false), None]),
+        )
+        .unwrap();
+
+        // array != scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &(Arc::new(Int64Array::from(vec![Some(123), None, Some(1)])) as ArrayRef),
+            &decimal_scalar,
+            Operator::NotEq,
+            &BooleanArray::from(vec![Some(true), None, Some(true)]),
+        )
+        .unwrap();
+
+        // array < scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &(Arc::new(Int64Array::from(vec![Some(123), None, Some(124)])) as ArrayRef),
+            &decimal_scalar,
+            Operator::Lt,
+            &BooleanArray::from(vec![Some(true), None, Some(false)]),
+        )
+        .unwrap();
+
+        // array > scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &(Arc::new(Int64Array::from(vec![Some(123), None, Some(124)])) as ArrayRef),
+            &decimal_scalar,
+            Operator::Gt,
+            &BooleanArray::from(vec![Some(false), None, Some(true)]),
+        )
+        .unwrap();
+
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, true)]));
+        // array == scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &(Arc::new(Float64Array::from(vec![Some(123.456), None, Some(123.457)]))
+                as ArrayRef),
+            &decimal_scalar,
+            Operator::Eq,
+            &BooleanArray::from(vec![Some(true), None, Some(false)]),
+        )
+        .unwrap();
+
+        // array <= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &(Arc::new(Float64Array::from(vec![
+                Some(123.456),
+                None,
+                Some(123.457),
+                Some(123.45),
+            ])) as ArrayRef),
+            &decimal_scalar,
+            Operator::LtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+        // array >= scalar
+        apply_logic_op_arr_scalar(
+            &schema,
+            &(Arc::new(Float64Array::from(vec![
+                Some(123.456),
+                None,
+                Some(123.457),
+                Some(123.45),
+            ])) as ArrayRef),
+            &decimal_scalar,
+            Operator::GtEq,
+            &BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        // compare decimal array with other array type
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Decimal(10, 0), true),
+        ]));
+
+        let value: i64 = 123;
+
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value as i128),
+                None,
+                Some((value - 1) as i128),
+                Some((value + 1) as i128),
+            ],
+            10,
+            0,
+        )?) as ArrayRef;
+
+        let int64_array = Arc::new(Int64Array::from(vec![
+            Some(value),
+            Some(value - 1),
+            Some(value),
+            Some(value + 1),
+        ])) as ArrayRef;
+
+        // eq: int64array == decimal array
+        apply_logic_op(
+            &schema,
+            &int64_array,
+            &decimal_array,
+            Operator::Eq,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+        // neq: int64array != decimal array
+        apply_logic_op(
+            &schema,
+            &int64_array,
+            &decimal_array,
+            Operator::NotEq,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value as i128), // 1.23
+                None,
+                Some((value - 1) as i128), // 1.22
+                Some((value + 1) as i128), // 1.24
+            ],
+            10,
+            2,
+        )?) as ArrayRef;
+        let float64_array = Arc::new(Float64Array::from(vec![
+            Some(1.23),
+            Some(1.22),
+            Some(1.23),
+            Some(1.24),
+        ])) as ArrayRef;
+        // lt: float64array < decimal array
+        apply_logic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Lt,
+            BooleanArray::from(vec![Some(false), None, Some(false), Some(false)]),
+        )
+        .unwrap();
+        // lt_eq: float64array <= decimal array
+        apply_logic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::LtEq,
+            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+        )
+        .unwrap();
+        // gt: float64array > decimal array
+        apply_logic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::Gt,
+            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+        )
+        .unwrap();
+        apply_logic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::GtEq,
+            BooleanArray::from(vec![Some(true), None, Some(true), Some(true)]),
+        )
+        .unwrap();
+        // is distinct: float64array is distinct decimal array
+        // TODO: now we do not refactor the `is distinct or is not distinct` rule of coercion.
+        // traced by https://github.com/apache/arrow-datafusion/issues/1590
+        // the decimal array will be casted to float64array
+        apply_logic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::IsDistinctFrom,
+            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(false)]),
+        )
+        .unwrap();
+        // is not distinct
+        apply_logic_op(
+            &schema,
+            &float64_array,
+            &decimal_array,
+            Operator::IsNotDistinctFrom,
+            BooleanArray::from(vec![Some(true), Some(false), Some(false), Some(true)]),
+        )
+        .unwrap();
+
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_op_test() -> Result<()> {
+        let value_i128: i128 = 123;
+        let left_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                None,
+                Some(value_i128 - 1),
+                Some(value_i128 + 1),
+            ],
+            25,
+            3,
+        )?;
+        let right_decimal_array = create_decimal_array(
+            &[
+                Some(value_i128),
+                Some(value_i128),
+                Some(value_i128),
+                Some(value_i128),
+            ],
+            25,
+            3,
+        )?;
+        // add
+        let result = add_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect =
+            create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3)?;
+        assert_eq!(expect, result);
+        // subtract
+        let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
+        assert_eq!(expect, result);
+        // multiply
+        let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
+        assert_eq!(expect, result);
+        // divide
+        let left_decimal_array = create_decimal_array(
+            &[Some(1234567), None, Some(1234567), Some(1234567)],
+            25,
+            3,
+        )?;
+        let right_decimal_array =
+            create_decimal_array(&[Some(10), Some(100), Some(55), Some(-123)], 25, 3)?;
+        let result = divide_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(
+            &[Some(123456700), None, Some(22446672), Some(-10037130)],
+            25,
+            3,
+        )?;
+        assert_eq!(expect, result);
+        // modulus
+        let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3)?;
+        assert_eq!(expect, result);
+
+        Ok(())
+    }
+
+    fn apply_arithmetic_op(
+        schema: &SchemaRef,
+        left: &ArrayRef,
+        right: &ArrayRef,
+        op: Operator,
+        expected: ArrayRef,
+    ) -> Result<()> {
+        let arithmetic_op =
+            binary_simple(col("a", schema)?, op, col("b", schema)?, schema);
+        let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
+        let batch = RecordBatch::try_new(schema.clone(), data)?;
+        let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
+
+        assert_eq!(result.as_ref(), expected.as_ref());
+        Ok(())
+    }
+
+    #[test]
+    fn arithmetic_decimal_expr_test() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+        let value: i128 = 123;
+        let decimal_array = Arc::new(create_decimal_array(
+            &[
+                Some(value as i128), // 1.23
+                None,
+                Some((value - 1) as i128), // 1.22
+                Some((value + 1) as i128), // 1.24
+            ],
+            10,
+            2,
+        )?) as ArrayRef;
+        let int32_array = Arc::new(Int32Array::from(vec![
+            Some(123),
+            Some(122),
+            Some(123),
+            Some(124),
+        ])) as ArrayRef;
+
+        // add: Int32array add decimal array
+        let expect = Arc::new(create_decimal_array(
+            &[Some(12423), None, Some(12422), Some(12524)],
+            13,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Plus,
+            expect,
+        )
+        .unwrap();
+
+        // subtract: decimal array subtract int32 array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, true),
+            Field::new("a", DataType::Decimal(10, 2), true),
+        ]));
+        let expect = Arc::new(create_decimal_array(
+            &[Some(-12177), None, Some(-12178), Some(-12276)],
+            13,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Minus,
+            expect,
+        )
+        .unwrap();
+
+        // multiply: decimal array multiply int32 array
+        let expect = Arc::new(create_decimal_array(
+            &[Some(15129), None, Some(15006), Some(15376)],
+            21,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Multiply,
+            expect,
+        )
+        .unwrap();
+        // divide: int32 array divide decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+        let expect = Arc::new(create_decimal_array(
+            &[
+                Some(10000000000000),
+                None,
+                Some(10081967213114),
+                Some(10000000000000),
+            ],
+            23,
+            11,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Divide,
+            expect,
+        )
+        .unwrap();
+        // modulus: int32 array modulus decimal array
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Decimal(10, 2), true),
+        ]));
+        let expect = Arc::new(create_decimal_array(
+            &[Some(000), None, Some(100), Some(000)],
+            10,
+            2,
+        )?) as ArrayRef;
+        apply_arithmetic_op(
+            &schema,
+            &int32_array,
+            &decimal_array,
+            Operator::Modulo,
+            expect,
+        )
+        .unwrap();
+
+        Ok(())
     }
 }

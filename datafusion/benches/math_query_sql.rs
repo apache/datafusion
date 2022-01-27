@@ -31,6 +31,7 @@ use datafusion::error::Result;
 use datafusion::record_batch::RecordBatch;
 
 use datafusion::datasource::MemTable;
+use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::field_util::SchemaExt;
 

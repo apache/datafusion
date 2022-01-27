@@ -29,6 +29,9 @@ use sqlparser::parser::ParserError;
 /// Result type for operations that could result in an [DataFusionError]
 pub type Result<T> = result::Result<T, DataFusionError>;
 
+/// Error type for generic operations that could result in DataFusionError::External
+pub type GenericError = Box<dyn error::Error + Send + Sync>;
+
 /// DataFusion error
 #[derive(Debug)]
 #[allow(missing_docs)]
@@ -56,13 +59,12 @@ pub enum DataFusionError {
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
-}
-
-impl DataFusionError {
-    /// Wraps this [DataFusionError] as an [arrow::error::ArrowError].
-    pub fn into_arrow_external_error(self) -> ArrowError {
-        ArrowError::from_external_error(Box::new(self))
-    }
+    /// This error is thrown when a consumer cannot acquire memory from the Memory Manager
+    /// we can just cancel the execution of the partition.
+    ResourcesExhausted(String),
+    /// Errors originating from outside DataFusion's core codebase.
+    /// For example, a custom S3Error from the crate datafusion-objectstore-s3
+    External(GenericError),
 }
 
 impl From<io::Error> for DataFusionError {
@@ -74,6 +76,16 @@ impl From<io::Error> for DataFusionError {
 impl From<ArrowError> for DataFusionError {
     fn from(e: ArrowError) -> Self {
         DataFusionError::ArrowError(e)
+    }
+}
+
+impl From<DataFusionError> for ArrowError {
+    fn from(e: DataFusionError) -> Self {
+        match e {
+            DataFusionError::ArrowError(e) => e,
+            DataFusionError::External(e) => ArrowError::ExternalError(e),
+            other => ArrowError::ExternalError(Box::new(other)),
+        }
     }
 }
 
@@ -89,8 +101,14 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
+impl From<GenericError> for DataFusionError {
+    fn from(err: GenericError) -> Self {
+        DataFusionError::External(err)
+    }
+}
+
 impl Display for DataFusionError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
             DataFusionError::ParquetError(ref desc) => {
@@ -113,8 +131,53 @@ impl Display for DataFusionError {
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
             }
+            DataFusionError::ResourcesExhausted(ref desc) => {
+                write!(f, "Resources exhausted: {}", desc)
+            }
+            DataFusionError::External(ref desc) => {
+                write!(f, "External error: {}", desc)
+            }
         }
     }
 }
 
 impl error::Error for DataFusionError {}
+
+#[cfg(test)]
+mod test {
+    use crate::error::DataFusionError;
+    use arrow::error::ArrowError;
+
+    #[test]
+    fn arrow_error_to_datafusion() {
+        let res = return_arrow_error().unwrap_err();
+        assert_eq!(
+            res.to_string(),
+            "External error: Error during planning: foo"
+        );
+    }
+
+    #[test]
+    fn datafusion_error_to_arrow() {
+        let res = return_datafusion_error().unwrap_err();
+        assert_eq!(res.to_string(), "Arrow error: Schema error: bar");
+    }
+
+    /// Model what happens when implementing SendableRecrordBatchStream:
+    /// DataFusion code needs to return an ArrowError
+    #[allow(clippy::try_err)]
+    fn return_arrow_error() -> arrow::error::Result<()> {
+        // Expect the '?' to work
+        let _foo = Err(DataFusionError::Plan("foo".to_string()))?;
+        Ok(())
+    }
+
+    /// Model what happens when using arrow kernels in DataFusion
+    /// code: need to turn an ArrowError into a DataFusionError
+    #[allow(clippy::try_err)]
+    fn return_datafusion_error() -> crate::error::Result<()> {
+        // Expect the '?' to work
+        let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
+        Ok(())
+    }
+}

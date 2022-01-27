@@ -20,6 +20,7 @@
 
 use std::{convert::TryInto, io::Cursor};
 
+use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
 use datafusion::logical_plan::{JoinConstraint, JoinType, Operator};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
@@ -122,8 +123,13 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ArrayAgg => AggregateFunction::ArrayAgg,
             protobuf::AggregateFunction::Variance => AggregateFunction::Variance,
             protobuf::AggregateFunction::VariancePop => AggregateFunction::VariancePop,
+            protobuf::AggregateFunction::Covariance => AggregateFunction::Covariance,
+            protobuf::AggregateFunction::CovariancePop => {
+                AggregateFunction::CovariancePop
+            }
             protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
             protobuf::AggregateFunction::StddevPop => AggregateFunction::StddevPop,
+            protobuf::AggregateFunction::Correlation => AggregateFunction::Correlation,
         }
     }
 }
@@ -250,15 +256,24 @@ impl TryInto<datafusion::arrow::datatypes::DataType>
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?,
             ),
-            arrow_type::ArrowTypeEnum::Union(union) => DataType::Union(
-                union
+            arrow_type::ArrowTypeEnum::Union(union) => {
+                let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
+                    .ok_or_else(|| {
+                        proto_error(
+                            "Protobuf deserialization error: Unknown union mode type",
+                        )
+                    })?;
+                let union_mode = match union_mode {
+                    protobuf::UnionMode::Dense => UnionMode::Dense,
+                    protobuf::UnionMode::Sparse => UnionMode::Sparse,
+                };
+                let union_types = union
                     .union_types
                     .iter()
                     .map(|field| field.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-                None,
-                UnionMode::Dense,
-            ),
+                    .collect::<Result<Vec<_>, _>>()?;
+                DataType::Union(union_types, None, union_mode)
+            }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
                 let pb_key_datatype = dict
                     .as_ref()
@@ -304,6 +319,20 @@ impl Into<datafusion::arrow::datatypes::DataType> for protobuf::PrimitiveScalarT
                 DataType::Time64(TimeUnit::Nanosecond)
             }
             protobuf::PrimitiveScalarType::Null => DataType::Null,
+            protobuf::PrimitiveScalarType::Decimal128 => DataType::Decimal(0, 0),
+            protobuf::PrimitiveScalarType::Date64 => DataType::Date64,
+            protobuf::PrimitiveScalarType::TimeSecond => {
+                DataType::Timestamp(TimeUnit::Second, None)
+            }
+            protobuf::PrimitiveScalarType::TimeMillisecond => {
+                DataType::Timestamp(TimeUnit::Millisecond, None)
+            }
+            protobuf::PrimitiveScalarType::IntervalYearmonth => {
+                DataType::Interval(IntervalUnit::YearMonth)
+            }
+            protobuf::PrimitiveScalarType::IntervalDaytime => {
+                DataType::Interval(IntervalUnit::DayTime)
+            }
         }
     }
 }
@@ -364,4 +393,10 @@ fn str_to_byte(s: &str) -> Result<u8, BallistaError> {
         return Err(BallistaError::General("Invalid CSV delimiter".to_owned()));
     }
     Ok(s.as_bytes()[0])
+}
+
+fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
+    v.try_into().unwrap_or_else(|v: Vec<T>| {
+        panic!("Expected a Vec of length {} but it was {}", N, v.len())
+    })
 }

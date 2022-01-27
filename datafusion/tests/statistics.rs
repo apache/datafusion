@@ -25,7 +25,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_plan::Expr,
     physical_plan::{
-        ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning,
+        project_schema, ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning,
         SendableRecordBatchStream, Statistics,
     },
     prelude::ExecutionContext,
@@ -33,6 +33,7 @@ use datafusion::{
 };
 
 use async_trait::async_trait;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::field_util::SchemaExt;
 
 /// This is a testing structure for statistics
@@ -44,7 +45,7 @@ struct StatisticsValidation {
 }
 
 impl StatisticsValidation {
-    fn new(stats: Statistics, schema: Schema) -> Self {
+    fn new(stats: Statistics, schema: SchemaRef) -> Self {
         assert!(
             stats
                 .column_statistics
@@ -53,10 +54,7 @@ impl StatisticsValidation {
                 .unwrap_or(true),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        Self {
-            stats,
-            schema: Arc::new(schema),
-        }
+        Self { stats, schema }
     }
 }
 
@@ -73,7 +71,6 @@ impl TableProvider for StatisticsValidation {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,
@@ -88,12 +85,7 @@ impl TableProvider for StatisticsValidation {
             Some(p) => p,
             None => (0..self.schema.fields().len()).collect(),
         };
-        let projected_schema = Schema::new(
-            projection
-                .iter()
-                .map(|i| self.schema.field(*i).clone())
-                .collect(),
-        );
+        let projected_schema = project_schema(&self.schema, Some(&projection))?;
 
         let current_stat = self.stats.clone();
 
@@ -145,7 +137,11 @@ impl ExecutionPlan for StatisticsValidation {
         }
     }
 
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
 
@@ -174,7 +170,7 @@ impl ExecutionPlan for StatisticsValidation {
 fn init_ctx(stats: Statistics, schema: Schema) -> Result<ExecutionContext> {
     let mut ctx = ExecutionContext::new();
     let provider: Arc<dyn TableProvider> =
-        Arc::new(StatisticsValidation::new(stats, schema));
+        Arc::new(StatisticsValidation::new(stats, Arc::new(schema)));
     ctx.register_table("stats_table", provider)?;
     Ok(ctx)
 }

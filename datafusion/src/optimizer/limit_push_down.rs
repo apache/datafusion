@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 /// Optimization rule that tries pushes down LIMIT n
 /// where applicable to reduce the amount of scanned / processed data
+#[derive(Default)]
 pub struct LimitPushDown {}
 
 impl LimitPushDown {

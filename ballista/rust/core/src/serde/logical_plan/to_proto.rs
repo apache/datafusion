@@ -24,7 +24,7 @@ use crate::serde::protobuf::integer_type::IntegerTypeEnum;
 use crate::serde::{byte_to_string, protobuf, BallistaError};
 use arrow::datatypes::{IntegerType, UnionMode};
 use datafusion::arrow::datatypes::{
-    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit,
+    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
 use datafusion::datasource::file_format::avro::AvroFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
@@ -291,12 +291,19 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                     .map(|field| field.into())
                     .collect::<Vec<_>>(),
             }),
-            DataType::Union(union_types, _, _) => ArrowTypeEnum::Union(protobuf::Union {
-                union_types: union_types
-                    .iter()
-                    .map(|field| field.into())
-                    .collect::<Vec<_>>(),
-            }),
+            DataType::Union(union_types, _, union_mode) => {
+                let union_mode = match union_mode {
+                    UnionMode::Sparse => protobuf::UnionMode::Sparse,
+                    UnionMode::Dense => protobuf::UnionMode::Dense,
+                };
+                ArrowTypeEnum::Union(protobuf::Union {
+                    union_types: union_types
+                        .iter()
+                        .map(|field| field.into())
+                        .collect::<Vec<_>>(),
+                    union_mode: union_mode.into(),
+                })
+            }
             DataType::Dictionary(key_type, value_type, _) => {
                 ArrowTypeEnum::Dictionary(Box::new(protobuf::Dictionary {
                     key: Some(key_type.into()),
@@ -445,6 +452,7 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             | DataType::Struct(_)
             | DataType::Union(_, _, _)
             | DataType::Dictionary(_, _, _)
+            | DataType::Map(_, _)
             | DataType::Decimal(_, _) => {
                 return Err(proto_error(format!(
                     "Error converting to Datatype to scalar type, {:?} is invalid as a datafusion scalar.",
@@ -611,6 +619,51 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
             datafusion::scalar::ScalarValue::TimestampNanosecond(val, _) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeNanosecond, |s| {
                     Value::TimeNanosecondValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::Decimal128(val, p, s) => {
+                match *val {
+                    Some(v) => {
+                        let array = v.to_be_bytes();
+                        let vec_val: Vec<u8> = array.to_vec();
+                        protobuf::ScalarValue {
+                            value: Some(Value::Decimal128Value(protobuf::Decimal128 {
+                                value: vec_val,
+                                p: *p as i64,
+                                s: *s as i64,
+                            })),
+                        }
+                    }
+                    None => {
+                        protobuf::ScalarValue {
+                            value: Some(protobuf::scalar_value::Value::NullValue(PrimitiveScalarType::Decimal128 as i32))
+                        }
+                    }
+                }
+            }
+            datafusion::scalar::ScalarValue::Date64(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::Date64, |s| {
+                    Value::Date64Value(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::TimestampSecond(val, _) => {
+                create_proto_scalar(val, PrimitiveScalarType::TimeSecond, |s| {
+                    Value::TimeSecondValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::TimestampMillisecond(val, _) => {
+                create_proto_scalar(val, PrimitiveScalarType::TimeMillisecond, |s| {
+                    Value::TimeMillisecondValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::IntervalYearMonth(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::IntervalYearmonth, |s| {
+                    Value::IntervalYearmonthValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::IntervalDayTime(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::IntervalDaytime, |s| {
+                    Value::IntervalDaytimeValue(*s)
                 })
             }
             _ => {
@@ -876,8 +929,8 @@ impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
                             partition_count: *partition_count as u64,
                         })
                     }
-                    Partitioning::RoundRobinBatch(batch_size) => {
-                        PartitionMethod::RoundRobin(*batch_size as u64)
+                    Partitioning::RoundRobinBatch(partition_count) => {
+                        PartitionMethod::RoundRobin(*partition_count as u64)
                     }
                 };
 
@@ -1089,9 +1142,18 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::VariancePop => {
                         protobuf::AggregateFunction::VariancePop
                     }
+                    AggregateFunction::Covariance => {
+                        protobuf::AggregateFunction::Covariance
+                    }
+                    AggregateFunction::CovariancePop => {
+                        protobuf::AggregateFunction::CovariancePop
+                    }
                     AggregateFunction::Stddev => protobuf::AggregateFunction::Stddev,
                     AggregateFunction::StddevPop => {
                         protobuf::AggregateFunction::StddevPop
+                    }
+                    AggregateFunction::Correlation => {
+                        protobuf::AggregateFunction::Correlation
                     }
                 };
 
@@ -1325,8 +1387,11 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::ArrayAgg => Self::ArrayAgg,
             AggregateFunction::Variance => Self::Variance,
             AggregateFunction::VariancePop => Self::VariancePop,
+            AggregateFunction::Covariance => Self::Covariance,
+            AggregateFunction::CovariancePop => Self::CovariancePop,
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
+            AggregateFunction::Correlation => Self::Correlation,
         }
     }
 }

@@ -264,6 +264,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
 
     // register tables
     for table in TABLES {
@@ -278,7 +279,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
             let start = Instant::now();
 
             let memtable =
-                MemTable::load(table_provider, opt.batch_size, Some(opt.partitions))
+                MemTable::load(table_provider, Some(opt.partitions), runtime.clone())
                     .await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
@@ -545,7 +546,8 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let result = collect(physical_plan.clone()).await?;
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let result = collect(physical_plan.clone(), runtime).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",

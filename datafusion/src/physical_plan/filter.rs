@@ -35,9 +35,10 @@ use arrow::array::{Array, BooleanArray};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 
+use arrow::compute::boolean::{and, is_not_null};
 use async_trait::async_trait;
 
-use arrow::compute::boolean::{and, is_not_null};
+use crate::execution::runtime_env::RuntimeEnv;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -119,13 +120,17 @@ impl ExecutionPlan for FilterExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema().clone(),
             predicate: self.predicate.clone(),
-            input: self.input.execute(partition).await?,
+            input: self.input.execute(partition, runtime).await?,
             baseline_metrics,
         }))
     }
@@ -172,7 +177,7 @@ fn batch_filter(
     predicate
         .evaluate(batch)
         .map(|v| v.into_array(batch.num_rows()))
-        .map_err(DataFusionError::into_arrow_external_error)
+        .map_err(DataFusionError::into)
         .and_then(|array| {
             array
                 .as_any()
@@ -181,7 +186,7 @@ fn batch_filter(
                     DataFusionError::Internal(
                         "Filter predicate evaluated to non-boolean value".to_string(),
                     )
-                    .into_arrow_external_error()
+                    .into()
                 })
                 // apply filter array to record batch
                 .and_then(|filter_array| {
@@ -229,7 +234,7 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::*;
-    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
     use crate::scalar::ScalarValue;
     use crate::test;
@@ -239,6 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
@@ -246,13 +252,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -280,7 +285,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, Arc::new(csv))?);
 
-        let results = collect(filter).await?;
+        let results = collect(filter, runtime).await?;
 
         results
             .iter()

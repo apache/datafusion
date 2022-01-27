@@ -30,7 +30,7 @@ use datafusion::field_util::FieldExt;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::sort::SortExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{cross_join::CrossJoinExec, ColumnStatistics};
 use datafusion::physical_plan::{
     expressions::{
@@ -44,7 +44,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::physical_plan::{file_format::AvroExec, filter::FilterExec};
 use datafusion::physical_plan::{
-    file_format::PhysicalPlanConfig, hash_aggregate::AggregateMode,
+    file_format::FileScanConfig, hash_aggregate::AggregateMode,
 };
 use datafusion::{
     datasource::PartitionedFile, physical_plan::coalesce_batches::CoalesceBatchesExec,
@@ -678,10 +678,10 @@ impl From<&Statistics> for protobuf::Statistics {
     }
 }
 
-impl TryFrom<&PhysicalPlanConfig> for protobuf::FileScanExecConf {
+impl TryFrom<&FileScanConfig> for protobuf::FileScanExecConf {
     type Error = BallistaError;
     fn try_from(
-        conf: &PhysicalPlanConfig,
+        conf: &FileScanConfig,
     ) -> Result<protobuf::FileScanExecConf, Self::Error> {
         let file_groups = conf
             .file_groups
@@ -701,7 +701,6 @@ impl TryFrom<&PhysicalPlanConfig> for protobuf::FileScanExecConf {
                 .map(|n| *n as u32)
                 .collect(),
             schema: Some(conf.file_schema.as_ref().into()),
-            batch_size: conf.batch_size as u32,
             table_partition_cols: conf.table_partition_cols.to_vec(),
         })
     }

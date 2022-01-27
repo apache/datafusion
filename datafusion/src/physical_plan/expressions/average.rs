@@ -168,34 +168,11 @@ impl Accumulator for AvgAccumulator {
         Ok(vec![ScalarValue::from(self.count), self.sum.clone()])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let values = &values[0];
-
-        self.count += (!values.is_null()) as u64;
-        self.sum = sum::sum(&self.sum, values)?;
-
-        Ok(())
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
 
         self.count += (values.len() - values.null_count()) as u64;
         self.sum = sum::sum(&self.sum, &sum::sum_batch(values)?)?;
-        Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count = &states[0];
-        // counts are summed
-        if let ScalarValue::UInt64(Some(c)) = count {
-            self.count += c
-        } else {
-            unreachable!()
-        };
-
-        // sums are summed
-        self.sum = sum::sum(&self.sum, &states[1])?;
         Ok(())
     }
 

@@ -17,6 +17,7 @@
 
 //! Metrics for recording information about execution
 
+mod aggregated;
 mod baseline;
 mod builder;
 mod value;
@@ -30,9 +31,10 @@ use std::{
 use hashbrown::HashMap;
 
 // public exports
+pub use aggregated::AggregatedMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
@@ -76,7 +78,7 @@ pub struct Metric {
 }
 
 impl Display for Metric {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.value.name())?;
 
         let mut iter = self
@@ -191,6 +193,20 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
+    /// convenience: return the count of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spill_count(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpillCount(_)))
+            .map(|v| v.as_usize())
+    }
+
+    /// convenience: return the total byte size of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spilled_bytes(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpilledBytes(_)))
+            .map(|v| v.as_usize())
+    }
+
     /// convenience: return the amount of elapsed CPU time spent,
     /// aggregated across partitions or None if no metric is present
     pub fn elapsed_compute(&self) -> Option<usize> {
@@ -282,7 +298,7 @@ impl MetricsSet {
 
 impl Display for MetricsSet {
     /// format the MetricsSet as a single string
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut is_first = true;
         for i in self.metrics.iter() {
             if !is_first {
@@ -363,7 +379,7 @@ impl Label {
 }
 
 impl Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}={}", self.name, self.value)
     }
 }

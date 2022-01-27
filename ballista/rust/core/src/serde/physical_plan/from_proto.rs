@@ -41,18 +41,20 @@ use datafusion::datasource::PartitionedFile;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::{
     window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
 };
 use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::file_format::{
-    AvroExec, CsvExec, ParquetExec, PhysicalPlanConfig,
+    AvroExec, CsvExec, FileScanConfig, ParquetExec,
 };
 use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::PartitionMode;
 use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
+use datafusion::physical_plan::sorts::sort::{SortExec, SortOptions};
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
@@ -71,7 +73,6 @@ use datafusion::physical_plan::{
     limit::{GlobalLimitExec, LocalLimitExec},
     projection::ProjectionExec,
     repartition::RepartitionExec,
-    sort::{SortExec, SortOptions},
     Partitioning,
 };
 use datafusion::physical_plan::{
@@ -624,6 +625,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
                     object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+                    runtime_env: Arc::new(RuntimeEnv::default()),
                 };
 
                 let fun_expr = functions::create_physical_fun(
@@ -766,10 +768,10 @@ impl TryInto<Statistics> for &protobuf::Statistics {
     }
 }
 
-impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
+impl TryInto<FileScanConfig> for &protobuf::FileScanExecConf {
     type Error = BallistaError;
 
-    fn try_into(self) -> Result<PhysicalPlanConfig, Self::Error> {
+    fn try_into(self) -> Result<FileScanConfig, Self::Error> {
         let schema = Arc::new(convert_required!(self.schema)?);
         let projection = self
             .projection
@@ -783,7 +785,7 @@ impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
         };
         let statistics = convert_required!(self.statistics)?;
 
-        Ok(PhysicalPlanConfig {
+        Ok(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_schema: schema,
             file_groups: self
@@ -793,7 +795,6 @@ impl TryInto<PhysicalPlanConfig> for &protobuf::FileScanExecConf {
                 .collect::<Result<Vec<_>, _>>()?,
             statistics,
             projection,
-            batch_size: self.batch_size as usize,
             limit: self.limit.as_ref().map(|sl| sl.limit as usize),
             table_partition_cols: vec![],
         })

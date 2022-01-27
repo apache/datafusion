@@ -41,7 +41,8 @@ async fn explain_analyze_baseline_metrics() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let results = collect(physical_plan.clone()).await.unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(physical_plan.clone(), runtime).await.unwrap();
     let formatted = print::write(&results);
     println!("Query Output:\n\n{}", formatted);
 
@@ -103,8 +104,9 @@ async fn explain_analyze_baseline_metrics() {
 
     fn expected_to_have_metrics(plan: &dyn ExecutionPlan) -> bool {
         use datafusion::physical_plan;
+        use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<physical_plan::sort::SortExec>().is_some()
+        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
             // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
@@ -325,7 +327,8 @@ async fn csv_explain_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let results = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -522,7 +525,8 @@ async fn csv_explain_verbose_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let results = collect(plan).await.expect(&msg);
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -648,7 +652,7 @@ async fn test_physical_plan_display_indent() {
         "                CoalesceBatchesExec: target_batch_size=4096",
         "                  FilterExec: c12@1 < CAST(10 AS Float64)",
         "                    RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None",
+        "                      CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
     ];
 
     let data_path = datafusion::test_util::arrow_test_data();
@@ -693,13 +697,13 @@ async fn test_physical_plan_display_indent_multi_children() {
         "          ProjectionExec: expr=[c1@0 as c1]",
         "            ProjectionExec: expr=[c1@0 as c1]",
         "              RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
         "          ProjectionExec: expr=[c2@0 as c2]",
         "            ProjectionExec: expr=[c1@0 as c2]",
         "              RepartitionExec: partitioning=RoundRobinBatch(3)",
-        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
     ];
 
     let data_path = datafusion::test_util::arrow_test_data();
@@ -741,7 +745,7 @@ async fn csv_explain() {
               \n  CoalesceBatchesExec: target_batch_size=4096\
               \n    FilterExec: CAST(c2@1 AS Int64) > 10\
               \n      RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, batch_size=8192, limit=None\
+              \n        CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None\
               \n"
         ]];
     assert_eq!(expected, actual);

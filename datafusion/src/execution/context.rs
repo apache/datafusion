@@ -39,7 +39,6 @@ use crate::{
     },
 };
 use log::debug;
-use std::fs;
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
@@ -47,6 +46,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
 };
+use std::{fs, path::PathBuf};
 
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
@@ -82,6 +82,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::plan::Explain;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
@@ -98,7 +99,12 @@ use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use super::options::{AvroReadOptions, CsvReadOptions};
+use super::{
+    disk_manager::DiskManagerConfig,
+    memory_manager::MemoryManagerConfig,
+    options::{AvroReadOptions, CsvReadOptions},
+    DiskManager, MemoryManager,
+};
 
 /// ExecutionContext is the main interface for executing queries with DataFusion. The context
 /// provides the following functionality:
@@ -146,6 +152,12 @@ pub struct ExecutionContext {
     pub state: Arc<Mutex<ExecutionContextState>>,
 }
 
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExecutionContext {
     /// Creates a new execution context using a default configuration.
     pub fn new() -> Self {
@@ -177,6 +189,8 @@ impl ExecutionContext {
                 .register_catalog(config.default_catalog.clone(), default_catalog);
         }
 
+        let runtime_env = Arc::new(RuntimeEnv::new(config.runtime.clone()).unwrap());
+
         Self {
             state: Arc::new(Mutex::new(ExecutionContextState {
                 catalog_list,
@@ -186,8 +200,14 @@ impl ExecutionContext {
                 config,
                 execution_props: ExecutionProps::new(),
                 object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+                runtime_env,
             })),
         }
+    }
+
+    /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
+    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
+        self.state.lock().unwrap().runtime_env.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -571,6 +591,7 @@ impl ExecutionContext {
             .unwrap()
             .object_store_registry
             .get_by_uri(uri)
+            .map_err(DataFusionError::from)
     }
 
     /// Registers a table using a custom `TableProvider` so that
@@ -712,6 +733,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the CSV files (one per partition)
         let fs_path = Path::new(path);
+        let runtime = self.runtime_env();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -732,7 +754,7 @@ impl ExecutionContext {
 
                     let options = csv::write::SerializeOptions::default();
 
-                    let stream = plan.execute(i).await?;
+                    let stream = plan.execute(i, runtime.clone()).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
                             .map(|batch| {
@@ -768,6 +790,7 @@ impl ExecutionContext {
         let path = path.as_ref();
         // create directory to contain the Parquet files (one per partition)
         let fs_path = Path::new(path);
+        let runtime = self.runtime_env();
         match fs::create_dir(fs_path) {
             Ok(()) => {
                 let mut tasks = vec![];
@@ -778,7 +801,7 @@ impl ExecutionContext {
                     let path = fs_path.join(&filename);
 
                     let mut file = fs::File::create(path)?;
-                    let stream = plan.execute(i).await?;
+                    let stream = plan.execute(i, runtime.clone()).await?;
 
                     let handle: JoinHandle<Result<u64>> = task::spawn(async move {
                         let parquet_schema = parquet::write::to_parquet_schema(&schema)?;
@@ -923,8 +946,6 @@ impl QueryPlanner for DefaultQueryPlanner {
 pub struct ExecutionConfig {
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
-    /// Default batch size when reading data sources
-    pub batch_size: usize,
     /// Responsible for optimizing a logical plan
     optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     /// Responsible for optimizing a physical execution plan
@@ -951,13 +972,14 @@ pub struct ExecutionConfig {
     pub repartition_windows: bool,
     /// Should Datafusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
+    /// Runtime configurations such as memory threshold and local disk for spill
+    pub runtime: RuntimeConfig,
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             target_partitions: num_cpus::get(),
-            batch_size: 8192,
             optimizers: vec![
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
@@ -985,6 +1007,7 @@ impl Default for ExecutionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
+            runtime: RuntimeConfig::default(),
         }
     }
 }
@@ -1007,7 +1030,7 @@ impl ExecutionConfig {
     pub fn with_batch_size(mut self, n: usize) -> Self {
         // batch size must be greater than zero
         assert!(n > 0);
-        self.batch_size = n;
+        self.runtime.batch_size = n;
         self
     }
 
@@ -1102,6 +1125,54 @@ impl ExecutionConfig {
         self.parquet_pruning = enabled;
         self
     }
+
+    /// Customize runtime config
+    pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
+        self.runtime = config;
+        self
+    }
+
+    /// Use an an existing [MemoryManager]
+    pub fn with_existing_memory_manager(mut self, existing: Arc<MemoryManager>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_memory_manager(MemoryManagerConfig::new_existing(existing));
+        self
+    }
+
+    /// Specify the total memory to use while running the DataFusion
+    /// plan to `max_memory * memory_fraction` in bytes.
+    ///
+    /// Note DataFusion does not yet respect this limit in all cases.
+    pub fn with_memory_limit(
+        mut self,
+        max_memory: usize,
+        memory_fraction: f64,
+    ) -> Result<Self> {
+        self.runtime =
+            self.runtime
+                .with_memory_manager(MemoryManagerConfig::try_new_limit(
+                    max_memory,
+                    memory_fraction,
+                )?);
+        Ok(self)
+    }
+
+    /// Use an an existing [DiskManager]
+    pub fn with_existing_disk_manager(mut self, existing: Arc<DiskManager>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_disk_manager(DiskManagerConfig::new_existing(existing));
+        self
+    }
+
+    /// Use the specified path to create any needed temporary files
+    pub fn with_temp_file_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.runtime = self
+            .runtime
+            .with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]));
+        self
+    }
 }
 
 /// Holds per-execution properties and data (such as starting timestamps, etc).
@@ -1111,6 +1182,27 @@ impl ExecutionConfig {
 #[derive(Clone)]
 pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
+}
+
+impl Default for ExecutionProps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ExecutionProps {
+    /// Creates a new execution props
+    pub fn new() -> Self {
+        ExecutionProps {
+            query_execution_start_time: chrono::Utc::now(),
+        }
+    }
+
+    /// Marks the execution of query started timestamp
+    pub fn start_execution(&mut self) -> &Self {
+        self.query_execution_start_time = chrono::Utc::now();
+        &*self
+    }
 }
 
 /// Execution context for registering data sources and executing queries
@@ -1130,20 +1222,13 @@ pub struct ExecutionContextState {
     pub execution_props: ExecutionProps,
     /// Object Store that are registered with the context
     pub object_store_registry: Arc<ObjectStoreRegistry>,
+    /// Runtime environment
+    pub runtime_env: Arc<RuntimeEnv>,
 }
 
-impl ExecutionProps {
-    /// Creates a new execution props
-    pub fn new() -> Self {
-        ExecutionProps {
-            query_execution_start_time: chrono::Utc::now(),
-        }
-    }
-
-    /// Marks the execution of query started timestamp
-    pub fn start_execution(&mut self) -> &Self {
-        self.query_execution_start_time = chrono::Utc::now();
-        &*self
+impl Default for ExecutionContextState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -1158,6 +1243,7 @@ impl ExecutionContextState {
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),
             object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            runtime_env: Arc::new(RuntimeEnv::default()),
         }
     }
 
@@ -1276,6 +1362,40 @@ mod tests {
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
     use test::*;
+
+    #[tokio::test]
+    async fn shared_memory_and_disk_manager() {
+        // Demonstrate the ability to share DiskManager and
+        // MemoryManager between two different executions.
+        let ctx1 = ExecutionContext::new();
+
+        // configure with same memory / disk manager
+        let memory_manager = ctx1.runtime_env().memory_manager.clone();
+        let disk_manager = ctx1.runtime_env().disk_manager.clone();
+        let config = ExecutionConfig::new()
+            .with_existing_memory_manager(memory_manager.clone())
+            .with_existing_disk_manager(disk_manager.clone());
+
+        let ctx2 = ExecutionContext::with_config(config);
+
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&memory_manager),
+            Arc::as_ptr(&ctx1.runtime_env().memory_manager)
+        ));
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&memory_manager),
+            Arc::as_ptr(&ctx2.runtime_env().memory_manager)
+        ));
+
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&disk_manager),
+            Arc::as_ptr(&ctx1.runtime_env().disk_manager)
+        ));
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&disk_manager),
+            Arc::as_ptr(&ctx2.runtime_env().disk_manager)
+        ));
+    }
 
     #[test]
     fn optimize_explain() {
@@ -1427,7 +1547,8 @@ mod tests {
 
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
 
-        let results = collect_partitioned(physical_plan).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let results = collect_partitioned(physical_plan, runtime).await?;
 
         // note that the order of partitions is not deterministic
         let mut num_rows = 0;
@@ -1475,6 +1596,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
 
         let table = ctx.table("test")?;
         let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
@@ -1506,7 +1628,7 @@ mod tests {
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("c2", physical_plan.schema().field(0).name());
 
-        let batches = collect(physical_plan).await?;
+        let batches = collect(physical_plan, runtime).await?;
         assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
 
         Ok(())
@@ -1582,7 +1704,8 @@ mod tests {
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("b", physical_plan.schema().field(0).name());
 
-        let batches = collect(physical_plan).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let batches = collect(physical_plan, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(4, batches[0].num_rows());
@@ -3357,7 +3480,8 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
-        let result = collect(plan).await?;
+        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let result = collect(plan, runtime).await?;
 
         let expected = vec![
             "+-----+-----+-----------------+",
@@ -3644,7 +3768,6 @@ mod tests {
             async fn scan(
                 &self,
                 _: &Option<Vec<usize>>,
-                _: usize,
                 _: &[Expr],
                 _: Option<usize>,
             ) -> Result<Arc<dyn ExecutionPlan>> {

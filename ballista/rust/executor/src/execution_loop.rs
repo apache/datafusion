@@ -26,12 +26,11 @@ use tonic::transport::Channel;
 
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::serde::protobuf::{
-    self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
-    PartitionId, PollWorkParams, PollWorkResult, ShuffleWritePartition, TaskDefinition,
-    TaskStatus,
+    scheduler_grpc_client::SchedulerGrpcClient, PollWorkParams, PollWorkResult,
+    TaskDefinition, TaskStatus,
 };
-use protobuf::CompletedTask;
 
+use crate::as_task_status;
 use crate::executor::Executor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
@@ -142,37 +141,6 @@ async fn run_received_tasks(
     });
 
     Ok(())
-}
-
-fn as_task_status(
-    execution_result: ballista_core::error::Result<Vec<ShuffleWritePartition>>,
-    executor_id: String,
-    task_id: PartitionId,
-) -> TaskStatus {
-    match execution_result {
-        Ok(partitions) => {
-            info!("Task {:?} finished", task_id);
-
-            TaskStatus {
-                partition_id: Some(task_id),
-                status: Some(task_status::Status::Completed(CompletedTask {
-                    executor_id,
-                    partitions,
-                })),
-            }
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            info!("Task {:?} failed: {}", task_id, error_msg);
-
-            TaskStatus {
-                partition_id: Some(task_id),
-                status: Some(task_status::Status::Failed(FailedTask {
-                    error: format!("Task failed due to Tokio error: {}", error_msg),
-                })),
-            }
-        }
-    }
 }
 
 async fn sample_tasks_status(

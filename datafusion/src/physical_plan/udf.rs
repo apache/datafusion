@@ -54,7 +54,7 @@ pub struct ScalarUDF {
 }
 
 impl Debug for ScalarUDF {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ScalarUDF")
             .field("name", &self.name)
             .field("signature", &self.signature)

@@ -54,7 +54,8 @@ async fn parquet_single_nan_schema() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let results = collect(plan).await.unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -90,7 +91,8 @@ async fn parquet_list_columns() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let results = collect(plan).await.unwrap();
+    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let results = collect(plan, runtime).await.unwrap();
 
     //   int64_list              utf8_list
     // 0  [1, 2, 3]        [abc, efg, hij]

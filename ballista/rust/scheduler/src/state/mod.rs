@@ -31,7 +31,7 @@ use ballista_core::serde::protobuf::{
     ExecutorMetadata, FailedJob, FailedTask, JobStatus, PhysicalPlanNode, RunningJob,
     RunningTask, TaskStatus,
 };
-use ballista_core::serde::scheduler::PartitionStats;
+use ballista_core::serde::scheduler::{ExecutorData, PartitionStats};
 use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
 use ballista_core::{error::Result, execution_plans::UnresolvedShuffleExec};
 
@@ -118,6 +118,13 @@ impl SchedulerState {
         Ok(result)
     }
 
+    pub async fn get_alive_executors_metadata_within_one_minute(
+        &self,
+    ) -> Result<Vec<ExecutorMeta>> {
+        self.get_alive_executors_metadata(Duration::from_secs(60))
+            .await
+    }
+
     pub async fn get_alive_executors_metadata(
         &self,
         last_seen_threshold: Duration,
@@ -133,6 +140,14 @@ impl SchedulerState {
     }
 
     pub async fn save_executor_metadata(&self, meta: ExecutorMeta) -> Result<()> {
+        self.save_executor_state(meta, None).await
+    }
+
+    pub async fn save_executor_state(
+        &self,
+        meta: ExecutorMeta,
+        state: Option<protobuf::ExecutorState>,
+    ) -> Result<()> {
         let key = get_executor_key(&self.namespace, &meta.id);
         let meta: ExecutorMetadata = meta.into();
         let timestamp = SystemTime::now()
@@ -142,9 +157,55 @@ impl SchedulerState {
         let heartbeat = ExecutorHeartbeat {
             meta: Some(meta),
             timestamp,
+            state,
         };
         let value: Vec<u8> = encode_protobuf(&heartbeat)?;
         self.config_client.put(key, value).await
+    }
+
+    pub async fn save_executor_data(&self, executor_data: ExecutorData) -> Result<()> {
+        let key = get_executor_data_key(&self.namespace, &executor_data.executor_id);
+        let executor_data: protobuf::ExecutorData = executor_data.into();
+        let value: Vec<u8> = encode_protobuf(&executor_data)?;
+        self.config_client.put(key, value).await
+    }
+
+    pub async fn get_executors_data(&self) -> Result<Vec<ExecutorData>> {
+        let mut result = vec![];
+
+        let entries = self
+            .config_client
+            .get_from_prefix(&get_executors_data_prefix(&self.namespace))
+            .await?;
+        for (_key, entry) in entries {
+            let executor_data: protobuf::ExecutorData = decode_protobuf(&entry)?;
+            result.push(executor_data.into());
+        }
+        Ok(result)
+    }
+
+    pub async fn get_available_executors_data(&self) -> Result<Vec<ExecutorData>> {
+        let mut res = self
+            .get_executors_data()
+            .await?
+            .into_iter()
+            .filter_map(|exec| (exec.available_task_slots > 0).then(|| exec))
+            .collect::<Vec<ExecutorData>>();
+        res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
+        Ok(res)
+    }
+
+    pub async fn get_executor_data(&self, executor_id: &str) -> Result<ExecutorData> {
+        let key = get_executor_data_key(&self.namespace, executor_id);
+        let value = &self.config_client.get(&key).await?;
+        if value.is_empty() {
+            return Err(BallistaError::General(format!(
+                "No executor data found for {}",
+                key
+            )));
+        }
+        let value: protobuf::ExecutorData = decode_protobuf(value)?;
+        Ok(value.into())
     }
 
     pub async fn save_job_metadata(
@@ -233,6 +294,18 @@ impl SchedulerState {
         Ok((&value).try_into()?)
     }
 
+    pub async fn get_job_tasks(
+        &self,
+        job_id: &str,
+    ) -> Result<HashMap<String, TaskStatus>> {
+        self.config_client
+            .get_from_prefix(&get_task_prefix_for_job(&self.namespace, job_id))
+            .await?
+            .into_iter()
+            .map(|(key, bytes)| Ok((key, decode_protobuf(&bytes)?)))
+            .collect()
+    }
+
     pub async fn get_all_tasks(&self) -> Result<HashMap<String, TaskStatus>> {
         self.config_client
             .get_from_prefix(&get_task_prefix(&self.namespace))
@@ -281,6 +354,42 @@ impl SchedulerState {
         executor_id: &str,
     ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         let tasks = self.get_all_tasks().await?;
+        self.assign_next_schedulable_task_inner(executor_id, tasks)
+            .await
+    }
+
+    pub async fn assign_next_schedulable_job_task(
+        &self,
+        executor_id: &str,
+        job_id: &str,
+    ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
+        let job_tasks = self.get_job_tasks(job_id).await?;
+        self.assign_next_schedulable_task_inner(executor_id, job_tasks)
+            .await
+    }
+
+    async fn assign_next_schedulable_task_inner(
+        &self,
+        executor_id: &str,
+        tasks: HashMap<String, TaskStatus>,
+    ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
+        match self.get_next_schedulable_task(tasks).await? {
+            Some((status, plan)) => {
+                let mut status = status.clone();
+                status.status = Some(task_status::Status::Running(RunningTask {
+                    executor_id: executor_id.to_owned(),
+                }));
+                self.save_task_status(&status).await?;
+                Ok(Some((status, plan)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn get_next_schedulable_task(
+        &self,
+        tasks: HashMap<String, TaskStatus>,
+    ) -> Result<Option<(TaskStatus, Arc<dyn ExecutionPlan>)>> {
         // TODO: Make the duration a configurable parameter
         let executors = self
             .get_alive_executors_metadata(Duration::from_secs(60))
@@ -320,34 +429,36 @@ impl SchedulerState {
                             .await?;
                         if task_is_dead {
                             continue 'tasks;
-                        } else if let Some(task_status::Status::Completed(
-                            CompletedTask {
+                        }
+                        match &referenced_task.status {
+                            Some(task_status::Status::Completed(CompletedTask {
                                 executor_id,
                                 partitions,
-                            },
-                        )) = &referenced_task.status
-                        {
-                            debug!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{}",
-                                shuffle_input_partition_id,
-                                partitions.iter().map(|p| format!("{}={}", p.partition_id, &p.path)).collect::<Vec<_>>().join("\n\t")
-                            );
-                            let stage_shuffle_partition_locations = partition_locations
-                                .entry(unresolved_shuffle.stage_id)
-                                .or_insert_with(HashMap::new);
-                            let executor_meta = executors
-                                .iter()
-                                .find(|exec| exec.id == *executor_id)
-                                .unwrap()
-                                .clone();
+                            })) => {
+                                debug!("Task for unresolved shuffle input partition {} completed and produced these shuffle partitions:\n\t{}",
+                                    shuffle_input_partition_id,
+                                    partitions.iter().map(|p| format!("{}={}", p.partition_id, &p.path)).collect::<Vec<_>>().join("\n\t")
+                                );
+                                let stage_shuffle_partition_locations =
+                                    partition_locations
+                                        .entry(unresolved_shuffle.stage_id)
+                                        .or_insert_with(HashMap::new);
+                                let executor_meta = executors
+                                    .iter()
+                                    .find(|exec| exec.id == *executor_id)
+                                    .unwrap()
+                                    .clone();
 
-                            for shuffle_write_partition in partitions {
-                                let temp = stage_shuffle_partition_locations
-                                    .entry(shuffle_write_partition.partition_id as usize)
-                                    .or_insert_with(Vec::new);
-                                let executor_meta = executor_meta.clone();
-                                let partition_location =
-                                    ballista_core::serde::scheduler::PartitionLocation {
-                                        partition_id:
+                                for shuffle_write_partition in partitions {
+                                    let temp = stage_shuffle_partition_locations
+                                        .entry(
+                                            shuffle_write_partition.partition_id as usize,
+                                        )
+                                        .or_insert_with(Vec::new);
+                                    let executor_meta = executor_meta.clone();
+                                    let partition_location =
+                                        ballista_core::serde::scheduler::PartitionLocation {
+                                            partition_id:
                                             ballista_core::serde::scheduler::PartitionId {
                                                 job_id: partition.job_id.clone(),
                                                 stage_id: unresolved_shuffle.stage_id,
@@ -355,29 +466,43 @@ impl SchedulerState {
                                                     .partition_id
                                                     as usize,
                                             },
-                                        executor_meta,
-                                        partition_stats: PartitionStats::new(
-                                            Some(shuffle_write_partition.num_rows),
-                                            Some(shuffle_write_partition.num_batches),
-                                            Some(shuffle_write_partition.num_bytes),
-                                        ),
-                                        path: shuffle_write_partition.path.clone(),
-                                    };
-                                debug!(
-                                    "Scheduler storing stage {} output partition {} path: {}",
-                                    unresolved_shuffle.stage_id,
-                                    partition_location.partition_id.partition_id,
-                                    partition_location.path
+                                            executor_meta,
+                                            partition_stats: PartitionStats::new(
+                                                Some(shuffle_write_partition.num_rows),
+                                                Some(shuffle_write_partition.num_batches),
+                                                Some(shuffle_write_partition.num_bytes),
+                                            ),
+                                            path: shuffle_write_partition.path.clone(),
+                                        };
+                                    debug!(
+                                        "Scheduler storing stage {} output partition {} path: {}",
+                                        unresolved_shuffle.stage_id,
+                                        partition_location.partition_id.partition_id,
+                                        partition_location.path
                                     );
-                                temp.push(partition_location);
+                                    temp.push(partition_location);
+                                }
                             }
-                        } else {
-                            debug!(
-                                "Stage {} input partition {} has not completed yet",
-                                unresolved_shuffle.stage_id, shuffle_input_partition_id,
-                            );
-                            continue 'tasks;
-                        }
+                            Some(task_status::Status::Failed(FailedTask { error })) => {
+                                // A task should fail when its referenced_task fails
+                                let mut status = status.clone();
+                                let err_msg = error.to_string();
+                                status.status =
+                                    Some(task_status::Status::Failed(FailedTask {
+                                        error: err_msg,
+                                    }));
+                                self.save_task_status(&status).await?;
+                                continue 'tasks;
+                            }
+                            _ => {
+                                debug!(
+                                    "Stage {} input partition {} has not completed yet",
+                                    unresolved_shuffle.stage_id,
+                                    shuffle_input_partition_id,
+                                );
+                                continue 'tasks;
+                            }
+                        };
                     }
                 }
 
@@ -385,12 +510,7 @@ impl SchedulerState {
                     remove_unresolved_shuffles(plan.as_ref(), &partition_locations)?;
 
                 // If we get here, there are no more unresolved shuffled and the task can be run
-                let mut status = status.clone();
-                status.status = Some(task_status::Status::Running(RunningTask {
-                    executor_id: executor_id.to_owned(),
-                }));
-                self.save_task_status(&status).await?;
-                return Ok(Some((status, plan)));
+                return Ok(Some((status.clone(), plan)));
             }
         }
         Ok(None)
@@ -583,6 +703,14 @@ fn get_executor_key(namespace: &str, id: &str) -> String {
     format!("{}/{}", get_executors_prefix(namespace), id)
 }
 
+fn get_executors_data_prefix(namespace: &str) -> String {
+    format!("/ballista/{}/resources/executors", namespace)
+}
+
+fn get_executor_data_key(namespace: &str, id: &str) -> String {
+    format!("{}/{}", get_executors_data_prefix(namespace), id)
+}
+
 fn get_job_prefix(namespace: &str) -> String {
     format!("/ballista/{}/jobs", namespace)
 }
@@ -670,6 +798,7 @@ mod test {
             id: "123".to_owned(),
             host: "localhost".to_owned(),
             port: 123,
+            grpc_port: 124,
         };
         state.save_executor_metadata(meta.clone()).await?;
         let result: Vec<_> = state

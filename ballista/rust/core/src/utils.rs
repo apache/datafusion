@@ -26,7 +26,6 @@ use crate::error::{BallistaError, Result};
 use crate::execution_plans::{
     DistributedQueryExec, ShuffleWriterExec, UnresolvedShuffleExec,
 };
-use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
@@ -48,12 +47,13 @@ use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
 use datafusion::field_util::SchemaExt;
-use datafusion::logical_plan::{LogicalPlan, Operator};
+use datafusion::logical_plan::{LogicalPlan, Operator, TableScan};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
 use datafusion::physical_plan::file_format::{CsvExec, ParquetExec};
@@ -61,7 +61,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::sort::SortExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{
     metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
 };
@@ -96,11 +96,7 @@ pub async fn write_stream_to_disk(
     while let Some(result) = stream.next().await {
         let batch = result?;
 
-        let batch_size_bytes: usize = batch
-            .columns()
-            .iter()
-            .map(|array| estimated_bytes_size(array.as_ref()))
-            .sum();
+        let batch_size_bytes: usize = batch_byte_size(&batch);
         num_batches += 1;
         num_rows += batch.num_rows();
         num_bytes += batch_size_bytes;
@@ -260,7 +256,8 @@ pub fn create_df_ctx_with_ballista_query_planner(
             scheduler_url,
             config.clone(),
         )))
-        .with_target_partitions(config.default_shuffle_partitions());
+        .with_target_partitions(config.default_shuffle_partitions())
+        .with_information_schema(true);
     ExecutionContext::with_config(config)
 }
 

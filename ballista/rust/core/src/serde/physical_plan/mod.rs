@@ -23,6 +23,7 @@ mod roundtrip_tests {
     use std::{convert::TryInto, sync::Arc};
 
     use datafusion::field_util::SchemaExt;
+    use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::{
         arrow::{
             compute::sort::SortOptions,
@@ -37,7 +38,6 @@ mod roundtrip_tests {
             hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
-            sort::SortExec,
             AggregateExpr, ColumnarValue, Distribution, ExecutionPlan, Partitioning,
             PhysicalExpr,
         },

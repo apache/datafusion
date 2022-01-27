@@ -103,6 +103,8 @@ pub enum ScalarValue {
     IntervalYearMonth(Option<i32>),
     /// Interval with DayTime unit
     IntervalDayTime(Option<days_ms>),
+    /// Interval with MonthDayNano unit
+    IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
     #[allow(clippy::box_collection)]
     Struct(Option<Box<Vec<ScalarValue>>>, Box<Vec<Field>>),
@@ -177,6 +179,8 @@ impl PartialEq for ScalarValue {
             (IntervalYearMonth(_), _) => false,
             (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.eq(v2),
             (IntervalDayTime(_), _) => false,
+            (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.eq(v2),
+            (IntervalMonthDayNano(_), _) => false,
             (Struct(v1, t1), Struct(v2, t2)) => v1.eq(v2) && t1.eq(t2),
             (Struct(_, _), _) => false,
         }
@@ -269,6 +273,8 @@ impl PartialOrd for ScalarValue {
             (IntervalYearMonth(_), _) => None,
             (_, IntervalDayTime(_)) => None,
             (IntervalDayTime(_), _) => None,
+            (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
+            (IntervalMonthDayNano(_), _) => None,
             (Struct(v1, t1), Struct(v2, t2)) => {
                 if t1.eq(t2) {
                     v1.partial_cmp(v2)
@@ -327,6 +333,7 @@ impl std::hash::Hash for ScalarValue {
             TimestampNanosecond(v, _) => v.hash(state),
             IntervalYearMonth(v) => v.hash(state),
             IntervalDayTime(v) => v.hash(state),
+            IntervalMonthDayNano(v) => v.hash(state),
             Struct(v, t) => {
                 v.hash(state);
                 t.hash(state);
@@ -506,320 +513,6 @@ macro_rules! eq_array_primitive {
 }
 
 impl ScalarValue {
-    /// Return true if the value is numeric
-    pub fn is_numeric(&self) -> bool {
-        matches!(
-            self,
-            ScalarValue::Float32(_)
-                | ScalarValue::Float64(_)
-                | ScalarValue::Decimal128(_, _, _)
-                | ScalarValue::Int8(_)
-                | ScalarValue::Int16(_)
-                | ScalarValue::Int32(_)
-                | ScalarValue::Int64(_)
-                | ScalarValue::UInt8(_)
-                | ScalarValue::UInt16(_)
-                | ScalarValue::UInt32(_)
-                | ScalarValue::UInt64(_)
-        )
-    }
-
-    /// Add two numeric ScalarValues
-    pub fn add(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-        if !lhs.is_numeric() || !rhs.is_numeric() {
-            return Err(DataFusionError::Internal(format!(
-                "Addition only supports numeric types, \
-                    here has  {:?} and {:?}",
-                lhs.get_datatype(),
-                rhs.get_datatype()
-            )));
-        }
-
-        if lhs.is_null() || rhs.is_null() {
-            return Err(DataFusionError::Internal(
-                "Addition does not support empty values".to_string(),
-            ));
-        }
-
-        // TODO: Finding a good way to support operation between different types without
-        // writing a hige match block.
-        // TODO: Add support for decimal types
-        match (lhs, rhs) {
-            (ScalarValue::Decimal128(_, _, _), _) |
-            (_, ScalarValue::Decimal128(_, _, _)) => {
-                Err(DataFusionError::Internal(
-                    "Addition with Decimals are not supported for now".to_string()
-                ))
-            },
-            // f64 / _
-            (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() + f2.unwrap())))
-            },
-            // f32 / _
-            (ScalarValue::Float32(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::Float32(f1), ScalarValue::Float32(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap() as f64)))
-            },
-            // i64 / _
-            (ScalarValue::Int64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::Int64(f1), ScalarValue::Int64(f2)) => {
-                Ok(ScalarValue::Int64(Some(f1.unwrap() + f2.unwrap())))
-            },
-            // i32 / _
-            (ScalarValue::Int32(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::Int32(f1), ScalarValue::Int32(f2)) => {
-                Ok(ScalarValue::Int64(Some(f1.unwrap() as i64 + f2.unwrap() as i64)))
-            },
-            // i16 / _
-            (ScalarValue::Int16(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::Int16(f1), ScalarValue::Int16(f2)) => {
-                Ok(ScalarValue::Int32(Some(f1.unwrap() as i32 + f2.unwrap() as i32)))
-            },
-            // i8 / _
-            (ScalarValue::Int8(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::Int8(f1), ScalarValue::Int8(f2)) => {
-                Ok(ScalarValue::Int16(Some(f1.unwrap() as i16 + f2.unwrap() as i16)))
-            },
-            // u64 / _
-            (ScalarValue::UInt64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::UInt64(f1), ScalarValue::UInt64(f2)) => {
-                Ok(ScalarValue::UInt64(Some(f1.unwrap() as u64 + f2.unwrap() as u64)))
-            },
-            // u32 / _
-            (ScalarValue::UInt32(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::UInt32(f1), ScalarValue::UInt32(f2)) => {
-                Ok(ScalarValue::UInt64(Some(f1.unwrap() as u64 + f2.unwrap() as u64)))
-            },
-            // u16 / _
-            (ScalarValue::UInt16(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::UInt16(f1), ScalarValue::UInt16(f2)) => {
-                Ok(ScalarValue::UInt32(Some(f1.unwrap() as u32 + f2.unwrap() as u32)))
-            },
-            // u8 / _
-            (ScalarValue::UInt8(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 + f2.unwrap())))
-            },
-            (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => {
-                Ok(ScalarValue::UInt16(Some(f1.unwrap() as u16 + f2.unwrap() as u16)))
-            },
-            _ => Err(DataFusionError::Internal(
-                format!(
-                "Addition only support calculation with the same type or f64 as one of the numbers for now, here has {:?} and {:?}",
-                lhs.get_datatype(), rhs.get_datatype()
-            ))),
-        }
-    }
-
-    /// Multiply two numeric ScalarValues
-    pub fn mul(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-        if !lhs.is_numeric() || !rhs.is_numeric() {
-            return Err(DataFusionError::Internal(format!(
-                "Multiplication is only supported on numeric types, \
-                    here has  {:?} and {:?}",
-                lhs.get_datatype(),
-                rhs.get_datatype()
-            )));
-        }
-
-        if lhs.is_null() || rhs.is_null() {
-            return Err(DataFusionError::Internal(
-                "Multiplication does not support empty values".to_string(),
-            ));
-        }
-
-        // TODO: Finding a good way to support operation between different types without
-        // writing a hige match block.
-        // TODO: Add support for decimal type
-        match (lhs, rhs) {
-            (ScalarValue::Decimal128(_, _, _), _)
-            | (_, ScalarValue::Decimal128(_, _, _)) => Err(DataFusionError::Internal(
-                "Multiplication with Decimals are not supported for now".to_string(),
-            )),
-            // f64 / _
-            (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() * f2.unwrap())))
-            }
-            // f32 / _
-            (ScalarValue::Float32(f1), ScalarValue::Float32(f2)) => Ok(
-                ScalarValue::Float64(Some(f1.unwrap() as f64 * f2.unwrap() as f64)),
-            ),
-            // i64 / _
-            (ScalarValue::Int64(f1), ScalarValue::Int64(f2)) => {
-                Ok(ScalarValue::Int64(Some(f1.unwrap() * f2.unwrap())))
-            }
-            // i32 / _
-            (ScalarValue::Int32(f1), ScalarValue::Int32(f2)) => Ok(ScalarValue::Int64(
-                Some(f1.unwrap() as i64 * f2.unwrap() as i64),
-            )),
-            // i16 / _
-            (ScalarValue::Int16(f1), ScalarValue::Int16(f2)) => Ok(ScalarValue::Int32(
-                Some(f1.unwrap() as i32 * f2.unwrap() as i32),
-            )),
-            // i8 / _
-            (ScalarValue::Int8(f1), ScalarValue::Int8(f2)) => Ok(ScalarValue::Int16(
-                Some(f1.unwrap() as i16 * f2.unwrap() as i16),
-            )),
-            // u64 / _
-            (ScalarValue::UInt64(f1), ScalarValue::UInt64(f2)) => Ok(
-                ScalarValue::UInt64(Some(f1.unwrap() as u64 * f2.unwrap() as u64)),
-            ),
-            // u32 / _
-            (ScalarValue::UInt32(f1), ScalarValue::UInt32(f2)) => Ok(
-                ScalarValue::UInt64(Some(f1.unwrap() as u64 * f2.unwrap() as u64)),
-            ),
-            // u16 / _
-            (ScalarValue::UInt16(f1), ScalarValue::UInt16(f2)) => Ok(
-                ScalarValue::UInt32(Some(f1.unwrap() as u32 * f2.unwrap() as u32)),
-            ),
-            // u8 / _
-            (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => Ok(ScalarValue::UInt16(
-                Some(f1.unwrap() as u16 * f2.unwrap() as u16),
-            )),
-            _ => Err(DataFusionError::Internal(format!(
-                "Multiplication only support f64 for now, here has {:?} and {:?}",
-                lhs.get_datatype(),
-                rhs.get_datatype()
-            ))),
-        }
-    }
-
-    /// Division between two numeric ScalarValues
-    pub fn div(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-        if !lhs.is_numeric() || !rhs.is_numeric() {
-            return Err(DataFusionError::Internal(format!(
-                "Division is only supported on numeric types, \
-                    here has  {:?} and {:?}",
-                lhs.get_datatype(),
-                rhs.get_datatype()
-            )));
-        }
-
-        if lhs.is_null() || rhs.is_null() {
-            return Err(DataFusionError::Internal(
-                "Division does not support empty values".to_string(),
-            ));
-        }
-
-        // TODO: Finding a good way to support operation between different types without
-        // writing a hige match block.
-        // TODO: Add support for decimal types
-        match (lhs, rhs) {
-            (ScalarValue::Decimal128(_, _, _), _) |
-            (_, ScalarValue::Decimal128(_, _, _)) => {
-                Err(DataFusionError::Internal(
-                    "Division with Decimals are not supported for now".to_string()
-                ))
-            },
-            // f64 / _
-            (ScalarValue::Float64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() / f2.unwrap())))
-            },
-            // f32 / _
-            (ScalarValue::Float32(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64/ f2.unwrap())))
-            },
-            (ScalarValue::Float32(f1), ScalarValue::Float32(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64/ f2.unwrap() as f64)))
-            },
-            // i64 / _
-            (ScalarValue::Int64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::Int64(f1), ScalarValue::Int64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // i32 / _
-            (ScalarValue::Int32(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::Int32(f1), ScalarValue::Int32(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // i16 / _
-            (ScalarValue::Int16(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::Int16(f1), ScalarValue::Int16(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // i8 / _
-            (ScalarValue::Int8(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::Int8(f1), ScalarValue::Int8(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // u64 / _
-            (ScalarValue::UInt64(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::UInt64(f1), ScalarValue::UInt64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // u32 / _
-            (ScalarValue::UInt32(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::UInt32(f1), ScalarValue::UInt32(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // u16 / _
-            (ScalarValue::UInt16(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::UInt16(f1), ScalarValue::UInt16(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            // u8 / _
-            (ScalarValue::UInt8(f1), ScalarValue::Float64(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap())))
-            },
-            (ScalarValue::UInt8(f1), ScalarValue::UInt8(f2)) => {
-                Ok(ScalarValue::Float64(Some(f1.unwrap() as f64 / f2.unwrap() as f64)))
-            },
-            _ => Err(DataFusionError::Internal(
-                format!(
-                "Division only support calculation with the same type or f64 as denominator for now, here has {:?} and {:?}",
-                lhs.get_datatype(), rhs.get_datatype()
-            ))),
-        }
-    }
-
-    /// Create null scalar value for specific data type.
-    pub fn new_null(dt: DataType) -> Self {
-        match dt {
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                ScalarValue::TimestampSecond(None, None)
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                ScalarValue::TimestampMillisecond(None, None)
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                ScalarValue::TimestampMicrosecond(None, None)
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                ScalarValue::TimestampNanosecond(None, None)
-            }
-            _ => todo!("Create null scalar value for datatype: {:?}", dt),
-        }
-    }
-
     /// Create a decimal Scalar from value/precision and scale.
     pub fn try_new_decimal128(
         value: i128,
@@ -880,6 +573,9 @@ impl ScalarValue {
                 DataType::Interval(IntervalUnit::YearMonth)
             }
             ScalarValue::IntervalDayTime(_) => DataType::Interval(IntervalUnit::DayTime),
+            ScalarValue::IntervalMonthDayNano(_) => {
+                DataType::Interval(IntervalUnit::MonthDayNano)
+            }
             ScalarValue::Struct(_, fields) => DataType::Struct(fields.as_ref().clone()),
         }
     }
@@ -1359,6 +1055,10 @@ impl ScalarValue {
                 Some(value) => dyn_to_array!(self, value, size, i32),
                 None => new_null_array(self.get_datatype(), size).into(),
             },
+            ScalarValue::IntervalMonthDayNano(e) => match e {
+                Some(value) => dyn_to_array!(self, value, size, i128),
+                None => new_null_array(self.get_datatype(), size).into(),
+            },
             ScalarValue::Int64(e) | ScalarValue::Date64(e) => match e {
                 Some(value) => dyn_to_array!(self, value, size, i64),
                 None => new_null_array(self.get_datatype(), size).into(),
@@ -1704,6 +1404,9 @@ impl ScalarValue {
             ScalarValue::IntervalDayTime(val) => {
                 eq_array_primitive!(array, index, DaysMsArray, val)
             }
+            ScalarValue::IntervalMonthDayNano(val) => {
+                eq_array_primitive!(array, index, IntervalMonthDayNanoArray, val)
+            }
             ScalarValue::Struct(_, _) => unimplemented!(),
         }
     }
@@ -1847,6 +1550,22 @@ impl TryFrom<ScalarValue> for i64 {
             | ScalarValue::TimestampMicrosecond(Some(inner_value), _)
             | ScalarValue::TimestampMillisecond(Some(inner_value), _)
             | ScalarValue::TimestampSecond(Some(inner_value), _) => Ok(inner_value),
+            _ => Err(DataFusionError::Internal(format!(
+                "Cannot convert {:?} to {}",
+                value,
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
+// special implementation for i128 because of Decimal128
+impl TryFrom<ScalarValue> for i128 {
+    type Error = DataFusionError;
+
+    fn try_from(value: ScalarValue) -> Result<Self> {
+        match value {
+            ScalarValue::Decimal128(Some(inner_value), _, _) => Ok(inner_value),
             _ => Err(DataFusionError::Internal(format!(
                 "Cannot convert {:?} to {}",
                 value,
@@ -2105,6 +1824,7 @@ impl fmt::Display for ScalarValue {
             ScalarValue::Date64(e) => format_option!(f, e)?,
             ScalarValue::IntervalDayTime(e) => format_option!(f, e)?,
             ScalarValue::IntervalYearMonth(e) => format_option!(f, e)?,
+            ScalarValue::IntervalMonthDayNano(e) => format_option!(f, e)?,
             ScalarValue::Struct(e, fields) => match e {
                 Some(l) => write!(
                     f,
@@ -2123,7 +1843,7 @@ impl fmt::Display for ScalarValue {
 }
 
 impl fmt::Debug for ScalarValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ScalarValue::Decimal128(_, _, _) => write!(f, "Decimal128({})", self),
             ScalarValue::Boolean(_) => write!(f, "Boolean({})", self),
@@ -2166,6 +1886,9 @@ impl fmt::Debug for ScalarValue {
             ScalarValue::IntervalYearMonth(_) => {
                 write!(f, "IntervalYearMonth(\"{}\")", self)
             }
+            ScalarValue::IntervalMonthDayNano(_) => {
+                write!(f, "IntervalMonthDayNano(\"{}\")", self)
+            }
             ScalarValue::Struct(e, fields) => {
                 // Use Debug representation of field values
                 match e {
@@ -2194,6 +1917,8 @@ mod tests {
     fn scalar_decimal_test() {
         let decimal_value = ScalarValue::Decimal128(Some(123), 10, 1);
         assert_eq!(DataType::Decimal(10, 1), decimal_value.get_datatype());
+        let try_into_value: i128 = decimal_value.clone().try_into().unwrap();
+        assert_eq!(123_i128, try_into_value);
         assert!(!decimal_value.is_null());
         let neg_decimal_value = decimal_value.arithmetic_negate();
         match neg_decimal_value {
@@ -3264,246 +2989,5 @@ mod tests {
             newscalar.get_datatype(),
             DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".to_owned()))
         );
-    }
-
-    macro_rules! test_scalar_op {
-        ($OP:ident, $LHS:expr, $LHS_TYPE:ident, $RHS:expr, $RHS_TYPE:ident, $RESULT:expr, $RESULT_TYPE:ident) => {{
-            let v1 = &ScalarValue::from($LHS as $LHS_TYPE);
-            let v2 = &ScalarValue::from($RHS as $RHS_TYPE);
-            assert_eq!(
-                ScalarValue::$OP(v1, v2).unwrap(),
-                ScalarValue::from($RESULT as $RESULT_TYPE)
-            );
-        }};
-    }
-
-    macro_rules! test_scalar_op_err {
-        ($OP:ident, $LHS:expr, $LHS_TYPE:ident, $RHS:expr, $RHS_TYPE:ident) => {{
-            let v1 = &ScalarValue::from($LHS as $LHS_TYPE);
-            let v2 = &ScalarValue::from($RHS as $RHS_TYPE);
-            let actual = ScalarValue::$OP(v1, v2).is_err();
-            assert!(actual);
-        }};
-    }
-
-    #[test]
-    fn scalar_addition() {
-        test_scalar_op!(add, 1, f64, 2, f64, 3, f64);
-        test_scalar_op!(add, 1, f32, 2, f32, 3, f64);
-        test_scalar_op!(add, 1, i64, 2, i64, 3, i64);
-        test_scalar_op!(add, 100, i64, -32, i64, 68, i64);
-        test_scalar_op!(add, -102, i64, 32, i64, -70, i64);
-        test_scalar_op!(add, 1, i32, 2, i32, 3, i64);
-        test_scalar_op!(
-            add,
-            std::i32::MAX,
-            i32,
-            std::i32::MAX,
-            i32,
-            std::i32::MAX as i64 * 2,
-            i64
-        );
-        test_scalar_op!(add, 1, i16, 2, i16, 3, i32);
-        test_scalar_op!(
-            add,
-            std::i16::MAX,
-            i16,
-            std::i16::MAX,
-            i16,
-            std::i16::MAX as i32 * 2,
-            i32
-        );
-        test_scalar_op!(add, 1, i8, 2, i8, 3, i16);
-        test_scalar_op!(
-            add,
-            std::i8::MAX,
-            i8,
-            std::i8::MAX,
-            i8,
-            std::i8::MAX as i16 * 2,
-            i16
-        );
-        test_scalar_op!(add, 1, u64, 2, u64, 3, u64);
-        test_scalar_op!(add, 1, u32, 2, u32, 3, u64);
-        test_scalar_op!(
-            add,
-            std::u32::MAX,
-            u32,
-            std::u32::MAX,
-            u32,
-            std::u32::MAX as u64 * 2,
-            u64
-        );
-        test_scalar_op!(add, 1, u16, 2, u16, 3, u32);
-        test_scalar_op!(
-            add,
-            std::u16::MAX,
-            u16,
-            std::u16::MAX,
-            u16,
-            std::u16::MAX as u32 * 2,
-            u32
-        );
-        test_scalar_op!(add, 1, u8, 2, u8, 3, u16);
-        test_scalar_op!(
-            add,
-            std::u8::MAX,
-            u8,
-            std::u8::MAX,
-            u8,
-            std::u8::MAX as u16 * 2,
-            u16
-        );
-        test_scalar_op_err!(add, 1, i32, 2, u16);
-        test_scalar_op_err!(add, 1, i32, 2, u16);
-
-        let v1 = &ScalarValue::from(1);
-        let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
-        assert!(ScalarValue::add(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
-        let v2 = &ScalarValue::from(2);
-        assert!(ScalarValue::add(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Float32(None);
-        let v2 = &ScalarValue::from(2);
-        assert!(ScalarValue::add(v1, v2).is_err());
-
-        let v2 = &ScalarValue::Float32(None);
-        let v1 = &ScalarValue::from(2);
-        assert!(ScalarValue::add(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Float32(None);
-        let v2 = &ScalarValue::Float32(None);
-        assert!(ScalarValue::add(v1, v2).is_err());
-    }
-
-    #[test]
-    fn scalar_multiplication() {
-        test_scalar_op!(mul, 1, f64, 2, f64, 2, f64);
-        test_scalar_op!(mul, 1, f32, 2, f32, 2, f64);
-        test_scalar_op!(mul, 15, i64, 2, i64, 30, i64);
-        test_scalar_op!(mul, 100, i64, -32, i64, -3200, i64);
-        test_scalar_op!(mul, -1.1, f64, 2, f64, -2.2, f64);
-        test_scalar_op!(mul, 1, i32, 2, i32, 2, i64);
-        test_scalar_op!(
-            mul,
-            std::i32::MAX,
-            i32,
-            std::i32::MAX,
-            i32,
-            std::i32::MAX as i64 * std::i32::MAX as i64,
-            i64
-        );
-        test_scalar_op!(mul, 1, i16, 2, i16, 2, i32);
-        test_scalar_op!(
-            mul,
-            std::i16::MAX,
-            i16,
-            std::i16::MAX,
-            i16,
-            std::i16::MAX as i32 * std::i16::MAX as i32,
-            i32
-        );
-        test_scalar_op!(mul, 1, i8, 2, i8, 2, i16);
-        test_scalar_op!(
-            mul,
-            std::i8::MAX,
-            i8,
-            std::i8::MAX,
-            i8,
-            std::i8::MAX as i16 * std::i8::MAX as i16,
-            i16
-        );
-        test_scalar_op!(mul, 1, u64, 2, u64, 2, u64);
-        test_scalar_op!(mul, 1, u32, 2, u32, 2, u64);
-        test_scalar_op!(
-            mul,
-            std::u32::MAX,
-            u32,
-            std::u32::MAX,
-            u32,
-            std::u32::MAX as u64 * std::u32::MAX as u64,
-            u64
-        );
-        test_scalar_op!(mul, 1, u16, 2, u16, 2, u32);
-        test_scalar_op!(
-            mul,
-            std::u16::MAX,
-            u16,
-            std::u16::MAX,
-            u16,
-            std::u16::MAX as u32 * std::u16::MAX as u32,
-            u32
-        );
-        test_scalar_op!(mul, 1, u8, 2, u8, 2, u16);
-        test_scalar_op!(
-            mul,
-            std::u8::MAX,
-            u8,
-            std::u8::MAX,
-            u8,
-            std::u8::MAX as u16 * std::u8::MAX as u16,
-            u16
-        );
-        test_scalar_op_err!(mul, 1, i32, 2, u16);
-        test_scalar_op_err!(mul, 1, i32, 2, u16);
-
-        let v1 = &ScalarValue::from(1);
-        let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
-        assert!(ScalarValue::mul(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
-        let v2 = &ScalarValue::from(2);
-        assert!(ScalarValue::mul(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Float32(None);
-        let v2 = &ScalarValue::from(2);
-        assert!(ScalarValue::mul(v1, v2).is_err());
-
-        let v2 = &ScalarValue::Float32(None);
-        let v1 = &ScalarValue::from(2);
-        assert!(ScalarValue::mul(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Float32(None);
-        let v2 = &ScalarValue::Float32(None);
-        assert!(ScalarValue::mul(v1, v2).is_err());
-    }
-
-    #[test]
-    fn scalar_division() {
-        test_scalar_op!(div, 1, f64, 2, f64, 0.5, f64);
-        test_scalar_op!(div, 1, f32, 2, f32, 0.5, f64);
-        test_scalar_op!(div, 15, i64, 2, i64, 7.5, f64);
-        test_scalar_op!(div, 100, i64, -2, i64, -50, f64);
-        test_scalar_op!(div, 1, i32, 2, i32, 0.5, f64);
-        test_scalar_op!(div, 1, i16, 2, i16, 0.5, f64);
-        test_scalar_op!(div, 1, i8, 2, i8, 0.5, f64);
-        test_scalar_op!(div, 1, u64, 2, u64, 0.5, f64);
-        test_scalar_op!(div, 1, u32, 2, u32, 0.5, f64);
-        test_scalar_op!(div, 1, u16, 2, u16, 0.5, f64);
-        test_scalar_op!(div, 1, u8, 2, u8, 0.5, f64);
-        test_scalar_op_err!(div, 1, i32, 2, u16);
-        test_scalar_op_err!(div, 1, i32, 2, u16);
-
-        let v1 = &ScalarValue::from(1);
-        let v2 = &ScalarValue::Decimal128(Some(2), 0, 0);
-        assert!(ScalarValue::div(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Decimal128(Some(1), 0, 0);
-        let v2 = &ScalarValue::from(2);
-        assert!(ScalarValue::div(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Float32(None);
-        let v2 = &ScalarValue::from(2);
-        assert!(ScalarValue::div(v1, v2).is_err());
-
-        let v2 = &ScalarValue::Float32(None);
-        let v1 = &ScalarValue::from(2);
-        assert!(ScalarValue::div(v1, v2).is_err());
-
-        let v1 = &ScalarValue::Float32(None);
-        let v2 = &ScalarValue::Float32(None);
-        assert!(ScalarValue::div(v1, v2).is_err());
     }
 }

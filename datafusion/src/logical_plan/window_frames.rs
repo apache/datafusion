@@ -197,6 +197,12 @@ impl Ord for WindowFrameBound {
     }
 }
 
+impl Hash for WindowFrameBound {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.get_rank().hash(state)
+    }
+}
+
 impl WindowFrameBound {
     /// get the rank of this window frame bound.
     ///

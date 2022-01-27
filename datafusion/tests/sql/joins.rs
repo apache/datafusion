@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn equijoin() -> Result<()> {
@@ -207,6 +208,202 @@ async fn left_join_unbalanced() -> Result<()> {
         let actual = execute_to_batches(&mut ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_null_filter() -> Result<()> {
+    // Since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
+    // Note that this is only true because IS NULL does not remove nulls. For filters that
+    // remove nulls, we can rewrite the join as an inner join and then push down the filter.
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+-------+---------+",
+        "| t1_id | t2_id | t2_name |",
+        "+-------+-------+---------+",
+        "| 22    | 22    |         |",
+        "| 33    |       |         |",
+        "| 77    |       |         |",
+        "| 88    |       |         |",
+        "+-------+-------+---------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_null_filter_on_join_column() -> Result<()> {
+    // Again, since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+-------+---------+",
+        "| t1_id | t2_id | t2_name |",
+        "+-------+-------+---------+",
+        "| 33    |       |         |",
+        "| 77    |       |         |",
+        "| 88    |       |         |",
+        "+-------+-------+---------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_not_null_filter() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NOT NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+-------+---------+",
+        "| t1_id | t2_id | t2_name |",
+        "+-------+-------+---------+",
+        "| 11    | 11    | z       |",
+        "| 44    | 44    | x       |",
+        "| 99    | 99    | u       |",
+        "+-------+-------+---------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_not_null_filter_on_join_column() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NOT NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+-------+---------+",
+        "| t1_id | t2_id | t2_name |",
+        "+-------+-------+---------+",
+        "| 11    | 11    | z       |",
+        "| 22    | 22    |         |",
+        "| 44    | 44    | x       |",
+        "| 99    | 99    | u       |",
+        "+-------+-------+---------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_join_null_filter() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t2_id";
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "|       |         | 55    |",
+        "| 99    |         | 99    |",
+        "+-------+---------+-------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_join_null_filter_on_join_column() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_id IS NULL ORDER BY t2_id";
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "|       |         | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_join_not_null_filter() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NOT NULL ORDER BY t2_id";
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 11    |",
+        "| 22    | b       | 22    |",
+        "| 44    | d       | 44    |",
+        "+-------+---------+-------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn right_join_not_null_filter_on_join_column() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_id IS NOT NULL ORDER BY t2_id";
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 11    |",
+        "| 22    | b       | 22    |",
+        "| 44    | d       | 44    |",
+        "| 99    |         | 99    |",
+        "+-------+---------+-------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_join_null_filter() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t1_name, t2_id FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 88    |         |       |",
+        "| 99    |         | 99    |",
+        "|       |         | 55    |",
+        "+-------+---------+-------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_join_not_null_filter() -> Result<()> {
+    let mut ctx = create_join_context_with_nulls()?;
+    let sql = "SELECT t1_id, t1_name, t2_id FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id WHERE t1_name IS NOT NULL ORDER BY t1_id";
+    let expected = vec![
+        "+-------+---------+-------+",
+        "| t1_id | t1_name | t2_id |",
+        "+-------+---------+-------+",
+        "| 11    | a       | 11    |",
+        "| 22    | b       | 22    |",
+        "| 33    | c       |       |",
+        "| 44    | d       | 44    |",
+        "| 77    | e       |       |",
+        "+-------+---------+-------+",
+    ];
+
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
@@ -418,32 +615,32 @@ async fn cross_join_unbalanced() {
 
     // the order of the values is not determinisitic, so we need to sort to check the values
     let sql =
-        "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name";
+        "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name, t2_name";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
         "+-------+---------+---------+",
-        "| 11    | a       | z       |",
-        "| 11    | a       | y       |",
-        "| 11    | a       | x       |",
         "| 11    | a       | w       |",
-        "| 22    | b       | z       |",
-        "| 22    | b       | y       |",
-        "| 22    | b       | x       |",
+        "| 11    | a       | x       |",
+        "| 11    | a       | y       |",
+        "| 11    | a       | z       |",
         "| 22    | b       | w       |",
-        "| 33    | c       | z       |",
-        "| 33    | c       | y       |",
-        "| 33    | c       | x       |",
+        "| 22    | b       | x       |",
+        "| 22    | b       | y       |",
+        "| 22    | b       | z       |",
         "| 33    | c       | w       |",
-        "| 44    | d       | z       |",
-        "| 44    | d       | y       |",
-        "| 44    | d       | x       |",
+        "| 33    | c       | x       |",
+        "| 33    | c       | y       |",
+        "| 33    | c       | z       |",
         "| 44    | d       | w       |",
-        "| 77    | e       | z       |",
-        "| 77    | e       | y       |",
-        "| 77    | e       | x       |",
+        "| 44    | d       | x       |",
+        "| 44    | d       | y       |",
+        "| 44    | d       | z       |",
         "| 77    | e       | w       |",
+        "| 77    | e       | x       |",
+        "| 77    | e       | y       |",
+        "| 77    | e       | z       |",
         "+-------+---------+---------+",
     ];
     assert_batches_eq!(expected, &actual);

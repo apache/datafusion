@@ -24,7 +24,10 @@ use arrow::compute::if_then_else;
 use arrow::datatypes::{DataType, Schema};
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+
+type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
 /// The CASE expression is similar to a series of nested if/else and there are two forms that
 /// can be used. The first form consists of a series of boolean "when" expressions with
@@ -48,7 +51,7 @@ pub struct CaseExpr {
     /// Optional base expression that can be compared to literal values in the "when" expressions
     expr: Option<Arc<dyn PhysicalExpr>>,
     /// One or more when/then expressions
-    when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)>,
+    when_then_expr: Vec<WhenThen>,
     /// Optional "else" expression
     else_expr: Option<Arc<dyn PhysicalExpr>>,
 }
@@ -73,7 +76,7 @@ impl CaseExpr {
     /// Create a new CASE WHEN expression
     pub fn try_new(
         expr: Option<Arc<dyn PhysicalExpr>>,
-        when_then_expr: &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)],
+        when_then_expr: &[WhenThen],
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         if when_then_expr.is_empty() {
@@ -95,7 +98,7 @@ impl CaseExpr {
     }
 
     /// One or more when/then expressions
-    pub fn when_then_expr(&self) -> &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)] {
+    pub fn when_then_expr(&self) -> &[WhenThen] {
         &self.when_then_expr
     }
 
@@ -121,7 +124,10 @@ impl CaseExpr {
 
         // start with the else condition, or nulls
         let mut current_value = if let Some(e) = &self.else_expr {
-            e.evaluate(batch)?.into_array(batch.num_rows())
+            // keep `else_expr`'s data type and return type consistent
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| e.clone());
+            expr.evaluate(batch)?.into_array(batch.num_rows())
         } else {
             new_null_array(return_type, batch.num_rows()).into()
         };
@@ -172,7 +178,9 @@ impl CaseExpr {
 
         // start with the else condition, or nulls
         let mut current_value = if let Some(e) = &self.else_expr {
-            e.evaluate(batch)?.into_array(batch.num_rows())
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| e.clone());
+            expr.evaluate(batch)?.into_array(batch.num_rows())
         } else {
             new_null_array(return_type, batch.num_rows()).into()
         };
@@ -257,7 +265,7 @@ impl PhysicalExpr for CaseExpr {
 /// Create a CASE expression
 pub fn case(
     expr: Option<Arc<dyn PhysicalExpr>>,
-    when_thens: &[(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)],
+    when_thens: &[WhenThen],
     else_expr: Option<Arc<dyn PhysicalExpr>>,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     Ok(Arc::new(CaseExpr::try_new(expr, when_thens, else_expr)?))
@@ -408,6 +416,35 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn case_with_type_cast() -> Result<()> {
+        let batch = case_test_batch()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a = 'foo' THEN 123.3 ELSE 999 END
+        let when = binary(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Utf8(Some("foo".to_string()))),
+            &batch.schema(),
+        )?;
+        let then = lit(ScalarValue::Float64(Some(123.3)));
+        let else_value = lit(ScalarValue::Int32(Some(999)));
+
+        let expr = case(None, &[(when, then)], Some(else_value))?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(123.3), Some(999.0), Some(999.0), Some(999.0)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
     fn case_test_batch() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let a = Utf8Array::<i32>::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);

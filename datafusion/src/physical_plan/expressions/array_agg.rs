@@ -18,9 +18,10 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use super::format_state_name;
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::sync::Arc;
@@ -94,7 +95,7 @@ impl AggregateExpr for ArrayAgg {
 
 #[derive(Debug)]
 pub(crate) struct ArrayAggAccumulator {
-    array: Vec<ScalarValue>,
+    values: Vec<ScalarValue>,
     datatype: DataType,
 }
 
@@ -102,45 +103,52 @@ impl ArrayAggAccumulator {
     /// new array_agg accumulator based on given item data type
     pub fn try_new(datatype: &DataType) -> Result<Self> {
         Ok(Self {
-            array: vec![],
+            values: vec![],
             datatype: datatype.clone(),
         })
     }
 }
 
 impl Accumulator for ArrayAggAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::List(
-            Some(Box::new(self.array.clone())),
-            Box::new(self.datatype.clone()),
-        )])
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        };
+        assert!(values.len() == 1, "array_agg can only take 1 param!");
+        let arr = &values[0];
+        (0..arr.len()).try_for_each(|index| {
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+            self.values.push(scalar);
+            Ok(())
+        })
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.array.push(value.clone());
-
-        Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
         };
-
-        assert!(states.len() == 1, "states length should be 1!");
-        match &states[0] {
-            ScalarValue::List(Some(array), _) => {
-                self.array.extend((&**array).clone());
+        assert!(states.len() == 1, "array_agg states must be singleton!");
+        let arr = &states[0];
+        (0..arr.len()).try_for_each(|index| {
+            let scalar = ScalarValue::try_from_array(arr, index)?;
+            if let ScalarValue::List(Some(values), _) = scalar {
+                self.values.extend(*values);
+                Ok(())
+            } else {
+                Err(DataFusionError::Internal(
+                    "array_agg state must be list!".into(),
+                ))
             }
-            _ => unreachable!(),
-        }
-        Ok(())
+        })
+    }
+
+    fn state(&self) -> Result<Vec<ScalarValue>> {
+        Ok(vec![self.evaluate()?])
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(ScalarValue::List(
-            Some(Box::new(self.array.clone())),
+            Some(Box::new(self.values.clone())),
             Box::new(self.datatype.clone()),
         ))
     }

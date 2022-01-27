@@ -172,7 +172,7 @@ pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
 
 /// Enum of all built-in scalar functions
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BuiltinScalarFunction {
     // math functions
     /// abs
@@ -1587,7 +1587,7 @@ pub struct ScalarFunctionExpr {
 }
 
 impl Debug for ScalarFunctionExpr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("ScalarFunctionExpr")
             .field("fun", &"<FUNC>")
             .field("name", &self.name)
@@ -3751,7 +3751,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(-1))),
             ],
             Err(DataFusionError::Execution(
-                "negative substring length not allowed".to_string(),
+                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
             )),
             &str,
             Utf8,

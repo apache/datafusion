@@ -125,7 +125,7 @@ pub type ListEntryStream =
 
 /// Stream readers opened on a given object store
 pub type ObjectReaderStream =
-    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -174,7 +174,7 @@ pub struct ObjectStoreRegistry {
 }
 
 impl fmt::Debug for ObjectStoreRegistry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("ObjectStoreRegistry")
             .field(
                 "schemes",
@@ -186,6 +186,12 @@ impl fmt::Debug for ObjectStoreRegistry {
                     .collect::<Vec<_>>(),
             )
             .finish()
+    }
+}
+
+impl Default for ObjectStoreRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

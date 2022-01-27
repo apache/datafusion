@@ -23,8 +23,13 @@ use std::sync::Arc;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
+use arrow::array::Float64Array;
+use arrow::{
+    array::{ArrayRef, UInt64Array},
+    compute::cast,
+    datatypes::DataType,
+    datatypes::Field,
+};
 
 use super::{format_state_name, StatsType};
 
@@ -56,7 +61,7 @@ pub(crate) fn variance_return_type(arg_type: &DataType) -> Result<DataType> {
         | DataType::Float32
         | DataType::Float64 => Ok(DataType::Float64),
         other => Err(DataFusionError::Plan(format!(
-            "VARIANCE does not support {:?}",
+            "VAR does not support {:?}",
             other
         ))),
     }
@@ -209,8 +214,8 @@ impl AggregateExpr for VariancePop {
 
 #[derive(Debug)]
 pub struct VarianceAccumulator {
-    m2: ScalarValue,
-    mean: ScalarValue,
+    m2: f64,
+    mean: f64,
     count: u64,
     stats_type: StatsType,
 }
@@ -219,9 +224,9 @@ impl VarianceAccumulator {
     /// Creates a new `VarianceAccumulator`
     pub fn try_new(s_type: StatsType) -> Result<Self> {
         Ok(Self {
-            m2: ScalarValue::from(0 as f64),
-            mean: ScalarValue::from(0 as f64),
-            count: 0,
+            m2: 0_f64,
+            mean: 0_f64,
+            count: 0_u64,
             stats_type: s_type,
         })
     }
@@ -230,12 +235,12 @@ impl VarianceAccumulator {
         self.count
     }
 
-    pub fn get_mean(&self) -> ScalarValue {
-        self.mean.clone()
+    pub fn get_mean(&self) -> f64 {
+        self.mean
     }
 
-    pub fn get_m2(&self) -> ScalarValue {
-        self.m2.clone()
+    pub fn get_m2(&self) -> f64 {
+        self.m2
     }
 }
 
@@ -243,26 +248,27 @@ impl Accumulator for VarianceAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.count),
-            self.mean.clone(),
-            self.m2.clone(),
+            ScalarValue::from(self.mean),
+            ScalarValue::from(self.m2),
         ])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let values = &values[0];
-        let is_empty = values.is_null();
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let values = &cast(&values[0], &DataType::Float64)?;
+        let arr = values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .flatten();
 
-        if !is_empty {
+        for value in arr {
             let new_count = self.count + 1;
-            let delta1 = ScalarValue::add(values, &self.mean.arithmetic_negate())?;
-            let new_mean = ScalarValue::add(
-                &ScalarValue::div(&delta1, &ScalarValue::from(new_count as f64))?,
-                &self.mean,
-            )?;
-            let delta2 = ScalarValue::add(values, &new_mean.arithmetic_negate())?;
-            let tmp = ScalarValue::mul(&delta1, &delta2)?;
+            let delta1 = value - self.mean;
+            let new_mean = delta1 / new_count as f64 + self.mean;
+            let delta2 = value - new_mean;
+            let new_m2 = self.m2 + delta1 * delta2;
 
-            let new_m2 = ScalarValue::add(&self.m2, &tmp)?;
             self.count += 1;
             self.mean = new_mean;
             self.m2 = new_m2;
@@ -271,53 +277,28 @@ impl Accumulator for VarianceAccumulator {
         Ok(())
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count = &states[0];
-        let mean = &states[1];
-        let m2 = &states[2];
-        let mut new_count: u64 = self.count;
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let means = states[1].as_any().downcast_ref::<Float64Array>().unwrap();
+        let m2s = states[2].as_any().downcast_ref::<Float64Array>().unwrap();
 
-        // counts are summed
-        if let ScalarValue::UInt64(Some(c)) = count {
-            if *c == 0_u64 {
-                return Ok(());
+        for i in 0..counts.len() {
+            let c = counts.value(i);
+            if c == 0_u64 {
+                continue;
             }
+            let new_count = self.count + c;
+            let new_mean = self.mean * self.count as f64 / new_count as f64
+                + means.value(i) * c as f64 / new_count as f64;
+            let delta = self.mean - means.value(i);
+            let new_m2 = self.m2
+                + m2s.value(i)
+                + delta * delta * self.count as f64 * c as f64 / new_count as f64;
 
-            if self.count == 0 {
-                self.count = *c;
-                self.mean = mean.clone();
-                self.m2 = m2.clone();
-                return Ok(());
-            }
-            new_count += c
-        } else {
-            unreachable!()
-        };
-
-        let new_mean = ScalarValue::div(
-            &ScalarValue::add(&self.mean, mean)?,
-            &ScalarValue::from(2_f64),
-        )?;
-        let delta = ScalarValue::add(&mean.arithmetic_negate(), &self.mean)?;
-        let delta_sqrt = ScalarValue::mul(&delta, &delta)?;
-        let new_m2 = ScalarValue::add(
-            &ScalarValue::add(
-                &ScalarValue::mul(
-                    &delta_sqrt,
-                    &ScalarValue::div(
-                        &ScalarValue::mul(&ScalarValue::from(self.count), count)?,
-                        &ScalarValue::from(new_count as f64),
-                    )?,
-                )?,
-                &self.m2,
-            )?,
-            m2,
-        )?;
-
-        self.count = new_count;
-        self.mean = new_mean;
-        self.m2 = new_m2;
-
+            self.count = new_count;
+            self.mean = new_mean;
+            self.m2 = new_m2;
+        }
         Ok(())
     }
 
@@ -339,17 +320,10 @@ impl Accumulator for VarianceAccumulator {
             ));
         }
 
-        match self.m2 {
-            ScalarValue::Float64(e) => {
-                if self.count == 0 {
-                    Ok(ScalarValue::Float64(None))
-                } else {
-                    Ok(ScalarValue::Float64(e.map(|f| f / count as f64)))
-                }
-            }
-            _ => Err(DataFusionError::Internal(
-                "M2 should be f64 for variance".to_string(),
-            )),
+        if self.count == 0 {
+            Ok(ScalarValue::Float64(None))
+        } else {
+            Ok(ScalarValue::Float64(Some(self.m2 / count as f64)))
         }
     }
 }
@@ -512,6 +486,64 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn variance_f64_merge_1() -> Result<()> {
+        let a = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64]));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
+
+        let agg1 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(2_f64));
+
+        Ok(())
+    }
+
+    #[test]
+    fn variance_f64_merge_2() -> Result<()> {
+        let a = Arc::new(Float64Array::from_slice(&[
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
+        let b = Arc::new(Float64Array::from(vec![None]));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
+
+        let agg1 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(VariancePop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(2_f64));
+
+        Ok(())
+    }
+
     fn aggregate(
         batch: &RecordBatch,
         agg: Arc<dyn AggregateExpr>,
@@ -525,5 +557,38 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
+    }
+
+    fn merge(
+        batch1: &RecordBatch,
+        batch2: &RecordBatch,
+        agg1: Arc<dyn AggregateExpr>,
+        agg2: Arc<dyn AggregateExpr>,
+    ) -> Result<ScalarValue> {
+        let mut accum1 = agg1.create_accumulator()?;
+        let mut accum2 = agg2.create_accumulator()?;
+        let expr1 = agg1.expressions();
+        let expr2 = agg2.expressions();
+
+        let values1 = expr1
+            .iter()
+            .map(|e| e.evaluate(batch1))
+            .map(|r| r.map(|v| v.into_array(batch1.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        let values2 = expr2
+            .iter()
+            .map(|e| e.evaluate(batch2))
+            .map(|r| r.map(|v| v.into_array(batch2.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        accum1.update_batch(&values1)?;
+        accum2.update_batch(&values2)?;
+        let state2 = accum2
+            .state()?
+            .iter()
+            .map(|v| vec![v.clone()])
+            .map(|x| ScalarValue::iter_to_array(x).unwrap())
+            .collect::<Vec<_>>();
+        accum1.merge_batch(&state2)?;
+        accum1.evaluate()
     }
 }

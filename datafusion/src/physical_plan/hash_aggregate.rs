@@ -47,6 +47,7 @@ use arrow::{
 use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::field_util::{FieldExt, SchemaExt};
 use async_trait::async_trait;
 
@@ -207,8 +208,12 @@ impl ExecutionPlan for HashAggregateExec {
         self.input.output_partitioning()
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition).await?;
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
+        let input = self.input.execute(partition, runtime).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -398,8 +403,7 @@ fn group_aggregate_batch(
             }
             //  1.2 Need to create new entry
             None => {
-                let accumulator_set = create_accumulators(aggr_expr)
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                let accumulator_set = create_accumulators(aggr_expr)?;
 
                 // Copy group values out of arrays into `ScalarValue`s
                 let group_by_values = group_values
@@ -505,8 +509,7 @@ async fn compute_grouped_hash_aggregate(
     // Assume create_schema() always put group columns in front of aggr columns, we set
     // col_idx_base to group expression count.
     let aggregate_expressions =
-        aggregate_expressions(&aggr_expr, &mode, group_expr.len())
-            .map_err(DataFusionError::into_arrow_external_error)?;
+        aggregate_expressions(&aggr_expr, &mode, group_expr.len())?;
 
     let random_state = RandomState::new();
 
@@ -524,8 +527,7 @@ async fn compute_grouped_hash_aggregate(
             batch,
             accumulators,
             &aggregate_expressions,
-        )
-        .map_err(DataFusionError::into_arrow_external_error)?;
+        )?;
         timer.done();
     }
 
@@ -608,7 +610,7 @@ struct Accumulators {
 }
 
 impl std::fmt::Debug for Accumulators {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
         let map_string = "RawTable";
         f.debug_struct("Accumulators")
@@ -742,10 +744,8 @@ async fn compute_hash_aggregate(
     elapsed_compute: metrics::Time,
 ) -> ArrowResult<RecordBatch> {
     let timer = elapsed_compute.timer();
-    let mut accumulators = create_accumulators(&aggr_expr)
-        .map_err(DataFusionError::into_arrow_external_error)?;
-    let expressions = aggregate_expressions(&aggr_expr, &mode, 0)
-        .map_err(DataFusionError::into_arrow_external_error)?;
+    let mut accumulators = create_accumulators(&aggr_expr)?;
+    let expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
     let expressions = Arc::new(expressions);
     timer.done();
 
@@ -754,16 +754,14 @@ async fn compute_hash_aggregate(
     while let Some(batch) = input.next().await {
         let batch = batch?;
         let timer = elapsed_compute.timer();
-        aggregate_batch(&mode, &batch, &mut accumulators, &expressions)
-            .map_err(DataFusionError::into_arrow_external_error)?;
+        aggregate_batch(&mode, &batch, &mut accumulators, &expressions)?;
         timer.done();
     }
 
     // 2. convert values to a record batch
     let timer = elapsed_compute.timer();
     let batch = finalize_aggregation(&accumulators, &mode)
-        .map(|columns| RecordBatch::try_new(schema.clone(), columns))
-        .map_err(DataFusionError::into_arrow_external_error)?;
+        .map(|columns| RecordBatch::try_new(schema.clone(), columns))?;
     timer.done();
     batch
 }
@@ -907,9 +905,7 @@ fn create_batch_from_map(
     match mode {
         AggregateMode::Partial => {
             for acc in accs.iter() {
-                let state = acc
-                    .state()
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                let state = acc.state()?;
                 acc_data_types.push(state.len());
             }
         }
@@ -927,8 +923,7 @@ fn create_batch_from_map(
                     .map(|group_state| group_state.group_by_values[i].clone()),
             )
         })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|x| x.into_arrow_external_error())?;
+        .collect::<Result<Vec<_>>>()?;
 
     // add state / evaluated arrays
     for (x, &state_len) in acc_data_types.iter().enumerate() {
@@ -940,8 +935,7 @@ fn create_batch_from_map(
                             let x = group_state.accumulator_set[x].state().unwrap();
                             x[y].clone()
                         }),
-                    )
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                    )?;
 
                     columns.push(res);
                 }
@@ -950,8 +944,7 @@ fn create_batch_from_map(
                         accumulators.group_states.iter().map(|group_state| {
                             group_state.accumulator_set[x].evaluate().unwrap()
                         }),
-                    )
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                    )?;
                     columns.push(res);
                 }
             }
@@ -1019,16 +1012,13 @@ fn finalize_aggregation(
 #[cfg(test)]
 mod tests {
 
-    use arrow::array::{Float64Array, UInt32Array};
-    use arrow::datatypes::DataType;
-    use futures::FutureExt;
-
     use super::*;
     use crate::assert_batches_sorted_eq;
     use crate::physical_plan::common;
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use futures::FutureExt;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
@@ -1077,6 +1067,8 @@ mod tests {
             DataType::Float64,
         ))];
 
+        let runtime = Arc::new(RuntimeEnv::default());
+
         let partial_aggregate = Arc::new(HashAggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
@@ -1085,7 +1077,8 @@ mod tests {
             input_schema.clone(),
         )?);
 
-        let result = common::collect(partial_aggregate.execute(0).await?).await?;
+        let result =
+            common::collect(partial_aggregate.execute(0, runtime.clone()).await?).await?;
 
         let expected = vec![
             "+---+---------------+-------------+",
@@ -1116,7 +1109,8 @@ mod tests {
             input_schema,
         )?);
 
-        let result = common::collect(merged_aggregate.execute(0).await?).await?;
+        let result =
+            common::collect(merged_aggregate.execute(0, runtime.clone()).await?).await?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];
@@ -1177,7 +1171,11 @@ mod tests {
             )))
         }
 
-        async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+        async fn execute(
+            &self,
+            _partition: usize,
+            _runtime: Arc<RuntimeEnv>,
+        ) -> Result<SendableRecordBatchStream> {
             let stream;
             if self.yield_first {
                 stream = TestYieldingStream::New;
@@ -1253,6 +1251,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_without_groups() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -1274,7 +1273,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec);
+        let fut = crate::physical_plan::collect(hash_aggregate_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1286,6 +1285,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_with_groups() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float32, true),
@@ -1310,7 +1310,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec);
+        let fut = crate::physical_plan::collect(hash_aggregate_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

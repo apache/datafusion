@@ -254,7 +254,7 @@ mod test {
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::hash_join::HashJoinExec;
-    use datafusion::physical_plan::sort::SortExec;
+    use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };

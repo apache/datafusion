@@ -43,6 +43,7 @@ use super::{
     coalesce_batches::concat_batches, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::field_util::SchemaExt;
 use log::debug;
 
@@ -138,7 +139,11 @@ impl ExecutionPlan for CrossJoinExec {
         self.right.output_partitioning()
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // we only want to compute the build side once
         let left_data = {
             let mut build_side = self.build_side.lock().await;
@@ -150,7 +155,7 @@ impl ExecutionPlan for CrossJoinExec {
 
                     // merge all left parts into a single stream
                     let merge = CoalescePartitionsExec::new(self.left.clone());
-                    let stream = merge.execute(0).await?;
+                    let stream = merge.execute(0, runtime.clone()).await?;
 
                     // Load all batches and count the rows
                     let (batches, num_rows) = stream
@@ -175,7 +180,7 @@ impl ExecutionPlan for CrossJoinExec {
             }
         };
 
-        let stream = self.right.execute(partition).await?;
+        let stream = self.right.execute(partition, runtime.clone()).await?;
 
         if left_data.num_rows() == 0 {
             return Ok(Box::pin(MemoryStream::try_new(
@@ -328,8 +333,7 @@ fn build_batch(
             let scalar = ScalarValue::try_from_array(arr, left_index)?;
             Ok(scalar.to_array_of_size(batch.num_rows()))
         })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|x| x.into_arrow_external_error())?;
+        .collect::<Result<Vec<_>>>()?;
 
     RecordBatch::try_new(
         Arc::new(schema.clone()),

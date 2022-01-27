@@ -21,6 +21,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use super::SendableRecordBatchStream;
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
@@ -31,6 +32,7 @@ use crate::{
     },
 };
 use arrow::{array::*, datatypes::SchemaRef};
+
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
@@ -101,7 +103,11 @@ impl ExecutionPlan for ExplainExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "ExplainExec invalid partition {}",
@@ -140,9 +146,13 @@ impl ExecutionPlan for ExplainExec {
             vec![type_builder.into_arc(), plan_builder.into_arc()],
         )?;
 
+        let metrics = ExecutionPlanMetricsSet::new();
+        let baseline_metrics = BaselineMetrics::new(&metrics, partition);
+
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema.clone(),
             vec![Arc::new(record_batch)],
+            baseline_metrics,
         )))
     }
 

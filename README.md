@@ -49,19 +49,25 @@ the convenience of an SQL interface or a DataFrame API.
 
 ## Known Uses
 
+Projects that adapt to or serve as plugins to DataFusion:
+
+- [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
+- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
+- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
+- [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
+- [datafusion-hdfs-native](https://github.com/datafusion-contrib/datafusion-hdfs-native)
+
 Here are some of the projects known to use DataFusion:
 
 - [Ballista](ballista) Distributed Compute Platform
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
-- [datafusion-python](https://pypi.org/project/datafusion)
-- [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
-- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [delta-rs](https://github.com/delta-io/delta-rs)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [ROAPI](https://github.com/roapi/roapi)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
 - [Squirtle](https://github.com/DSLAM-UMD/Squirtle)
+- [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 
 (if you know of another project, please submit a PR to add a link!)
 
@@ -133,6 +139,60 @@ datafusion = "6.0.0"
 ## Using DataFusion as a binary
 
 DataFusion also includes a simple command-line interactive SQL utility. See the [CLI reference](https://arrow.apache.org/datafusion/cli/index.html) for more information.
+
+# Roadmap
+
+A quarterly roadmap will be published to give the DataFusion community visibility into the priorities of the projects contributors. This roadmap is not binding.
+
+## 2022 Q1
+
+### DataFusion Core
+
+- Publish official Arrow2 branch
+- Implementation of memory manager (i.e. to enable spilling to disk as needed)
+
+### Benchmarking
+
+- Inclusion in Db-Benchmark with all quries covered
+- All TPCH queries covered
+
+### Performance Improvements
+
+- Predicate evaluation
+- Improve multi-column comparisons (that can't be vectorized at the moment)
+- Null constant support
+
+### New Features
+
+- Read JSON as table
+- Simplify DDL with Datafusion-Cli
+- Add Decimal128 data type and the attendant features such as Arrow Kernel and UDF support
+- Add new experimental e-graph based optimizer
+
+### Ballista
+
+- Begin work on design documents and plan / priorities for development
+
+### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib]))
+
+- Stable S3 support
+- Begin design discussions and prototyping of a stream provider
+
+## Beyond 2022 Q1
+
+There is no clear timeline for the below, but community members have expressed interest in working on these topics.
+
+### DataFusion Core
+
+- Custom SQL support
+- Split DataFusion into multiple crates
+- Push based query execution and code generation
+
+### Ballista
+
+- Evolve architecture so that it can be deployed in a multi-tenant cloud native environment
+- Ensure Ballista is scalable, elastic, and stable for production usage
+- Develop distributed ML capabilities
 
 # Status
 
@@ -266,7 +326,7 @@ This library currently supports many SQL constructs, including
 - `CAST` to change types, including e.g. `Timestamp(Nanosecond, None)`
 - Many mathematical unary and binary expressions such as `+`, `/`, `sqrt`, `tan`, `>=`.
 - `WHERE` to filter
-- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `VAR`, `STDDEV` (sample and population)
+- `GROUP BY` together with one of the following aggregations: `MIN`, `MAX`, `COUNT`, `SUM`, `AVG`, `CORR`, `VAR`, `COVAR`, `STDDEV` (sample and population)
 - `ORDER BY` together with an expression and optional `ASC` or `DESC` and also optional `NULLS FIRST` or `NULLS LAST`
 
 ## Supported Functions

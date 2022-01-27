@@ -29,6 +29,7 @@ use async_trait::async_trait;
 
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::Expr;
 use crate::physical_plan::common;
@@ -81,18 +82,19 @@ impl MemTable {
     /// Create a mem table by reading from another data source
     pub async fn load(
         t: Arc<dyn TableProvider>,
-        batch_size: usize,
         output_partitions: Option<usize>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<Self> {
         let schema = t.schema();
-        let exec = t.scan(&None, batch_size, &[], None).await?;
+        let exec = t.scan(&None, &[], None).await?;
         let partition_count = exec.output_partitioning().partition_count();
 
         let tasks = (0..partition_count)
             .map(|part_i| {
+                let runtime1 = runtime.clone();
                 let exec = exec.clone();
                 tokio::spawn(async move {
-                    let stream = exec.execute(part_i).await?;
+                    let stream = exec.execute(part_i, runtime1.clone()).await?;
                     common::collect(stream).await
                 })
             })
@@ -119,7 +121,7 @@ impl MemTable {
             let mut output_partitions = vec![];
             for i in 0..exec.output_partitioning().partition_count() {
                 // execute this *output* partition and collect all batches
-                let mut stream = exec.execute(i).await?;
+                let mut stream = exec.execute(i, runtime.clone()).await?;
                 let mut batches = vec![];
                 while let Some(result) = stream.next().await {
                     batches.push(result?);
@@ -146,7 +148,6 @@ impl TableProvider for MemTable {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -161,13 +162,16 @@ impl TableProvider for MemTable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::error::ArrowError;
     use futures::StreamExt;
     use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -188,8 +192,8 @@ mod tests {
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
         // scan with projection
-        let exec = provider.scan(&Some(vec![2, 1]), 1024, &[], None).await?;
-        let mut it = exec.execute(0).await?;
+        let exec = provider.scan(&Some(vec![2, 1]), &[], None).await?;
+        let mut it = exec.execute(0, runtime).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -201,6 +205,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_without_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -218,8 +223,8 @@ mod tests {
 
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
 
-        let exec = provider.scan(&None, 1024, &[], None).await?;
-        let mut it = exec.execute(0).await?;
+        let exec = provider.scan(&None, &[], None).await?;
+        let mut it = exec.execute(0, runtime).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());
@@ -248,11 +253,14 @@ mod tests {
 
         let projection: Vec<usize> = vec![0, 4];
 
-        match provider.scan(&Some(projection), 1024, &[], None).await {
-            Err(DataFusionError::Internal(e)) => {
-                assert_eq!("\"Projection index out of range\"", format!("{:?}", e))
+        match provider.scan(&Some(projection), &[], None).await {
+            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
+                assert_eq!(
+                    "\"project index 4 out of bounds, max field 3\"",
+                    format!("{:?}", e)
+                )
             }
-            _ => panic!("Scan should failed on invalid projection"),
+            res => panic!("Scan should failed on invalid projection, got {:?}", res),
         };
 
         Ok(())
@@ -326,6 +334,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merged_schema() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let mut metadata = BTreeMap::new();
         metadata.insert("foo".to_string(), "bar".to_string());
 
@@ -367,8 +376,8 @@ mod tests {
         let provider =
             MemTable::try_new(Arc::new(merged_schema), vec![vec![batch1, batch2]])?;
 
-        let exec = provider.scan(&None, 1024, &[], None).await?;
-        let mut it = exec.execute(0).await?;
+        let exec = provider.scan(&None, &[], None).await?;
+        let mut it = exec.execute(0, runtime).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());

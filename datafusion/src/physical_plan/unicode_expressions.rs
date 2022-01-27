@@ -442,9 +442,11 @@ pub fn substr<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
                 .map(|((string, start), count)| match (string, start, count) {
                     (Some(string), Some(&start), Some(&count)) => {
                         if count < 0 {
-                            Err(DataFusionError::Execution(
-                                "negative substring length not allowed".to_string(),
-                            ))
+                            Err(DataFusionError::Execution(format!(
+                                "negative substring length not allowed: substr(<str>, {}, {})",
+                                start,
+                                count
+                            )))
                         } else if start <= 0 {
                             Ok(Some(string.to_string()))
                         } else {

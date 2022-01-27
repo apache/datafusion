@@ -31,6 +31,7 @@ use crate::physical_plan::{
     SendableRecordBatchStream,
 };
 
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::field_util::SchemaExt;
 use crate::record_batch::RecordBatch;
 use arrow::compute::concatenate::concatenate;
@@ -114,9 +115,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream {
-            input: self.input.execute(partition).await?,
+            input: self.input.execute(partition, runtime).await?,
             schema: self.input.schema(),
             target_batch_size: self.target_batch_size,
             buffer: Vec::new(),
@@ -322,6 +327,7 @@ pub fn concat_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
     use arrow::array::UInt32Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -383,9 +389,10 @@ mod tests {
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();
         let mut output_partitions = Vec::with_capacity(output_partition_count);
+        let runtime = Arc::new(RuntimeEnv::default());
         for i in 0..output_partition_count {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i).await?;
+            let mut stream = exec.execute(i, runtime.clone()).await?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);

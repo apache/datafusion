@@ -39,6 +39,7 @@ use std::{
 
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
+#[derive(Default)]
 pub struct ProjectionPushDown {}
 
 impl OptimizerRule for ProjectionPushDown {

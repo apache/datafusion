@@ -36,6 +36,44 @@ mod noforce_hash_collisions {
     type StringArray = Utf8Array<i32>;
     type LargeStringArray = Utf8Array<i64>;
 
+    fn hash_decimal128<'a>(
+        array: &ArrayRef,
+        random_state: &RandomState,
+        hashes_buffer: &'a mut Vec<u64>,
+        mul_col: bool,
+    ) {
+        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        if array.null_count() == 0 {
+            if mul_col {
+                for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                    *hash = combine_hashes(
+                        i128::get_hash(&array.value(i), random_state),
+                        *hash,
+                    );
+                }
+            } else {
+                for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                    *hash = i128::get_hash(&array.value(i), random_state);
+                }
+            }
+        } else if mul_col {
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                if !array.is_null(i) {
+                    *hash = combine_hashes(
+                        i128::get_hash(&array.value(i), random_state),
+                        *hash,
+                    );
+                }
+            }
+        } else {
+            for (i, hash) in hashes_buffer.iter_mut().enumerate() {
+                if !array.is_null(i) {
+                    *hash = i128::get_hash(&array.value(i), random_state);
+                }
+            }
+        }
+    }
+
     macro_rules! hash_array_float {
         ($array_type:ident, $column: ident, $ty: ident, $hashes: ident, $random_state: ident, $multi_col: ident) => {
             let array = $column.as_any().downcast_ref::<$array_type>().unwrap();
@@ -240,6 +278,9 @@ mod noforce_hash_collisions {
 
         for col in arrays {
             match col.data_type() {
+                DataType::Decimal(_, _) => {
+                    hash_decimal128(col, random_state, hashes_buffer, multi_col);
+                }
                 DataType::UInt8 => {
                     hash_array_primitive!(
                         UInt8Array,
@@ -528,6 +569,21 @@ mod tests {
     use arrow::array::{MutableDictionaryArray, MutableUtf8Array, TryExtend, Utf8Array};
 
     use super::*;
+
+    #[test]
+    fn create_hashes_for_decimal_array() -> Result<()> {
+        let mut builder = DecimalBuilder::new(4, 20, 3);
+        let array: Vec<i128> = vec![1, 2, 3, 4];
+        for value in &array {
+            builder.append_value(*value)?;
+        }
+        let array_ref = Arc::new(builder.finish());
+        let random_state = RandomState::with_seeds(0, 0, 0, 0);
+        let hashes_buff = &mut vec![0; array.len()];
+        let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
+        assert_eq!(hashes.len(), 4);
+        Ok(())
+    }
 
     #[test]
     fn create_hashes_for_float_arrays() -> Result<()> {

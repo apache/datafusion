@@ -25,8 +25,7 @@ use crate::physical_plan::{
     expressions::variance::VarianceAccumulator, Accumulator, AggregateExpr, PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
+use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 
 use super::{format_state_name, StatsType};
 
@@ -210,23 +209,27 @@ impl StddevAccumulator {
             variance: VarianceAccumulator::try_new(s_type)?,
         })
     }
+
+    pub fn get_m2(&self) -> f64 {
+        self.variance.get_m2()
+    }
 }
 
 impl Accumulator for StddevAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.variance.get_count()),
-            self.variance.get_mean(),
-            self.variance.get_m2(),
+            ScalarValue::from(self.variance.get_mean()),
+            ScalarValue::from(self.variance.get_m2()),
         ])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        self.variance.update(values)
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.variance.update_batch(values)
     }
 
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.variance.merge(states)
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.variance.merge_batch(states)
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
@@ -408,6 +411,64 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn stddev_f64_merge_1() -> Result<()> {
+        let a = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64]));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
+
+        let agg1 = Arc::new(StddevPop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(StddevPop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(std::f64::consts::SQRT_2));
+
+        Ok(())
+    }
+
+    #[test]
+    fn stddev_f64_merge_2() -> Result<()> {
+        let a = Arc::new(Float64Array::from_slice(&[
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
+        let b = Arc::new(Float64Array::from(vec![None]));
+
+        let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
+
+        let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
+        let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
+
+        let agg1 = Arc::new(StddevPop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let agg2 = Arc::new(StddevPop::new(
+            col("a", &schema)?,
+            "bla".to_string(),
+            DataType::Float64,
+        ));
+
+        let actual = merge(&batch1, &batch2, agg1, agg2)?;
+        assert!(actual == ScalarValue::from(std::f64::consts::SQRT_2));
+
+        Ok(())
+    }
+
     fn aggregate(
         batch: &RecordBatch,
         agg: Arc<dyn AggregateExpr>,
@@ -421,5 +482,38 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
         accum.update_batch(&values)?;
         accum.evaluate()
+    }
+
+    fn merge(
+        batch1: &RecordBatch,
+        batch2: &RecordBatch,
+        agg1: Arc<dyn AggregateExpr>,
+        agg2: Arc<dyn AggregateExpr>,
+    ) -> Result<ScalarValue> {
+        let mut accum1 = agg1.create_accumulator()?;
+        let mut accum2 = agg2.create_accumulator()?;
+        let expr1 = agg1.expressions();
+        let expr2 = agg2.expressions();
+
+        let values1 = expr1
+            .iter()
+            .map(|e| e.evaluate(batch1))
+            .map(|r| r.map(|v| v.into_array(batch1.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        let values2 = expr2
+            .iter()
+            .map(|e| e.evaluate(batch2))
+            .map(|r| r.map(|v| v.into_array(batch2.num_rows())))
+            .collect::<Result<Vec<_>>>()?;
+        accum1.update_batch(&values1)?;
+        accum2.update_batch(&values2)?;
+        let state2 = accum2
+            .state()?
+            .iter()
+            .map(|v| vec![v.clone()])
+            .map(|x| ScalarValue::iter_to_array(x).unwrap())
+            .collect::<Vec<_>>();
+        accum1.merge_batch(&state2)?;
+        accum1.evaluate()
     }
 }

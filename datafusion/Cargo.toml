@@ -31,7 +31,7 @@ include = [
     "Cargo.toml",
 ]
 edition = "2021"
-rust-version = "1.57"
+rust-version = "1.58"
 
 [lib]
 name = "datafusion"
@@ -66,9 +66,9 @@ pin-project-lite= "^0.2.7"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs"] }
 tokio-stream = "0.1"
 log = "^0.4"
-md-5 = { version = "^0.9.1", optional = true }
-sha2 = { version = "^0.9.1", optional = true }
-blake2 = { version = "^0.9.2", optional = true }
+md-5 = { version = "^0.10.0", optional = true }
+sha2 = { version = "^0.10.1", optional = true }
+blake2 = { version = "^0.10.2", optional = true }
 blake3 = { version = "1.0", optional = true }
 ordered-float = "2.0"
 unicode-segmentation = { version = "^1.7.1", optional = true }
@@ -77,7 +77,9 @@ lazy_static = { version = "^1.4.0" }
 smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
 num-traits = { version = "0.2", optional = true }
-pyo3 = { version = "0.14", optional = true }
+pyo3 = { version = "0.15", optional = true }
+tempfile = "3"
+
 avro-schema = { version = "0.2", optional = true }
 # used to print arrow arrays in a nice columnar format
 comfy-table = { version = "5.0", default-features = false }
@@ -89,7 +91,6 @@ features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc
 
 [dev-dependencies]
 criterion = "0.3"
-tempfile = "3"
 doc-comment = "0.3"
 parquet-format-async-temp = "0"
 

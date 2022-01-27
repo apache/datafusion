@@ -113,24 +113,6 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        if !value.is_null() {
-            self.count += 1;
-        }
-        Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        let count = &states[0];
-        if let ScalarValue::UInt64(Some(delta)) = count {
-            self.count += *delta;
-        } else {
-            unreachable!()
-        }
-        Ok(())
-    }
-
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let delta = &compute::aggregate::sum_primitive(counts);
