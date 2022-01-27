@@ -44,7 +44,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use futures::StreamExt;
-use log::{error, debug};
+use log::{debug, error};
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
