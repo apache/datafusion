@@ -547,7 +547,7 @@ mod tests {
                 Arc::new(
                     expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
                 ),
-                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(4.2)))),
+                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.2)))),
             ];
             let result_agg_phy_exprs = create_aggregate_expr(
                 &AggregateFunction::ApproxQuantile,
@@ -564,6 +564,30 @@ mod tests {
                 Field::new("c1", data_type.clone(), false),
                 result_agg_phy_exprs.field().unwrap()
             );
+        }
+    }
+
+    #[test]
+    fn test_agg_approx_quantile_invalid_phy_expr() {
+        for data_type in NUMERICS {
+            let input_schema =
+                Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+            let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+                Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                ),
+                Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(4.2)))),
+            ];
+            let err = create_aggregate_expr(
+                &AggregateFunction::ApproxQuantile,
+                false,
+                &input_phy_exprs[..],
+                &input_schema,
+                "c1",
+            )
+            .expect_err("should fail due to invalid quantile");
+
+            assert!(matches!(err, DataFusionError::Plan(_)));
         }
     }
 

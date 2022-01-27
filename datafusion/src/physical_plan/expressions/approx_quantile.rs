@@ -89,6 +89,14 @@ impl ApproxQuantile {
             )))
         };
 
+        // Ensure the quantile is between 0 and 1.
+        if !(0.0..=1.0).contains(&quantile) {
+            return Err(DataFusionError::Plan(format!(
+                "Quantile value must be between 0.0 and 1.0, {} is invalid",
+                quantile
+            )));
+        }
+
         Ok(Self {
             name: name.into(),
             input_data_type,
