@@ -19,7 +19,7 @@
 //! hashed among the directories listed in RuntimeConfig::local_dirs.
 
 use crate::error::{DataFusionError, Result};
-use log::{debug, info};
+use log::debug;
 use rand::{thread_rng, Rng};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ impl DiskManager {
             }
             DiskManagerConfig::NewSpecified(conf_dirs) => {
                 let local_dirs = create_local_dirs(conf_dirs)?;
-                info!(
+                debug!(
                     "Created local dirs {:?} as DataFusion working directory",
                     local_dirs
                 );
