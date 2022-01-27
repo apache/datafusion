@@ -108,33 +108,35 @@ impl TableProvider for DataFrameImpl {
         // The datasource should return *at least* this number of rows if available.
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let schema = TableProvider::schema(self);
         let expr = projection
             .as_ref()
+            // construct projections
             .map_or_else(
-                || {
-                    Ok(Arc::new(Self::new(self.ctx_state.clone(), &self.plan))
-                        as Arc<dyn DataFrame>)
-                },
+                || Ok(Arc::new(Self::new(self.ctx_state.clone(), &self.plan)) as Arc<_>),
                 |projection| {
-                    let names = projection
+                    let schema = TableProvider::schema(self).project(projection)?;
+                    let names = schema
+                        .fields()
                         .iter()
-                        .copied()
-                        .map(|i| &schema.field(i).name()[..])
+                        .map(|field| field.name().as_str())
                         .collect::<Vec<_>>();
-                    self.select_columns(&names)
+                    self.select_columns(names.as_slice())
                 },
             )?
+            // add predicates, otherwise use `true` as the predicate
             .filter(filters.iter().fold(
                 Expr::Literal(ScalarValue::Boolean(Some(true))),
                 |acc, new| acc.and(new.clone()),
             ))?;
-        let plan = limit
-            .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
-            .to_logical_plan();
-        DataFrameImpl::new(self.ctx_state.clone(), &plan)
-            .create_physical_plan()
-            .await
+        // add a limit if given
+        Self::new(
+            self.ctx_state.clone(),
+            &limit
+                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
+                .to_logical_plan(),
+        )
+        .create_physical_plan()
+        .await
     }
 }
 
