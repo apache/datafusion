@@ -22,8 +22,8 @@ use crate::physical_plan::{
     expressions::PhysicalSortExpr, window_functions::BuiltInWindowFunctionExpr,
     PhysicalExpr, WindowExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::compute::concatenate;
-use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
 use std::sync::Arc;

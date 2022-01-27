@@ -31,6 +31,7 @@ pub use self::memory::MemTable;
 use self::object_store::{FileMeta, SizedFile};
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
+use crate::field_util::SchemaExt;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
 use crate::scalar::ScalarValue;

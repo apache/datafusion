@@ -30,6 +30,7 @@ use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use arrow::chunk::Chunk;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -41,12 +42,12 @@ use datafusion::arrow::{
     datatypes::{DataType, Field},
     io::ipc::read::FileReader,
     io::ipc::write::FileWriter,
-    record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
+use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::{LogicalPlan, Operator};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -64,6 +65,7 @@ use datafusion::physical_plan::sort::SortExec;
 use datafusion::physical_plan::{
     metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
 };
+use datafusion::record_batch::RecordBatch;
 use futures::{future, Stream, StreamExt};
 use std::time::Instant;
 
@@ -104,7 +106,8 @@ pub async fn write_stream_to_disk(
         num_bytes += batch_size_bytes;
 
         let timer = disk_write_metric.timer();
-        writer.write(&batch, None)?;
+        let chunk = Chunk::new(batch.columns().to_vec());
+        writer.write(&chunk, None)?;
         timer.done();
     }
     let timer = disk_write_metric.timer();

@@ -23,8 +23,9 @@ use datafusion::arrow::{
     array::ArrayRef,
     compute::aggregate::estimated_bytes_size,
     datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
 };
+use datafusion::field_util::{FieldExt, SchemaExt};
+use datafusion::record_batch::RecordBatch;
 use datafusion::scalar::ScalarValue;
 
 pub type MaybeColumnarBatch = Result<Option<ColumnarBatch>>;
@@ -44,7 +45,7 @@ impl ColumnarBatch {
             .enumerate()
             .map(|(i, array)| {
                 (
-                    batch.schema().field(i).name().clone(),
+                    batch.schema().field(i).name().to_string(),
                     ColumnarValue::Columnar(array.clone()),
                 )
             })
@@ -61,7 +62,7 @@ impl ColumnarBatch {
             .fields()
             .iter()
             .enumerate()
-            .map(|(i, f)| (f.name().clone(), values[i].clone()))
+            .map(|(i, f)| (f.name().to_string(), values[i].clone()))
             .collect();
 
         Self {

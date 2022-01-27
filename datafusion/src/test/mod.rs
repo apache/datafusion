@@ -20,10 +20,11 @@
 use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
+use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
@@ -120,7 +121,7 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         .schema()
         .fields()
         .iter()
-        .map(|f| f.name().clone())
+        .map(|f| f.name().to_string())
         .collect();
     assert_eq!(actual, expected);
 }
@@ -150,7 +151,11 @@ pub fn build_table_i32(
 
 /// Returns the column names on the schema
 pub fn columns(schema: &Schema) -> Vec<String> {
-    schema.fields().iter().map(|f| f.name().clone()).collect()
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect()
 }
 
 /// Return a new table provider that has a single Int32 column with

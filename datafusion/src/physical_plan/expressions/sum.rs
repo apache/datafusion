@@ -380,10 +380,11 @@ impl Accumulator for SumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
+    use crate::record_batch::RecordBatch;
     use crate::{error::Result, generic_test_op};
     use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
 
     #[test]
     fn test_sum_return_data_type() -> Result<()> {

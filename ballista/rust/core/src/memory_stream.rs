@@ -20,8 +20,9 @@
 
 use std::task::{Context, Poll};
 
-use datafusion::arrow::{datatypes::SchemaRef, error::Result, record_batch::RecordBatch};
+use datafusion::arrow::{datatypes::SchemaRef, error::Result};
 use datafusion::physical_plan::RecordBatchStream;
+use datafusion::record_batch::RecordBatch;
 use futures::Stream;
 
 /// Iterator over batches

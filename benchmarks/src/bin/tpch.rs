@@ -17,6 +17,8 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
+use arrow::array::ArrayRef;
+use arrow::chunk::Chunk;
 use futures::future::join_all;
 use rand::prelude::*;
 use std::ops::Div;
@@ -45,14 +47,14 @@ use datafusion::{
     datasource::file_format::{csv::CsvFormat, FileFormat},
 };
 use datafusion::{
-    arrow::record_batch::RecordBatch, datasource::file_format::parquet::ParquetFormat,
+    datasource::file_format::parquet::ParquetFormat, record_batch::RecordBatch,
 };
 
 use arrow::io::parquet::write::{Compression, Version, WriteOptions};
-use arrow::io::print::print;
 use ballista::prelude::{
     BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
 };
+use datafusion::field_util::SchemaExt;
 use structopt::StructOpt;
 
 #[cfg(all(feature = "snmalloc", not(feature = "mimalloc")))]
@@ -348,7 +350,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         millis.push(elapsed as f64);
         println!("Query {} iteration {} took {:.1} ms", opt.query, i, elapsed);
         if opt.debug {
-            print(&batches);
+            println!("{}", datafusion::arrow_print::write(&batches));
         }
     }
 
@@ -441,7 +443,7 @@ async fn loadtest_ballista(opt: BallistaLoadtestOpt) -> Result<()> {
                     &client_id, &i, query_id, elapsed
                 );
                 if opt.debug {
-                    print(&batches);
+                    println!("{}", datafusion::arrow_print::write(&batches));
                 }
             }
         });
@@ -549,7 +551,12 @@ async fn execute_query(
             "=== Physical plan with metrics ===\n{}\n",
             DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
         );
-        print::print(&result);
+        let fields = result
+            .first()
+            .map(|b| b.schema().field_names())
+            .unwrap_or(vec![]);
+        let chunks: Vec<Chunk<ArrayRef>> = result.iter().map(|rb| rb.into()).collect();
+        println!("{}", print::write(&chunks, &fields));
     }
     Ok(result)
 }
@@ -785,6 +792,7 @@ mod tests {
 
     use arrow::array::get_display;
     use datafusion::arrow::array::*;
+    use datafusion::field_util::FieldExt;
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;
 

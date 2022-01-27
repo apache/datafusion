@@ -49,6 +49,7 @@ use crate::{
 use arrow::datatypes::*;
 use arrow::types::days_ms;
 
+use crate::field_util::SchemaExt;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -1155,7 +1156,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }) {
                         Some(df_field) => Expr::Column(Column {
                             relation: df_field.qualifier().cloned(),
-                            name: df_field.name().clone(),
+                            name: df_field.name().to_string(),
                         }),
                         None => Expr::Column(col),
                     }

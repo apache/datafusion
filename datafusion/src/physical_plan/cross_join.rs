@@ -22,9 +22,9 @@ use futures::{lock::Mutex, StreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
 use crate::physical_plan::memory::MemoryStream;
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
@@ -43,6 +43,7 @@ use super::{
     coalesce_batches::concat_batches, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream,
 };
+use crate::field_util::SchemaExt;
 use log::debug;
 
 /// Data of the left side

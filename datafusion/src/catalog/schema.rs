@@ -128,6 +128,7 @@ mod tests {
 
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
     use crate::datasource::empty::EmptyTable;
+    use crate::field_util::SchemaExt;
 
     #[tokio::test]
     async fn test_mem_provider() {

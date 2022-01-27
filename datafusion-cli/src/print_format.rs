@@ -18,8 +18,9 @@
 //! Print format variants
 use arrow::io::json::write::{JsonArray, JsonFormat, LineDelimited};
 use datafusion::arrow::io::{csv::write, print};
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::field_util::SchemaExt;
+use datafusion::record_batch::RecordBatch;
 use std::fmt;
 use std::str::FromStr;
 
@@ -77,10 +78,14 @@ fn print_batches_to_json<J: JsonFormat>(batches: &[RecordBatch]) -> Result<Strin
         return Ok("{}".to_string());
     }
     let mut bytes = vec![];
-
+    let fields = batches
+        .first()
+        .map(|b| b.schema().field_names())
+        .unwrap_or(vec![]);
     let format = J::default();
     let blocks = json_write::Serializer::new(
-        batches.iter().map(|r| Ok(r.clone())),
+        batches.into_iter().map(|r| Ok(r.into())),
+        fields,
         vec![],
         format,
     );
@@ -101,10 +106,14 @@ fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<Stri
         let mut is_first = true;
         for batch in batches {
             if is_first {
-                write::write_header(&mut writer, batches[0].schema())?;
+                write::write_header(&mut writer, &batches[0].schema().field_names())?;
                 is_first = false;
             }
-            write::write_batch(&mut writer, batch, &write::SerializeOptions::default())?;
+            write::write_chunk(
+                &mut writer,
+                &batch.into(),
+                &write::SerializeOptions::default(),
+            )?;
         }
     }
     let formatted = String::from_utf8(bytes)
@@ -118,7 +127,7 @@ impl PrintFormat {
         match self {
             Self::Csv => println!("{}", print_batches_with_sep(batches, b',')?),
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
-            Self::Table => print::print(batches),
+            Self::Table => println!("{}", datafusion::arrow_print::write(batches)),
             Self::Json => {
                 println!("{}", print_batches_to_json::<JsonArray>(batches)?)
             }

@@ -51,13 +51,13 @@ use std::{
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
 
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::io::csv;
 use arrow::io::parquet;
 use arrow::io::parquet::write::FallibleStreamingIterator;
 use arrow::io::parquet::write::WriteOptions;
-use arrow::record_batch::RecordBatch;
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -82,6 +82,7 @@ use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::plan::Explain;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
@@ -722,8 +723,12 @@ impl ExecutionContext {
                     let mut writer = csv::write::WriterBuilder::new()
                         .from_path(path)
                         .map_err(ArrowError::from)?;
-
-                    csv::write::write_header(&mut writer, plan.schema().as_ref())?;
+                    let mut field_names = vec![];
+                    let schema = plan.schema();
+                    for f in schema.fields() {
+                        field_names.push(f.name());
+                    }
+                    csv::write::write_header(&mut writer, &field_names)?;
 
                     let options = csv::write::SerializeOptions::default();
 
@@ -731,7 +736,11 @@ impl ExecutionContext {
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
                             .map(|batch| {
-                                csv::write::write_batch(&mut writer, &batch?, &options)
+                                csv::write::write_chunk(
+                                    &mut writer,
+                                    &batch?.into(),
+                                    &options,
+                                )
                             })
                             .try_collect()
                             .await
@@ -777,7 +786,7 @@ impl ExecutionContext {
 
                         let row_groups = stream.map(|batch: ArrowResult<RecordBatch>| {
                             // map each record batch to a row group
-                            batch.map(|batch| {
+                            let r = batch.map(|batch| {
                                 let batch_cols = batch.columns().to_vec();
                                 // column chunk in row group
                                 let pages =
@@ -809,13 +818,14 @@ impl ExecutionContext {
                                             })
                                         });
                                 parquet::write::DynIter::new(pages)
-                            })
+                            });
+                            async { r }
                         });
 
                         Ok(parquet::write::stream::write_stream(
                             &mut file,
                             row_groups,
-                            schema.as_ref(),
+                            schema.as_ref().clone(),
                             parquet_schema,
                             options,
                             None,
@@ -1231,11 +1241,14 @@ impl FunctionRegistry for ExecutionContextState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::execution::context::QueryPlanner;
+    use crate::field_util::{FieldExt, SchemaExt};
     use crate::logical_plan::plan::Projection;
     use crate::logical_plan::TableScan;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::physical_plan::{collect, collect_partitioned};
+    use crate::record_batch::RecordBatch;
     use crate::test;
     use crate::variable::VarType;
     use crate::{
@@ -1248,14 +1261,15 @@ mod tests {
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::*;
+    use arrow::chunk::Chunk;
     use arrow::compute::arithmetics::basic::add;
     use arrow::datatypes::*;
     use arrow::io::parquet::write::{
         to_parquet_schema, write_file, Compression, Encoding, RowGroupIterator, Version,
         WriteOptions,
     };
-    use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
+    use std::collections::BTreeMap;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
@@ -1490,7 +1504,7 @@ mod tests {
         let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
         assert_eq!(1, physical_plan.schema().fields().len());
-        assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
+        assert_eq!("c2", physical_plan.schema().field(0).name());
 
         let batches = collect(physical_plan).await?;
         assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
@@ -1566,7 +1580,7 @@ mod tests {
         let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
         assert_eq!(1, physical_plan.schema().fields().len());
-        assert_eq!("b", physical_plan.schema().field(0).name().as_str());
+        assert_eq!("b", physical_plan.schema().field(0).name());
 
         let batches = collect(physical_plan).await?;
         assert_eq!(1, batches.len());
@@ -2815,11 +2829,8 @@ mod tests {
         let plan = ctx.optimize(&plan)?;
 
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
-        assert_eq!(
-            "total_salary",
-            physical_plan.schema().field(1).name().as_str()
-        );
+        assert_eq!("c1", physical_plan.schema().field(0).name());
+        assert_eq!("total_salary", physical_plan.schema().field(1).name());
         Ok(())
     }
 
@@ -4139,7 +4150,7 @@ mod tests {
         let table_dir = tmp_dir.path().join("parquet_test");
         let table_path = Path::new(&table_dir);
 
-        let mut non_empty_metadata: HashMap<String, String> = HashMap::new();
+        let mut non_empty_metadata: BTreeMap<String, String> = BTreeMap::new();
         non_empty_metadata.insert("testing".to_string(), "metadata".to_string());
 
         let fields = vec![
@@ -4147,7 +4158,9 @@ mod tests {
             Field::new("name", DataType::Utf8, true),
         ];
         let schemas = vec![
-            Arc::new(Schema::new_from(fields.clone(), non_empty_metadata.clone())),
+            Arc::new(
+                Schema::new(fields.clone()).with_metadata(non_empty_metadata.clone()),
+            ),
             Arc::new(Schema::new(fields.clone())),
         ];
 
@@ -4166,12 +4179,9 @@ mod tests {
                 // create mock record batch
                 let ids = Arc::new(Int32Array::from_slice(vec![i as i32]));
                 let names = Arc::new(Utf8Array::<i32>::from_slice(vec!["test"]));
-                let rec_batch =
-                    RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
-
                 let schema_ref = schema.as_ref();
                 let parquet_schema = to_parquet_schema(schema_ref).unwrap();
-                let iter = vec![Ok(rec_batch)];
+                let iter = vec![Ok(Chunk::new(vec![ids as ArrayRef, names as ArrayRef]))];
                 let row_groups = RowGroupIterator::try_new(
                     iter.into_iter(),
                     schema_ref,

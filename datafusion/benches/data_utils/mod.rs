@@ -17,9 +17,11 @@
 
 //! This module provides the in-memory table for more realistic benchmarking.
 
-use arrow::{array::*, datatypes::*, record_batch::RecordBatch};
+use arrow::{array::*, datatypes::*};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
+use datafusion::field_util::SchemaExt;
+use datafusion::record_batch::RecordBatch;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};

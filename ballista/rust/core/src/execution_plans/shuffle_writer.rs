@@ -33,6 +33,7 @@ use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
+use arrow::chunk::Chunk;
 use arrow::io::ipc::write::WriteOptions;
 use async_trait::async_trait;
 use datafusion::arrow::array::*;
@@ -41,8 +42,8 @@ use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::io::ipc::read::FileReader;
 use datafusion::arrow::io::ipc::write::FileWriter;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -52,6 +53,7 @@ use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream, Statistics,
 };
+use datafusion::record_batch::RecordBatch;
 use futures::StreamExt;
 use hashbrown::HashMap;
 use log::{debug, info};
@@ -468,7 +470,8 @@ impl ShuffleWriter {
     }
 
     fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch, None)?;
+        let chunk = Chunk::new(batch.columns().to_vec());
+        self.writer.write(&chunk, None)?;
         self.num_batches += 1;
         self.num_rows += batch.num_rows() as u64;
         let num_bytes: usize = batch

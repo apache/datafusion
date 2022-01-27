@@ -17,9 +17,9 @@
 
 //! Avro to Arrow array readers
 
-use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
-use crate::physical_plan::coalesce_batches::concat_batches;
+use crate::physical_plan::coalesce_batches::concat_chunks;
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::io::avro::read::Reader as AvroReader;
@@ -45,7 +45,7 @@ impl<'a, R: Read> AvroBatchReader<R> {
                 codec,
             ),
             avro_schemas,
-            schema.clone(),
+            schema.fields.clone(),
         );
         Ok(Self { reader, schema })
     }
@@ -55,15 +55,15 @@ impl<'a, R: Read> AvroBatchReader<R> {
     pub fn next_batch(&mut self, batch_size: usize) -> ArrowResult<Option<RecordBatch>> {
         if let Some(Ok(batch)) = self.reader.next() {
             let mut batch = batch;
-            'batch: while batch.num_rows() < batch_size {
+            'batch: while batch.len() < batch_size {
                 if let Some(Ok(next_batch)) = self.reader.next() {
-                    let num_rows = batch.num_rows() + next_batch.num_rows();
-                    batch = concat_batches(&self.schema, &[batch, next_batch], num_rows)?
+                    let num_rows = batch.len() + next_batch.len();
+                    batch = concat_chunks(&self.schema, &[batch, next_batch], num_rows)?
                 } else {
                     break 'batch;
                 }
             }
-            Ok(Some(batch))
+            Ok(Some(RecordBatch::new_with_chunk(&self.schema, batch)))
         } else {
             Ok(None)
         }
@@ -75,6 +75,7 @@ mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
+    use crate::field_util::SchemaExt;
     use arrow::array::{Int32Array, Int64Array, ListArray};
     use arrow::datatypes::DataType;
     use std::fs::File;

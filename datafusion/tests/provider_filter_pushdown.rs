@@ -17,17 +17,18 @@
 
 use arrow::array::*;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
+use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
+use datafusion::record_batch::RecordBatch;
 use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 

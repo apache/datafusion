@@ -16,11 +16,14 @@
 // under the License.
 
 //! Functions that are query-able and searchable via the `\h` command
-use arrow::array::Utf8Array;
+use arrow::array::{ArrayRef, Utf8Array};
+use arrow::chunk::Chunk;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 use datafusion::arrow::io::print;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::field_util::SchemaExt;
+use datafusion::physical_plan::ColumnarValue::Array;
+use datafusion::record_batch::RecordBatch;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -187,14 +190,14 @@ impl fmt::Display for Function {
 
 pub fn display_all_functions() -> Result<()> {
     println!("Available help:");
-    let array = StringArray::from_slice(
+    let array: ArrayRef = Arc::new(StringArray::from_slice(
         ALL_FUNCTIONS
             .iter()
             .map(|f| format!("{}", f))
             .collect::<Vec<String>>(),
-    );
+    ));
     let schema = Schema::new(vec![Field::new("Function", DataType::Utf8, false)]);
-    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)])?;
-    print::print(&[batch]);
+    let batch = Chunk::try_new(vec![array])?;
+    println!("{}", print::write(&[batch], &schema.field_names()));
     Ok(())
 }

@@ -18,10 +18,11 @@
 use arrow::{
     array::{Float32Array, Float64Array},
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
 use criterion::{criterion_group, criterion_main, Criterion};
+use datafusion::field_util::SchemaExt;
 use datafusion::prelude::ExecutionContext;
+use datafusion::record_batch::RecordBatch;
 use datafusion::{datasource::MemTable, error::Result};
 use futures::executor::block_on;
 use std::sync::Arc;

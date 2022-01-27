@@ -357,9 +357,10 @@ impl Accumulator for VarianceAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
+    use crate::record_batch::RecordBatch;
     use crate::{error::Result, generic_test_op};
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     #[test]

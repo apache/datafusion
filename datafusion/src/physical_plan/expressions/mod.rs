@@ -22,9 +22,9 @@ use std::sync::Arc;
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
+use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute::sort::{SortColumn as ArrowSortColumn, SortOptions};
-use arrow::record_batch::RecordBatch;
 
 /// One column to be used in lexicographical sort
 #[derive(Clone, Debug)]
@@ -166,7 +166,6 @@ impl PhysicalSortExpr {
 mod tests {
     use super::*;
     use crate::{error::Result, physical_plan::AggregateExpr, scalar::ScalarValue};
-
     /// macro to perform an aggregation and verify the result.
     #[macro_export]
     macro_rules! generic_test_op {

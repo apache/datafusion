@@ -210,6 +210,7 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::{
         expressions::col,
         functions::{TypeSignature, Volatility},

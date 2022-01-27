@@ -21,6 +21,8 @@ use arrow::io::flight::deserialize_schemas;
 use arrow_format::flight::data::{flight_descriptor, FlightDescriptor, Ticket};
 use arrow_format::flight::service::flight_service_client::FlightServiceClient;
 use datafusion::arrow_print;
+use datafusion::field_util::SchemaExt;
+use datafusion::record_batch::RecordBatch;
 use std::collections::HashMap;
 
 /// This example shows how to wrap DataFusion with `FlightService` to support looking up schema information for
@@ -64,13 +66,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut results = vec![];
     let dictionaries_by_field = HashMap::new();
     while let Some(flight_data) = stream.message().await? {
-        let record_batch = arrow::io::flight::deserialize_batch(
+        let chunk = arrow::io::flight::deserialize_batch(
             &flight_data,
-            schema.clone(),
+            schema.fields(),
             &ipc_schema,
             &dictionaries_by_field,
         )?;
-        results.push(record_batch);
+        results.push(RecordBatch::new_with_chunk(&schema, chunk));
     }
 
     // print the results

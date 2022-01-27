@@ -27,7 +27,7 @@ use futures::Stream;
 
 use async_trait::async_trait;
 
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
 use super::common::AbortOnDropMany;
@@ -207,6 +207,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
     use crate::physical_plan::{collect, common};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};

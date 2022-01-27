@@ -30,6 +30,7 @@ use super::FileFormat;
 use super::PhysicalPlanConfig;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
+use crate::field_util::SchemaExt;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
@@ -90,6 +91,7 @@ mod tests {
     use arrow::array::Int64Array;
 
     use super::*;
+    use crate::field_util::FieldExt;
     use crate::{
         datasource::{
             file_format::PhysicalPlanConfig,

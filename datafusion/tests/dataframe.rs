@@ -17,15 +17,14 @@
 
 use std::sync::Arc;
 
+use arrow::array::{Int32Array, Utf8Array};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::{
-    array::{Int32Array, Utf8Array},
-    record_batch::RecordBatch,
-};
+use datafusion::record_batch::RecordBatch;
 
 use datafusion::assert_batches_eq;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
+use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::{col, Expr};
 use datafusion::{datasource::MemTable, prelude::JoinType};
 

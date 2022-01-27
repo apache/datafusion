@@ -25,8 +25,8 @@ use crate::{
     print_options::PrintOptions,
 };
 use clap::SubCommand;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::record_batch::RecordBatch;
 use rustyline::config::Config;
 use rustyline::error::ReadlineError;
 use rustyline::Editor;

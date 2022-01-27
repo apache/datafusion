@@ -19,11 +19,9 @@
 
 use std::{any::Any, sync::Arc};
 
+use crate::record_batch::RecordBatch;
 use arrow::compute;
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Schema};
 
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::{error::Result, scalar::ScalarValue};
@@ -88,11 +86,11 @@ pub fn is_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
     use arrow::{
         array::{BooleanArray, Utf8Array},
         datatypes::*,
-        record_batch::RecordBatch,
     };
     use std::sync::Arc;
 

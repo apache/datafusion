@@ -17,6 +17,7 @@
 //! This module provides logic for displaying LogicalPlans in various styles
 
 use super::{LogicalPlan, PlanVisitor};
+use crate::field_util::{FieldExt, SchemaExt};
 use arrow::datatypes::Schema;
 use std::fmt;
 

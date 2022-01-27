@@ -25,6 +25,7 @@ use async_trait::async_trait;
 
 use crate::datasource::TableProvider;
 use crate::error::Result;
+use crate::field_util::SchemaExt;
 use crate::logical_plan::Expr;
 use crate::physical_plan::{empty::EmptyExec, ExecutionPlan};
 

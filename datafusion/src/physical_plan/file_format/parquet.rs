@@ -25,6 +25,8 @@ use std::{any::Any, convert::TryInto};
 
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
+use crate::field_util::SchemaExt;
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, Expr},
@@ -38,13 +40,11 @@ use crate::{
     },
     scalar::ScalarValue,
 };
-
 use arrow::{
     array::ArrayRef,
     datatypes::*,
     error::Result as ArrowResult,
     io::parquet::read::{self, RowGroupMetaData},
-    record_batch::RecordBatch,
 };
 use log::debug;
 
@@ -443,9 +443,11 @@ fn read_partition(
             )));
         }
 
-        for batch in record_reader {
+        let schema = record_reader.schema().clone();
+        for chunk in record_reader {
+            let batch = RecordBatch::new_with_chunk(&schema, chunk?);
             let proj_batch = partition_column_projector
-                .project(batch?, &partitioned_file.partition_values);
+                .project(batch, &partitioned_file.partition_values);
             response_tx
                 .blocking_send(proj_batch)
                 .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
@@ -467,6 +469,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::field_util::FieldExt;
     use arrow::datatypes::{DataType, Field};
     use arrow::io::parquet::write::to_parquet_schema;
     use arrow::io::parquet::write::{ColumnDescriptor, SchemaDescriptor};
@@ -503,8 +506,7 @@ mod tests {
         assert_eq!(3, batch.num_columns());
 
         let schema = batch.schema();
-        let field_names: Vec<&str> =
-            schema.fields().iter().map(|f| f.name().as_str()).collect();
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name()).collect();
         assert_eq!(vec!["id", "bool_col", "tinyint_col"], field_names);
 
         let batch = results.next().await;

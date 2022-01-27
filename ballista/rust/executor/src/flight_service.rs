@@ -17,6 +17,8 @@
 
 //! Implementation of the Apache Arrow Flight protocol that wraps an executor.
 
+use arrow::array::ArrayRef;
+use arrow::chunk::Chunk;
 use std::fs::File;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,7 +36,6 @@ use arrow_format::flight::data::{
 use arrow_format::flight::service::flight_service_server::FlightService;
 use datafusion::arrow::{
     error::ArrowError, io::ipc::read::FileReader, io::ipc::write::WriteOptions,
-    record_batch::RecordBatch,
 };
 use futures::{Stream, StreamExt};
 use log::{info, warn};
@@ -175,11 +176,11 @@ impl FlightService for BallistaFlightService {
 /// Convert a single RecordBatch into an iterator of FlightData (containing
 /// dictionaries and batches)
 fn create_flight_iter(
-    batch: &RecordBatch,
+    chunk: &Chunk<ArrayRef>,
     options: &WriteOptions,
 ) -> Box<dyn Iterator<Item = Result<FlightData, Status>>> {
     let (flight_dictionaries, flight_batch) =
-        arrow::io::flight::serialize_batch(batch, &[], options);
+        arrow::io::flight::serialize_batch(chunk, &[], options);
     Box::new(
         flight_dictionaries
             .into_iter()
@@ -201,14 +202,13 @@ async fn stream_flight_data(path: String, tx: FlightDataSender) -> Result<(), St
     let reader = FileReader::new(&mut file, file_meta, None);
 
     let options = WriteOptions::default();
-    let schema_flight_data =
-        arrow::io::flight::serialize_schema(reader.schema().as_ref(), &[]);
+    let schema_flight_data = arrow::io::flight::serialize_schema(reader.schema(), None);
     send_response(&tx, Ok(schema_flight_data)).await?;
 
     let mut row_count = 0;
     for batch in reader {
         if let Ok(x) = &batch {
-            row_count += x.num_rows();
+            row_count += x.len();
         }
         let batch_flight_data: Vec<_> = batch
             .map(|b| create_flight_iter(&b, &options).collect())

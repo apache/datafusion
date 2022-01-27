@@ -20,6 +20,7 @@
 use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::{
@@ -27,7 +28,7 @@ use crate::{
         Partitioning, Statistics,
     },
 };
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::datatypes::SchemaRef;
 use futures::StreamExt;
 
 use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
@@ -220,6 +221,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::FutureExt;
 
+    use crate::field_util::SchemaExt;
     use crate::{
         physical_plan::collect,
         test::{

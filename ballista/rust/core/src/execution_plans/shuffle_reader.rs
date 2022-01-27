@@ -27,13 +27,13 @@ use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Metric, Partitioning, Statistics,
 };
+use datafusion::record_batch::RecordBatch;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,

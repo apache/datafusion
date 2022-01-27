@@ -30,11 +30,10 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 
+use crate::record_batch::{filter_record_batch, RecordBatch};
 use arrow::array::{Array, BooleanArray};
-use arrow::compute::filter::filter_record_batch;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 

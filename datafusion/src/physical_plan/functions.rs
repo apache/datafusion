@@ -41,6 +41,7 @@ use crate::physical_plan::expressions::{
 };
 use crate::physical_plan::math_expressions;
 use crate::physical_plan::string_expressions;
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -51,7 +52,6 @@ use arrow::{
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Schema},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
     types::NativeType,
 };
 use fmt::{Debug, Formatter};
@@ -1735,12 +1735,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
+    use crate::record_batch::RecordBatch;
     use crate::{
         error::Result,
         physical_plan::expressions::{col, lit},
         scalar::ScalarValue,
     };
-    use arrow::{datatypes::Field, record_batch::RecordBatch};
+    use arrow::datatypes::Field;
 
     type StringArray = Utf8Array<i32>;
 

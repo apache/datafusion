@@ -29,6 +29,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext;
 
+use datafusion::field_util::SchemaExt;
 use tokio::runtime::Runtime;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {

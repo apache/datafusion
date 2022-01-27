@@ -20,17 +20,16 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::error::{DataFusionError, Result};
+use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::record_batch::RecordBatch;
+use crate::scalar::ScalarValue;
 use arrow::{
     array::*,
     bitmap::Bitmap,
     datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
     types::NativeType,
 };
-
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::scalar::ScalarValue;
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
@@ -456,6 +455,7 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
+    use crate::field_util::SchemaExt;
     use arrow::{array::Utf8Array, datatypes::Field};
 
     type StringArray = Utf8Array<i32>;

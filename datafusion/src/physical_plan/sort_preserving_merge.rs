@@ -26,13 +26,13 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use crate::record_batch::RecordBatch;
 use arrow::array::ord::DynComparator;
 use arrow::array::{growable::make_growable, ord::build_compare, ArrayRef};
 use arrow::compute::sort::SortOptions;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
@@ -40,6 +40,7 @@ use futures::{Stream, StreamExt};
 use hashbrown::HashMap;
 
 use crate::error::{DataFusionError, Result};
+use crate::field_util::SchemaExt;
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
     Distribution, ExecutionPlan, Partitioning, PhysicalExpr, RecordBatchStream,

@@ -39,7 +39,7 @@
 //! ```rust
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -77,7 +77,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -233,6 +233,7 @@ pub mod arrow_print;
 mod arrow_temporal_util;
 
 pub mod field_util;
+pub mod record_batch;
 
 #[cfg(feature = "pyarrow")]
 mod pyarrow;

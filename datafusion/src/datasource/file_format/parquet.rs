@@ -39,6 +39,7 @@ use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
+use crate::field_util::SchemaExt;
 use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -331,6 +332,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::field_util::FieldExt;
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
     };

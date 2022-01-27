@@ -29,6 +29,7 @@ use futures::StreamExt;
 use super::FileFormat;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
+use crate::field_util::SchemaExt;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
 use crate::physical_plan::ExecutionPlan;
@@ -102,25 +103,18 @@ impl FileFormat for CsvFormat {
                 .has_headers(self.has_header)
                 .from_reader(obj_reader?.sync_reader()?);
 
-            let schema = csv::read::infer_schema(
+            let (fields, records_read) = csv::read::infer_schema(
                 &mut reader,
                 Some(records_to_read),
                 self.has_header,
                 &csv::read::infer,
             )?;
 
-            // if records_read == 0 {
-            //     continue;
-            // }
-            // schemas.push(schema.clone());
-            // records_to_read -= records_read;
-            // if records_to_read == 0 {
-            //     break;
-            // }
-            //
-            // FIXME: return recods_read from infer_schema
-            schemas.push(schema.clone());
-            records_to_read -= records_to_read;
+            if records_read == 0 {
+                continue;
+            }
+            schemas.push(Schema::new(fields));
+            records_to_read -= records_read;
             if records_to_read == 0 {
                 break;
             }
@@ -147,6 +141,7 @@ impl FileFormat for CsvFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::{FieldExt, SchemaExt};
     use crate::{
         datasource::{
             file_format::PhysicalPlanConfig,

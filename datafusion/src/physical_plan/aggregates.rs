@@ -333,6 +333,7 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{
         ApproxDistinct, ArrayAgg, Avg, Count, Max, Min, Stddev, Sum, Variance,
     };

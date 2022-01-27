@@ -25,11 +25,11 @@ use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
+use crate::record_batch::RecordBatch;
 use crate::{
     dataframe::*,
     physical_plan::{collect, collect_partitioned},
 };
-use arrow::record_batch::RecordBatch;
 
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,

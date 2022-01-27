@@ -24,17 +24,18 @@ mod json;
 mod parquet;
 
 pub use self::parquet::ParquetExec;
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{ArrayRef, DictionaryArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
 pub use csv::CsvExec;
 pub use json::NdJsonExec;
 use std::iter;
 
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     scalar::ScalarValue,
@@ -134,8 +135,7 @@ impl PhysicalPlanConfig {
         self.projection.as_ref().map(|p| {
             p.iter()
                 .filter(|col_idx| **col_idx < self.file_schema.fields().len())
-                .map(|col_idx| self.file_schema.field(*col_idx).name())
-                .cloned()
+                .map(|col_idx| self.file_schema.field(*col_idx).name().to_string())
                 .collect()
         })
     }

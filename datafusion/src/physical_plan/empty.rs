@@ -25,12 +25,13 @@ use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
 
+use crate::record_batch::RecordBatch;
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 
 use super::{common, SendableRecordBatchStream, Statistics};
 
+use crate::field_util::SchemaExt;
 use async_trait::async_trait;
 
 /// Execution plan for empty relation (produces no rows)

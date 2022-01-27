@@ -32,6 +32,7 @@ use crate::scalar::ScalarValue;
 use super::optimizer::PhysicalOptimizerRule;
 use super::utils::optimize_children;
 use crate::error::Result;
+use crate::field_util::SchemaExt;
 
 /// Optimizer that uses available statistics for aggregate functions
 pub struct AggregateStatistics {}
@@ -253,9 +254,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use crate::record_batch::RecordBatch;
     use arrow::array::{Int32Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
 
     use crate::error::Result;
     use crate::logical_plan::Operator;

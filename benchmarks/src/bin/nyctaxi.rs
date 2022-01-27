@@ -17,6 +17,8 @@
 
 //! Apache Arrow Rust Benchmarks
 
+use arrow::array::ArrayRef;
+use arrow::chunk::Chunk;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
@@ -28,6 +30,7 @@ use datafusion::arrow::io::print;
 use datafusion::error::Result;
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
 
+use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::collect;
 use datafusion::prelude::CsvReadOptions;
 use structopt::StructOpt;
@@ -124,7 +127,12 @@ async fn execute_sql(ctx: &mut ExecutionContext, sql: &str, debug: bool) -> Resu
     let physical_plan = ctx.create_physical_plan(&plan).await?;
     let result = collect(physical_plan).await?;
     if debug {
-        print::print(&result);
+        let fields = result
+            .first()
+            .map(|b| b.schema().field_names())
+            .unwrap_or(vec![]);
+        let chunks: Vec<Chunk<ArrayRef>> = result.iter().map(|rb| rb.into()).collect();
+        println!("{}", print::write(&chunks, &fields));
     }
     Ok(())
 }

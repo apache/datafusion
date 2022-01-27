@@ -26,7 +26,7 @@ use std::{any::Any, vec};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{Array, UInt64Array},
     error::Result as ArrowResult,
@@ -494,6 +494,8 @@ mod tests {
     type StringArray = Utf8Array<i32>;
 
     use super::*;
+    use crate::field_util::SchemaExt;
+    use crate::record_batch::RecordBatch;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{collect, expressions::col, memory::MemoryExec},
@@ -508,7 +510,6 @@ mod tests {
     use arrow::array::{ArrayRef, UInt32Array, Utf8Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
-    use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
 
     #[tokio::test]

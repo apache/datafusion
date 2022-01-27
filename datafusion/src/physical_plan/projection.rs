@@ -30,13 +30,14 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use super::expressions::Column;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
+use crate::field_util::{FieldExt, SchemaExt};
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -78,7 +79,8 @@ impl ProjectionExec {
             })
             .collect();
 
-        let schema = Arc::new(Schema::new_from(fields?, input_schema.metadata().clone()));
+        let schema =
+            Arc::new(Schema::new(fields?).with_metadata(input_schema.metadata().clone()));
 
         Ok(Self {
             expr,

@@ -18,8 +18,10 @@
 //! Utility functions for complex field access
 
 use arrow::array::{ArrayRef, StructArray};
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::error::ArrowError;
 use std::borrow::Borrow;
+use std::collections::BTreeMap;
 
 use crate::error::{DataFusionError, Result};
 use crate::scalar::ScalarValue;
@@ -108,4 +110,322 @@ pub fn struct_array_from(pairs: Vec<(Field, ArrayRef)>) -> StructArray {
     let fields: Vec<Field> = pairs.iter().map(|v| v.0.clone()).collect();
     let values = pairs.iter().map(|v| v.1.clone()).collect();
     StructArray::from_data(DataType::Struct(fields), values, None)
+}
+
+/// Imitate arrow-rs Schema behavior by extending arrow2 Schema
+pub trait SchemaExt {
+    /// Creates a new [`Schema`] from a sequence of [`Field`] values.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow::datatypes::{Field, DataType, Schema};
+    /// use datafusion::field_util::SchemaExt;
+    /// let field_a = Field::new("a", DataType::Int64, false);
+    /// let field_b = Field::new("b", DataType::Boolean, false);
+    ///
+    /// let schema = Schema::new(vec![field_a, field_b]);
+    /// ```
+    fn new(fields: Vec<Field>) -> Self;
+
+    /// Creates an empty [`Schema`].
+    fn empty() -> Self;
+
+    /// Look up a column by name and return a immutable reference to the column along with
+    /// its index.
+    fn column_with_name(&self, name: &str) -> Option<(usize, &Field)>;
+
+    /// Returns the first [`Field`] named `name`.
+    fn field_with_name(&self, name: &str) -> Result<&Field>;
+
+    /// Find the index of the column with the given name.
+    fn index_of(&self, name: &str) -> Result<usize>;
+
+    /// Returns the [`Field`] at position `i`.
+    /// # Panics
+    /// Panics iff `i` is larger than the number of fields in this [`Schema`].
+    fn field(&self, index: usize) -> &Field;
+
+    /// Returns all [`Field`]s in this schema.
+    fn fields(&self) -> &[Field];
+
+    /// Returns an immutable reference to the Map of custom metadata key-value pairs.
+    fn metadata(&self) -> &BTreeMap<String, String>;
+
+    /// Merge schema into self if it is compatible. Struct fields will be merged recursively.
+    ///
+    /// Example:
+    ///
+    /// ```
+    /// use arrow::datatypes::*;
+    /// use datafusion::field_util::SchemaExt;
+    ///
+    /// let merged = Schema::try_merge(vec![
+    ///     Schema::new(vec![
+    ///         Field::new("c1", DataType::Int64, false),
+    ///         Field::new("c2", DataType::Utf8, false),
+    ///     ]),
+    ///     Schema::new(vec![
+    ///         Field::new("c1", DataType::Int64, true),
+    ///         Field::new("c2", DataType::Utf8, false),
+    ///         Field::new("c3", DataType::Utf8, false),
+    ///     ]),
+    /// ]).unwrap();
+    ///
+    /// assert_eq!(
+    ///     merged,
+    ///     Schema::new(vec![
+    ///         Field::new("c1", DataType::Int64, true),
+    ///         Field::new("c2", DataType::Utf8, false),
+    ///         Field::new("c3", DataType::Utf8, false),
+    ///     ]),
+    /// );
+    /// ```
+    fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self>
+    where
+        Self: Sized;
+
+    /// Return the field names
+    fn field_names(&self) -> Vec<String>;
+}
+
+impl SchemaExt for Schema {
+    fn new(fields: Vec<Field>) -> Self {
+        Self::from(fields)
+    }
+
+    fn empty() -> Self {
+        Self::from(vec![])
+    }
+
+    fn column_with_name(&self, name: &str) -> Option<(usize, &Field)> {
+        self.fields.iter().enumerate().find(|(_, f)| f.name == name)
+    }
+
+    fn field_with_name(&self, name: &str) -> Result<&Field> {
+        Ok(&self.fields[self.index_of(name)?])
+    }
+
+    fn index_of(&self, name: &str) -> Result<usize> {
+        self.column_with_name(name).map(|(i, _f)| i).ok_or_else(|| {
+            DataFusionError::ArrowError(ArrowError::InvalidArgumentError(format!(
+                "Unable to get field named \"{}\". Valid fields: {:?}",
+                name,
+                self.field_names()
+            )))
+        })
+    }
+
+    fn field(&self, index: usize) -> &Field {
+        &self.fields[index]
+    }
+
+    #[inline]
+    fn fields(&self) -> &[Field] {
+        &self.fields
+    }
+
+    #[inline]
+    fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
+
+    fn try_merge(schemas: impl IntoIterator<Item = Self>) -> Result<Self> {
+        schemas
+            .into_iter()
+            .try_fold(Self::empty(), |mut merged, schema| {
+                let Schema { metadata, fields } = schema;
+                for (key, value) in metadata.into_iter() {
+                    // merge metadata
+                    if let Some(old_val) = merged.metadata.get(&key) {
+                        if old_val != &value {
+                            return Err(DataFusionError::ArrowError(
+                                ArrowError::InvalidArgumentError(
+                                    "Fail to merge schema due to conflicting metadata."
+                                        .to_string(),
+                                ),
+                            ));
+                        }
+                    }
+                    merged.metadata.insert(key, value);
+                }
+                // merge fields
+                for field in fields.into_iter() {
+                    let mut new_field = true;
+                    for merged_field in &mut merged.fields {
+                        if field.name() != merged_field.name() {
+                            continue;
+                        }
+                        new_field = false;
+                        merged_field.try_merge(&field)?
+                    }
+                    // found a new field, add to field list
+                    if new_field {
+                        merged.fields.push(field);
+                    }
+                }
+                Ok(merged)
+            })
+    }
+
+    fn field_names(&self) -> Vec<String> {
+        self.fields.iter().map(|f| f.name.to_string()).collect()
+    }
+}
+
+/// Imitate arrow-rs Field behavior by extending arrow2 Field
+pub trait FieldExt {
+    /// The field name
+    fn name(&self) -> &str;
+
+    /// Whether the field is nullable
+    fn is_nullable(&self) -> bool;
+
+    /// Returns the field metadata
+    fn metadata(&self) -> &BTreeMap<String, String>;
+
+    /// Merge field into self if it is compatible. Struct will be merged recursively.
+    /// NOTE: `self` may be updated to unexpected state in case of merge failure.
+    ///
+    /// Example:
+    ///
+    /// ```
+    /// use arrow2::datatypes::*;
+    ///
+    /// let mut field = Field::new("c1", DataType::Int64, false);
+    /// assert!(field.try_merge(&Field::new("c1", DataType::Int64, true)).is_ok());
+    /// assert!(field.is_nullable());
+    /// ```
+    fn try_merge(&mut self, from: &Field) -> Result<()>;
+}
+
+impl FieldExt for Field {
+    #[inline]
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[inline]
+    fn is_nullable(&self) -> bool {
+        self.is_nullable
+    }
+
+    #[inline]
+    fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
+
+    fn try_merge(&mut self, from: &Field) -> Result<()> {
+        // merge metadata
+        for (key, from_value) in from.metadata() {
+            if let Some(self_value) = self.metadata.get(key) {
+                if self_value != from_value {
+                    return Err(DataFusionError::ArrowError(ArrowError::InvalidArgumentError(format!(
+                        "Fail to merge field due to conflicting metadata data value for key {}",
+                        key
+                    ))));
+                }
+            } else {
+                self.metadata.insert(key.clone(), from_value.clone());
+            }
+        }
+
+        match &mut self.data_type {
+            DataType::Struct(nested_fields) => match &from.data_type {
+                DataType::Struct(from_nested_fields) => {
+                    for from_field in from_nested_fields {
+                        let mut is_new_field = true;
+                        for self_field in nested_fields.iter_mut() {
+                            if self_field.name != from_field.name {
+                                continue;
+                            }
+                            is_new_field = false;
+                            self_field.try_merge(from_field)?;
+                        }
+                        if is_new_field {
+                            nested_fields.push(from_field.clone());
+                        }
+                    }
+                }
+                _ => {
+                    return Err(DataFusionError::ArrowError(
+                        ArrowError::InvalidArgumentError(
+                            "Fail to merge schema Field due to conflicting datatype"
+                                .to_string(),
+                        ),
+                    ));
+                }
+            },
+            DataType::Union(nested_fields, _, _) => match &from.data_type {
+                DataType::Union(from_nested_fields, _, _) => {
+                    for from_field in from_nested_fields {
+                        let mut is_new_field = true;
+                        for self_field in nested_fields.iter_mut() {
+                            if from_field == self_field {
+                                is_new_field = false;
+                                break;
+                            }
+                        }
+                        if is_new_field {
+                            nested_fields.push(from_field.clone());
+                        }
+                    }
+                }
+                _ => {
+                    return Err(DataFusionError::ArrowError(
+                        ArrowError::InvalidArgumentError(
+                            "Fail to merge schema Field due to conflicting datatype"
+                                .to_string(),
+                        ),
+                    ));
+                }
+            },
+            DataType::Null
+            | DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Timestamp(_, _)
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Duration(_)
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::Interval(_)
+            | DataType::LargeList(_)
+            | DataType::List(_)
+            | DataType::Dictionary(_, _, _)
+            | DataType::FixedSizeList(_, _)
+            | DataType::FixedSizeBinary(_)
+            | DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Extension(_, _, _)
+            | DataType::Map(_, _)
+            | DataType::Decimal(_, _) => {
+                if self.data_type != from.data_type {
+                    return Err(DataFusionError::ArrowError(
+                        ArrowError::InvalidArgumentError(
+                            "Fail to merge schema Field due to conflicting datatype"
+                                .to_string(),
+                        ),
+                    ));
+                }
+            }
+        }
+        if from.is_nullable {
+            self.is_nullable = from.is_nullable;
+        }
+
+        Ok(())
+    }
 }

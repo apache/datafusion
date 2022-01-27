@@ -18,9 +18,9 @@
 use arrow::array::{Int32Array, PrimitiveArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
-
+use datafusion::field_util::{FieldExt, SchemaExt};
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::record_batch::RecordBatch;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
@@ -241,7 +241,7 @@ async fn custom_source_dataframe() -> Result<()> {
     let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
-    assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
+    assert_eq!("c2", physical_plan.schema().field(0).name());
 
     let batches = collect(physical_plan).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;

@@ -21,11 +21,11 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::ops::Neg;
@@ -188,8 +188,9 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::Column;
-    use arrow::record_batch::RecordBatch;
+    use crate::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {

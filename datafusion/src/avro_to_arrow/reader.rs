@@ -17,8 +17,8 @@
 
 use super::arrow_array_reader::AvroBatchReader;
 use crate::arrow::datatypes::SchemaRef;
-use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
+use crate::record_batch::RecordBatch;
 use arrow::error::Result as ArrowResult;
 use arrow::io::avro::{read, Compression};
 use std::io::{Read, Seek, SeekFrom};
@@ -196,6 +196,8 @@ mod tests {
     use super::*;
     use crate::arrow::array::*;
     use crate::arrow::datatypes::{DataType, Field};
+    use crate::field_util::SchemaExt;
+    use crate::record_batch::RecordBatch;
     use arrow::datatypes::TimeUnit;
     use std::fs::File;
 

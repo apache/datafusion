@@ -37,12 +37,12 @@ pub fn nullif_func(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match (lhs, rhs) {
         (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
             Ok(ColumnarValue::Array(
-                nullif::nullif(lhs.as_ref(), rhs.to_array_of_size(lhs.len()).as_ref())?
+                nullif::nullif(lhs.as_ref(), rhs.to_array_of_size(lhs.len()).as_ref())
                     .into(),
             ))
         }
         (ColumnarValue::Array(lhs), ColumnarValue::Array(rhs)) => Ok(
-            ColumnarValue::Array(nullif::nullif(lhs.as_ref(), rhs.as_ref())?.into()),
+            ColumnarValue::Array(nullif::nullif(lhs.as_ref(), rhs.as_ref()).into()),
         ),
         _ => Err(DataFusionError::NotImplemented(
             "nullif does not support a literal as first argument".to_string(),

@@ -19,10 +19,10 @@
 
 use std::sync::Arc;
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::*,
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
 use chrono::{TimeZone, Utc};
 use futures::{
@@ -43,6 +43,7 @@ use crate::datasource::{
     object_store::{FileMeta, ObjectStore, SizedFile},
     MemTable, PartitionedFile, PartitionedFileStream,
 };
+use crate::field_util::SchemaExt;
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";

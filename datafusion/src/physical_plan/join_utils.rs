@@ -18,6 +18,7 @@
 //! Join related functionality used both on logical and physical plans
 
 use crate::error::{DataFusionError, Result};
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::JoinType;
 use crate::physical_plan::expressions::Column;
 use arrow::datatypes::{Field, Schema};

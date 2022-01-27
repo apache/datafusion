@@ -29,10 +29,10 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
+use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use arrow::compute::take;
 
@@ -54,6 +54,7 @@ use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
+use crate::field_util::SchemaExt;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use arrow::bitmap::MutableBitmap;

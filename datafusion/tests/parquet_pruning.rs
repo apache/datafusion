@@ -29,9 +29,10 @@ use arrow::{
         array_to_pages, to_parquet_schema, write_file, Compression, Compressor, DynIter,
         DynStreamingIterator, Encoding, FallibleStreamingIterator, Version, WriteOptions,
     },
-    record_batch::RecordBatch,
 };
 use chrono::{Datelike, Duration};
+use datafusion::field_util::SchemaExt;
+use datafusion::record_batch::RecordBatch;
 use datafusion::{
     arrow_print,
     datasource::TableProvider,

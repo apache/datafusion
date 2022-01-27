@@ -26,12 +26,13 @@ use tokio::runtime::Runtime;
 use arrow::{
     array::{Float32Array, Float64Array},
     datatypes::{DataType, Field, Schema},
-    record_batch::RecordBatch,
 };
 use datafusion::error::Result;
+use datafusion::record_batch::RecordBatch;
 
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext;
+use datafusion::field_util::SchemaExt;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();

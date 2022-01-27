@@ -37,6 +37,7 @@ use crate::datasource::{
     datasource::TableProviderFilterPushDown, file_format::FileFormat,
     get_statistics_with_limit, object_store::ObjectStore, PartitionedFile, TableProvider,
 };
+use crate::field_util::SchemaExt;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
@@ -125,7 +126,7 @@ impl ListingTable {
         options: ListingOptions,
     ) -> Self {
         // Add the partition columns to the file schema
-        let mut table_fields = file_schema.fields().clone();
+        let mut table_fields = file_schema.fields().to_vec();
         for part in &options.table_partition_cols {
             table_fields.push(Field::new(
                 part,
@@ -138,7 +139,7 @@ impl ListingTable {
             object_store,
             table_path,
             file_schema,
-            table_schema: Arc::new(Schema::new(table_fields)),
+            table_schema: Arc::new(Schema::new(table_fields.to_vec())),
             options,
         }
     }

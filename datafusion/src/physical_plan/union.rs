@@ -23,7 +23,8 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use crate::record_batch::RecordBatch;
+use arrow::datatypes::SchemaRef;
 use futures::StreamExt;
 
 use super::{
@@ -221,6 +222,7 @@ mod tests {
     use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
     use crate::{test, test_util};
 
+    use crate::record_batch::RecordBatch;
     use crate::{
         physical_plan::{
             collect,
@@ -228,7 +230,6 @@ mod tests {
         },
         scalar::ScalarValue,
     };
-    use arrow::record_batch::RecordBatch;
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {

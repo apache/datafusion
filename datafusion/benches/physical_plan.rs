@@ -23,10 +23,8 @@ extern crate datafusion;
 
 use std::sync::Arc;
 
-use arrow::{
-    array::{ArrayRef, Int64Array, Utf8Array},
-    record_batch::RecordBatch,
-};
+use arrow::array::{ArrayRef, Int64Array, Utf8Array};
+use datafusion::record_batch::RecordBatch;
 use tokio::runtime::Runtime;
 
 use datafusion::physical_plan::{

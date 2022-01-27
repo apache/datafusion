@@ -53,7 +53,7 @@ pub trait UserDefinedLogicalNode: fmt::Debug {
         self.schema()
             .fields()
             .iter()
-            .map(|f| f.name().clone())
+            .map(|f| f.name().to_string())
             .collect()
     }
 

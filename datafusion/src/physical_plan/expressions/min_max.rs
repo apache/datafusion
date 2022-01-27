@@ -571,11 +571,12 @@ impl Accumulator for MinAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::expressions::tests::aggregate;
+    use crate::record_batch::RecordBatch;
     use crate::scalar::ScalarValue::Decimal128;
     use crate::{error::Result, generic_test_op};
-    use arrow::record_batch::RecordBatch;
 
     #[test]
     fn min_decimal() -> Result<()> {

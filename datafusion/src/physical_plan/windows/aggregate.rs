@@ -23,8 +23,8 @@ use crate::physical_plan::windows::find_ranges_in_range;
 use crate::physical_plan::{
     expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::compute::concatenate;
-use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use std::any::Any;
 use std::iter::IntoIterator;

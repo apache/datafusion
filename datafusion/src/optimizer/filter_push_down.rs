@@ -556,6 +556,7 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::datasource::TableProvider;
+    use crate::field_util::SchemaExt;
     use crate::logical_plan::{lit, sum, DFSchema, Expr, LogicalPlanBuilder, Operator};
     use crate::physical_plan::ExecutionPlan;
     use crate::test::*;

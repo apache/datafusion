@@ -19,10 +19,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Int32Array, Utf8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::record_batch::RecordBatch;
 
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
+use datafusion::field_util::SchemaExt;
 use datafusion::prelude::*;
 
 /// This example demonstrates how to use the DataFrame API against in-memory data.

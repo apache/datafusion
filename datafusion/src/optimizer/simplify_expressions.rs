@@ -17,12 +17,13 @@
 
 //! Simplify expressions optimizer rule
 
+use crate::record_batch::RecordBatch;
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 
 use crate::error::DataFusionError;
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
+use crate::field_util::SchemaExt;
 use crate::logical_plan::{lit, DFSchemaRef, Expr};
 use crate::logical_plan::{DFSchema, ExprRewriter, LogicalPlan, RewriteRecursion};
 use crate::optimizer::optimizer::OptimizerRule;

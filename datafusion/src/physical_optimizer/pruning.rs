@@ -31,13 +31,14 @@
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     compute::cast,
     datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
 };
 
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::{
     error::{DataFusionError, Result},
     execution::context::ExecutionContextState,

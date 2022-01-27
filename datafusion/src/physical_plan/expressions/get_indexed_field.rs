@@ -20,13 +20,12 @@
 use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
+use crate::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Schema};
 
 use crate::arrow::array::Array;
 use crate::arrow::compute::concatenate::concatenate;
+use crate::field_util::FieldExt;
 use crate::scalar::ScalarValue;
 use crate::{
     error::DataFusionError,
@@ -120,6 +119,7 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, lit};
     use arrow::array::{
         Int64Array, MutableListArray, MutableUtf8Array, StructArray, Utf8Array,

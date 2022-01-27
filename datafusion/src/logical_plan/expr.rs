@@ -23,7 +23,7 @@ pub use super::Operator;
 use arrow::{compute::cast::can_cast_types, datatypes::DataType};
 
 use crate::error::{DataFusionError, Result};
-use crate::field_util::get_indexed_field;
+use crate::field_util::{get_indexed_field, FieldExt};
 use crate::logical_plan::{
     plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
 };

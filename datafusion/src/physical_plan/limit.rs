@@ -30,11 +30,11 @@ use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
 
+use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
 use arrow::compute::limit::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},

@@ -21,10 +21,10 @@
 use crate::error::Result;
 use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
+use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -166,6 +166,7 @@ impl PartitionEvaluator for RankEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use arrow::{array::*, datatypes::*};
 
     fn test_with_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {

@@ -25,6 +25,7 @@ mod roundtrip_tests {
     use crate::error::BallistaError;
     use arrow::datatypes::UnionMode;
     use core::panic;
+    use datafusion::field_util::SchemaExt;
     use datafusion::logical_plan::Repartition;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},

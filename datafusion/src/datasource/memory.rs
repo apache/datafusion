@@ -23,12 +23,13 @@ use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::Expr;
 use crate::physical_plan::common;
 use crate::physical_plan::memory::MemoryExec;
@@ -163,7 +164,7 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
@@ -325,18 +326,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_merged_schema() -> Result<()> {
-        let mut metadata = HashMap::new();
+        let mut metadata = BTreeMap::new();
         metadata.insert("foo".to_string(), "bar".to_string());
 
-        let schema1 = Schema::new_from(
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Int32, false),
-            ],
-            // test for comparing metadata
-            metadata,
-        );
+        // test for comparing metadata
+        let schema1 = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ])
+        .with_metadata(metadata);
 
         let schema2 = Schema::new(vec![
             // test for comparing nullability

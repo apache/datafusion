@@ -17,9 +17,8 @@
 
 //! Stream wrappers for physical operators
 
-use arrow::{
-    datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
-};
+use crate::record_batch::RecordBatch;
+use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 use futures::{Stream, StreamExt};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;

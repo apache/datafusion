@@ -19,9 +19,9 @@
 
 use std::task::Poll;
 
-use arrow::{error::ArrowError, record_batch::RecordBatch};
-
 use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
+use crate::record_batch::RecordBatch;
+use arrow::error::ArrowError;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator

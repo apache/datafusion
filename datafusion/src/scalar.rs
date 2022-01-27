@@ -20,7 +20,7 @@
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
 
 use crate::error::{DataFusionError, Result};
-use crate::field_util::StructArrayExt;
+use crate::field_util::{FieldExt, StructArrayExt};
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 use arrow::compute::concatenate;

@@ -20,6 +20,7 @@
 use std::{fs, io, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::field_util::SchemaExt;
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{

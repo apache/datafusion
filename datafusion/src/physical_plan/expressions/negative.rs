@@ -20,11 +20,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::*,
     compute::arithmetics::basic::negate,
     datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
 };
 
 use crate::error::{DataFusionError, Result};

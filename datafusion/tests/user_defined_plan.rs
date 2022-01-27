@@ -64,8 +64,8 @@ use arrow::{
     array::{Int64Array, Utf8Array},
     datatypes::SchemaRef,
     error::ArrowError,
-    record_batch::RecordBatch,
 };
+use datafusion::record_batch::RecordBatch;
 use datafusion::{
     arrow_print::write,
     error::{DataFusionError, Result},

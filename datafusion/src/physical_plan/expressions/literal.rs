@@ -20,10 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
+use crate::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Schema};
 
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::{error::Result, scalar::ScalarValue};
@@ -80,6 +78,7 @@ pub fn lit(value: ScalarValue) -> Arc<dyn PhysicalExpr> {
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use arrow::array::*;
     use arrow::datatypes::*;
 

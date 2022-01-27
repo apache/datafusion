@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -81,6 +80,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::field_util::{FieldExt, SchemaExt};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, UInt64Array,
     };

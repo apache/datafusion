@@ -17,10 +17,10 @@
 
 use std::{any::Any, convert::TryInto, sync::Arc};
 
+use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
@@ -775,6 +775,7 @@ mod tests {
 
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, lit};
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions

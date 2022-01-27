@@ -20,6 +20,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
+use crate::field_util::SchemaExt;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, Join, Projection, TableScan, Window,
 };
@@ -31,7 +32,6 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::{Field, Schema};
-use arrow::error::Result as ArrowResult;
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -87,7 +87,7 @@ fn get_projected_schema(
         .iter()
         .filter(|c| c.relation.is_none() || c.relation.as_ref() == table_name)
         .map(|c| schema.index_of(&c.name))
-        .filter_map(ArrowResult::ok)
+        .filter_map(Result::ok)
         .collect();
 
     if projection.is_empty() {

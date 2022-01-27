@@ -24,10 +24,10 @@ use std::sync::Arc;
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 
 /// Not expression
 #[derive(Debug)]
@@ -119,6 +119,7 @@ pub fn not(
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
     use arrow::datatypes::*;
 

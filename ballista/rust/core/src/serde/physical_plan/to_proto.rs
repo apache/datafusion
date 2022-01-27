@@ -26,6 +26,7 @@ use std::{
     sync::Arc,
 };
 
+use datafusion::field_util::FieldExt;
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -197,7 +198,7 @@ impl TryInto<protobuf::PhysicalPlanNode> for Arc<dyn ExecutionPlan> {
                 .aggr_expr()
                 .iter()
                 .map(|expr| match expr.field() {
-                    Ok(field) => Ok(field.name().clone()),
+                    Ok(field) => Ok(field.name().to_string()),
                     Err(e) => Err(BallistaError::DataFusionError(e)),
                 })
                 .collect::<Result<_, Self::Error>>()?;

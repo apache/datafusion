@@ -22,14 +22,15 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::io::csv;
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::io::Read;
 use std::sync::Arc;
 
+use crate::field_util::SchemaExt;
 use async_trait::async_trait;
 
 use super::file_stream::{BatchIter, FileStream};
@@ -86,6 +87,7 @@ fn deserialize(
         0,
         csv::read::deserialize_column,
     )
+    .map(|chunk| RecordBatch::new_with_chunk(schema, chunk))
 }
 
 struct CsvBatchReader<R: Read> {
@@ -249,6 +251,7 @@ impl ExecutionPlan for CsvExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::{
         assert_batches_eq,
         datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},

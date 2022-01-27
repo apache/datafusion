@@ -37,16 +37,17 @@ use crate::{
     scalar::ScalarValue,
 };
 
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::*,
     compute::{cast, concatenate, take},
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
 
+use crate::field_util::{FieldExt, SchemaExt};
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;

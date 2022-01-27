@@ -19,12 +19,11 @@
 
 use std::sync::Arc;
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
+use crate::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Schema};
 
 use crate::error::Result;
+use crate::field_util::{FieldExt, SchemaExt};
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 
 /// Represents the column at a given index in a RecordBatch

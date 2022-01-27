@@ -22,10 +22,10 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
+use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::io::json;
-use arrow::record_batch::RecordBatch;
 use std::any::Any;
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
@@ -97,7 +97,8 @@ impl<R: BufRead> Iterator for JsonBatchReader<R> {
                     self.schema.fields.clone()
                 };
                 self.rows.truncate(records_read);
-                json::read::deserialize(&self.rows, fields).map(Some)
+                json::read::deserialize(&self.rows, &fields)
+                    .map(|chunk| Some(RecordBatch::new_with_chunk(&self.schema, chunk)))
             } else {
                 Ok(None)
             }
@@ -197,6 +198,7 @@ mod tests {
             local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
+    use crate::field_util::SchemaExt;
 
     use super::*;
 

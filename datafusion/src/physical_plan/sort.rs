@@ -27,11 +27,11 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
+use crate::record_batch::RecordBatch;
 pub use arrow::compute::sort::SortOptions;
 use arrow::compute::{sort::lexsort_to_indices, take};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, error::ArrowError};
 use async_trait::async_trait;
 use futures::stream::Stream;
@@ -302,10 +302,11 @@ impl RecordBatchStream for SortStream {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::field_util::{FieldExt, SchemaExt};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -393,14 +394,14 @@ mod tests {
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
                 .collect();
-        let schema_metadata: HashMap<String, String> =
+        let schema_metadata: BTreeMap<String, String> =
             vec![("baz".to_string(), "barf".to_string())]
                 .into_iter()
                 .collect();
 
         let mut field = Field::new("field_name", DataType::UInt64, true);
         field = field.with_metadata(field_metadata.clone());
-        let schema = Schema::new_from(vec![field], schema_metadata.clone());
+        let schema = Schema::new(vec![field]).with_metadata(schema_metadata.clone());
         let schema = Arc::new(schema);
 
         let data: ArrayRef =

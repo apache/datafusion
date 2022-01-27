@@ -158,6 +158,7 @@ mod tests {
     use crate::datasource::object_store::local::{
         local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
     };
+    use crate::field_util::SchemaExt;
     use crate::scalar::ScalarValue;
     use futures::StreamExt;
 

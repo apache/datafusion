@@ -39,10 +39,11 @@ use datafusion::arrow::{
     array::{StructArray, Utf8Array},
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
+use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::common::collect;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion::record_batch::RecordBatch;
 use datafusion::{logical_plan::LogicalPlan, physical_plan::RecordBatchStream};
 use futures::{Stream, StreamExt};
 use log::debug;
@@ -174,11 +175,12 @@ impl Stream for FlightDataStream {
 
                         arrow::io::flight::deserialize_batch(
                             &flight_data_chunk,
-                            self.schema.clone(),
+                            self.schema.fields(),
                             &self.ipc_schema,
                             &hm,
                         )
-                    });
+                    })
+                    .map(|c| RecordBatch::new_with_chunk(&self.schema, c));
                 Some(converted_chunk)
             }
             None => None,

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Column;
 
+use crate::field_util::{FieldExt, SchemaExt};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
 
@@ -70,8 +71,8 @@ impl DFSchema {
         // deterministic
         let mut qualified_names = qualified_names
             .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&String, &String)>>();
+            .map(|(l, r)| (l.as_str(), r.to_owned()))
+            .collect::<Vec<(&str, &str)>>();
         qualified_names.sort_by(|a, b| {
             let a = format!("{}.{}", a.0, a.1);
             let b = format!("{}.{}", b.0, b.1);
@@ -305,11 +306,7 @@ impl Into<Schema> for DFSchema {
                 .into_iter()
                 .map(|f| {
                     if f.qualifier().is_some() {
-                        Field::new(
-                            f.name().as_str(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
+                        Field::new(f.name(), f.data_type().to_owned(), f.is_nullable())
                     } else {
                         f.field
                     }
@@ -441,7 +438,7 @@ impl DFField {
     }
 
     /// Returns an immutable reference to the `DFField`'s unqualified name
-    pub fn name(&self) -> &String {
+    pub fn name(&self) -> &str {
         self.field.name()
     }
 

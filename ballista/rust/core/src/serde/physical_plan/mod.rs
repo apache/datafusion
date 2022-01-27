@@ -22,6 +22,7 @@ pub mod to_proto;
 mod roundtrip_tests {
     use std::{convert::TryInto, sync::Arc};
 
+    use datafusion::field_util::SchemaExt;
     use datafusion::{
         arrow::{
             compute::sort::SortOptions,

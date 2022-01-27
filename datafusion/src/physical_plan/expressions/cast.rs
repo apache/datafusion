@@ -22,12 +22,12 @@ use std::sync::Arc;
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::{Array, Int32Array};
 use arrow::compute::cast;
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug)]
@@ -157,6 +157,7 @@ pub fn cast(
 mod tests {
     use super::*;
     use crate::error::Result;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
     use arrow::{array::*, datatypes::*};
 

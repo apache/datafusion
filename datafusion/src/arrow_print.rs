@@ -20,8 +20,9 @@
 // adapted from https://github.com/jorgecarleitao/arrow2/blob/ef7937dfe56033c2cc491482c67587b52cd91554/src/array/display.rs
 // see: https://github.com/jorgecarleitao/arrow2/issues/771
 
-use arrow::{array::*, record_batch::RecordBatch};
-
+use crate::field_util::{FieldExt, SchemaExt};
+use crate::record_batch::RecordBatch;
+use arrow::array::*;
 use comfy_table::{Cell, Table};
 
 macro_rules! dyn_display {

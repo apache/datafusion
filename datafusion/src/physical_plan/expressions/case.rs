@@ -17,11 +17,11 @@
 
 use std::{any::Any, sync::Arc};
 
+use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute::comparison;
 use arrow::compute::if_then_else;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
@@ -266,6 +266,7 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::field_util::SchemaExt;
     use crate::{
         error::Result,
         logical_plan::Operator,

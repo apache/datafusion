@@ -20,6 +20,7 @@
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
+use crate::field_util::SchemaExt;
 use arrow::datatypes::{DataType, Field, Schema};
 
 /// Compares formatted output of a record batch with an expected
