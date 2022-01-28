@@ -248,15 +248,6 @@ enum StreamWrapper {
     Stream(Option<SortedStream>),
 }
 
-impl StreamWrapper {
-    fn mem_used(&self) -> usize {
-        match &self {
-            StreamWrapper::Stream(Some(s)) => s.mem_used,
-            _ => 0,
-        }
-    }
-}
-
 impl Stream for StreamWrapper {
     type Item = ArrowResult<RecordBatch>;
 

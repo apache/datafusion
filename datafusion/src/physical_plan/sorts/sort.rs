@@ -143,13 +143,14 @@ impl ExternalSorter {
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(SortedStream::new(stream, 0));
             }
-            let baseline_metrics = self.metrics_set.new_final_baseline(partition);
+            let tracking_metrics = self
+                .metrics_set
+                .new_final_tracking(partition, self.runtime.clone());
             Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
                 &self.expr,
-                baseline_metrics,
-                partition,
+                tracking_metrics,
                 self.runtime.clone(),
             )))
         } else if in_mem_batches.len() > 0 {
