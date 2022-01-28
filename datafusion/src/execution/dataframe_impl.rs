@@ -111,9 +111,9 @@ impl TableProvider for DataFrameImpl {
                 },
             )?
             // add predicates, otherwise use `true` as the predicate
-            .filter(filters.iter().fold(
+            .filter(filters.iter().cloned().fold(
                 Expr::Literal(ScalarValue::Boolean(Some(true))),
-                |acc, new| acc.and(new.clone()),
+                |acc, new| acc.and(new),
             ))?;
         // add a limit if given
         Self::new(
