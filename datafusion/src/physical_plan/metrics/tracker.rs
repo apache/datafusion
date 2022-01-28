@@ -80,7 +80,7 @@ impl MemTrackingMetrics {
     pub fn init_mem_used(&self, size: usize) {
         self.metrics.mem_used().set(size);
         if let Some(rt) = self.runtime.as_ref() {
-            rt.memory_manager.grow_tracker_total(size);
+            rt.memory_manager.grow_tracker_usage(size);
         }
     }
 

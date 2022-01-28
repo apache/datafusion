@@ -281,8 +281,14 @@ impl MemoryManager {
         *self.trackers_total.lock().unwrap()
     }
 
-    pub(crate) fn grow_tracker_total(&self, size: usize) {
-        *self.trackers_total.lock().unwrap() += size;
+    pub(crate) fn grow_tracker_usage(&self, delta: usize) {
+        *self.trackers_total.lock().unwrap() += delta;
+    }
+
+    pub(crate) fn shrink_tracker_usage(&self, delta: usize) {
+        let mut total = self.trackers_total.lock().unwrap();
+        assert!(*total >= delta);
+        *total -= delta;
     }
 
     fn get_requester_total(&self) -> usize {
@@ -307,7 +313,6 @@ impl MemoryManager {
 
         let granted;
         loop {
-            let remaining = rqt_max - *rqt_current_used;
             let max_per_rqt = rqt_max / num_rqt;
             let min_per_rqt = max_per_rqt / 2;
 
@@ -316,6 +321,7 @@ impl MemoryManager {
                 break;
             }
 
+            let remaining = rqt_max.checked_sub(*rqt_current_used).unwrap_or_default();
             if remaining >= required {
                 granted = true;
                 *rqt_current_used += required;
@@ -337,9 +343,8 @@ impl MemoryManager {
 
     fn record_free_then_acquire(&self, freed: usize, acquired: usize) {
         let mut requesters_total = self.requesters_total.lock().unwrap();
-        requesters_total
-            .checked_sub(freed)
-            .expect("Freed more than allocated");
+        assert!(*requesters_total >= freed);
+        *requesters_total -= freed;
         *requesters_total += acquired;
         self.cv.notify_all()
     }
@@ -350,20 +355,14 @@ impl MemoryManager {
         {
             let mut requesters = self.requesters.lock().unwrap();
             if requesters.remove(id) {
-                self.requesters_total
-                    .lock()
-                    .unwrap()
-                    .checked_sub(mem_used)
-                    .expect("Requesters total underflow");
-                self.cv.notify_all();
-                return;
+                let mut total = self.requesters_total.lock().unwrap();
+                assert!(*total >= mem_used);
+                *total -= mem_used;
             }
         }
-        self.trackers_total
-            .lock()
-            .unwrap()
-            .checked_sub(mem_used)
-            .expect("Trackers total underflow");
+        let mut total = self.trackers_total.lock().unwrap();
+        assert!(*total >= mem_used);
+        *total -= mem_used;
         self.cv.notify_all();
     }
 }
@@ -409,6 +408,7 @@ mod tests {
     use crate::error::Result;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::execution::MemoryConsumer;
+    use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -478,6 +478,7 @@ mod tests {
 
     impl DummyTracker {
         fn new(partition: usize, runtime: Arc<RuntimeEnv>, mem_used: usize) -> Self {
+            runtime.grow_tracker_usage(mem_used);
             Self {
                 id: MemoryConsumerId::new(partition),
                 runtime,
@@ -514,25 +515,30 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn basic_functionalities() {
         let config = RuntimeConfig::new()
             .with_memory_manager(MemoryManagerConfig::try_new_limit(100, 1.0).unwrap());
         let runtime = Arc::new(RuntimeEnv::new(config).unwrap());
 
-        let tracker1 = DummyTracker::new(0, runtime.clone(), 5);
-        runtime.register_requester(tracker1.id());
+        DummyTracker::new(0, runtime.clone(), 5);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 5);
 
-        let tracker2 = DummyTracker::new(0, runtime.clone(), 10);
-        runtime.register_requester(tracker2.id());
+        let tracker1 = DummyTracker::new(0, runtime.clone(), 10);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 15);
 
-        let tracker3 = DummyTracker::new(0, runtime.clone(), 15);
-        runtime.register_requester(tracker3.id());
+        DummyTracker::new(0, runtime.clone(), 15);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 30);
 
-        runtime.drop_consumer(tracker2.id(), tracker2.mem_used);
+        runtime.drop_consumer(tracker1.id(), tracker1.mem_used);
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
+
+        // MemTrackingMetrics as an easy way to tracking memory
+        let ms = ExecutionPlanMetricsSet::new();
+        let tracking_metric = MemTrackingMetrics::new_with_rt(&ms, 0, runtime.clone());
+        tracking_metric.init_mem_used(15);
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 35);
+
+        drop(tracking_metric);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
 
         let requester1 = DummyRequester::new(0, runtime.clone());

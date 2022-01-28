@@ -77,6 +77,16 @@ impl RuntimeEnv {
     pub fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
         self.memory_manager.drop_consumer(id, mem_used)
     }
+
+    /// Grow tracker memory usage during execution
+    pub fn grow_tracker_usage(&self, delta: usize) {
+        self.memory_manager.grow_tracker_usage(delta)
+    }
+
+    /// Shrink tracker memory usage
+    pub fn shrink_tracker_usage(&self, delta: usize) {
+        self.memory_manager.shrink_tracker_usage(delta)
+    }
 }
 
 impl Default for RuntimeEnv {
