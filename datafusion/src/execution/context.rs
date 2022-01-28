@@ -1152,8 +1152,7 @@ impl ExecutionProps {
         var_type: VarType,
         provider: Arc<dyn VarProvider + Send + Sync>,
     ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
-        let mut var_providers =
-            self.var_providers.take().unwrap_or_else(|| HashMap::new());
+        let mut var_providers = self.var_providers.take().unwrap_or_else(HashMap::new);
 
         let old_provider = var_providers.insert(var_type, provider);
 
@@ -1167,9 +1166,9 @@ impl ExecutionProps {
         &self,
         var_type: VarType,
     ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
-        self.var_providers.as_ref().and_then(|var_providers| {
-            var_providers.get(&var_type).map(|p| Arc::clone(&p))
-        })
+        self.var_providers
+            .as_ref()
+            .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
     }
 }
 
