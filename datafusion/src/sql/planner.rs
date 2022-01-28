@@ -3289,7 +3289,7 @@ mod tests {
             JOIN orders \
             ON id = customer_id";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3303,7 +3303,7 @@ mod tests {
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Filter: #orders.order_id > Int64(1)\
-        \n    Join: #person.id = #orders.customer_id\
+        \n    Inner Join: #person.id = #orders.customer_id\
         \n      TableScan: person projection=None\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3316,7 +3316,7 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Left Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    Filter: #orders.order_id > Int64(1)\
         \n      TableScan: orders projection=None";
@@ -3330,7 +3330,7 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Right Join: #person.id = #orders.customer_id\
         \n    Filter: #person.id > Int64(1)\
         \n      TableScan: person projection=None\
         \n    TableScan: orders projection=None";
@@ -3344,7 +3344,7 @@ mod tests {
             JOIN orders \
             ON person.id = orders.customer_id";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3357,7 +3357,7 @@ mod tests {
             JOIN person as person2 \
             USING (id)";
         let expected = "Projection: #person.first_name, #person.id\
-        \n  Join: Using #person.id = #person2.id\
+        \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
         quick_test(sql, expected);
@@ -3370,7 +3370,7 @@ mod tests {
             JOIN lineitem as lineitem2 \
             USING (l_item_id)";
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
-        \n  Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
+        \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
         \n    TableScan: lineitem2 projection=None";
         quick_test(sql, expected);
@@ -3384,8 +3384,8 @@ mod tests {
             JOIN lineitem ON o_item_id = l_item_id";
         let expected =
             "Projection: #person.id, #orders.order_id, #lineitem.l_description\
-            \n  Join: #orders.o_item_id = #lineitem.l_item_id\
-            \n    Join: #person.id = #orders.customer_id\
+            \n  Inner Join: #orders.o_item_id = #lineitem.l_item_id\
+            \n    Inner Join: #person.id = #orders.customer_id\
             \n      TableScan: person projection=None\
             \n      TableScan: orders projection=None\
             \n    TableScan: lineitem projection=None";
@@ -3918,8 +3918,8 @@ mod tests {
     fn cross_join_to_inner_join() {
         let sql = "select person.id from person, orders, lineitem where person.id = lineitem.l_item_id and orders.o_item_id = lineitem.l_description;";
         let expected = "Projection: #person.id\
-                                 \n  Join: #lineitem.l_description = #orders.o_item_id\
-                                 \n    Join: #person.id = #lineitem.l_item_id\
+                                 \n  Inner Join: #lineitem.l_description = #orders.o_item_id\
+                                 \n    Inner Join: #person.id = #lineitem.l_item_id\
                                  \n      TableScan: person projection=None\
                                  \n      TableScan: lineitem projection=None\
                                  \n    TableScan: orders projection=None";

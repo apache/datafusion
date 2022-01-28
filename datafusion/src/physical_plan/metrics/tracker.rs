@@ -79,8 +79,9 @@ impl MemTrackingMetrics {
     /// setup initial memory usage and register it with memory manager
     pub fn init_mem_used(&self, size: usize) {
         self.metrics.mem_used().set(size);
-        self.runtime.as_ref()
-            .map(|rt| rt.memory_manager.grow_tracker_total(size));
+        if let Some(rt) = self.runtime.as_ref() {
+            rt.memory_manager.grow_tracker_total(size);
+        }
     }
 
     /// return the metric for the total number of output rows produced
@@ -122,8 +123,9 @@ impl Drop for MemTrackingMetrics {
     fn drop(&mut self) {
         self.metrics.try_done();
         if self.mem_used() != 0 {
-            self.runtime.as_ref()
-                .map(|rt| rt.drop_consumer(&self.id, self.mem_used()));
+            if let Some(rt) = self.runtime.as_ref() {
+                rt.drop_consumer(&self.id, self.mem_used());
+            }
         }
     }
 }

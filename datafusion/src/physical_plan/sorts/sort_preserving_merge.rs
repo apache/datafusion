@@ -58,6 +58,27 @@ use crate::physical_plan::{
 /// provided each partition of the input plan is sorted with respect to
 /// these sort expressions, this operator will yield a single partition
 /// that is also sorted with respect to them
+///
+/// ```text
+/// ┌─────────────────────────┐
+/// │ ┌───┬───┬───┬───┐       │
+/// │ │ A │ B │ C │ D │ ...   │──┐
+/// │ └───┴───┴───┴───┘       │  │
+/// └─────────────────────────┘  │  ┌───────────────────┐    ┌───────────────────────────────┐
+///   Stream 1                   │  │                   │    │ ┌───┬───╦═══╦───┬───╦═══╗     │
+///                              ├─▶│SortPreservingMerge│───▶│ │ A │ B ║ B ║ C │ D ║ E ║ ... │
+///                              │  │                   │    │ └───┴─▲─╩═══╩───┴───╩═══╝     │
+/// ┌─────────────────────────┐  │  └───────────────────┘    └─┬─────┴───────────────────────┘
+/// │ ╔═══╦═══╗               │  │
+/// │ ║ B ║ E ║     ...       │──┘                             │
+/// │ ╚═══╩═══╝               │              Note Stable Sort: the merged stream
+/// └─────────────────────────┘                places equal rows from stream 1
+///   Stream 2
+///
+///
+///  Input Streams                                             Output stream
+///    (sorted)                                                  (sorted)
+/// ```
 #[derive(Debug)]
 pub struct SortPreservingMergeExec {
     /// Input plan
@@ -411,40 +432,53 @@ impl SortPreservingMergeStream {
             // Cursor is not finished - don't need a new RecordBatch yet
             return Poll::Ready(Ok(()));
         }
-        let mut streams = self.streams.streams.lock().unwrap();
+        let mut empty_batch = false;
+        {
+            let mut streams = self.streams.streams.lock().unwrap();
 
-        let stream = &mut streams[idx];
-        if stream.is_terminated() {
-            return Poll::Ready(Ok(()));
-        }
-
-        // Fetch a new input record and create a cursor from it
-        match futures::ready!(stream.poll_next_unpin(cx)) {
-            None => return Poll::Ready(Ok(())),
-            Some(Err(e)) => {
-                return Poll::Ready(Err(e));
+            let stream = &mut streams[idx];
+            if stream.is_terminated() {
+                return Poll::Ready(Ok(()));
             }
-            Some(Ok(batch)) => {
-                let cursor = match SortKeyCursor::new(
-                    idx,
-                    self.next_batch_id, // assign this batch an ID
-                    &batch,
-                    &self.column_expressions,
-                    self.sort_options.clone(),
-                ) {
-                    Ok(cursor) => cursor,
-                    Err(e) => {
-                        return Poll::Ready(Err(ArrowError::ExternalError(Box::new(e))));
+
+            // Fetch a new input record and create a cursor from it
+            match futures::ready!(stream.poll_next_unpin(cx)) {
+                None => return Poll::Ready(Ok(())),
+                Some(Err(e)) => {
+                    return Poll::Ready(Err(e));
+                }
+                Some(Ok(batch)) => {
+                    if batch.num_rows() > 0 {
+                        let cursor = match SortKeyCursor::new(
+                            idx,
+                            self.next_batch_id, // assign this batch an ID
+                            &batch,
+                            &self.column_expressions,
+                            self.sort_options.clone(),
+                        ) {
+                            Ok(cursor) => cursor,
+                            Err(e) => {
+                                return Poll::Ready(Err(ArrowError::ExternalError(
+                                    Box::new(e),
+                                )));
+                            }
+                        };
+                        self.next_batch_id += 1;
+                        self.min_heap.push(cursor);
+                        self.cursor_finished[idx] = false;
+                        self.batches[idx].push_back(batch)
+                    } else {
+                        empty_batch = true;
                     }
-                };
-                self.next_batch_id += 1;
-                self.min_heap.push(cursor);
-                self.cursor_finished[idx] = false;
-                self.batches[idx].push_back(batch)
+                }
             }
         }
 
-        Poll::Ready(Ok(()))
+        if empty_batch {
+            self.maybe_poll_stream(cx, idx)
+        } else {
+            Poll::Ready(Ok(()))
+        }
     }
 
     /// Drains the in_progress row indexes, and builds a new RecordBatch from them
@@ -1348,5 +1382,84 @@ mod tests {
         assert_strong_count_converges_to_zero(refs).await;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stable_sort() {
+        let runtime = Arc::new(RuntimeEnv::default());
+
+        // Create record batches like:
+        // batch_number |value
+        // -------------+------
+        //    1         | A
+        //    1         | B
+        //
+        // Ensure that the output is in the same order the batches were fed
+        let partitions: Vec<Vec<RecordBatch>> = (0..10)
+            .map(|batch_number| {
+                let batch_number: Int32Array =
+                    vec![Some(batch_number), Some(batch_number)]
+                        .into_iter()
+                        .collect();
+                let value: StringArray = vec![Some("A"), Some("B")].into_iter().collect();
+
+                let batch = RecordBatch::try_from_iter(vec![
+                    ("batch_number", Arc::new(batch_number) as ArrayRef),
+                    ("value", Arc::new(value) as ArrayRef),
+                ])
+                .unwrap();
+
+                vec![batch]
+            })
+            .collect();
+
+        let schema = partitions[0][0].schema();
+
+        let sort = vec![PhysicalSortExpr {
+            expr: col("value", &schema).unwrap(),
+            options: SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+        }];
+
+        let exec = MemoryExec::try_new(&partitions, schema, None).unwrap();
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
+
+        let collected = collect(merge, runtime).await.unwrap();
+        assert_eq!(collected.len(), 1);
+
+        // Expect the data to be sorted first by "batch_number" (because
+        // that was the order it was fed in, even though only "value"
+        // is in the sort key)
+        assert_batches_eq!(
+            &[
+                "+--------------+-------+",
+                "| batch_number | value |",
+                "+--------------+-------+",
+                "| 0            | A     |",
+                "| 1            | A     |",
+                "| 2            | A     |",
+                "| 3            | A     |",
+                "| 4            | A     |",
+                "| 5            | A     |",
+                "| 6            | A     |",
+                "| 7            | A     |",
+                "| 8            | A     |",
+                "| 9            | A     |",
+                "| 0            | B     |",
+                "| 1            | B     |",
+                "| 2            | B     |",
+                "| 3            | B     |",
+                "| 4            | B     |",
+                "| 5            | B     |",
+                "| 6            | B     |",
+                "| 7            | B     |",
+                "| 8            | B     |",
+                "| 9            | B     |",
+                "+--------------+-------+",
+            ],
+            collected.as_slice()
+        );
     }
 }

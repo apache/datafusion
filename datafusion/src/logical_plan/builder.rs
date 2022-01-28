@@ -1150,7 +1150,7 @@ mod tests {
 
         // id column should only show up once in projection
         let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
-        \n  Join: Using #t1.id = #t2.id\
+        \n  Inner Join: Using #t1.id = #t2.id\
         \n    TableScan: t1 projection=None\
         \n    TableScan: t2 projection=None";
 

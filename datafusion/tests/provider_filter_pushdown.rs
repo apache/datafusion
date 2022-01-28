@@ -25,9 +25,7 @@ use datafusion::execution::context::ExecutionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
-use datafusion::physical_plan::metrics::{
-    ExecutionPlanMetricsSet, MemTrackingMetrics,
-};
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };

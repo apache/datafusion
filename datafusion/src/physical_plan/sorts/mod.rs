@@ -160,7 +160,9 @@ impl SortKeyCursor {
             }
         }
 
-        Ok(Ordering::Equal)
+        // Break ties using stream_idx to ensure a predictable
+        // ordering of rows when comparing equal streams.
+        Ok(self.stream_idx.cmp(&other.stream_idx))
     }
 
     /// Initialize a collection of comparators for comparing
