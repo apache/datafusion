@@ -20,7 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
 use hashbrown::HashMap;
-use log::info;
+use log::debug;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -169,7 +169,7 @@ pub trait MemoryConsumer: Send + Sync {
     /// reached for this consumer.
     async fn try_grow(&self, required: usize) -> Result<()> {
         let current = self.mem_used();
-        info!(
+        debug!(
             "trying to acquire {} whiling holding {} from consumer {}",
             human_readable_size(required),
             human_readable_size(current),
@@ -181,7 +181,7 @@ pub trait MemoryConsumer: Send + Sync {
             .can_grow_directly(required, current)
             .await;
         if !can_grow_directly {
-            info!(
+            debug!(
                 "Failed to grow memory of {} directly from consumer {}, spilling first ...",
                 human_readable_size(required),
                 self.id()
@@ -261,7 +261,7 @@ impl MemoryManager {
         match config {
             MemoryManagerConfig::Existing(manager) => manager,
             MemoryManagerConfig::New { .. } => {
-                info!(
+                debug!(
                     "Creating memory manager with initial size {}",
                     human_readable_size(pool_size)
                 );
