@@ -521,8 +521,15 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     Ok(())
 }
 
-/// Execute query and return result set as 2-d table of Vecs
-/// `result[row][column]`
+/// Execute SQL and return results as a RecordBatch
+async fn plan_and_collect(
+    ctx: &mut ExecutionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
+}
+
+/// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<RecordBatch> {
     let msg = format!("Creating logical plan for '{}'", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
@@ -732,6 +739,93 @@ fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>()
+}
+
+/// Return a new table provider containing all of the supported timestamp types
+pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
+    let batch = make_timestamps();
+    let schema = batch.schema();
+    let partitions = vec![vec![batch]];
+    Arc::new(MemTable::try_new(schema, partitions).unwrap())
+}
+
+/// Return  record batch with all of the supported timestamp types
+/// values
+///
+/// Columns are named:
+/// "nanos" --> TimestampNanosecondArray
+/// "micros" --> TimestampMicrosecondArray
+/// "millis" --> TimestampMillisecondArray
+/// "secs" --> TimestampSecondArray
+/// "names" --> StringArray
+pub fn make_timestamps() -> RecordBatch {
+    let ts_strings = vec![
+        Some("2018-11-13T17:11:10.011375885995"),
+        Some("2011-12-13T11:13:10.12345"),
+        None,
+        Some("2021-1-1T05:11:10.432"),
+    ];
+
+    let ts_nanos = ts_strings
+        .into_iter()
+        .map(|t| {
+            t.map(|t| {
+                t.parse::<chrono::NaiveDateTime>()
+                    .unwrap()
+                    .timestamp_nanos()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let ts_micros = ts_nanos
+        .iter()
+        .map(|t| t.as_ref().map(|ts_nanos| ts_nanos / 1000))
+        .collect::<Vec<_>>();
+
+    let ts_millis = ts_nanos
+        .iter()
+        .map(|t| t.as_ref().map(|ts_nanos| ts_nanos / 1000000))
+        .collect::<Vec<_>>();
+
+    let ts_secs = ts_nanos
+        .iter()
+        .map(|t| t.as_ref().map(|ts_nanos| ts_nanos / 1000000000))
+        .collect::<Vec<_>>();
+
+    let names = ts_nanos
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("Row {}", i))
+        .collect::<Vec<_>>();
+
+    let arr_nanos = TimestampNanosecondArray::from_opt_vec(ts_nanos, None);
+    let arr_micros = TimestampMicrosecondArray::from_opt_vec(ts_micros, None);
+    let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
+    let arr_secs = TimestampSecondArray::from_opt_vec(ts_secs, None);
+
+    let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let arr_names = StringArray::from(names);
+
+    let schema = Schema::new(vec![
+        Field::new("nanos", arr_nanos.data_type().clone(), true),
+        Field::new("micros", arr_micros.data_type().clone(), true),
+        Field::new("millis", arr_millis.data_type().clone(), true),
+        Field::new("secs", arr_secs.data_type().clone(), true),
+        Field::new("name", arr_names.data_type().clone(), true),
+    ]);
+    let schema = Arc::new(schema);
+
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(arr_nanos),
+            Arc::new(arr_micros),
+            Arc::new(arr_millis),
+            Arc::new(arr_secs),
+            Arc::new(arr_names),
+        ],
+    )
+    .unwrap()
 }
 
 #[tokio::test]
