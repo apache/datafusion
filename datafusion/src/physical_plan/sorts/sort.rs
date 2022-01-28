@@ -44,7 +44,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use futures::StreamExt;
-use log::{error, info};
+use log::{debug, error};
 use std::any::Any;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
@@ -207,7 +207,7 @@ impl MemoryConsumer for ExternalSorter {
     }
 
     async fn spill(&self) -> Result<usize> {
-        info!(
+        debug!(
             "{}[{}] spilling sort data of {} to disk while inserting ({} time(s) so far)",
             self.name(),
             self.id(),
@@ -331,7 +331,7 @@ fn write_sorted(
         writer.write(&batch?)?;
     }
     writer.finish()?;
-    info!(
+    debug!(
         "Spilled {} batches of total {} rows to disk, memory released {}",
         writer.num_batches, writer.num_rows, writer.num_bytes
     );
