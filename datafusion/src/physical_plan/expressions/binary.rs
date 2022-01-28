@@ -965,6 +965,8 @@ macro_rules! binary_array_op_dyn_scalar {
             ScalarValue::UInt16(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
             ScalarValue::UInt32(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
             ScalarValue::UInt64(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::Float32(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Float32Array),
+            ScalarValue::Float64(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Float64Array),
             ScalarValue::Date32(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array),
             ScalarValue::Date64(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array),
             ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray),
