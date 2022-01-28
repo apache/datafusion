@@ -70,13 +70,10 @@ impl DataFrameImpl {
 
 #[async_trait]
 impl TableProvider for DataFrameImpl {
-    /// Returns the table provider as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any {
         self
     }
 
-    /// Get a reference to the schema for this table
     fn schema(&self) -> SchemaRef {
         Arc::new(Schema::new(
             self.plan
@@ -88,15 +85,10 @@ impl TableProvider for DataFrameImpl {
         ))
     }
 
-    /// Get the type of this table for metadata/catalog purposes.
     fn table_type(&self) -> TableType {
         TableType::View
     }
 
-    /// Create an ExecutionPlan that will scan the table.
-    /// The table provider will be usually responsible of grouping
-    /// the source data into partitions that can be efficiently
-    /// parallelized or distributed.
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
