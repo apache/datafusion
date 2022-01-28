@@ -521,8 +521,15 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
     Ok(())
 }
 
-/// Execute query and return result set as 2-d table of Vecs
-/// `result[row][column]`
+/// Execute SQL and return results as a RecordBatch
+async fn plan_and_collect(
+    ctx: &mut ExecutionContext,
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    ctx.sql(sql).await?.collect().await
+}
+
+/// Execute query and return results as a Vec of RecordBatches
 async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<RecordBatch> {
     let msg = format!("Creating logical plan for '{}'", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
@@ -734,7 +741,6 @@ fn normalize_vec_for_explain(v: Vec<Vec<String>>) -> Vec<Vec<String>> {
         .collect::<Vec<_>>()
 }
 
-
 /// Return a new table provider containing all of the supported timestamp types
 pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
     let batch = make_timestamps();
@@ -742,7 +748,6 @@ pub fn table_with_timestamps() -> Arc<dyn TableProvider> {
     let partitions = vec![vec![batch]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
-
 
 /// Return  record batch with all of the supported timestamp types
 /// values
@@ -822,7 +827,6 @@ pub fn make_timestamps() -> RecordBatch {
     )
     .unwrap()
 }
-
 
 #[tokio::test]
 async fn nyc() -> Result<()> {

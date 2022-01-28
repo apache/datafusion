@@ -474,20 +474,17 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn aggregate_timestamps_sum() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, 1).await?;
-    ctx.register_table("t", test::table_with_timestamps())
-        .unwrap();
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = plan_and_collect(
         &mut ctx,
         "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
 
     assert_eq!(results.to_string(), "Error during planning: The function Sum does not support inputs of type Timestamp(Nanosecond, None).");
 
@@ -496,17 +493,14 @@ async fn aggregate_timestamps_sum() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_count() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, 1).await?;
-    ctx.register_table("t", test::table_with_timestamps())
-        .unwrap();
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("t", table_with_timestamps()).unwrap();
 
-    let results = plan_and_collect(
+    let results = execute_to_batches(
         &mut ctx,
         "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
     )
-        .await
-        .unwrap();
+    .await;
 
     let expected = vec![
         "+----------------+-----------------+-----------------+---------------+",
@@ -522,17 +516,14 @@ async fn aggregate_timestamps_count() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_min() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, 1).await?;
-    ctx.register_table("t", test::table_with_timestamps())
-        .unwrap();
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("t", table_with_timestamps()).unwrap();
 
-    let results = plan_and_collect(
+    let results = execute_to_batches(
         &mut ctx,
         "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
     )
-        .await
-        .unwrap();
+    .await;
 
     let expected = vec![
         "+----------------------------+----------------------------+-------------------------+---------------------+",
@@ -548,17 +539,14 @@ async fn aggregate_timestamps_min() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_max() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, 1).await?;
-    ctx.register_table("t", test::table_with_timestamps())
-        .unwrap();
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("t", table_with_timestamps()).unwrap();
 
-    let results = plan_and_collect(
+    let results = execute_to_batches(
         &mut ctx,
         "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
     )
-        .await
-        .unwrap();
+    .await;
 
     let expected = vec![
         "+-------------------------+-------------------------+-------------------------+---------------------+",
@@ -574,17 +562,15 @@ async fn aggregate_timestamps_max() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_avg() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, 1).await?;
-    ctx.register_table("t", test::table_with_timestamps())
-        .unwrap();
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = plan_and_collect(
         &mut ctx,
         "SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t",
     )
-        .await
-        .unwrap_err();
+    .await
+    .unwrap_err();
 
     assert_eq!(results.to_string(), "Error during planning: The function Avg does not support inputs of type Timestamp(Nanosecond, None).");
     Ok(())

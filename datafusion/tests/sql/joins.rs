@@ -883,13 +883,10 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
     Ok(())
 }
 
-
 #[tokio::test]
 async fn join_timestamp() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, 1).await?;
-    ctx.register_table("t", test::table_with_timestamps())
-        .unwrap();
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let expected = vec![
         "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
@@ -901,34 +898,34 @@ async fn join_timestamp() -> Result<()> {
         "+-------------------------------+----------------------------+-------------------------+---------------------+-------+-------------------------------+----------------------------+-------------------------+---------------------+-------+",
     ];
 
-    let results = plan_and_collect(
+    let results = execute_to_batches(
         &mut ctx,
         "SELECT * FROM t as t1  \
          JOIN (SELECT * FROM t) as t2 \
          ON t1.nanos = t2.nanos",
     )
-        .await
-        .unwrap();
+    .await;
+
     assert_batches_sorted_eq!(expected, &results);
 
-    let results = plan_and_collect(
+    let results = execute_to_batches(
         &mut ctx,
         "SELECT * FROM t as t1  \
          JOIN (SELECT * FROM t) as t2 \
          ON t1.micros = t2.micros",
     )
-        .await
-        .unwrap();
+    .await;
+
     assert_batches_sorted_eq!(expected, &results);
 
-    let results = plan_and_collect(
+    let results = execute_to_batches(
         &mut ctx,
         "SELECT * FROM t as t1  \
          JOIN (SELECT * FROM t) as t2 \
          ON t1.millis = t2.millis",
     )
-        .await
-        .unwrap();
+    .await;
+
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
