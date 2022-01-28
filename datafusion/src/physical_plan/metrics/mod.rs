@@ -31,7 +31,7 @@ use std::{
 use hashbrown::HashMap;
 
 // public exports
-pub use aggregated::AggregatedMetricsSet;
+pub use aggregated::CompositeMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};

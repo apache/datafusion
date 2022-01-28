@@ -278,7 +278,7 @@ pub(crate) struct SortPreservingMergeStream {
     schema: SchemaRef,
 
     /// The sorted input streams to merge together
-    streams: Arc<MergingStreams>,
+    streams: MergingStreams,
 
     /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
     _drop_helper: AbortOnDropMany<()>,
@@ -320,7 +320,8 @@ pub(crate) struct SortPreservingMergeStream {
 
 impl Drop for SortPreservingMergeStream {
     fn drop(&mut self) {
-        self.runtime.drop_consumer(self.streams.id())
+        self.runtime
+            .drop_consumer(self.streams.id(), self.streams.mem_used())
     }
 }
 
@@ -341,8 +342,8 @@ impl SortPreservingMergeStream {
             .map(|_| VecDeque::new())
             .collect();
         let wrappers = receivers.into_iter().map(StreamWrapper::Receiver).collect();
-        let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
+        let streams = MergingStreams::new(partition, wrappers, runtime.clone());
+        runtime.register_requester(streams.id());
 
         SortPreservingMergeStream {
             schema,
@@ -378,8 +379,8 @@ impl SortPreservingMergeStream {
             .into_iter()
             .map(|s| StreamWrapper::Stream(Some(s)))
             .collect();
-        let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
+        let streams = MergingStreams::new(partition, wrappers, runtime.clone());
+        runtime.register_requester(streams.id());
 
         Self {
             schema,

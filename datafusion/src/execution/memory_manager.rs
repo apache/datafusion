@@ -19,12 +19,12 @@
 
 use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
-use hashbrown::HashMap;
+use hashbrown::HashSet;
 use log::info;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex};
 
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -245,10 +245,10 @@ The memory management architecture is the following:
 /// Manage memory usage during physical plan execution
 #[derive(Debug)]
 pub struct MemoryManager {
-    requesters: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
-    trackers: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
+    requesters: Arc<Mutex<HashSet<MemoryConsumerId>>>,
     pool_size: usize,
     requesters_total: Arc<Mutex<usize>>,
+    trackers_total: Arc<Mutex<usize>>,
     cv: Condvar,
 }
 
@@ -267,10 +267,10 @@ impl MemoryManager {
                 );
 
                 Arc::new(Self {
-                    requesters: Arc::new(Mutex::new(HashMap::new())),
-                    trackers: Arc::new(Mutex::new(HashMap::new())),
+                    requesters: Arc::new(Mutex::new(HashSet::new())),
                     pool_size,
                     requesters_total: Arc::new(Mutex::new(0)),
+                    trackers_total: Arc::new(Mutex::new(0)),
                     cv: Condvar::new(),
                 })
             }
@@ -278,30 +278,16 @@ impl MemoryManager {
     }
 
     fn get_tracker_total(&self) -> usize {
-        let trackers = self.trackers.lock().unwrap();
-        if trackers.len() > 0 {
-            trackers.values().fold(0usize, |acc, y| match y.upgrade() {
-                None => acc,
-                Some(t) => acc + t.mem_used(),
-            })
-        } else {
-            0
-        }
+        *self.trackers_total.lock().unwrap()
     }
 
-    /// Register a new memory consumer for memory usage tracking
-    pub(crate) fn register_consumer(&self, consumer: &Arc<dyn MemoryConsumer>) {
-        let id = consumer.id().clone();
-        match consumer.type_() {
-            ConsumerType::Requesting => {
-                let mut requesters = self.requesters.lock().unwrap();
-                requesters.insert(id, Arc::downgrade(consumer));
-            }
-            ConsumerType::Tracking => {
-                let mut trackers = self.trackers.lock().unwrap();
-                trackers.insert(id, Arc::downgrade(consumer));
-            }
-        }
+    fn get_requester_total(&self) -> usize {
+        *self.requesters_total.lock().unwrap()
+    }
+
+    /// Register a new memory requester for memory usage tracking
+    pub(crate) fn register_requester(&self, requester_id: &MemoryConsumerId) {
+        self.requesters.lock().unwrap().insert(requester_id.clone());
     }
 
     fn max_mem_for_requesters(&self) -> usize {
@@ -347,46 +333,46 @@ impl MemoryManager {
 
     fn record_free_then_acquire(&self, freed: usize, acquired: usize) {
         let mut requesters_total = self.requesters_total.lock().unwrap();
-        *requesters_total -= freed;
+        requesters_total
+            .checked_sub(freed)
+            .expect("Freed more than allocated");
         *requesters_total += acquired;
         self.cv.notify_all()
     }
 
     /// Drop a memory consumer from memory usage tracking
-    pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId) {
+    pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
         // find in requesters first
         {
             let mut requesters = self.requesters.lock().unwrap();
-            if requesters.remove(id).is_some() {
+            if requesters.remove(id) {
+                self.requesters_total
+                    .lock()
+                    .unwrap()
+                    .checked_sub(mem_used)
+                    .expect("Requesters total underflow");
+                self.cv.notify_all();
                 return;
             }
         }
-        let mut trackers = self.trackers.lock().unwrap();
-        trackers.remove(id);
+        self.trackers_total
+            .lock()
+            .unwrap()
+            .checked_sub(mem_used)
+            .expect("Trackers total underflow");
+        self.cv.notify_all();
     }
 }
 
 impl Display for MemoryManager {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let requesters =
-            self.requesters
-                .lock()
-                .unwrap()
-                .values()
-                .fold(vec![], |mut acc, consumer| match consumer.upgrade() {
-                    None => acc,
-                    Some(c) => {
-                        acc.push(format!("{}", c));
-                        acc
-                    }
-                });
-        let tracker_mem = self.get_tracker_total();
         write!(f,
-               "MemoryManager usage statistics: total {}, tracker used {}, total {} requesters detail: \n {},",
-                human_readable_size(self.pool_size),
-                human_readable_size(tracker_mem),
-                &requesters.len(),
-               requesters.join("\n"))
+               "MemoryManager usage statistics: total {}, trackers used {}, total {} requesters used: {}",
+               human_readable_size(self.pool_size),
+               human_readable_size(self.get_tracker_total()),
+               self.requesters.lock().unwrap().len(),
+               human_readable_size(self.get_requester_total()),
+        )
     }
 }
 
@@ -523,28 +509,29 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn basic_functionalities() {
         let config = RuntimeConfig::new()
             .with_memory_manager(MemoryManagerConfig::try_new_limit(100, 1.0).unwrap());
         let runtime = Arc::new(RuntimeEnv::new(config).unwrap());
 
-        let tracker1 = Arc::new(DummyTracker::new(0, runtime.clone(), 5));
-        runtime.register_consumer(&(tracker1.clone() as Arc<dyn MemoryConsumer>));
+        let tracker1 = DummyTracker::new(0, runtime.clone(), 5);
+        runtime.register_requester(tracker1.id());
         assert_eq!(runtime.memory_manager.get_tracker_total(), 5);
 
-        let tracker2 = Arc::new(DummyTracker::new(0, runtime.clone(), 10));
-        runtime.register_consumer(&(tracker2.clone() as Arc<dyn MemoryConsumer>));
+        let tracker2 = DummyTracker::new(0, runtime.clone(), 10);
+        runtime.register_requester(tracker2.id());
         assert_eq!(runtime.memory_manager.get_tracker_total(), 15);
 
-        let tracker3 = Arc::new(DummyTracker::new(0, runtime.clone(), 15));
-        runtime.register_consumer(&(tracker3.clone() as Arc<dyn MemoryConsumer>));
+        let tracker3 = DummyTracker::new(0, runtime.clone(), 15);
+        runtime.register_requester(tracker3.id());
         assert_eq!(runtime.memory_manager.get_tracker_total(), 30);
 
-        runtime.drop_consumer(tracker2.id());
+        runtime.drop_consumer(tracker2.id(), tracker2.mem_used);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
 
-        let requester1 = Arc::new(DummyRequester::new(0, runtime.clone()));
-        runtime.register_consumer(&(requester1.clone() as Arc<dyn MemoryConsumer>));
+        let requester1 = DummyRequester::new(0, runtime.clone());
+        runtime.register_requester(requester1.id());
 
         // first requester entered, should be able to use any of the remaining 80
         requester1.do_with_mem(40).await.unwrap();
@@ -553,8 +540,8 @@ mod tests {
         assert_eq!(requester1.mem_used(), 50);
         assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 50);
 
-        let requester2 = Arc::new(DummyRequester::new(0, runtime.clone()));
-        runtime.register_consumer(&(requester2.clone() as Arc<dyn MemoryConsumer>));
+        let requester2 = DummyRequester::new(0, runtime.clone());
+        runtime.register_requester(requester2.id());
 
         requester2.do_with_mem(20).await.unwrap();
         requester2.do_with_mem(30).await.unwrap();

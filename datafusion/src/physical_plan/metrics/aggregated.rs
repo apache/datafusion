@@ -18,138 +18,168 @@
 //! Metrics common for complex operators with multiple steps.
 
 use crate::physical_plan::metrics::{
-    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricsSet, Time,
+    BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricValue, MetricsSet, Time,
+    Timestamp,
 };
+use crate::physical_plan::Metric;
+use chrono::{TimeZone, Utc};
 use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
-/// Aggregates all metrics during a complex operation, which is composed of multiple steps and
+/// Collects all metrics during a complex operation, which is composed of multiple steps and
 /// each stage reports its statistics separately.
 /// Give sort as an example, when the dataset is more significant than available memory, it will report
 /// multiple in-mem sort metrics and final merge-sort  metrics from `SortPreservingMergeStream`.
 /// Therefore, We need a separation of metrics for which are final metrics (for output_rows accumulation),
 /// and which are intermediate metrics that we only account for elapsed_compute time.
-pub struct AggregatedMetricsSet {
-    intermediate: Arc<std::sync::Mutex<Vec<ExecutionPlanMetricsSet>>>,
-    final_: Arc<std::sync::Mutex<Vec<ExecutionPlanMetricsSet>>>,
+pub struct CompositeMetricsSet {
+    mid: ExecutionPlanMetricsSet,
+    final_: ExecutionPlanMetricsSet,
 }
 
-impl Default for AggregatedMetricsSet {
+impl Default for CompositeMetricsSet {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AggregatedMetricsSet {
+impl CompositeMetricsSet {
     /// Create a new aggregated set
     pub fn new() -> Self {
         Self {
-            intermediate: Arc::new(std::sync::Mutex::new(vec![])),
-            final_: Arc::new(std::sync::Mutex::new(vec![])),
+            mid: ExecutionPlanMetricsSet::new(),
+            final_: ExecutionPlanMetricsSet::new(),
         }
     }
 
     /// create a new intermediate baseline
     pub fn new_intermediate_baseline(&self, partition: usize) -> BaselineMetrics {
-        let ms = ExecutionPlanMetricsSet::new();
-        let result = BaselineMetrics::new(&ms, partition);
-        self.intermediate.lock().unwrap().push(ms);
-        result
+        BaselineMetrics::new(&self.mid, partition)
     }
 
     /// create a new final baseline
     pub fn new_final_baseline(&self, partition: usize) -> BaselineMetrics {
-        let ms = ExecutionPlanMetricsSet::new();
-        let result = BaselineMetrics::new(&ms, partition);
-        self.final_.lock().unwrap().push(ms);
-        result
+        BaselineMetrics::new(&self.final_, partition)
     }
 
     fn merge_compute_time(&self, dest: &Time) {
         let time1 = self
-            .intermediate
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| {
-                es.clone_inner()
-                    .elapsed_compute()
-                    .map_or(0u64, |v| v as u64)
-            })
-            .sum();
+            .mid
+            .clone_inner()
+            .elapsed_compute()
+            .map_or(0u64, |v| v as u64);
         let time2 = self
             .final_
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| {
-                es.clone_inner()
-                    .elapsed_compute()
-                    .map_or(0u64, |v| v as u64)
-            })
-            .sum();
+            .clone_inner()
+            .elapsed_compute()
+            .map_or(0u64, |v| v as u64);
         dest.add_duration(Duration::from_nanos(time1));
         dest.add_duration(Duration::from_nanos(time2));
     }
 
     fn merge_spill_count(&self, dest: &Count) {
-        let count1 = self
-            .intermediate
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| es.clone_inner().spill_count().map_or(0, |v| v))
-            .sum();
-        let count2 = self
-            .final_
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| es.clone_inner().spill_count().map_or(0, |v| v))
-            .sum();
+        let count1 = self.mid.clone_inner().spill_count().map_or(0, |v| v);
+        let count2 = self.final_.clone_inner().spill_count().map_or(0, |v| v);
         dest.add(count1);
         dest.add(count2);
     }
 
     fn merge_spilled_bytes(&self, dest: &Count) {
-        let count1 = self
-            .intermediate
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| es.clone_inner().spilled_bytes().map_or(0, |v| v))
-            .sum();
-        let count2 = self
-            .final_
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| es.clone_inner().spilled_bytes().map_or(0, |v| v))
-            .sum();
+        let count1 = self.mid.clone_inner().spilled_bytes().map_or(0, |v| v);
+        let count2 = self.final_.clone_inner().spill_count().map_or(0, |v| v);
         dest.add(count1);
         dest.add(count2);
     }
 
     fn merge_output_count(&self, dest: &Count) {
-        let count = self
-            .final_
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|es| es.clone_inner().output_rows().map_or(0, |v| v))
-            .sum();
+        let count = self.final_.clone_inner().output_rows().map_or(0, |v| v);
         dest.add(count);
+    }
+
+    fn merge_start_time(&self, dest: &Timestamp) {
+        let start1 = self
+            .mid
+            .clone_inner()
+            .sum(|metric| matches!(metric.value(), MetricValue::StartTimestamp(_)))
+            .map(|v| v.as_usize());
+        let start2 = self
+            .final_
+            .clone_inner()
+            .sum(|metric| matches!(metric.value(), MetricValue::StartTimestamp(_)))
+            .map(|v| v.as_usize());
+        match (start1, start2) {
+            (Some(start1), Some(start2)) => {
+                dest.set(Utc.timestamp_nanos(start1.min(start2) as i64))
+            }
+            (Some(start1), None) => dest.set(Utc.timestamp_nanos(start1 as i64)),
+            (None, Some(start2)) => dest.set(Utc.timestamp_nanos(start2 as i64)),
+            (None, None) => {}
+        }
+    }
+
+    fn merge_end_time(&self, dest: &Timestamp) {
+        let start1 = self
+            .mid
+            .clone_inner()
+            .sum(|metric| matches!(metric.value(), MetricValue::EndTimestamp(_)))
+            .map(|v| v.as_usize());
+        let start2 = self
+            .final_
+            .clone_inner()
+            .sum(|metric| matches!(metric.value(), MetricValue::EndTimestamp(_)))
+            .map(|v| v.as_usize());
+        match (start1, start2) {
+            (Some(start1), Some(start2)) => {
+                dest.set(Utc.timestamp_nanos(start1.max(start2) as i64))
+            }
+            (Some(start1), None) => dest.set(Utc.timestamp_nanos(start1 as i64)),
+            (None, Some(start2)) => dest.set(Utc.timestamp_nanos(start2 as i64)),
+            (None, None) => {}
+        }
     }
 
     /// Aggregate all metrics into a one
     pub fn aggregate_all(&self) -> MetricsSet {
-        let metrics = ExecutionPlanMetricsSet::new();
-        let baseline = BaselineMetrics::new(&metrics, 0);
-        self.merge_compute_time(baseline.elapsed_compute());
-        self.merge_spill_count(baseline.spill_count());
-        self.merge_spilled_bytes(baseline.spilled_bytes());
-        self.merge_output_count(baseline.output_rows());
-        metrics.clone_inner()
+        let mut metrics = MetricsSet::new();
+        let elapsed_time = Time::new();
+        let spill_count = Count::new();
+        let spilled_bytes = Count::new();
+        let output_count = Count::new();
+        let start_time = Timestamp::new();
+        let end_time = Timestamp::new();
+
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::ElapsedCompute(elapsed_time.clone()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::SpillCount(spill_count.clone()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::SpilledBytes(spilled_bytes.clone()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::OutputRows(output_count.clone()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::StartTimestamp(start_time.clone()),
+            None,
+        )));
+        metrics.push(Arc::new(Metric::new(
+            MetricValue::EndTimestamp(end_time.clone()),
+            None,
+        )));
+
+        self.merge_compute_time(&elapsed_time);
+        self.merge_spill_count(&spill_count);
+        self.merge_spilled_bytes(&spilled_bytes);
+        self.merge_output_count(&output_count);
+        self.merge_start_time(&start_time);
+        self.merge_end_time(&end_time);
+        metrics
     }
 }

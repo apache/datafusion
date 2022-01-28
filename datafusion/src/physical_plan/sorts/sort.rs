@@ -26,7 +26,7 @@ use crate::execution::memory_manager::{
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{AggregatedMetricsSet, BaselineMetrics, MetricsSet};
+use crate::physical_plan::metrics::{BaselineMetrics, CompositeMetricsSet, MetricsSet};
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
@@ -73,7 +73,7 @@ struct ExternalSorter {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     runtime: Arc<RuntimeEnv>,
-    metrics: AggregatedMetricsSet,
+    metrics: CompositeMetricsSet,
     inner_metrics: BaselineMetrics,
 }
 
@@ -82,7 +82,7 @@ impl ExternalSorter {
         partition_id: usize,
         schema: SchemaRef,
         expr: Vec<PhysicalSortExpr>,
-        metrics: AggregatedMetricsSet,
+        metrics: CompositeMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         let inner_metrics = metrics.new_intermediate_baseline(partition_id);
@@ -185,6 +185,12 @@ impl Debug for ExternalSorter {
             .field("spilled_bytes", &self.spilled_bytes())
             .field("spill_count", &self.spill_count())
             .finish()
+    }
+}
+
+impl Drop for ExternalSorter {
+    fn drop(&mut self) {
+        self.runtime.drop_consumer(self.id(), self.used());
     }
 }
 
@@ -357,7 +363,7 @@ pub struct SortExec {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Containing all metrics set created during sort
-    all_metrics: AggregatedMetricsSet,
+    all_metrics: CompositeMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
 }
@@ -381,7 +387,7 @@ impl SortExec {
         Self {
             expr,
             input,
-            all_metrics: AggregatedMetricsSet::new(),
+            all_metrics: CompositeMetricsSet::new(),
             preserve_partitioning,
         }
     }
@@ -537,27 +543,18 @@ async fn do_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,
     expr: Vec<PhysicalSortExpr>,
-    metrics: AggregatedMetricsSet,
+    metrics: CompositeMetricsSet,
     runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
     let schema = input.schema();
-    let sorter = Arc::new(ExternalSorter::new(
-        partition_id,
-        schema.clone(),
-        expr,
-        metrics,
-        runtime.clone(),
-    ));
-    runtime.register_consumer(&(sorter.clone() as Arc<dyn MemoryConsumer>));
-
+    let sorter =
+        ExternalSorter::new(partition_id, schema.clone(), expr, metrics, runtime.clone());
+    runtime.register_requester(sorter.id());
     while let Some(batch) = input.next().await {
         let batch = batch?;
         sorter.insert_batch(batch).await?;
     }
-
-    let result = sorter.sort().await;
-    runtime.drop_consumer(sorter.id());
-    result
+    sorter.sort().await
 }
 
 #[cfg(test)]
