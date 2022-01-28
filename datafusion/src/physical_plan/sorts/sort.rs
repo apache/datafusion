@@ -530,7 +530,7 @@ fn sort_batch(
         batch
             .columns()
             .iter()
-            .map(|column| take(column.as_ref(), &indices).map(|array| Arc::from(array)))
+            .map(|column| take(column.as_ref(), &indices).map(Arc::from))
             .collect::<ArrowResult<Vec<ArrayRef>>>()?,
     )
 }

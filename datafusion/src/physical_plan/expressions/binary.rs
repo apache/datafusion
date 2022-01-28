@@ -1389,7 +1389,7 @@ mod tests {
         expected: ArrayRef,
     ) -> Result<()> {
         let arithmetic_op =
-            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
+            binary_simple(col("a", schema)?, op, col("b", schema)?, schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
@@ -2012,7 +2012,7 @@ mod tests {
         let expr = (0..tree_depth)
             .into_iter()
             .map(|_| col("a", schema.as_ref()).unwrap())
-            .reduce(|l, r| binary_simple(l, Operator::Plus, r, &schema))
+            .reduce(|l, r| binary_simple(l, Operator::Plus, r, schema))
             .unwrap();
 
         let result = expr

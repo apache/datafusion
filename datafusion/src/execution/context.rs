@@ -815,7 +815,7 @@ impl ExecutionContext {
                                 let pages =
                                     batch_cols
                                         .into_iter()
-                                        .zip(a.columns().to_vec().into_iter())
+                                        .zip(a.columns().iter().cloned())
                                         .map(move |(array, descriptor)| {
                                             parquet::write::array_to_pages(
                                                 array.as_ref(),
@@ -4402,7 +4402,7 @@ mod tests {
         let logical_plan = ctx.create_logical_plan(sql)?;
         let logical_plan = ctx.optimize(&logical_plan)?;
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-        ctx.write_csv(physical_plan, out_dir.to_string()).await
+        ctx.write_csv(physical_plan, out_dir).await
     }
 
     /// Execute SQL and write results to partitioned parquet files
@@ -4422,8 +4422,7 @@ mod tests {
             version: parquet::write::Version::V1,
         });
 
-        ctx.write_parquet(physical_plan, out_dir.to_string(), options)
-            .await
+        ctx.write_parquet(physical_plan, out_dir, options).await
     }
 
     /// Generate CSV partitions within the supplied directory

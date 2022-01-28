@@ -981,7 +981,7 @@ impl ScalarValue {
                         flat_len += element_array.len() as i32;
                         offsets.push(flat_len);
 
-                        elements.push(element_array.into());
+                        elements.push(element_array);
 
                         // Element is valid
                         valid.push(true);
@@ -1987,9 +1987,8 @@ mod tests {
             ScalarValue::Decimal128(Some(3), 10, 2),
             ScalarValue::Decimal128(None, 10, 2),
         ];
-        let array: ArrayRef = ScalarValue::iter_to_array(decimal_vec.into_iter())
-            .unwrap()
-            .into();
+        let array: ArrayRef =
+            ScalarValue::iter_to_array(decimal_vec.into_iter()).unwrap();
         assert_eq!(4, array.len());
         assert_eq!(DataType::Decimal(10, 2), array.data_type().clone());
 
@@ -2720,7 +2719,7 @@ mod tests {
                 ),
             ]),
         ];
-        let array: ArrayRef = ScalarValue::iter_to_array(scalars).unwrap().into();
+        let array: ArrayRef = ScalarValue::iter_to_array(scalars).unwrap();
 
         let expected = Arc::new(struct_array_from(vec![
             (field_a, Int32Vec::from_slice(vec![23, 7, -1000]).as_arc()),

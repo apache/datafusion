@@ -45,11 +45,10 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        while let Some(obj_reader) = readers.next().await {
+        if let Some(obj_reader) = readers.next().await {
             let mut reader = obj_reader?.sync_reader()?;
             let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
-            break;
         }
         Ok(Arc::new(schemas.first().unwrap().clone()))
     }

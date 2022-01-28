@@ -125,7 +125,7 @@ impl CaseExpr {
         // start with the else condition, or nulls
         let mut current_value = if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type)
                 .unwrap_or_else(|_| e.clone());
             expr.evaluate(batch)?.into_array(batch.num_rows())
         } else {
@@ -178,7 +178,7 @@ impl CaseExpr {
 
         // start with the else condition, or nulls
         let mut current_value = if let Some(e) = &self.else_expr {
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type)
                 .unwrap_or_else(|_| e.clone());
             expr.evaluate(batch)?.into_array(batch.num_rows())
         } else {
@@ -423,10 +423,10 @@ mod tests {
 
         // CASE WHEN a = 'foo' THEN 123.3 ELSE 999 END
         let when = binary(
-            col("a", &schema)?,
+            col("a", schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("foo".to_string()))),
-            &batch.schema(),
+            batch.schema(),
         )?;
         let then = lit(ScalarValue::Float64(Some(123.3)));
         let else_value = lit(ScalarValue::Int32(Some(999)));

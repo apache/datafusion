@@ -253,8 +253,7 @@ mod tests {
             )))),
         );
 
-        let array: ArrayRef =
-            ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap().into();
+        let array: ArrayRef = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
 
         generic_test_op!(
             array,

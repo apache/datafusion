@@ -1429,7 +1429,7 @@ mod tests {
         let schema = partitions[0][0].schema();
 
         let sort = vec![PhysicalSortExpr {
-            expr: col("value", &schema).unwrap(),
+            expr: col("value", schema).unwrap(),
             options: SortOptions {
                 descending: false,
                 nulls_first: true,

@@ -1235,7 +1235,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema.clone())?;
+        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
         let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
 
         let row_group_predicate = build_row_group_predicate(

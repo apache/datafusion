@@ -407,7 +407,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
                 (TimeUnit::Nanosecond, TimeUnit::Microsecond) => TimeUnit::Microsecond,
                 (l, r) => {
                     assert_eq!(l, r);
-                    l.clone()
+                    *l
                 }
             };
 
