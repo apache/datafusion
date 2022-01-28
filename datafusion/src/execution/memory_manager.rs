@@ -532,7 +532,7 @@ mod tests {
         runtime.drop_consumer(tracker1.id(), tracker1.mem_used);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
 
-        // MemTrackingMetrics as an easy way to tracking memory
+        // MemTrackingMetrics as an easy way to track memory
         let ms = ExecutionPlanMetricsSet::new();
         let tracking_metric = MemTrackingMetrics::new_with_rt(&ms, 0, runtime.clone());
         tracking_metric.init_mem_used(15);
