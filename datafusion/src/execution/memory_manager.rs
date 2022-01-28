@@ -281,6 +281,10 @@ impl MemoryManager {
         *self.trackers_total.lock().unwrap()
     }
 
+    pub(crate) fn grow_tracker_total(&self, size: usize) {
+        *self.trackers_total.lock().unwrap() += size;
+    }
+
     fn get_requester_total(&self) -> usize {
         *self.requesters_total.lock().unwrap()
     }

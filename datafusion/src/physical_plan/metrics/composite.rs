@@ -17,6 +17,8 @@
 
 //! Metrics common for complex operators with multiple steps.
 
+use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::metrics::tracker::MemTrackingMetrics;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, MetricValue, MetricsSet, Time,
     Timestamp,
@@ -61,6 +63,24 @@ impl CompositeMetricsSet {
     /// create a new final baseline
     pub fn new_final_baseline(&self, partition: usize) -> BaselineMetrics {
         BaselineMetrics::new(&self.final_, partition)
+    }
+
+    /// create a new intermediate memory tracking metrics
+    pub fn new_intermediate_tracking(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> MemTrackingMetrics {
+        MemTrackingMetrics::new_with_rt(&self.mid, partition, runtime)
+    }
+
+    /// create a new final memory tracking metrics
+    pub fn new_final_tracking(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> MemTrackingMetrics {
+        MemTrackingMetrics::new_with_rt(&self.final_, partition, runtime)
     }
 
     fn merge_compute_time(&self, dest: &Time) {

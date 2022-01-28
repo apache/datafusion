@@ -32,7 +32,7 @@ use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatc
 
 use super::SendableRecordBatchStream;
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
@@ -148,12 +148,12 @@ impl ExecutionPlan for ExplainExec {
         )?;
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let baseline_metrics = BaselineMetrics::new(&metrics, partition);
+        let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
 
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema.clone(),
             vec![Arc::new(record_batch)],
-            baseline_metrics,
+            tracking_metrics,
         )))
     }
 
