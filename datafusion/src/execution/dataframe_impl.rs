@@ -557,6 +557,17 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn register_table() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let mut ctx = ExecutionContext::new();
+        let df_impl = DataFrameImpl::new(ctx.state.clone(), &df.to_logical_plan());
+        ctx.register_table("test_table", Arc::new(df_impl))?;
+        let table = ctx.table("test_table")?;
+        assert_same_plan(&table.to_logical_plan(), &table.to_logical_plan());
+        Ok(())
+    }
+
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
         assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
