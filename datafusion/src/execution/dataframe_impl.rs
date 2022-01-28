@@ -75,15 +75,10 @@ impl TableProvider for DataFrameImpl {
     }
 
     fn schema(&self) -> SchemaRef {
-        Arc::new(Schema::new(
-            self.plan
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.field().clone())
-                .collect(),
-        ))
+        let schema: Schema = self.plan.schema().as_ref().into();
+        Arc::new(schema)
     }
+
 
     fn table_type(&self) -> TableType {
         TableType::View
