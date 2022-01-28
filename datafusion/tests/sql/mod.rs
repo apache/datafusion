@@ -29,6 +29,7 @@ use datafusion::assert_batches_eq;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
+use datafusion::datasource::TableProvider;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
@@ -95,6 +96,7 @@ pub mod udf;
 pub mod union;
 pub mod window;
 
+pub mod information_schema;
 #[cfg_attr(not(feature = "unicode_expressions"), ignore)]
 pub mod unicode;
 
@@ -691,6 +693,21 @@ where
 
 fn make_timestamp_nano_table() -> Result<Arc<MemTable>> {
     make_timestamp_table::<TimestampNanosecondType>()
+}
+
+/// Return a new table provider that has a single Int32 column with
+/// values between `seq_start` and `seq_end`
+pub fn table_with_sequence(
+    seq_start: i32,
+    seq_end: i32,
+) -> Result<Arc<dyn TableProvider>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
+    let partitions = vec![vec![RecordBatch::try_new(
+        schema.clone(),
+        vec![arr as ArrayRef],
+    )?]];
+    Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
 // Normalizes parts of an explain plan that vary from run to run (such as path)
