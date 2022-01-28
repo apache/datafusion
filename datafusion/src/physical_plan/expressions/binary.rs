@@ -57,8 +57,6 @@ use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
-use num::ToPrimitive;
-
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
 use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
@@ -447,16 +445,15 @@ macro_rules! compute_utf8_op_scalar {
 /// Invoke a compute kernel on a data array and a scalar value
 macro_rules! compute_utf8_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        if let ScalarValue::Utf8(Some(string_value)) = $RIGHT {
+        if let Some(string_value) = $RIGHT {
             Ok(Arc::new(paste::expr! {[<$OP _dyn_utf8_scalar>]}(
                 $LEFT,
                 &string_value,
             )?))
         } else {
             Err(DataFusionError::Internal(format!(
-                "compute_utf8_op_scalar for '{}' failed to cast literal value {}",
+                "compute_utf8_op_scalar for '{}' failed with literal 'none' value",
                 stringify!($OP),
-                $RIGHT
             )))
         }
     }};
@@ -484,10 +481,17 @@ macro_rules! compute_bool_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         // generate the scalar function name, such as lt_dyn_bool_scalar, from the $OP parameter
         // (which could have a value of lt) and the suffix _scalar
-        Ok(Arc::new(paste::expr! {[<$OP _dyn_bool_scalar>]}(
-            $LEFT,
-            $RIGHT.try_into()?,
-        )?))
+        if let Some(b) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_bool_scalar>]}(
+                $LEFT,
+                b,
+            )?))
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "compute_utf8_op_scalar for '{}' failed with literal 'none' value",
+                stringify!($OP),
+            )))
+        }
     }};
 }
 
@@ -539,10 +543,17 @@ macro_rules! compute_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         // generate the scalar function name, such as lt_dyn_scalar, from the $OP parameter
         // (which could have a value of lt_dyn) and the suffix _scalar
-        Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(
-            $LEFT,
-            $RIGHT,
-        )?))
+        if let Some(value) = $RIGHT {
+            Ok(Arc::new(paste::expr! {[<$OP _dyn_scalar>]}(
+                $LEFT,
+                value,
+            )?))
+        } else {
+            Err(DataFusionError::Internal(format!(
+                "compute_utf8_op_scalar for '{}' failed with literal 'none' value",
+                stringify!($OP),
+            )))
+        }
     }};
 }
 
@@ -936,61 +947,31 @@ impl PhysicalExpr for BinaryExpr {
     }
 }
 
-/// The binary_array_op_scalar macro includes types that extend beyond the primitive,
+/// The binary_array_op_dyn_scalar macro includes types that extend beyond the primitive,
 /// such as Utf8 strings.
 #[macro_export]
 macro_rules! binary_array_op_dyn_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        let is_numeric = DataType::is_numeric($LEFT.data_type());
-        let is_numeric_dict = match $LEFT.data_type() {
-            DataType::Dictionary(_, val_type) => DataType::is_numeric(val_type),
-            _ => false
-        };
-        let numeric_like = is_numeric | is_numeric_dict;
-
-        let is_string = ($LEFT.data_type() == &DataType::Utf8) | ($LEFT.data_type() == &DataType::LargeUtf8);
-        let is_string_dict = match $LEFT.data_type() {
-            DataType::Dictionary(_, val_type) => match **val_type {
-                DataType::Utf8 | DataType::LargeUtf8 => true,
-                _ => false
-            }
-            _ => false
-        };
-        let string_like = is_string | is_string_dict;
-
-        let result: Result<Arc<dyn Array>> = if numeric_like {
-            compute_op_dyn_scalar!($LEFT, $RIGHT.try_into()?, $OP)
-        } else if string_like {
-            compute_utf8_op_dyn_scalar!($LEFT, $RIGHT, $OP)
-        } else {
-            let r: Result<Arc<dyn Array>> = match $LEFT.data_type() {
-
-                DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
-                DataType::Boolean => compute_bool_op_dyn_scalar!($LEFT, $RIGHT, $OP),
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray)
-                }
-                DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray)
-                }
-                DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray)
-                }
-                DataType::Timestamp(TimeUnit::Second, _) => {
-                    compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray)
-                }
-                DataType::Date32 => {
-                    compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array)
-                }
-                DataType::Date64 => {
-                    compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array)
-                }
-                other => Err(DataFusionError::Internal(format!(
-                    "Data type {:?} not supported for scalar operation '{}' on dyn array",
-                    other, stringify!($OP)
-                ))),
-            };
-          r
+        let result: Result<Arc<dyn Array>> = match $RIGHT {
+            ScalarValue::Boolean(b) => compute_bool_op_dyn_scalar!($LEFT, b, $OP),
+            ScalarValue::Decimal128(..) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
+            ScalarValue::Utf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::LargeUtf8(v) => compute_utf8_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::Int8(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::Int16(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::Int32(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::Int64(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::UInt8(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::UInt16(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::UInt32(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::UInt64(v) => compute_op_dyn_scalar!($LEFT, v, $OP),
+            ScalarValue::Date32(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date32Array),
+            ScalarValue::Date64(_) => compute_op_scalar!($LEFT, $RIGHT, $OP, Date64Array),
+            ScalarValue::TimestampSecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampSecondArray),
+            ScalarValue::TimestampMillisecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMillisecondArray),
+            ScalarValue::TimestampMicrosecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampMicrosecondArray),
+            ScalarValue::TimestampNanosecond(..) => compute_op_scalar!($LEFT, $RIGHT, $OP, TimestampNanosecondArray),
+            other => Err(DataFusionError::Internal(format!("Data type {:?} not supported for scalar operation '{}' on dyn array", other, stringify!($OP))))
         };
         Some(result)
     }}

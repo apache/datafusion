@@ -333,29 +333,6 @@ impl std::hash::Hash for ScalarValue {
     }
 }
 
-impl num::ToPrimitive for ScalarValue {
-    fn to_i64(&self) -> Option<i64> {
-        use ScalarValue::*;
-        match self {
-            Int8(v) => Some(v.unwrap() as i64),
-            Int16(v) => Some(v.unwrap() as i64),
-            Int32(v) => Some(v.unwrap() as i64),
-            Int64(v) => Some(v.unwrap() as i64),
-            _ => None,
-        }
-    }
-    fn to_u64(&self) -> Option<u64> {
-        use ScalarValue::*;
-        match self {
-            UInt8(v) => Some(v.unwrap() as u64),
-            UInt16(v) => Some(v.unwrap() as u64),
-            UInt32(v) => Some(v.unwrap() as u64),
-            UInt64(v) => Some(v.unwrap() as u64),
-            _ => None,
-        }
-    }
-}
-
 // return the index into the dictionary values for array@index as well
 // as a reference to the dictionary values array. Returns None for the
 // index if the array is NULL at index
