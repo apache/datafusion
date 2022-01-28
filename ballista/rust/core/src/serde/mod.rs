@@ -27,7 +27,7 @@ use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
-use arrow::datatypes::{IntegerType, UnionMode};
+use arrow::datatypes::IntegerType;
 use prost::Message;
 
 // include the generated protobuf source as a submodule

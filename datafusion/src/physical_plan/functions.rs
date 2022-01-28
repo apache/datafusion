@@ -36,6 +36,7 @@ use super::{
 use crate::execution::context::ExecutionContextState;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
+use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
 use crate::physical_plan::expressions::{
     cast_column, nullif_func, SUPPORTED_NULLIF_TYPES,
 };
@@ -1224,6 +1225,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1243,6 +1245,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Millisecond, None),
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1262,6 +1265,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Microsecond, None),
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1281,6 +1285,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Second, None),
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }

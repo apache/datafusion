@@ -21,13 +21,14 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
+use crate::physical_plan::expressions::cast::{
+    cast_with_error, DEFAULT_DATAFUSION_CAST_OPTIONS,
+};
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::array::Float64Array;
 use arrow::{
     array::{ArrayRef, UInt64Array},
-    compute::cast::cast,
     datatypes::DataType,
     datatypes::Field,
 };
@@ -282,12 +283,12 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values1 = &cast(
+        let values1 = &cast_with_error(
             values[0].as_ref(),
             &DataType::Float64,
             DEFAULT_DATAFUSION_CAST_OPTIONS,
         )?;
-        let values2 = &cast(
+        let values2 = &cast_with_error(
             values[1].as_ref(),
             &DataType::Float64,
             DEFAULT_DATAFUSION_CAST_OPTIONS,

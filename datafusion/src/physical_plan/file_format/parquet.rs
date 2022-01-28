@@ -467,7 +467,7 @@ fn map_projections(
 #[allow(clippy::too_many_arguments)]
 fn read_partition(
     object_store: &dyn ObjectStore,
-    _file_schema: SchemaRef,
+    file_schema: SchemaRef,
     partition_index: usize,
     partition: Vec<PartitionedFile>,
     metrics: ExecutionPlanMetricsSet,
@@ -489,6 +489,7 @@ fn read_partition(
         let object_reader =
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
         let reader = object_reader.sync_reader()?;
+
         let mut record_reader = read::RecordReader::try_new(
             reader,
             Some(projection.to_vec()),
@@ -496,6 +497,9 @@ fn read_partition(
             None,
             None,
         )?;
+        // TODO : ???
+        let _mapped_projections =
+            map_projections(&file_schema, record_reader.schema(), projection)?;
         if let Some(pruning_predicate) = pruning_predicate {
             record_reader.set_groups_filter(Arc::new(build_row_group_predicate(
                 pruning_predicate,

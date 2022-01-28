@@ -28,7 +28,7 @@ use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchS
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{AggregatedMetricsSet, BaselineMetrics, MetricsSet};
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
-use crate::physical_plan::sorts::SortedStream;
+use crate::physical_plan::sorts::{SortColumn, SortedStream};
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
@@ -37,7 +37,7 @@ use crate::physical_plan::{
 use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
 pub use arrow::compute::sort::SortOptions;
-use arrow::compute::sort::{lexsort_to_indices, SortColumn};
+use arrow::compute::sort::{lexsort_to_indices, SortColumn as ArrowSortColumn};
 use arrow::compute::take::take;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
@@ -512,10 +512,14 @@ fn sort_batch(
     expr: &[PhysicalSortExpr],
 ) -> ArrowResult<RecordBatch> {
     // TODO: pushup the limit expression to sort
+    let vec = expr
+        .iter()
+        .map(|e| e.evaluate_to_sort_column(&batch))
+        .collect::<Result<Vec<SortColumn>>>()?;
     let indices = lexsort_to_indices::<i32>(
-        expr.iter()
-            .map(|e| e.evaluate_to_sort_column(&batch))
-            .collect::<Result<Vec<SortColumn>>>()?
+        vec.iter()
+            .map(|sc| sc.into())
+            .collect::<Vec<ArrowSortColumn>>()
             .as_slice(),
         None,
     )?;

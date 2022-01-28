@@ -23,7 +23,7 @@ mod roundtrip_tests {
 
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
-    use arrow::datatypes::UnionMode;
+    use arrow::datatypes::IntegerType;
     use core::panic;
     use datafusion::arrow::datatypes::UnionMode;
     use datafusion::field_util::SchemaExt;
@@ -443,19 +443,21 @@ mod roundtrip_tests {
                 UnionMode::Sparse,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Utf8),
+                IntegerType::UInt8,
                 Box::new(DataType::Struct(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ])),
+                false,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Decimal(10, 50)),
+                IntegerType::UInt64,
                 Box::new(DataType::FixedSizeList(
                     new_box_field("Level1", DataType::Binary, true),
                     4,
                 )),
+                false,
             ),
         ];
 
@@ -595,19 +597,21 @@ mod roundtrip_tests {
                 UnionMode::Dense,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Utf8),
+                IntegerType::UInt8,
                 Box::new(DataType::Struct(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ])),
+                false,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Decimal(10, 50)),
+                IntegerType::UInt64,
                 Box::new(DataType::FixedSizeList(
                     new_box_field("Level1", DataType::Binary, true),
                     4,
                 )),
+                false,
             ),
         ];
 

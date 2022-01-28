@@ -21,8 +21,6 @@ use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute;
 use arrow::datatypes::{DataType, Schema};
-use arrow::error::ArrowError;
-use arrow::error::ArrowError::InvalidArgumentError;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
@@ -66,267 +64,6 @@ fn is_not_distinct_from_bool(left: &dyn Array, right: &dyn Array) -> BooleanArra
         .zip(right.iter())
         .map(|(left, right)| Some(left == right))
         .collect()
-}
-
-// TODO add iter for decimal array
-// TODO move this to arrow-rs
-// https://github.com/apache/arrow-rs/issues/1083
-pub(super) fn eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) == right))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-pub(super) fn eq_decimal(
-    left: &Int128Array,
-    right: &Int128Array,
-) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) == right.value(i)))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn neq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) != right))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn neq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) != right.value(i)))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn lt_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) < right))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn lt_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) < right.value(i)))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn lt_eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) <= right))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn lt_eq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) <= right.value(i)))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn gt_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) > right))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn gt_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) > right.value(i)))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn gt_eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) >= right))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn gt_eq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.push(None);
-        } else {
-            bool_builder.try_push(Some(left.value(i) >= right.value(i)))?;
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn is_distinct_from_decimal(
-    left: &Int128Array,
-    right: &Int128Array,
-) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        match (left.is_null(i), right.is_null(i)) {
-            (true, true) => bool_builder.try_push(Some(false))?,
-            (true, false) | (false, true) => bool_builder.try_push(Some(true))?,
-            (_, _) => bool_builder.try_push(Some(left.value(i) != right.value(i)))?,
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn is_not_distinct_from_decimal(
-    left: &Int128Array,
-    right: &Int128Array,
-) -> Result<BooleanArray> {
-    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
-    for i in 0..left.len() {
-        match (left.is_null(i), right.is_null(i)) {
-            (true, true) => bool_builder.try_push(Some(true))?,
-            (true, false) | (false, true) => bool_builder.try_push(Some(false))?,
-            (_, _) => bool_builder.try_push(Some(left.value(i) == right.value(i)))?,
-        }
-    }
-    Ok(bool_builder.into())
-}
-
-fn add_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
-    let mut decimal_builder = Int128Vec::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.push(None);
-        } else {
-            decimal_builder.try_push(Some(left.value(i) + right.value(i)))?;
-        }
-    }
-    Ok(decimal_builder.into())
-}
-
-fn subtract_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
-    let mut decimal_builder = Int128Vec::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.push(None);
-        } else {
-            decimal_builder.try_push(Some(left.value(i) - right.value(i)))?;
-        }
-    }
-    Ok(decimal_builder.into())
-}
-
-fn multiply_decimal(
-    left: &Int128Array,
-    right: &Int128Array,
-    scale: u32,
-) -> Result<Int128Array> {
-    let mut decimal_builder = Int128Vec::with_capacity(left.len());
-    let divide = 10_i128.pow(scale);
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.push(None);
-        } else {
-            decimal_builder.try_push(Some(left.value(i) * right.value(i) / divide))?;
-        }
-    }
-    Ok(decimal_builder.into())
-}
-
-fn divide_decimal(
-    left: &Int128Array,
-    right: &Int128Array,
-    scale: i32,
-) -> Result<Int128Array> {
-    let mut decimal_builder = Int128Vec::with_capacity(left.len());
-    let mul = 10_f64.powi(scale);
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.push(None);
-        } else if right.value(i) == 0 {
-            return Err(DataFusionError::ArrowError(
-                ArrowError::InvalidArgumentError("Cannot divide by zero".to_string()),
-            ));
-        } else {
-            let l_value = left.value(i) as f64;
-            let r_value = right.value(i) as f64;
-            let result = ((l_value / r_value) * mul) as i128;
-            decimal_builder.try_push(Some(result))?;
-        }
-    }
-    Ok(decimal_builder.into())
-}
-
-fn modulus_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
-    let mut decimal_builder = Int128Vec::with_capacity(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.push(None);
-        } else if right.value(i) == 0 {
-            return Err(DataFusionError::ArrowError(InvalidArgumentError(
-                "Cannot divide by zero".to_string(),
-            )));
-        } else {
-            decimal_builder.try_push(Some(left.value(i) % right.value(i)))?;
-        }
-    }
-    Ok(decimal_builder.into())
 }
 
 /// Binary expression
@@ -989,6 +726,272 @@ mod tests {
     use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, lit};
     use arrow::datatypes::{Field, SchemaRef};
+    use arrow::error::ArrowError;
+
+    // TODO add iter for decimal array
+    // TODO move this to arrow-rs
+    // https://github.com/apache/arrow-rs/issues/1083
+    pub(super) fn eq_decimal_scalar(
+        left: &Int128Array,
+        right: i128,
+    ) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) == right))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    pub(super) fn eq_decimal(
+        left: &Int128Array,
+        right: &Int128Array,
+    ) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) == right.value(i)))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn neq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) != right))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn neq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) != right.value(i)))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn lt_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) < right))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn lt_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) < right.value(i)))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn lt_eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) <= right))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn lt_eq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) <= right.value(i)))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn gt_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) > right))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn gt_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) > right.value(i)))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn gt_eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) >= right))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn gt_eq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                bool_builder.push(None);
+            } else {
+                bool_builder.try_push(Some(left.value(i) >= right.value(i)))?;
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn is_distinct_from_decimal(
+        left: &Int128Array,
+        right: &Int128Array,
+    ) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            match (left.is_null(i), right.is_null(i)) {
+                (true, true) => bool_builder.try_push(Some(false))?,
+                (true, false) | (false, true) => bool_builder.try_push(Some(true))?,
+                (_, _) => bool_builder.try_push(Some(left.value(i) != right.value(i)))?,
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn is_not_distinct_from_decimal(
+        left: &Int128Array,
+        right: &Int128Array,
+    ) -> Result<BooleanArray> {
+        let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
+        for i in 0..left.len() {
+            match (left.is_null(i), right.is_null(i)) {
+                (true, true) => bool_builder.try_push(Some(true))?,
+                (true, false) | (false, true) => bool_builder.try_push(Some(false))?,
+                (_, _) => bool_builder.try_push(Some(left.value(i) == right.value(i)))?,
+            }
+        }
+        Ok(bool_builder.into())
+    }
+
+    fn add_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
+        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                decimal_builder.push(None);
+            } else {
+                decimal_builder.try_push(Some(left.value(i) + right.value(i)))?;
+            }
+        }
+        Ok(decimal_builder.into())
+    }
+
+    fn subtract_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
+        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                decimal_builder.push(None);
+            } else {
+                decimal_builder.try_push(Some(left.value(i) - right.value(i)))?;
+            }
+        }
+        Ok(decimal_builder.into())
+    }
+
+    fn multiply_decimal(
+        left: &Int128Array,
+        right: &Int128Array,
+        scale: u32,
+    ) -> Result<Int128Array> {
+        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let divide = 10_i128.pow(scale);
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                decimal_builder.push(None);
+            } else {
+                decimal_builder
+                    .try_push(Some(left.value(i) * right.value(i) / divide))?;
+            }
+        }
+        Ok(decimal_builder.into())
+    }
+
+    fn divide_decimal(
+        left: &Int128Array,
+        right: &Int128Array,
+        scale: i32,
+    ) -> Result<Int128Array> {
+        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let mul = 10_f64.powi(scale);
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                decimal_builder.push(None);
+            } else if right.value(i) == 0 {
+                return Err(DataFusionError::ArrowError(
+                    ArrowError::InvalidArgumentError("Cannot divide by zero".to_string()),
+                ));
+            } else {
+                let l_value = left.value(i) as f64;
+                let r_value = right.value(i) as f64;
+                let result = ((l_value / r_value) * mul) as i128;
+                decimal_builder.try_push(Some(result))?;
+            }
+        }
+        Ok(decimal_builder.into())
+    }
+
+    fn modulus_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
+        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        for i in 0..left.len() {
+            if left.is_null(i) || right.is_null(i) {
+                decimal_builder.push(None);
+            } else if right.value(i) == 0 {
+                return Err(DataFusionError::ArrowError(
+                    ArrowError::InvalidArgumentError("Cannot divide by zero".to_string()),
+                ));
+            } else {
+                decimal_builder.try_push(Some(left.value(i) % right.value(i)))?;
+            }
+        }
+        Ok(decimal_builder.into())
+    }
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.

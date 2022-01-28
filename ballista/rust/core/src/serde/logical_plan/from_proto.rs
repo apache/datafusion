@@ -585,7 +585,7 @@ fn typechecked_scalar_value_conversion(
             ScalarValue::IntervalYearMonth(Some(*v))
         }
         (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
-            ScalarValue::IntervalDayTime(Some(*v))
+            ScalarValue::IntervalDayTime(Some(days_ms::new(1i32, *v as i32)))
         }
         _ => return Err(proto_error("Could not convert to the proper type")),
     })
@@ -669,7 +669,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value
                 ScalarValue::IntervalYearMonth(Some(*v))
             }
             protobuf::scalar_value::Value::IntervalDaytimeValue(v) => {
-                ScalarValue::IntervalDayTime(Some(*v))
+                ScalarValue::IntervalDayTime(Some(days_ms::new(1, *v as i32)))
             }
         };
         Ok(scalar)
@@ -947,7 +947,7 @@ impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::ScalarValue {
                 ScalarValue::IntervalYearMonth(Some(*v))
             }
             protobuf::scalar_value::Value::IntervalDaytimeValue(v) => {
-                ScalarValue::IntervalDayTime(Some(*v))
+                ScalarValue::IntervalDayTime(Some(days_ms::new(1, *v as i32)))
             }
         })
     }
@@ -1272,6 +1272,7 @@ impl TryInto<Field> for &protobuf::Field {
 }
 
 use crate::serde::protobuf::ColumnStats;
+use arrow::types::days_ms;
 use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{

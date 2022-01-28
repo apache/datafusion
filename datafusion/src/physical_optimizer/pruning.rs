@@ -39,6 +39,7 @@ use arrow::{
 };
 
 use crate::field_util::{FieldExt, SchemaExt};
+use crate::physical_plan::expressions::cast::cast_with_error;
 use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
@@ -370,7 +371,8 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
         let array =
-            cast::cast(array.as_ref(), data_type, cast::CastOptions::default())?.into();
+            cast_with_error(array.as_ref(), data_type, cast::CastOptions::default())?
+                .into();
 
         fields.push(stat_field.clone());
         arrays.push(array);

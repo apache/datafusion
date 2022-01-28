@@ -18,7 +18,7 @@
 //! Defines helper functions for force Array type downcast
 
 use arrow::array::*;
-use arrow::array::{Array, DictionaryArray, ListArray, PrimitiveArray};
+use arrow::array::{Array, PrimitiveArray};
 use arrow::types::NativeType;
 
 /// Force downcast ArrayRef to PrimitiveArray<T>
@@ -29,35 +29,6 @@ where
     arr.as_any()
         .downcast_ref::<PrimitiveArray<T>>()
         .expect("Unable to downcast to primitive array")
-}
-
-/// Force downcast ArrayRef to DictionaryArray<T>
-pub fn as_dictionary_array<T>(arr: &dyn Array) -> &DictionaryArray<T>
-where
-    T: DictionaryKey,
-{
-    arr.as_any()
-        .downcast_ref::<DictionaryArray<T>>()
-        .expect("Unable to downcast to dictionary array")
-}
-
-#[doc = "Force downcast ArrayRef to ListArray"]
-pub fn as_generic_list_array<S: Offset>(arr: &dyn Array) -> &ListArray<S> {
-    arr.as_any()
-        .downcast_ref::<ListArray<S>>()
-        .expect("Unable to downcast to list array")
-}
-
-#[doc = "Force downcast ArrayRef to ListArray<i32>"]
-#[inline]
-pub fn as_list_array(arr: &dyn Array) -> &ListArray<i32> {
-    as_generic_list_array::<i32>(arr)
-}
-
-#[doc = "Force downcast ArrayRef to ListArray<i64>"]
-#[inline]
-pub fn as_large_list_array(arr: &dyn Array) -> &ListArray<i64> {
-    as_generic_list_array::<i64>(arr)
 }
 
 macro_rules! array_downcast_fn {
@@ -79,9 +50,3 @@ macro_rules! array_downcast_fn {
 }
 
 array_downcast_fn!(as_string_array, Utf8Array<i32>);
-array_downcast_fn!(as_largestring_array, Utf8Array<i64>);
-array_downcast_fn!(as_boolean_array, BooleanArray);
-array_downcast_fn!(as_null_array, NullArray);
-array_downcast_fn!(as_struct_array, StructArray);
-array_downcast_fn!(as_union_array, UnionArray);
-array_downcast_fn!(as_map_array, MapArray);

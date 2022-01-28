@@ -94,12 +94,16 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
-        cast_column(&value, &self.cast_type)
+        cast_column(&value, &self.cast_type, self.cast_options)
     }
 }
 
-fn cast_with_error(array: &dyn Array, cast_type: &DataType) -> Result<Box<dyn Array>> {
-    let result = cast::cast(array, cast_type, cast::CastOptions::default())?;
+pub fn cast_with_error(
+    array: &dyn Array,
+    cast_type: &DataType,
+    options: CastOptions,
+) -> Result<Box<dyn Array>> {
+    let result = cast::cast(array, cast_type, options)?;
     if result.null_count() != array.null_count() {
         let casted_valids = result.validity().unwrap();
         let failed_casts = match array.validity() {
@@ -122,15 +126,20 @@ fn cast_with_error(array: &dyn Array, cast_type: &DataType) -> Result<Box<dyn Ar
 }
 
 /// Internal cast function for casting ColumnarValue -> ColumnarValue for cast_type
-pub fn cast_column(value: &ColumnarValue, cast_type: &DataType) -> Result<ColumnarValue> {
+pub fn cast_column(
+    value: &ColumnarValue,
+    cast_type: &DataType,
+    cast_options: CastOptions,
+) -> Result<ColumnarValue> {
     match value {
-        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-            cast_with_error(array.as_ref(), cast_type)?.into(),
-        )),
+        ColumnarValue::Array(array) => Ok(ColumnarValue::Array(Arc::from(
+            cast_with_error(array.as_ref(), cast_type, cast_options)?,
+        ))),
         ColumnarValue::Scalar(scalar) => {
             let scalar_array = scalar.to_array();
-            let cast_array = cast_with_error(scalar_array.as_ref(), cast_type)?.into();
-            let cast_scalar = ScalarValue::try_from_array(&cast_array, 0)?;
+            let cast_array =
+                cast_with_error(scalar_array.as_ref(), cast_type, cast_options)?;
+            let cast_scalar = ScalarValue::try_from_array(&Arc::from(cast_array), 0)?;
             Ok(ColumnarValue::Scalar(cast_scalar))
         }
     }
@@ -620,7 +629,9 @@ mod tests {
     #[test]
     fn invalid_str_cast() {
         let arr = Utf8Array::<i32>::from_slice(&["a", "b", "123", "!", "456"]);
-        let err = cast_with_error(&arr, &DataType::Int64).unwrap_err();
+        let err =
+            cast_with_error(&arr, &DataType::Int64, DEFAULT_DATAFUSION_CAST_OPTIONS)
+                .unwrap_err();
         assert_eq!(
             err.to_string(),
             "Execution error: Could not cast Utf8[a, b, !] to value of type Int64"

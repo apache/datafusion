@@ -22,7 +22,7 @@
 use super::super::proto_error;
 use crate::serde::protobuf::integer_type::IntegerTypeEnum;
 use crate::serde::{byte_to_string, protobuf, BallistaError};
-use arrow::datatypes::{IntegerType, UnionMode};
+use arrow::datatypes::IntegerType;
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
@@ -461,8 +461,6 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             }
             DataType::Extension(_, _, _) =>
                 panic!("DataType::Extension is not supported"),
-            DataType::Map(_, _) =>
-                panic!("DataType::Map is not supported"),
         };
         Ok(scalar_value)
     }
@@ -663,7 +661,7 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
             }
             datafusion::scalar::ScalarValue::IntervalDayTime(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::IntervalDaytime, |s| {
-                    Value::IntervalDaytimeValue(*s)
+                    Value::IntervalDaytimeValue(s.milliseconds() as i64)
                 })
             }
             _ => {

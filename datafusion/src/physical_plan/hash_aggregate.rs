@@ -49,6 +49,7 @@ use pin_project_lite::pin_project;
 
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::field_util::{FieldExt, SchemaExt};
+use crate::physical_plan::expressions::cast::cast_with_error;
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;
@@ -958,11 +959,12 @@ fn create_batch_from_map(
         .iter()
         .zip(output_schema.fields().iter())
         .map(|(col, desired_field)| {
-            cast::cast(
+            cast_with_error(
                 col.as_ref(),
                 desired_field.data_type(),
                 cast::CastOptions::default(),
             )
+            .map_err(|e| e.into())
             .map(Arc::from)
         })
         .collect::<ArrowResult<Vec<_>>>()?;

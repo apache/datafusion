@@ -20,6 +20,7 @@
 use datafusion::arrow::{array::Float32Array, array::Float64Array, datatypes::DataType};
 use datafusion::record_batch::RecordBatch;
 
+use arrow::array::ArrayRef;
 use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::functions::Volatility;
 use datafusion::{error::Result, logical_plan::create_udaf, physical_plan::Accumulator};

@@ -33,12 +33,13 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::compute::merge_sort::SortOptions;
 use arrow::compute::partition::lexicographical_partition_ranges;
-use arrow::compute::sort::SortColumn;
+use arrow::compute::sort::SortColumn as ArrowSortColumn;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use async_trait::async_trait;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
+use sorts::SortColumn;
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::ops::Range;
@@ -525,7 +526,11 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
+            let v = partition_columns
+                .iter()
+                .map(|sc| sc.into())
+                .collect::<Vec<ArrowSortColumn>>();
+            Ok(lexicographical_partition_ranges(v.as_slice())
                 .map_err(DataFusionError::ArrowError)?
                 .collect())
         }

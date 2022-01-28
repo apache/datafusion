@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::cast::cast_with_error;
 use crate::physical_plan::PhysicalExpr;
 use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
@@ -78,7 +79,7 @@ impl PhysicalExpr for TryCastExpr {
         let value = self.expr.evaluate(batch)?;
         match value {
             ColumnarValue::Array(array) => Ok(ColumnarValue::Array(
-                cast::cast(
+                cast_with_error(
                     array.as_ref(),
                     &self.cast_type,
                     cast::CastOptions::default(),
@@ -87,7 +88,7 @@ impl PhysicalExpr for TryCastExpr {
             )),
             ColumnarValue::Scalar(scalar) => {
                 let scalar_array = scalar.to_array();
-                let cast_array = cast::cast(
+                let cast_array = cast_with_error(
                     scalar_array.as_ref(),
                     &self.cast_type,
                     cast::CastOptions::default(),

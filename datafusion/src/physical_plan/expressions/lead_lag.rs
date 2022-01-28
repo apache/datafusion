@@ -19,6 +19,7 @@
 //! at runtime during query execution
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::cast::cast_with_error;
 use crate::physical_plan::window_functions::PartitionEvaluator;
 use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
 use crate::record_batch::RecordBatch;
@@ -130,8 +131,7 @@ fn create_empty_array(
         .map(|scalar| scalar.to_array_of_size(size))
         .unwrap_or_else(|| ArrayRef::from(new_null_array(data_type.clone(), size)));
     if array.data_type() != data_type {
-        cast::cast(array.borrow(), data_type, cast::CastOptions::default())
-            .map_err(DataFusionError::ArrowError)
+        cast_with_error(array.borrow(), data_type, cast::CastOptions::default())
             .map(ArrayRef::from)
     } else {
         Ok(array)

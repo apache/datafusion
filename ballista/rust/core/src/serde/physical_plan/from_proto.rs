@@ -17,6 +17,7 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use arrow::compute::cast::CastOptions;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
@@ -594,6 +595,11 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
             ExprType::Cast(e) => Arc::new(CastExpr::new(
                 convert_box_required!(e.expr)?,
                 convert_required!(e.arrow_type)?,
+                // TODO: shouldn't this be added to proto ?
+                CastOptions {
+                    wrapped: false,
+                    partial: false,
+                },
             )),
             ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
                 convert_box_required!(e.expr)?,

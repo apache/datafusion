@@ -327,6 +327,31 @@ impl RecordBatch {
 
         RecordBatch::try_new(SchemaRef::new(projected_schema), batch_fields)
     }
+
+    /// Return a new RecordBatch where each column is sliced
+    /// according to `offset` and `length`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset` with `length` is greater than column length.
+    pub fn slice(&self, offset: usize, length: usize) -> RecordBatch {
+        if self.schema.fields().is_empty() {
+            assert!((offset + length) == 0);
+            return RecordBatch::new_empty(self.schema.clone());
+        }
+        assert!((offset + length) <= self.num_rows());
+
+        let columns = self
+            .columns()
+            .iter()
+            .map(|column| Arc::from(column.slice(offset, length)))
+            .collect();
+
+        Self {
+            schema: self.schema.clone(),
+            columns,
+        }
+    }
 }
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].
