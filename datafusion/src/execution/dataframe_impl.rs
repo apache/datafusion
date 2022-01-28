@@ -93,10 +93,6 @@ impl TableProvider for DataFrameImpl {
         &self,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
-        // limit can be used to reduce the amount scanned
-        // from the datasource as a performance optimization.
-        // If set, it contains the amount of rows needed by the `LogicalPlan`,
-        // The datasource should return *at least* this number of rows if available.
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let expr = projection
