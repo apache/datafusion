@@ -47,6 +47,7 @@ pub use expr::{
     signum, sin, split_part, sqrt, starts_with, strpos, substr, sum, tan, to_hex,
     translate, trim, trunc, unalias, unnormalize_col, unnormalize_cols, upper, when,
     Column, Expr, ExprRewriter, ExpressionVisitor, Literal, Recursion, RewriteRecursion,
+    SimplifyInfo,
 };
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
