@@ -295,7 +295,7 @@ impl MemoryManager {
         *self.requesters_total.lock().unwrap()
     }
 
-    /// Register a new memory requester for memory usage tracking
+    /// Register a new memory requester
     pub(crate) fn register_requester(&self, requester_id: &MemoryConsumerId) {
         self.requesters.lock().unwrap().insert(requester_id.clone());
     }
@@ -349,7 +349,7 @@ impl MemoryManager {
         self.cv.notify_all()
     }
 
-    /// Drop a memory consumer from memory usage tracking
+    /// Drop a memory consumer and reclaim the memory
     pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
         // find in requesters first
         {
