@@ -83,10 +83,8 @@ impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
             DataFusionError::ArrowError(e) => e,
-            DataFusionError::External(e) => {
-                ArrowError::External("datafusion".to_string(), e)
-            }
-            other => ArrowError::External("datafusion".to_string(), Box::new(other)),
+            DataFusionError::External(e) => ArrowError::External("".to_string(), e),
+            other => ArrowError::External("".to_string(), Box::new(other)),
         }
     }
 }
@@ -162,7 +160,10 @@ mod test {
     #[test]
     fn datafusion_error_to_arrow() {
         let res = return_datafusion_error().unwrap_err();
-        assert_eq!(res.to_string(), "Arrow error: Schema error: bar");
+        assert_eq!(
+            res.to_string(),
+            "Arrow error: Invalid argument error: Schema error: bar"
+        );
     }
 
     /// Model what happens when implementing SendableRecrordBatchStream:
@@ -179,7 +180,9 @@ mod test {
     #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        let _bar = Err(ArrowError::OutOfSpec("bar".to_string()))?;
+        let _bar = Err(ArrowError::InvalidArgumentError(
+            "Schema error: bar".to_string(),
+        ))?;
         Ok(())
     }
 }

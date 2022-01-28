@@ -535,8 +535,8 @@ mod tests {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema: Schema = schema.into();
         let expected =
-            "[Field { name: \"c0\", data_type: Boolean, nullable: true, metadata: {} }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, metadata: {} }]";
+            "[Field { name: \"c0\", data_type: Boolean, is_nullable: true, metadata: {} }, \
+        Field { name: \"c1\", data_type: Boolean, is_nullable: true, metadata: {} }]";
         assert_eq!(expected, format!("{:?}", arrow_schema.fields));
         Ok(())
     }
