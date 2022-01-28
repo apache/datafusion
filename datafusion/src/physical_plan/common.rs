@@ -29,7 +29,7 @@ use arrow::compute::concatenate;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::ipc::writer::FileWriter;
+use arrow::io::ipc::write::{FileWriter, WriteOptions};
 use futures::channel::mpsc;
 use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
@@ -416,13 +416,13 @@ impl IPCWriter {
             num_rows: 0,
             num_bytes: 0,
             path: path.into(),
-            writer: FileWriter::try_new(file, schema)?,
+            writer: FileWriter::try_new(file, schema, None, WriteOptions::default())?,
         })
     }
 
     /// Write one single batch
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
+        self.writer.write(&batch.into(), None)?;
         self.num_batches += 1;
         self.num_rows += batch.num_rows() as u64;
         let num_bytes: usize = batch_byte_size(batch);

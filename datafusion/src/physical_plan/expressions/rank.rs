@@ -122,7 +122,7 @@ impl PartitionEvaluator for RankEvaluator {
     ) -> Result<ArrayRef> {
         // see https://www.postgresql.org/docs/current/functions-window.html
         let result: ArrayRef = match self.rank_type {
-            RankType::DenseRank => Arc::new(UInt64Array::from_values(
+            RankType::Dense => Arc::new(UInt64Array::from_values(
                 ranks_in_partition
                     .iter()
                     .zip(1u64..)

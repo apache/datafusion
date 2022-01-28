@@ -767,7 +767,7 @@ enum StatisticsType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::{

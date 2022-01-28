@@ -229,8 +229,7 @@ pub mod record_batch;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
 
-pub mod from_slice;
-
+mod cast;
 #[cfg(test)]
 pub mod test;
 pub mod test_util;

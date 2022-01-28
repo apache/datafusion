@@ -308,6 +308,25 @@ impl RecordBatch {
         let Self { columns, schema } = self;
         (columns, schema)
     }
+
+    /// Projects the schema onto the specified columns
+    pub fn project(&self, indices: &[usize]) -> Result<RecordBatch> {
+        let projected_schema = self.schema.project(indices)?;
+        let batch_fields = indices
+            .iter()
+            .map(|f| {
+                self.columns.get(*f).cloned().ok_or_else(|| {
+                    ArrowError::InvalidArgumentError(format!(
+                        "project index {} out of bounds, max field {}",
+                        f,
+                        self.columns.len()
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        RecordBatch::try_new(SchemaRef::new(projected_schema), batch_fields)
+    }
 }
 
 /// Options that control the behaviour used when creating a [`RecordBatch`].

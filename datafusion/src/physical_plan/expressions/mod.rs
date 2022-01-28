@@ -23,26 +23,7 @@ use super::ColumnarValue;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
 use crate::record_batch::RecordBatch;
-use arrow::array::*;
-use arrow::compute::sort::{SortColumn as ArrowSortColumn, SortOptions};
-
-/// One column to be used in lexicographical sort
-#[derive(Clone, Debug)]
-pub struct SortColumn {
-    /// The array to be sorted
-    pub values: ArrayRef,
-    /// The options to sort the array
-    pub options: Option<SortOptions>,
-}
-
-impl<'a> From<&'a SortColumn> for ArrowSortColumn<'a> {
-    fn from(c: &'a SortColumn) -> Self {
-        Self {
-            values: c.values.as_ref(),
-            options: c.options,
-        }
-    }
-}
+use arrow::compute::sort::{SortColumn, SortOptions};
 
 mod approx_distinct;
 mod array_agg;
@@ -165,7 +146,7 @@ impl PhysicalSortExpr {
             }
         };
         Ok(SortColumn {
-            values: array_to_sort,
+            values: array_to_sort.as_ref(),
             options: Some(self.options),
         })
     }
@@ -175,6 +156,7 @@ impl PhysicalSortExpr {
 mod tests {
     use super::*;
     use crate::{error::Result, physical_plan::AggregateExpr, scalar::ScalarValue};
+
     /// macro to perform an aggregation and verify the result.
     #[macro_export]
     macro_rules! generic_test_op {

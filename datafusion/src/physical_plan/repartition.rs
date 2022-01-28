@@ -518,7 +518,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
     use futures::FutureExt;
-    use std::collections::HashSet;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {

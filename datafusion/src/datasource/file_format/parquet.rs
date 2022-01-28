@@ -17,15 +17,16 @@
 
 //! Parquet format abstractions
 
+use arrow::array::{BooleanArray, MutableArray, MutableUtf8Array};
 use std::any::{type_name, Any};
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use futures::stream::StreamExt;
 
 use arrow::io::parquet::read::{get_schema, read_metadata};
+use futures::TryStreamExt;
 use parquet::statistics::{
     BinaryStatistics as ParquetBinaryStatistics,
     BooleanStatistics as ParquetBooleanStatistics,
@@ -34,9 +35,6 @@ use parquet::statistics::{
 
 use super::FileFormat;
 use super::FileScanConfig;
-use crate::arrow::array::{
-    BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
-};
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
@@ -91,7 +89,6 @@ impl FileFormat for ParquetFormat {
             .try_fold(Schema::empty(), |acc, reader| async {
                 let next_schema = fetch_schema(reader);
                 Schema::try_merge([acc, next_schema?])
-                    .map_err(DataFusionError::ArrowError)
             })
             .await?;
         Ok(Arc::new(merged_schema))
@@ -130,7 +127,7 @@ fn summarize_min_max(
     use arrow::io::parquet::read::PhysicalType;
 
     macro_rules! update_primitive_min_max {
-        ($DT:ident, $PRIMITIVE_TYPE:ident) => {{
+        ($DT:ident, $PRIMITIVE_TYPE:ident, $ARRAY_TYPE:ident) => {{
             if let DataType::$DT = fields[i].data_type() {
                 let stats = stats
                     .as_any()
@@ -143,7 +140,9 @@ fn summarize_min_max(
                     })?;
                 if let Some(max_value) = &mut max_values[i] {
                     if let Some(v) = stats.max_value {
-                        match max_value.update_batch(&[ScalarValue::$DT(Some(v))]) {
+                        match max_value.update_batch(&[Arc::new(
+                            arrow::array::$ARRAY_TYPE::from_slice(vec![v]),
+                        )]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -153,7 +152,9 @@ fn summarize_min_max(
                 }
                 if let Some(min_value) = &mut min_values[i] {
                     if let Some(v) = stats.min_value {
-                        match min_value.update_batch(&[ScalarValue::$DT(Some(v))]) {
+                        match min_value.update_batch(&[Arc::new(
+                            arrow::array::$ARRAY_TYPE::from_slice(vec![v]),
+                        )]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -178,7 +179,9 @@ fn summarize_min_max(
                     })?;
                 if let Some(max_value) = &mut max_values[i] {
                     if let Some(v) = stats.max_value {
-                        match max_value.update_batch(&[ScalarValue::Boolean(Some(v))]) {
+                        match max_value
+                            .update_batch(&[Arc::new(BooleanArray::from_slice(vec![v]))])
+                        {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -188,7 +191,9 @@ fn summarize_min_max(
                 }
                 if let Some(min_value) = &mut min_values[i] {
                     if let Some(v) = stats.min_value {
-                        match min_value.update_batch(&[ScalarValue::Boolean(Some(v))]) {
+                        match min_value
+                            .update_batch(&[Arc::new(BooleanArray::from_slice(vec![v]))])
+                        {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;
@@ -199,18 +204,18 @@ fn summarize_min_max(
             }
         }
         PhysicalType::Int32 => {
-            update_primitive_min_max!(Int32, i32);
+            update_primitive_min_max!(Int32, i32, Int32Array);
         }
         PhysicalType::Int64 => {
-            update_primitive_min_max!(Int64, i64);
+            update_primitive_min_max!(Int64, i64, Int64Array);
         }
         // 96 bit ints not supported
         PhysicalType::Int96 => {}
         PhysicalType::Float => {
-            update_primitive_min_max!(Float32, f32);
+            update_primitive_min_max!(Float32, f32, Float32Array);
         }
         PhysicalType::Double => {
-            update_primitive_min_max!(Float64, f64);
+            update_primitive_min_max!(Float64, f64, Float64Array);
         }
         PhysicalType::ByteArray => {
             if let DataType::Utf8 = fields[i].data_type() {
@@ -224,9 +229,9 @@ fn summarize_min_max(
                     })?;
                 if let Some(max_value) = &mut max_values[i] {
                     if let Some(v) = &stats.max_value {
-                        match max_value.update_batch(&[ScalarValue::Utf8(
-                            std::str::from_utf8(&*v).map(|s| s.to_string()).ok(),
-                        )]) {
+                        let mut a = MutableUtf8Array::<i32>::with_capacity(1);
+                        a.push(std::str::from_utf8(&*v).map(|s| s.to_string()).ok());
+                        match max_value.update_batch(&[a.as_arc()]) {
                             Ok(_) => {}
                             Err(_) => {
                                 max_values[i] = None;
@@ -236,9 +241,9 @@ fn summarize_min_max(
                 }
                 if let Some(min_value) = &mut min_values[i] {
                     if let Some(v) = &stats.min_value {
-                        match min_value.update_batch(&[ScalarValue::Utf8(
-                            std::str::from_utf8(&*v).map(|s| s.to_string()).ok(),
-                        )]) {
+                        let mut a = MutableUtf8Array::<i32>::with_capacity(1);
+                        a.push(std::str::from_utf8(&*v).map(|s| s.to_string()).ok());
+                        match min_value.update_batch(&[a.as_arc()]) {
                             Ok(_) => {}
                             Err(_) => {
                                 min_values[i] = None;

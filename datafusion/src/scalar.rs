@@ -669,7 +669,7 @@ impl ScalarValue {
     /// ```
     pub fn iter_to_array(
         scalars: impl IntoIterator<Item = ScalarValue>,
-    ) -> Result<Box<dyn Array>> {
+    ) -> Result<ArrayRef> {
         let mut scalars = scalars.into_iter().peekable();
 
         // figure out the type based on the first element
@@ -687,7 +687,7 @@ impl ScalarValue {
         macro_rules! build_array_primitive {
             ($TY:ty, $SCALAR_TY:ident, $DT:ident) => {{
                 {
-                    Box::new(scalars
+                    Arc::new(scalars
                         .map(|sv| {
                             if let ScalarValue::$SCALAR_TY(v) = sv {
                                 Ok(v)
@@ -699,7 +699,7 @@ impl ScalarValue {
                                 )))
                             }
                         }).collect::<Result<PrimitiveArray<$TY>>>()?.to($DT)
-                        ) as Box<dyn Array>
+                        ) as Arc<dyn Array>
                 }
             }};
         }
@@ -721,7 +721,7 @@ impl ScalarValue {
                         })
                         .collect::<Result<Int64Array>>()?;
 
-                    Box::new(array)
+                    Arc::new(array)
                 }
             }};
         }
@@ -744,7 +744,7 @@ impl ScalarValue {
                             }
                         })
                         .collect::<Result<$ARRAY_TY>>()?;
-                    Box::new(array)
+                    Arc::new(array)
                 }
             }};
         }
@@ -783,18 +783,18 @@ impl ScalarValue {
                 }
 
                 let array: ListArray<i32> = array.into();
-                Box::new(array)
+                Arc::new(array)
             }}
         }
 
         use DataType::*;
-        let array: Box<dyn Array> = match &data_type {
+        let array: Arc<dyn Array> = match &data_type {
             DataType::Decimal(precision, scale) => {
                 let decimal_array =
                     ScalarValue::iter_to_decimal_array(scalars, precision, scale)?;
-                Box::new(decimal_array)
+                Arc::new(decimal_array)
             }
-            DataType::Boolean => Box::new(
+            DataType::Boolean => Arc::new(
                 scalars
                     .map(|sv| {
                         if let ScalarValue::Boolean(v) = sv {
@@ -886,7 +886,7 @@ impl ScalarValue {
             DataType::List(_) => {
                 // Fallback case handling homogeneous lists with any ScalarValue element type
                 let list_array = ScalarValue::iter_to_array_list(scalars, &data_type)?;
-                Box::new(list_array)
+                Arc::new(list_array)
             }
             DataType::Struct(fields) => {
                 // Initialize a Vector to store the ScalarValues for each column
@@ -927,7 +927,7 @@ impl ScalarValue {
                     .map(|c| Self::iter_to_array(c.clone()).map(Arc::from))
                     .collect::<Result<Vec<_>>>()?;
 
-                Box::new(StructArray::from_data(data_type, field_values, None))
+                Arc::new(StructArray::from_data(data_type, field_values, None))
             }
             _ => {
                 return Err(DataFusionError::Internal(format!(
@@ -1405,7 +1405,7 @@ impl ScalarValue {
                 eq_array_primitive!(array, index, DaysMsArray, val)
             }
             ScalarValue::IntervalMonthDayNano(val) => {
-                eq_array_primitive!(array, index, IntervalMonthDayNanoArray, val)
+                eq_array_primitive!(array, index, Int128Array, val)
             }
             ScalarValue::Struct(_, _) => unimplemented!(),
         }
@@ -2096,7 +2096,7 @@ mod tests {
 
             let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
 
-            let expected = $ARRAYTYPE::from($INPUT).as_box();
+            let expected = $ARRAYTYPE::from($INPUT).as_arc();
 
             assert_eq!(&array, &expected);
         }};
@@ -2113,7 +2113,7 @@ mod tests {
 
             let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
 
-            let expected: Box<dyn Array> = Box::new(Int64Array::from($INPUT));
+            let expected: Arc<dyn Array> = Arc::new(Int64Array::from($INPUT));
 
             assert_eq!(&array, &expected);
         }};
@@ -2130,7 +2130,7 @@ mod tests {
 
             let array = ScalarValue::iter_to_array(scalars.into_iter()).unwrap();
 
-            let expected: Box<dyn Array> = Box::new($ARRAYTYPE::from($INPUT));
+            let expected: Arc<dyn Array> = Arc::new($ARRAYTYPE::from($INPUT));
 
             assert_eq!(&array, &expected);
         }};
@@ -2150,7 +2150,7 @@ mod tests {
             let expected: $ARRAYTYPE =
                 $INPUT.iter().map(|v| v.map(|v| v.to_vec())).collect();
 
-            let expected: Box<dyn Array> = Box::new(expected);
+            let expected: Arc<dyn Array> = Arc::new(expected);
 
             assert_eq!(&array, &expected);
         }};
@@ -2960,7 +2960,7 @@ mod tests {
             .try_push(Some(vec![Some(vec![Some(9)])]))
             .unwrap();
 
-        let expected = outer_builder.as_box();
+        let expected = outer_builder.as_arc();
 
         assert_eq!(&array, &expected);
     }

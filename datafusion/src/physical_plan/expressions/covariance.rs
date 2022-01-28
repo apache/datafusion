@@ -21,12 +21,13 @@ use std::any::Any;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
 use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
 use crate::scalar::ScalarValue;
 use arrow::array::Float64Array;
 use arrow::{
     array::{ArrayRef, UInt64Array},
-    compute::cast,
+    compute::cast::cast,
     datatypes::DataType,
     datatypes::Field,
 };
@@ -281,8 +282,16 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values1 = &cast(&values[0], &DataType::Float64)?;
-        let values2 = &cast(&values[1], &DataType::Float64)?;
+        let values1 = &cast(
+            values[0].as_ref(),
+            &DataType::Float64,
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )?;
+        let values2 = &cast(
+            values[1].as_ref(),
+            &DataType::Float64,
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )?;
 
         let mut arr1 = values1
             .as_any()
@@ -386,10 +395,10 @@ impl Accumulator for CovarianceAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
+    use crate::record_batch::RecordBatch;
     use crate::{error::Result, generic_test_op2};
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     #[test]
@@ -458,10 +467,10 @@ mod tests {
 
     #[test]
     fn covariance_f64_6() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![
+        let a = Arc::new(Float64Array::from_slice(vec![
             1_f64, 2_f64, 3_f64, 1.1_f64, 2.2_f64, 3.3_f64,
         ]));
-        let b = Arc::new(Float64Array::from(vec![
+        let b = Arc::new(Float64Array::from_slice(vec![
             4_f64, 5_f64, 6_f64, 4.4_f64, 5.5_f64, 6.6_f64,
         ]));
 

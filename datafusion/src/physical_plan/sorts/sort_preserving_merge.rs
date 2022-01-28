@@ -29,8 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use crate::record_batch::RecordBatch;
-use arrow::array::ord::DynComparator;
-use arrow::array::{growable::make_growable, ord::build_compare, ArrayRef};
+use arrow::array::growable::make_growable;
 use arrow::compute::sort::SortOptions;
 use arrow::datatypes::SchemaRef;
 use arrow::error::ArrowError;
@@ -41,7 +40,9 @@ use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::memory_manager::ConsumerType;
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::{MemoryConsumer, MemoryConsumerId, MemoryManager};
 use crate::field_util::SchemaExt;
 use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream, StreamWrapper};
 use crate::physical_plan::{
@@ -455,9 +456,10 @@ impl SortPreservingMergeStream {
                         ) {
                             Ok(cursor) => cursor,
                             Err(e) => {
-                                return Poll::Ready(Err(ArrowError::External(Box::new(
-                                    e,
-                                ))));
+                                return Poll::Ready(Err(ArrowError::External(
+                                    "datafusion".to_string(),
+                                    Box::new(e),
+                                )));
                             }
                         };
                         self.next_batch_id += 1;
@@ -661,7 +663,7 @@ impl RecordBatchStream for SortPreservingMergeStream {
 #[cfg(test)]
 mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::from_slice::FromSlice;
+
     use crate::physical_plan::metrics::MetricValue;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use arrow::array::ArrayRef;
@@ -797,6 +799,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_no_overlap() {
+        let runtime = Arc::new(RuntimeEnv::default());
         let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 9, 3]));
         let b: ArrayRef = Arc::new(Utf8Array::<i32>::from(&[
             Some("a"),
@@ -937,7 +940,7 @@ mod tests {
                 options: Default::default(),
             },
         ];
-        let exec = MemoryExec::try_new(partitions, schema, None).unwrap();
+        let exec = MemoryExec::try_new(partitions, schema.clone(), None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, runtime).await.unwrap();
@@ -1328,7 +1331,7 @@ mod tests {
         }];
         let exec =
             MemoryExec::try_new(&[vec![b1], vec![b2]], schema.clone(), None).unwrap();
-        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec), 1024));
+        let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge.clone(), runtime).await.unwrap();
         let expected = vec![
@@ -1410,7 +1413,8 @@ mod tests {
                     vec![Some(batch_number), Some(batch_number)]
                         .into_iter()
                         .collect();
-                let value: StringArray = vec![Some("A"), Some("B")].into_iter().collect();
+                let value: Utf8Array<i32> =
+                    vec![Some("A"), Some("B")].into_iter().collect();
 
                 let batch = RecordBatch::try_from_iter(vec![
                     ("batch_number", Arc::new(batch_number) as ArrayRef),
@@ -1432,7 +1436,7 @@ mod tests {
             },
         }];
 
-        let exec = MemoryExec::try_new(&partitions, schema, None).unwrap();
+        let exec = MemoryExec::try_new(&partitions, schema.clone(), None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let collected = collect(merge, runtime).await.unwrap();

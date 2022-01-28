@@ -18,7 +18,7 @@
 //! Utility functions for complex field access
 
 use arrow::array::{ArrayRef, StructArray};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Metadata, Schema};
 use arrow::error::ArrowError;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
@@ -128,6 +128,26 @@ pub trait SchemaExt {
     /// ```
     fn new(fields: Vec<Field>) -> Self;
 
+    /// Creates a new [`Schema`] from a sequence of [`Field`] values and [`arrow::datatypes::Metadata`]
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use std::collections::BTreeMap;
+    /// use arrow::datatypes::{Field, DataType, Schema};
+    /// use datafusion::field_util::SchemaExt;
+    ///
+    /// let field_a = Field::new("a", DataType::Int64, false);
+    /// let field_b = Field::new("b", DataType::Boolean, false);
+    ///
+    /// let schema_metadata: BTreeMap<String, String> =
+    ///             vec![("baz".to_string(), "barf".to_string())]
+    ///                 .into_iter()
+    ///                 .collect();
+    /// let schema = Schema::new_with_metadata(vec![field_a, field_b], schema_metadata);
+    /// ```
+    fn new_with_metadata(fields: Vec<Field>, metadata: Metadata) -> Self;
+
     /// Creates an empty [`Schema`].
     fn empty() -> Self;
 
@@ -187,11 +207,19 @@ pub trait SchemaExt {
 
     /// Return the field names
     fn field_names(&self) -> Vec<String>;
+
+    /// Returns a new schema with only the specified columns in the new schema
+    /// This carries metadata from the parent schema over as well
+    fn project(&self, indices: &[usize]) -> Result<Schema>;
 }
 
 impl SchemaExt for Schema {
     fn new(fields: Vec<Field>) -> Self {
         Self::from(fields)
+    }
+
+    fn new_with_metadata(fields: Vec<Field>, metadata: Metadata) -> Self {
+        Self::new(fields).with_metadata(metadata)
     }
 
     fn empty() -> Self {
@@ -271,6 +299,24 @@ impl SchemaExt for Schema {
     fn field_names(&self) -> Vec<String> {
         self.fields.iter().map(|f| f.name.to_string()).collect()
     }
+
+    fn project(&self, indices: &[usize]) -> Result<Schema> {
+        let new_fields = indices
+            .iter()
+            .map(|i| {
+                self.fields.get(*i).cloned().ok_or_else(|| {
+                    DataFusionError::ArrowError(ArrowError::InvalidArgumentError(
+                        format!(
+                            "project index {} out of bounds, max field {}",
+                            i,
+                            self.fields().len()
+                        ),
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self::new_with_metadata(new_fields, self.metadata.clone()))
+    }
 }
 
 /// Imitate arrow-rs Field behavior by extending arrow2 Field
@@ -297,6 +343,10 @@ pub trait FieldExt {
     /// assert!(field.is_nullable());
     /// ```
     fn try_merge(&mut self, from: &Field) -> Result<()>;
+
+    /// Sets the `Field`'s optional custom metadata.
+    /// The metadata is set as `None` for empty map.
+    fn set_metadata(&mut self, metadata: Option<BTreeMap<String, String>>);
 }
 
 impl FieldExt for Field {
@@ -427,5 +477,14 @@ impl FieldExt for Field {
         }
 
         Ok(())
+    }
+
+    #[inline]
+    fn set_metadata(&mut self, metadata: Option<BTreeMap<String, String>>) {
+        if let Some(v) = metadata {
+            if !v.is_empty() {
+                self.metadata = v;
+            }
+        }
     }
 }

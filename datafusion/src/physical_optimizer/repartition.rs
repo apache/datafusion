@@ -112,7 +112,7 @@ mod tests {
     use super::*;
     use crate::datasource::PartitionedFile;
     use crate::field_util::SchemaExt;
-    use crate::physical_plan::file_format::{ParquetExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::Statistics;
     use crate::test::object_store::TestObjectStore;

@@ -21,7 +21,8 @@ use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute;
 use arrow::datatypes::{DataType, Schema};
-use arrow::error::ArrowError::DivideByZero;
+use arrow::error::ArrowError;
+use arrow::error::ArrowError::InvalidArgumentError;
 
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::Operator;
@@ -30,9 +31,6 @@ use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-use super::coercion::{
-    eq_coercion, like_coercion, numerical_coercion, order_coercion, string_coercion,
-};
 use arrow::scalar::Scalar;
 use arrow::types::NativeType;
 
@@ -73,258 +71,262 @@ fn is_not_distinct_from_bool(left: &dyn Array, right: &dyn Array) -> BooleanArra
 // TODO add iter for decimal array
 // TODO move this to arrow-rs
 // https://github.com/apache/arrow-rs/issues/1083
-pub(super) fn eq_decimal_scalar(
-    left: &DecimalArray,
-    right: i128,
-) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+pub(super) fn eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) == right)?;
+            bool_builder.try_push(Some(left.value(i) == right))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
 pub(super) fn eq_decimal(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Int128Array,
+    right: &Int128Array,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) == right.value(i))?;
+            bool_builder.try_push(Some(left.value(i) == right.value(i)))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn neq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn neq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) != right)?;
+            bool_builder.try_push(Some(left.value(i) != right))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn neq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn neq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) != right.value(i))?;
+            bool_builder.try_push(Some(left.value(i) != right.value(i)))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn lt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn lt_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) < right)?;
+            bool_builder.try_push(Some(left.value(i) < right))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn lt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn lt_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) < right.value(i))?;
+            bool_builder.try_push(Some(left.value(i) < right.value(i)))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn lt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn lt_eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) <= right)?;
+            bool_builder.try_push(Some(left.value(i) <= right))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn lt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn lt_eq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) <= right.value(i))?;
+            bool_builder.try_push(Some(left.value(i) <= right.value(i)))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn gt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn gt_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) > right)?;
+            bool_builder.try_push(Some(left.value(i) > right))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn gt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn gt_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) > right.value(i))?;
+            bool_builder.try_push(Some(left.value(i) > right.value(i)))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn gt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn gt_eq_decimal_scalar(left: &Int128Array, right: i128) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) >= right)?;
+            bool_builder.try_push(Some(left.value(i) >= right))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn gt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+fn gt_eq_decimal(left: &Int128Array, right: &Int128Array) -> Result<BooleanArray> {
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
+            bool_builder.push(None);
         } else {
-            bool_builder.append_value(left.value(i) >= right.value(i))?;
+            bool_builder.try_push(Some(left.value(i) >= right.value(i)))?;
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
 fn is_distinct_from_decimal(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Int128Array,
+    right: &Int128Array,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         match (left.is_null(i), right.is_null(i)) {
-            (true, true) => bool_builder.append_value(false)?,
-            (true, false) | (false, true) => bool_builder.append_value(true)?,
-            (_, _) => bool_builder.append_value(left.value(i) != right.value(i))?,
+            (true, true) => bool_builder.try_push(Some(false))?,
+            (true, false) | (false, true) => bool_builder.try_push(Some(true))?,
+            (_, _) => bool_builder.try_push(Some(left.value(i) != right.value(i)))?,
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
 fn is_not_distinct_from_decimal(
-    left: &DecimalArray,
-    right: &DecimalArray,
+    left: &Int128Array,
+    right: &Int128Array,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
+    let mut bool_builder = MutableBooleanArray::with_capacity(left.len());
     for i in 0..left.len() {
         match (left.is_null(i), right.is_null(i)) {
-            (true, true) => bool_builder.append_value(true)?,
-            (true, false) | (false, true) => bool_builder.append_value(false)?,
-            (_, _) => bool_builder.append_value(left.value(i) == right.value(i))?,
+            (true, true) => bool_builder.try_push(Some(true))?,
+            (true, false) | (false, true) => bool_builder.try_push(Some(false))?,
+            (_, _) => bool_builder.try_push(Some(left.value(i) == right.value(i)))?,
         }
     }
-    Ok(bool_builder.finish())
+    Ok(bool_builder.into())
 }
 
-fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+fn add_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
+    let mut decimal_builder = Int128Vec::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
+            decimal_builder.push(None);
         } else {
-            decimal_builder.append_value(left.value(i) + right.value(i))?;
+            decimal_builder.try_push(Some(left.value(i) + right.value(i)))?;
         }
     }
-    Ok(decimal_builder.finish())
+    Ok(decimal_builder.into())
 }
 
-fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+fn subtract_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
+    let mut decimal_builder = Int128Vec::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
+            decimal_builder.push(None);
         } else {
-            decimal_builder.append_value(left.value(i) - right.value(i))?;
+            decimal_builder.try_push(Some(left.value(i) - right.value(i)))?;
         }
     }
-    Ok(decimal_builder.finish())
+    Ok(decimal_builder.into())
 }
 
-fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
-    let divide = 10_i128.pow(left.scale() as u32);
+fn multiply_decimal(
+    left: &Int128Array,
+    right: &Int128Array,
+    scale: u32,
+) -> Result<Int128Array> {
+    let mut decimal_builder = Int128Vec::with_capacity(left.len());
+    let divide = 10_i128.pow(scale);
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
+            decimal_builder.push(None);
         } else {
-            decimal_builder.append_value(left.value(i) * right.value(i) / divide)?;
+            decimal_builder.try_push(Some(left.value(i) * right.value(i) / divide))?;
         }
     }
-    Ok(decimal_builder.finish())
+    Ok(decimal_builder.into())
 }
 
-fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
-    let mul = 10_f64.powi(left.scale() as i32);
+fn divide_decimal(
+    left: &Int128Array,
+    right: &Int128Array,
+    scale: i32,
+) -> Result<Int128Array> {
+    let mut decimal_builder = Int128Vec::with_capacity(left.len());
+    let mul = 10_f64.powi(scale);
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
+            decimal_builder.push(None);
         } else if right.value(i) == 0 {
-            return Err(DataFusionError::ArrowError(DivideByZero));
+            return Err(DataFusionError::ArrowError(
+                ArrowError::InvalidArgumentError("Cannot divide by zero".to_string()),
+            ));
         } else {
             let l_value = left.value(i) as f64;
             let r_value = right.value(i) as f64;
             let result = ((l_value / r_value) * mul) as i128;
-            decimal_builder.append_value(result)?;
+            decimal_builder.try_push(Some(result))?;
         }
     }
-    Ok(decimal_builder.finish())
+    Ok(decimal_builder.into())
 }
 
-fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
+fn modulus_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
+    let mut decimal_builder = Int128Vec::with_capacity(left.len());
     for i in 0..left.len() {
         if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
+            decimal_builder.push(None);
         } else if right.value(i) == 0 {
-            return Err(DataFusionError::ArrowError(DivideByZero));
+            return Err(DataFusionError::ArrowError(InvalidArgumentError(
+                "Cannot divide by zero".to_string(),
+            )));
         } else {
-            decimal_builder.append_value(left.value(i) % right.value(i))?;
+            decimal_builder.try_push(Some(left.value(i) % right.value(i)))?;
         }
     }
-    Ok(decimal_builder.finish())
+    Ok(decimal_builder.into())
 }
 
 /// Binary expression
@@ -986,8 +988,7 @@ mod tests {
     use crate::error::Result;
     use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, lit};
-    use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
-    use arrow::util::display::array_value_to_string;
+    use arrow::datatypes::{Field, SchemaRef};
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -1378,19 +1379,19 @@ mod tests {
     }
 
     fn apply_logic_op(
-        schema: Arc<Schema>,
-        left: BooleanArray,
-        right: BooleanArray,
+        schema: &Arc<Schema>,
+        left: &ArrayRef,
+        right: &ArrayRef,
         op: Operator,
-        expected: BooleanArray,
+        expected: ArrayRef,
     ) -> Result<()> {
         let arithmetic_op =
-            binary_simple(col("a", schema)?, op, col("b", schema)?, schema);
+            binary_simple(col("a", &schema)?, op, col("b", &schema)?, &schema);
         let data: Vec<ArrayRef> = vec![left.clone(), right.clone()];
         let batch = RecordBatch::try_new(schema.clone(), data)?;
         let result = arithmetic_op.evaluate(&batch)?.into_array(batch.num_rows());
 
-        assert_eq!(expected, result.as_ref());
+        assert_eq!(expected, result);
         Ok(())
     }
 
@@ -1489,7 +1490,7 @@ mod tests {
             Some(false),
             None,
         ]);
-        apply_logic_op(&Arc::new(schema), &a, &b, Operator::And, expected)?;
+        apply_logic_op(&Arc::new(schema), &a, &b, Operator::And, Arc::new(expected))?;
 
         Ok(())
     }
@@ -1534,7 +1535,7 @@ mod tests {
             None,
             None,
         ]);
-        apply_logic_op(&Arc::new(schema), &a, &b, Operator::Or, expected)?;
+        apply_logic_op(&Arc::new(schema), &a, &b, Operator::Or, Arc::new(expected))?;
 
         Ok(())
     }
@@ -1587,7 +1588,7 @@ mod tests {
     #[test]
     fn eq_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = vec![
+        let expected = BooleanArray::from_iter(vec![
             Some(true),
             None,
             Some(false),
@@ -1597,10 +1598,8 @@ mod tests {
             Some(false),
             None,
             Some(true),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::Eq, expected).unwrap();
+        ]);
+        apply_logic_op(&schema, &a, &b, Operator::Eq, Arc::new(expected)).unwrap();
     }
 
     #[test]
@@ -1646,7 +1645,7 @@ mod tests {
     #[test]
     fn neq_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(false),
             None,
             Some(true),
@@ -1656,10 +1655,8 @@ mod tests {
             Some(true),
             None,
             Some(false),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::NotEq, expected).unwrap();
+        ]);
+        apply_logic_op(&schema, &a, &b, Operator::NotEq, Arc::new(expected)).unwrap();
     }
 
     #[test]
@@ -1705,7 +1702,7 @@ mod tests {
     #[test]
     fn lt_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(false),
             None,
             Some(false),
@@ -1715,10 +1712,8 @@ mod tests {
             Some(true),
             None,
             Some(false),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::Lt, expected).unwrap();
+        ]);
+        apply_logic_op(&schema, &a, &b, Operator::Lt, Arc::new(expected)).unwrap();
     }
 
     #[test]
@@ -1768,7 +1763,7 @@ mod tests {
     #[test]
     fn lt_eq_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(true),
             None,
             Some(false),
@@ -1778,10 +1773,8 @@ mod tests {
             Some(true),
             None,
             Some(true),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::LtEq, expected).unwrap();
+        ]);
+        apply_logic_op(&schema, &a, &b, Operator::LtEq, Arc::new(expected)).unwrap();
     }
 
     #[test]
@@ -1831,7 +1824,7 @@ mod tests {
     #[test]
     fn gt_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(false),
             None,
             Some(true),
@@ -1841,16 +1834,14 @@ mod tests {
             Some(false),
             None,
             Some(false),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::Gt, expected).unwrap();
+        ]);
+        apply_logic_op(&schema, &a, &b, Operator::Gt, Arc::new(expected)).unwrap();
     }
 
     #[test]
     fn gt_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
-        let expected = [Some(false), None, Some(true)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(false), None, Some(true)]);
         apply_logic_op_scalar_arr(
             &schema,
             &ScalarValue::from(true),
@@ -1860,7 +1851,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected = [Some(false), None, Some(false)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(false), None, Some(false)]);
         apply_logic_op_arr_scalar(
             &schema,
             &a,
@@ -1870,7 +1861,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected = [Some(false), None, Some(false)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(false), None, Some(false)]);
         apply_logic_op_scalar_arr(
             &schema,
             &ScalarValue::from(false),
@@ -1880,7 +1871,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected = [Some(true), None, Some(false)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(true), None, Some(false)]);
         apply_logic_op_arr_scalar(
             &schema,
             &a,
@@ -1894,7 +1885,7 @@ mod tests {
     #[test]
     fn gt_eq_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(true),
             None,
             Some(true),
@@ -1904,16 +1895,14 @@ mod tests {
             Some(false),
             None,
             Some(true),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::GtEq, expected).unwrap();
+        ]);
+        apply_logic_op(&schema, &a, &b, Operator::GtEq, Arc::new(expected)).unwrap();
     }
 
     #[test]
     fn gt_eq_op_bool_scalar() {
         let (schema, a) = scalar_bool_test_array();
-        let expected = [Some(true), None, Some(true)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(true), None, Some(true)]);
         apply_logic_op_scalar_arr(
             &schema,
             &ScalarValue::from(true),
@@ -1923,7 +1912,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected = [Some(true), None, Some(false)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(true), None, Some(false)]);
         apply_logic_op_arr_scalar(
             &schema,
             &a,
@@ -1933,7 +1922,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected = [Some(false), None, Some(true)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(false), None, Some(true)]);
         apply_logic_op_scalar_arr(
             &schema,
             &ScalarValue::from(false),
@@ -1943,7 +1932,7 @@ mod tests {
         )
         .unwrap();
 
-        let expected = [Some(true), None, Some(true)].iter().collect();
+        let expected = BooleanArray::from_iter([Some(true), None, Some(true)]);
         apply_logic_op_arr_scalar(
             &schema,
             &a,
@@ -1957,7 +1946,7 @@ mod tests {
     #[test]
     fn is_distinct_from_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(false),
             Some(true),
             Some(true),
@@ -1967,16 +1956,21 @@ mod tests {
             Some(true),
             Some(true),
             Some(false),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::IsDistinctFrom, expected).unwrap();
+        ]);
+        apply_logic_op(
+            &schema,
+            &a,
+            &b,
+            Operator::IsDistinctFrom,
+            Arc::new(expected),
+        )
+        .unwrap();
     }
 
     #[test]
     fn is_not_distinct_from_op_bool() {
         let (schema, a, b) = bool_test_arrays();
-        let expected = [
+        let expected = BooleanArray::from_iter([
             Some(true),
             Some(false),
             Some(false),
@@ -1986,10 +1980,15 @@ mod tests {
             Some(false),
             Some(false),
             Some(true),
-        ]
-        .iter()
-        .collect();
-        apply_logic_op(&schema, &a, &b, Operator::IsNotDistinctFrom, expected).unwrap();
+        ]);
+        apply_logic_op(
+            &schema,
+            &a,
+            &b,
+            Operator::IsNotDistinctFrom,
+            Arc::new(expected),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2027,21 +2026,21 @@ mod tests {
 
     fn create_decimal_array(
         array: &[Option<i128>],
-        precision: usize,
-        scale: usize,
-    ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
+        _precision: usize,
+        _scale: usize,
+    ) -> Result<Int128Array> {
+        let mut decimal_builder = Int128Vec::with_capacity(array.len());
         for value in array {
             match value {
                 None => {
-                    decimal_builder.append_null()?;
+                    decimal_builder.push(None);
                 }
                 Some(v) => {
-                    decimal_builder.append_value(*v)?;
+                    decimal_builder.try_push(Some(*v))?;
                 }
             }
         }
-        Ok(decimal_builder.finish())
+        Ok(decimal_builder.into())
     }
 
     #[test]
@@ -2275,7 +2274,12 @@ mod tests {
             &int64_array,
             &decimal_array,
             Operator::Eq,
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(true),
+                None,
+                Some(false),
+                Some(true),
+            ])),
         )
         .unwrap();
         // neq: int64array != decimal array
@@ -2284,7 +2288,12 @@ mod tests {
             &int64_array,
             &decimal_array,
             Operator::NotEq,
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(false),
+                None,
+                Some(true),
+                Some(false),
+            ])),
         )
         .unwrap();
 
@@ -2316,7 +2325,12 @@ mod tests {
             &float64_array,
             &decimal_array,
             Operator::Lt,
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(false)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(false),
+                None,
+                Some(false),
+                Some(false),
+            ])),
         )
         .unwrap();
         // lt_eq: float64array <= decimal array
@@ -2325,7 +2339,12 @@ mod tests {
             &float64_array,
             &decimal_array,
             Operator::LtEq,
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(true),
+                None,
+                Some(false),
+                Some(true),
+            ])),
         )
         .unwrap();
         // gt: float64array > decimal array
@@ -2334,7 +2353,12 @@ mod tests {
             &float64_array,
             &decimal_array,
             Operator::Gt,
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(false),
+                None,
+                Some(true),
+                Some(false),
+            ])),
         )
         .unwrap();
         apply_logic_op(
@@ -2342,7 +2366,12 @@ mod tests {
             &float64_array,
             &decimal_array,
             Operator::GtEq,
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(true)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(true),
+                None,
+                Some(true),
+                Some(true),
+            ])),
         )
         .unwrap();
         // is distinct: float64array is distinct decimal array
@@ -2354,7 +2383,12 @@ mod tests {
             &float64_array,
             &decimal_array,
             Operator::IsDistinctFrom,
-            BooleanArray::from(vec![Some(false), Some(true), Some(true), Some(false)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(false),
+            ])),
         )
         .unwrap();
         // is not distinct
@@ -2363,7 +2397,12 @@ mod tests {
             &float64_array,
             &decimal_array,
             Operator::IsNotDistinctFrom,
-            BooleanArray::from(vec![Some(true), Some(false), Some(false), Some(true)]),
+            Arc::new(BooleanArray::from_iter(vec![
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+            ])),
         )
         .unwrap();
 
@@ -2403,7 +2442,7 @@ mod tests {
         let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
         // multiply
-        let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = multiply_decimal(&left_decimal_array, &right_decimal_array, 3)?;
         let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
         assert_eq!(expect, result);
         // divide
@@ -2414,7 +2453,7 @@ mod tests {
         )?;
         let right_decimal_array =
             create_decimal_array(&[Some(10), Some(100), Some(55), Some(-123)], 25, 3)?;
-        let result = divide_decimal(&left_decimal_array, &right_decimal_array)?;
+        let result = divide_decimal(&left_decimal_array, &right_decimal_array, 3)?;
         let expect = create_decimal_array(
             &[Some(123456700), None, Some(22446672), Some(-10037130)],
             25,

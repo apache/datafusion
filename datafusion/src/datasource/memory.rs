@@ -162,7 +162,7 @@ impl TableProvider for MemTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
@@ -254,7 +254,7 @@ mod tests {
         let projection: Vec<usize> = vec![0, 4];
 
         match provider.scan(&Some(projection), &[], None).await {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
+            Err(DataFusionError::ArrowError(ArrowError::InvalidArgumentError(e))) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
                     format!("{:?}", e)

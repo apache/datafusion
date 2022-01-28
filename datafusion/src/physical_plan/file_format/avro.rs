@@ -25,8 +25,6 @@ use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
-#[cfg(feature = "avro")]
-use arrow::error::ArrowError;
 
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
@@ -177,6 +175,7 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let avro_exec = AvroExec::new(FileScanConfig {
@@ -192,7 +191,10 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let mut results = avro_exec
+            .execute(0, runtime)
+            .await
+            .expect("plan execution failed");
         let batch = results
             .next()
             .await
@@ -230,6 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_with_partition() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let mut partitioned_file = local_unpartitioned_file(filename.clone());
@@ -252,7 +255,10 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let mut results = avro_exec
+            .execute(0, runtime)
+            .await
+            .expect("plan execution failed");
         let batch = results
             .next()
             .await

@@ -83,8 +83,10 @@ impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
             DataFusionError::ArrowError(e) => e,
-            DataFusionError::External(e) => ArrowError::ExternalError(e),
-            other => ArrowError::ExternalError(Box::new(other)),
+            DataFusionError::External(e) => {
+                ArrowError::External("datafusion".to_string(), e)
+            }
+            other => ArrowError::External("datafusion".to_string(), Box::new(other)),
         }
     }
 }
@@ -177,7 +179,7 @@ mod test {
     #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
+        let _bar = Err(ArrowError::OutOfSpec("bar".to_string()))?;
         Ok(())
     }
 }

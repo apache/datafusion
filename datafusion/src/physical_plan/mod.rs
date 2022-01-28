@@ -22,7 +22,8 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::physical_plan::expressions::{PhysicalSortExpr, SortColumn};
+use crate::field_util::SchemaExt;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
@@ -32,6 +33,7 @@ use crate::{
 use arrow::array::ArrayRef;
 use arrow::compute::merge_sort::SortOptions;
 use arrow::compute::partition::lexicographical_partition_ranges;
+use arrow::compute::sort::SortColumn;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use async_trait::async_trait;
@@ -523,14 +525,9 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            Ok(lexicographical_partition_ranges(
-                &partition_columns
-                    .iter()
-                    .map(|x| x.into())
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(DataFusionError::ArrowError)?
-            .collect())
+            Ok(lexicographical_partition_ranges(partition_columns)
+                .map_err(DataFusionError::ArrowError)?
+                .collect())
         }
     }
 
@@ -597,6 +594,7 @@ pub trait Accumulator: Send + Sync + Debug {
 /// Example:
 /// ```
 /// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use datafusion::field_util::SchemaExt;
 /// use datafusion::physical_plan::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'

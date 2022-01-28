@@ -204,19 +204,19 @@ impl ExecutionPlan for CsvExec {
         let file_projection = self.base_config.file_column_projection_indices();
         let has_header = self.has_header;
         let delimiter = self.delimiter;
+        let start_line = if has_header { 1 } else { 0 };
 
         let fun = move |file, remaining: &Option<usize>| {
-            let bounds = remaining.map(|x| (0, x + start_line));
-            let datetime_format = None;
+            let bounds = remaining.map(|x| x + start_line);
             let reader = csv::read::ReaderBuilder::new()
                 .delimiter(delimiter)
                 .has_headers(has_header)
-                .from_reader(freader);
+                .from_reader(file);
             Box::new(CsvBatchReader::new(
                 reader,
                 file_schema.clone(),
                 batch_size,
-                *bounds,
+                bounds,
                 file_projection.clone(),
             )) as BatchIter
         };

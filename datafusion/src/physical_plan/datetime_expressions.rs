@@ -33,9 +33,9 @@ use arrow::{
 };
 use arrow::{compute::temporal, temporal_conversions::timestamp_ns_to_datetime};
 use chrono::prelude::{DateTime, Utc};
-use chrono::Datelike;
 use chrono::Duration;
 use chrono::Timelike;
+use chrono::{Datelike, NaiveDateTime};
 use std::borrow::Borrow;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
@@ -113,7 +113,9 @@ where
                     let s = PrimitiveScalar::<O>::new(data_type, Some((op)(s)?));
                     ColumnarValue::Scalar(s.try_into()?)
                 }
-                None => ColumnarValue::Scalar(ScalarValue::new_null(data_type)),
+                None => ColumnarValue::Scalar(
+                    PrimitiveScalar::<O>::new(data_type, None).try_into()?,
+                ),
             }),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",

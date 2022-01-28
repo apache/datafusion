@@ -25,7 +25,7 @@ use arrow::array::ArrayRef;
 mod noforce_hash_collisions {
     use super::{ArrayRef, CallHasher, RandomState, Result};
     use crate::error::DataFusionError;
-    use arrow::array::{Array, DictionaryArray, DictionaryKey};
+    use arrow::array::{Array, DictionaryArray, DictionaryKey, Int128Array};
     use arrow::array::{
         BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
         Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array, Utf8Array,
@@ -42,7 +42,7 @@ mod noforce_hash_collisions {
         hashes_buffer: &'a mut Vec<u64>,
         mul_col: bool,
     ) {
-        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        let array = array.as_any().downcast_ref::<Int128Array>().unwrap();
         if array.null_count() == 0 {
             if mul_col {
                 for (i, hash) in hashes_buffer.iter_mut().enumerate() {
@@ -564,7 +564,7 @@ mod tests {
     use crate::error::Result;
     use std::sync::Arc;
 
-    use arrow::array::{Float32Array, Float64Array};
+    use arrow::array::{Float32Array, Float64Array, Int128Vec, PrimitiveArray, TryPush};
     #[cfg(not(feature = "force_hash_collisions"))]
     use arrow::array::{MutableDictionaryArray, MutableUtf8Array, TryExtend, Utf8Array};
 
@@ -572,14 +572,15 @@ mod tests {
 
     #[test]
     fn create_hashes_for_decimal_array() -> Result<()> {
-        let mut builder = DecimalBuilder::new(4, 20, 3);
+        let mut builder = Int128Vec::with_capacity(4);
         let array: Vec<i128> = vec![1, 2, 3, 4];
         for value in &array {
-            builder.append_value(*value)?;
+            builder.try_push(Some(*value))?;
         }
-        let array_ref = Arc::new(builder.finish());
+        let array: PrimitiveArray<i128> = builder.into();
+        let array_ref = Arc::new(array);
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; array.len()];
+        let hashes_buff = &mut vec![0; array_ref.len()];
         let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4);
         Ok(())

@@ -26,8 +26,15 @@ use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::{Array, Int32Array};
 use arrow::compute::cast;
+use arrow::compute::cast::CastOptions;
 use arrow::compute::take;
 use arrow::datatypes::{DataType, Schema};
+
+/// provide Datafusion default cast options
+pub const DEFAULT_DATAFUSION_CAST_OPTIONS: CastOptions = CastOptions {
+    wrapped: false,
+    partial: false,
+};
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast
 #[derive(Debug)]
@@ -36,12 +43,22 @@ pub struct CastExpr {
     expr: Arc<dyn PhysicalExpr>,
     /// The data type to cast to
     cast_type: DataType,
+    /// Cast options
+    cast_options: CastOptions,
 }
 
 impl CastExpr {
     /// Create a new CastExpr
-    pub fn new(expr: Arc<dyn PhysicalExpr>, cast_type: DataType) -> Self {
-        Self { expr, cast_type }
+    pub fn new(
+        expr: Arc<dyn PhysicalExpr>,
+        cast_type: DataType,
+        cast_options: CastOptions,
+    ) -> Self {
+        Self {
+            expr,
+            cast_type,
+            cast_options,
+        }
     }
 
     /// The expression to cast
@@ -127,12 +144,13 @@ pub fn cast_with_options(
     expr: Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
     cast_type: DataType,
+    cast_options: CastOptions,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let expr_type = expr.data_type(input_schema)?;
     if expr_type == cast_type {
         Ok(expr.clone())
     } else if cast::can_cast_types(&expr_type, &cast_type) {
-        Ok(Arc::new(CastExpr::new(expr, cast_type)))
+        Ok(Arc::new(CastExpr::new(expr, cast_type, cast_options)))
     } else {
         Err(DataFusionError::Internal(format!(
             "Unsupported CAST from {:?} to {:?}",
@@ -150,7 +168,12 @@ pub fn cast(
     input_schema: &Schema,
     cast_type: DataType,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    cast_with_options(expr, input_schema, cast_type)
+    cast_with_options(
+        expr,
+        input_schema,
+        cast_type,
+        DEFAULT_DATAFUSION_CAST_OPTIONS,
+    )
 }
 
 #[cfg(test)]
@@ -218,14 +241,15 @@ mod tests {
     // 4. verify that the resulting expression is of type B
     // 5. verify that the resulting values are downcastable and correct
     macro_rules! generic_test_cast {
-        ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr) => {{
+        ($A_ARRAY:ident, $A_TYPE:expr, $A_VEC:expr, $TYPEARRAY:ident, $TYPE:expr, $VEC:expr, $CAST_OPTIONS:expr) => {{
             let schema = Schema::new(vec![Field::new("a", $A_TYPE, false)]);
             let a = $A_ARRAY::from_slice($A_VEC);
             let batch =
                 RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
 
             // verify that we can construct the expression
-            let expression = cast_with_options(col("a", &schema)?, &schema, $TYPE)?;
+            let expression =
+                cast_with_options(col("a", &schema)?, &schema, $TYPE, $CAST_OPTIONS)?;
 
             // verify that its display is correct
             assert_eq!(
@@ -261,27 +285,14 @@ mod tests {
         }};
     }
 
-    fn create_decimal_array(
-        array: &[i128],
-        precision: usize,
-        scale: usize,
-    ) -> Result<DecimalArray> {
-        let mut decimal_builder = DecimalBuilder::new(array.len(), precision, scale);
-        for value in array {
-            decimal_builder.append_value(*value)?
-        }
-        decimal_builder.append_null()?;
-        Ok(decimal_builder.finish())
-    }
-
     #[test]
     fn test_cast_decimal_to_decimal() -> Result<()> {
         let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(20, 6),
             vec![
                 Some(1_234_000_i128),
@@ -294,11 +305,11 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(10, 2),
             vec![
                 Some(123_i128),
@@ -318,7 +329,7 @@ mod tests {
     fn test_cast_decimal_to_numeric() -> Result<()> {
         let array: Vec<i128> = vec![1, 2, 3, 4, 5];
         // decimal to i8
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -335,7 +346,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to i16
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -352,7 +363,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to i32
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -369,7 +380,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to i64
-        let decimal_array = create_decimal_array(&array, 10, 0)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -387,7 +398,7 @@ mod tests {
         );
         // decimal to float32
         let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = create_decimal_array(&array, 10, 3)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
@@ -404,7 +415,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to float64
-        let decimal_array = create_decimal_array(&array, 20, 6)?;
+        let decimal_array = Int128Array::from_slice(&array);
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(20, 6),
@@ -430,7 +441,7 @@ mod tests {
             Int8Array,
             DataType::Int8,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(3, 0),
             vec![
                 Some(1_i128),
@@ -447,7 +458,7 @@ mod tests {
             Int16Array,
             DataType::Int16,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(5, 0),
             vec![
                 Some(1_i128),
@@ -464,7 +475,7 @@ mod tests {
             Int32Array,
             DataType::Int32,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(10, 0),
             vec![
                 Some(1_i128),
@@ -481,7 +492,7 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(20, 0),
             vec![
                 Some(1_i128),
@@ -498,7 +509,7 @@ mod tests {
             Int64Array,
             DataType::Int64,
             vec![1, 2, 3, 4, 5],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(20, 2),
             vec![
                 Some(100_i128),
@@ -515,7 +526,7 @@ mod tests {
             Float32Array,
             DataType::Float32,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(10, 2),
             vec![
                 Some(150_i128),
@@ -532,7 +543,7 @@ mod tests {
             Float64Array,
             DataType::Float64,
             vec![1.5, 2.5, 3.0, 1.123_456_8, 5.50],
-            DecimalArray,
+            Int128Array,
             DataType::Decimal(20, 4),
             vec![
                 Some(15000_i128),
@@ -560,7 +571,8 @@ mod tests {
                 Some(3_u32),
                 Some(4_u32),
                 Some(5_u32)
-            ]
+            ],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         Ok(())
     }
@@ -573,7 +585,8 @@ mod tests {
             &[1, 2, 3, 4, 5],
             StringArray,
             DataType::Utf8,
-            vec![Some("1"), Some("2"), Some("3"), Some("4"), Some("5")]
+            vec![Some("1"), Some("2"), Some("3"), Some("4"), Some("5")],
+            DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         Ok(())
     }
@@ -589,7 +602,8 @@ mod tests {
             original,
             Int64Array,
             DataType::Timestamp(TimeUnit::Nanosecond, None),
-            expected
+            expected,
+            DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         Ok(())
     }

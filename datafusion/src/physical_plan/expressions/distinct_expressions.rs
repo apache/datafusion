@@ -17,13 +17,12 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
-use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use ahash::RandomState;
-use arrow::array::{Array, ArrayRef};
+use arrow::array::ArrayRef;
 use std::collections::HashSet;
 
 use arrow::{
@@ -362,11 +361,13 @@ impl Accumulator for DistinctArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::expressions::tests::aggregate;
 
-    use arrow::datatypes::DataType;
+    use crate::field_util::SchemaExt;
+    use crate::record_batch::RecordBatch;
+    use arrow::datatypes::{DataType, Schema};
 
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
@@ -877,7 +878,7 @@ mod tests {
 
     #[test]
     fn distinct_array_agg_i32() -> Result<()> {
-        let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
+        let col: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 7, 4, 5, 2]));
 
         let out = ScalarValue::List(
             Some(Box::new(vec![

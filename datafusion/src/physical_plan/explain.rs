@@ -33,6 +33,7 @@ use crate::{
 };
 use arrow::{array::*, datatypes::SchemaRef};
 
+use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string

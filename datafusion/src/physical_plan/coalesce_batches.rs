@@ -327,7 +327,7 @@ pub fn concat_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
     use arrow::array::UInt32Array;
     use arrow::datatypes::{DataType, Field, Schema};

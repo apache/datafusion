@@ -28,11 +28,10 @@ use super::{
 };
 use crate::error::{DataFusionError, Result};
 use crate::record_batch::RecordBatch;
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -213,7 +212,7 @@ impl RecordBatchStream for MemoryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::FieldExt;
+    use crate::field_util::{FieldExt, SchemaExt};
     use crate::physical_plan::ColumnStatistics;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};

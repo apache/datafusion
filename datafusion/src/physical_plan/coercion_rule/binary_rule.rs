@@ -334,13 +334,13 @@ fn dictionary_value_coercion(
 fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
         (
-            DataType::Dictionary(_lhs_index_type, lhs_value_type),
-            DataType::Dictionary(_rhs_index_type, rhs_value_type),
+            DataType::Dictionary(_lhs_index_type, lhs_value_type, _),
+            DataType::Dictionary(_rhs_index_type, rhs_value_type, _),
         ) => dictionary_value_coercion(lhs_value_type, rhs_value_type),
-        (DataType::Dictionary(_index_type, value_type), _) => {
+        (DataType::Dictionary(_index_type, value_type, _), _) => {
             dictionary_value_coercion(value_type, rhs_type)
         }
-        (_, DataType::Dictionary(_index_type, value_type)) => {
+        (_, DataType::Dictionary(_index_type, value_type, _)) => {
             dictionary_value_coercion(lhs_type, value_type)
         }
         _ => None,
@@ -418,7 +418,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
 }
 
 pub(crate) fn is_dictionary(t: &DataType) -> bool {
-    matches!(t, DataType::Dictionary(_, _))
+    matches!(t, DataType::Dictionary(_, _, _))
 }
 
 /// Coercion rule for numerical types: The type that both lhs and rhs
@@ -475,6 +475,7 @@ mod tests {
     use crate::arrow::datatypes::DataType;
     use crate::error::{DataFusionError, Result};
     use crate::logical_plan::Operator;
+    use arrow::datatypes::IntegerType;
 
     #[test]
 
@@ -605,20 +606,20 @@ mod tests {
         use DataType::*;
 
         // TODO: In the future, this would ideally return Dictionary types and avoid unpacking
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
+        let lhs_type = Dictionary(IntegerType::Int8, Box::new(Int32), false);
+        let rhs_type = Dictionary(IntegerType::Int8, Box::new(Int16), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Int32));
 
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
+        let lhs_type = Dictionary(IntegerType::Int8, Box::new(Utf8), false);
+        let rhs_type = Dictionary(IntegerType::Int8, Box::new(Int16), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), None);
 
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
+        let lhs_type = Dictionary(IntegerType::Int8, Box::new(Utf8), false);
         let rhs_type = Utf8;
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
 
         let lhs_type = Utf8;
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
+        let rhs_type = Dictionary(IntegerType::Int8, Box::new(Utf8), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
     }
 }

@@ -228,10 +228,10 @@ impl Accumulator for CorrelationAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
+    use crate::record_batch::RecordBatch;
     use crate::{error::Result, generic_test_op2};
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
 
     #[test]
@@ -284,10 +284,10 @@ mod tests {
 
     #[test]
     fn correlation_f64_6() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![
+        let a = Arc::new(Float64Array::from_slice(vec![
             1_f64, 2_f64, 3_f64, 1.1_f64, 2.2_f64, 3.3_f64,
         ]));
-        let b = Arc::new(Float64Array::from(vec![
+        let b = Arc::new(Float64Array::from_slice(vec![
             4_f64, 5_f64, 6_f64, 4.4_f64, 5.5_f64, 6.6_f64,
         ]));
 
@@ -362,9 +362,9 @@ mod tests {
     #[test]
     fn correlation_i32_with_nulls_1() -> Result<()> {
         let a: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(1), None, Some(3), Some(3)]));
+            Arc::new(Int32Array::from_iter(vec![Some(1), None, Some(3), Some(3)]));
         let b: ArrayRef =
-            Arc::new(Int32Array::from(vec![Some(4), None, Some(6), Some(3)]));
+            Arc::new(Int32Array::from_iter(vec![Some(4), None, Some(6), Some(3)]));
 
         generic_test_op2!(
             a,
@@ -379,8 +379,9 @@ mod tests {
 
     #[test]
     fn correlation_i32_with_nulls_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5), Some(6)]));
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![Some(1), None, Some(3)]));
+        let b: ArrayRef =
+            Arc::new(Int32Array::from_iter(vec![Some(4), Some(5), Some(6)]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -402,8 +403,8 @@ mod tests {
 
     #[test]
     fn correlation_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![None, None]));
+        let b: ArrayRef = Arc::new(Int32Array::from_iter(vec![None, None]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -462,8 +463,8 @@ mod tests {
     fn correlation_f64_merge_2() -> Result<()> {
         let a = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64, 3_f64]));
         let b = Arc::new(Float64Array::from_slice(&[4_f64, 5_f64, 6_f64]));
-        let c = Arc::new(Float64Array::from(vec![None]));
-        let d = Arc::new(Float64Array::from(vec![None]));
+        let c = Arc::new(Float64Array::from_iter(vec![None]));
+        let d = Arc::new(Float64Array::from_iter(vec![None]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, false),
