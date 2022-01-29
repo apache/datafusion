@@ -558,7 +558,7 @@ mod tests {
 
         // pull the table out and compare the plans
         let table = ctx.table("test_table")?;
-        assert_same_plan(&table.to_logical_plan(), &table.to_logical_plan());
+        assert_same_plan(&df.to_logical_plan(), &table.to_logical_plan());
 
         // check that we correctly read from the table
         let results = &table
