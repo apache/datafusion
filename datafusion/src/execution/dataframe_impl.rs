@@ -79,7 +79,6 @@ impl TableProvider for DataFrameImpl {
         Arc::new(schema)
     }
 
-
     fn table_type(&self) -> TableType {
         TableType::View
     }
@@ -550,12 +549,36 @@ mod tests {
 
     #[tokio::test]
     async fn register_table() -> Result<()> {
-        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let df = test_table().await?.select_columns(&["c1", "c12"])?;
         let mut ctx = ExecutionContext::new();
         let df_impl = DataFrameImpl::new(ctx.state.clone(), &df.to_logical_plan());
+
+        // register a dataframe as a table
         ctx.register_table("test_table", Arc::new(df_impl))?;
+
+        // pull the table out and compare the plans
         let table = ctx.table("test_table")?;
         assert_same_plan(&table.to_logical_plan(), &table.to_logical_plan());
+
+        // check that we correctly read from the table
+        let results = &table
+            .aggregate(vec![col("c1")], vec![sum(col("c12"))])?
+            .collect()
+            .await?;
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+---------------------+",
+                "| c1 | SUM(test_table.c12) |",
+                "+----+---------------------+",
+                "| a  | 10.238448667882977  |",
+                "| b  | 7.797734760124923   |",
+                "| c  | 13.860958726523545  |",
+                "| d  | 8.793968289758968   |",
+                "| e  | 10.206140546981722  |",
+                "+----+---------------------+",
+            ],
+            results
+        );
         Ok(())
     }
 
