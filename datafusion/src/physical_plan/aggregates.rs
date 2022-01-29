@@ -80,8 +80,8 @@ pub enum AggregateFunction {
     CovariancePop,
     /// Correlation
     Correlation,
-    /// Approximate quantile function
-    ApproxQuantile,
+    /// Approximate continuous percentile function
+    ApproxPercentileCont,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -112,7 +112,7 @@ impl FromStr for AggregateFunction {
             "covar_samp" => AggregateFunction::Covariance,
             "covar_pop" => AggregateFunction::CovariancePop,
             "corr" => AggregateFunction::Correlation,
-            "approx_quantile" => AggregateFunction::ApproxQuantile,
+            "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",
@@ -160,7 +160,7 @@ pub fn return_type(
             coerced_data_types[0].clone(),
             true,
         )))),
-        AggregateFunction::ApproxQuantile => Ok(coerced_data_types[0].clone()),
+        AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
     }
 }
 
@@ -335,17 +335,18 @@ pub fn create_aggregate_expr(
                 "CORR(DISTINCT) aggregations are not available".to_string(),
             ));
         }
-        (AggregateFunction::ApproxQuantile, false) => {
-            Arc::new(expressions::ApproxQuantile::new(
-                // Pass in the desired quantile expr
+        (AggregateFunction::ApproxPercentileCont, false) => {
+            Arc::new(expressions::ApproxPercentileCont::new(
+                // Pass in the desired percentile expr
                 coerced_phy_exprs,
                 name,
                 return_type,
             )?)
         }
-        (AggregateFunction::ApproxQuantile, true) => {
+        (AggregateFunction::ApproxPercentileCont, true) => {
             return Err(DataFusionError::NotImplemented(
-                "approx_quantile(DISTINCT) aggregations are not available".to_string(),
+                "approx_percentile_cont(DISTINCT) aggregations are not available"
+                    .to_string(),
             ));
         }
     })
@@ -406,8 +407,8 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
         AggregateFunction::Correlation => {
             Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
         }
-        AggregateFunction::ApproxQuantile => Signature::one_of(
-            // Accept any numeric value paired with a float64 quantile
+        AggregateFunction::ApproxPercentileCont => Signature::one_of(
+            // Accept any numeric value paired with a float64 percentile
             NUMERICS
                 .iter()
                 .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
@@ -421,8 +422,8 @@ pub fn signature(fun: &AggregateFunction) -> Signature {
 mod tests {
     use super::*;
     use crate::physical_plan::expressions::{
-        ApproxDistinct, ApproxQuantile, ArrayAgg, Avg, Correlation, Count, Covariance,
-        DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
+        ApproxDistinct, ApproxPercentileCont, ArrayAgg, Avg, Correlation, Count,
+        Covariance, DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
     };
     use crate::{error::Result, scalar::ScalarValue};
 
@@ -539,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn test_agg_approx_quantile_phy_expr() {
+    fn test_agg_approx_percentile_phy_expr() {
         for data_type in NUMERICS {
             let input_schema =
                 Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
@@ -550,7 +551,7 @@ mod tests {
                 Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(0.2)))),
             ];
             let result_agg_phy_exprs = create_aggregate_expr(
-                &AggregateFunction::ApproxQuantile,
+                &AggregateFunction::ApproxPercentileCont,
                 false,
                 &input_phy_exprs[..],
                 &input_schema,
@@ -558,7 +559,7 @@ mod tests {
             )
             .expect("failed to create aggregate expr");
 
-            assert!(result_agg_phy_exprs.as_any().is::<ApproxQuantile>());
+            assert!(result_agg_phy_exprs.as_any().is::<ApproxPercentileCont>());
             assert_eq!("c1", result_agg_phy_exprs.name());
             assert_eq!(
                 Field::new("c1", data_type.clone(), false),
@@ -568,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn test_agg_approx_quantile_invalid_phy_expr() {
+    fn test_agg_approx_percentile_invalid_phy_expr() {
         for data_type in NUMERICS {
             let input_schema =
                 Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
@@ -579,13 +580,13 @@ mod tests {
                 Arc::new(expressions::Literal::new(ScalarValue::Float64(Some(4.2)))),
             ];
             let err = create_aggregate_expr(
-                &AggregateFunction::ApproxQuantile,
+                &AggregateFunction::ApproxPercentileCont,
                 false,
                 &input_phy_exprs[..],
                 &input_schema,
                 "c1",
             )
-            .expect_err("should fail due to invalid quantile");
+            .expect_err("should fail due to invalid percentile");
 
             assert!(matches!(err, DataFusionError::Plan(_)));
         }

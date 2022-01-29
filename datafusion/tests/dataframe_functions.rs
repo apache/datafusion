@@ -154,15 +154,15 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_fn_approx_quantile() -> Result<()> {
-    let expr = approx_quantile(col("b"), lit(0.5));
+async fn test_fn_approx_percentile_cont() -> Result<()> {
+    let expr = approx_percentile_cont(col("b"), lit(0.5));
 
     let expected = vec![
-        "+-------------------------------------+",
-        "| APPROXQUANTILE(test.b,Float64(0.5)) |",
-        "+-------------------------------------+",
-        "| 10                                  |",
-        "+-------------------------------------+",
+        "+-------------------------------------------+",
+        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
+        "+-------------------------------------------+",
+        "| 10                                        |",
+        "+-------------------------------------------+",
     ];
 
     let df = create_test_table()?;

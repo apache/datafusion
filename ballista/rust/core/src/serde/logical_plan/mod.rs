@@ -1001,9 +1001,9 @@ mod roundtrip_tests {
     }
 
     #[test]
-    fn roundtrip_approx_quantile() -> Result<()> {
+    fn roundtrip_approx_percentile_cont() -> Result<()> {
         let test_expr = Expr::AggregateFunction {
-            fun: aggregates::AggregateFunction::ApproxQuantile,
+            fun: aggregates::AggregateFunction::ApproxPercentileCont,
             args: vec![col("bananas"), lit(0.42)],
             distinct: false,
         };

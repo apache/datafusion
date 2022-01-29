@@ -1647,12 +1647,12 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
-/// Calculate an approximation of the specified `quantile` for `expr`.
-pub fn approx_quantile(expr: Expr, quantile: Expr) -> Expr {
+/// Calculate an approximation of the specified `percentile` for `expr`.
+pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
     Expr::AggregateFunction {
-        fun: aggregates::AggregateFunction::ApproxQuantile,
+        fun: aggregates::AggregateFunction::ApproxPercentileCont,
         distinct: false,
-        args: vec![expr, quantile],
+        args: vec![expr, percentile],
     }
 }
 

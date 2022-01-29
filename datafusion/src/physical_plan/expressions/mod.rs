@@ -26,7 +26,7 @@ use arrow::compute::kernels::sort::{SortColumn, SortOptions};
 use arrow::record_batch::RecordBatch;
 
 mod approx_distinct;
-mod approx_quantile;
+mod approx_percentile_cont;
 mod array_agg;
 mod average;
 #[macro_use]
@@ -65,7 +65,9 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
-pub use approx_quantile::{is_approx_quantile_supported_arg_type, ApproxQuantile};
+pub use approx_percentile_cont::{
+    is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
+};
 pub use array_agg::ArrayAgg;
 pub(crate) use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};

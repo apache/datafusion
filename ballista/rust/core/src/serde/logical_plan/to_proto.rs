@@ -1074,8 +1074,8 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
                     }
-                    AggregateFunction::ApproxQuantile => {
-                        protobuf::AggregateFunction::ApproxQuantile
+                    AggregateFunction::ApproxPercentileCont => {
+                        protobuf::AggregateFunction::ApproxPercentileCont
                     }
                     AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
@@ -1339,7 +1339,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
-            AggregateFunction::ApproxQuantile => Self::ApproxQuantile,
+            AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
         }
     }
 }

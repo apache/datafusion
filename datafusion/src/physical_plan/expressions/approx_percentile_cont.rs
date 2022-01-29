@@ -35,9 +35,9 @@ use crate::error::Result;
 
 use super::{format_state_name, Literal};
 
-/// Return `true` if `arg_type` is of a [`DataType`] that the [`ApproxQuantile`]
-/// aggregation can operate on.
-pub fn is_approx_quantile_supported_arg_type(arg_type: &DataType) -> bool {
+/// Return `true` if `arg_type` is of a [`DataType`] that the
+/// [`ApproxPercentileCont`] aggregation can operate on.
+pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
         DataType::UInt8
@@ -53,47 +53,47 @@ pub fn is_approx_quantile_supported_arg_type(arg_type: &DataType) -> bool {
     )
 }
 
-/// APPROX_QUANTILE aggregate expression
+/// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
-pub struct ApproxQuantile {
+pub struct ApproxPercentileCont {
     name: String,
     input_data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
-    quantile: f64,
+    percentile: f64,
 }
 
-impl ApproxQuantile {
-    /// Create a new ApproxQuantile aggregate function.
+impl ApproxPercentileCont {
+    /// Create a new [`ApproxPercentileCont`] aggregate function.
     pub fn new(
         expr: Vec<Arc<dyn PhysicalExpr>>,
         name: impl Into<String>,
         input_data_type: DataType,
     ) -> Result<Self> {
-        // Arguments should be [ColumnExpr, DesiredQuantileLiteral]
+        // Arguments should be [ColumnExpr, DesiredPercentileLiteral]
         debug_assert_eq!(expr.len(), 2);
 
-        // Extract the desired quantile literal
+        // Extract the desired percentile literal
         let lit = expr[1]
             .as_any()
             .downcast_ref::<Literal>()
             .ok_or(DataFusionError::Internal(
-                "desired quantile argument must be float literal".to_string(),
+                "desired percentile argument must be float literal".to_string(),
             ))?
             .value();
-        let quantile = match lit {
+        let percentile = match lit {
             ScalarValue::Float32(Some(q)) => *q as f64,
             ScalarValue::Float64(Some(q)) => *q as f64,
             got => return Err(DataFusionError::NotImplemented(format!(
-                "Quantile value for 'APPROX_QUANTILE' must be Float32 or Float64 literal (got data type {})",
+                "Percentile value for 'APPROX_PERCENTILE_CONT' must be Float32 or Float64 literal (got data type {})",
                 got
             )))
         };
 
-        // Ensure the quantile is between 0 and 1.
-        if !(0.0..=1.0).contains(&quantile) {
+        // Ensure the percentile is between 0 and 1.
+        if !(0.0..=1.0).contains(&percentile) {
             return Err(DataFusionError::Plan(format!(
-                "Quantile value must be between 0.0 and 1.0, {} is invalid",
-                quantile
+                "Percentile value must be between 0.0 and 1.0 inclusive, {} is invalid",
+                percentile
             )));
         }
 
@@ -102,12 +102,12 @@ impl ApproxQuantile {
             input_data_type,
             // The physical expr to evaluate during accumulation
             expr: expr[0].clone(),
-            quantile,
+            percentile,
         })
     }
 }
 
-impl AggregateExpr for ApproxQuantile {
+impl AggregateExpr for ApproxPercentileCont {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -169,11 +169,11 @@ impl AggregateExpr for ApproxQuantile {
             | DataType::Int64
             | DataType::Float32
             | DataType::Float64) => {
-                Box::new(ApproxQuantileAccumulator::new(self.quantile, t.clone()))
+                Box::new(ApproxPercentileAccumulator::new(self.percentile, t.clone()))
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'APPROX_QUANTILE' for data type {} is not implemented",
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
                     other
                 )))
             }
@@ -187,23 +187,23 @@ impl AggregateExpr for ApproxQuantile {
 }
 
 #[derive(Debug)]
-pub struct ApproxQuantileAccumulator {
+pub struct ApproxPercentileAccumulator {
     digest: TDigest,
-    quantile: f64,
+    percentile: f64,
     return_type: DataType,
 }
 
-impl ApproxQuantileAccumulator {
-    pub fn new(quantile: f64, return_type: DataType) -> Self {
+impl ApproxPercentileAccumulator {
+    pub fn new(percentile: f64, return_type: DataType) -> Self {
         Self {
             digest: TDigest::new(100),
-            quantile,
+            percentile,
             return_type,
         }
     }
 }
 
-impl Accumulator for ApproxQuantileAccumulator {
+impl Accumulator for ApproxPercentileAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(self.digest.to_scalar_state())
     }
@@ -212,7 +212,7 @@ impl Accumulator for ApproxQuantileAccumulator {
         debug_assert_eq!(
             values.len(),
             1,
-            "invalid number of values in batch quantile update"
+            "invalid number of values in batch percentile update"
         );
         let values = &values[0];
 
@@ -259,7 +259,7 @@ impl Accumulator for ApproxQuantileAccumulator {
             }
             e => {
                 return Err(DataFusionError::Internal(format!(
-                    "APPROX_QUANTILE is not expected to receive the type {:?}",
+                    "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
                     e
                 )));
             }
@@ -269,10 +269,10 @@ impl Accumulator for ApproxQuantileAccumulator {
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let q = self.digest.estimate_quantile(self.quantile);
+        let q = self.digest.estimate_quantile(self.percentile);
 
         // These acceptable return types MUST match the validation in
-        // ApproxQuantile::create_accumulator.
+        // ApproxPercentile::create_accumulator.
         Ok(match &self.return_type {
             DataType::Int8 => ScalarValue::Int8(Some(q as i8)),
             DataType::Int16 => ScalarValue::Int16(Some(q as i16)),

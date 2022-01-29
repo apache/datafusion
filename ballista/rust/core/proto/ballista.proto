@@ -176,7 +176,7 @@ enum AggregateFunction {
   STDDEV=11;
   STDDEV_POP=12;
   CORRELATION=13;
-  APPROX_QUANTILE = 14;
+  APPROX_PERCENTILE_CONT = 14;
 }
 
 message AggregateExprNode {

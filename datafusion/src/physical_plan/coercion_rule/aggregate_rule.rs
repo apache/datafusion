@@ -28,7 +28,7 @@ use crate::physical_plan::functions::{Signature, TypeSignature};
 use crate::physical_plan::PhysicalExpr;
 use crate::{
     arrow::datatypes::Schema,
-    physical_plan::expressions::is_approx_quantile_supported_arg_type,
+    physical_plan::expressions::is_approx_percentile_cont_supported_arg_type,
 };
 use arrow::datatypes::DataType;
 use std::ops::Deref;
@@ -139,8 +139,8 @@ pub(crate) fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::ApproxQuantile => {
-            if !is_approx_quantile_supported_arg_type(&input_types[0]) {
+        AggregateFunction::ApproxPercentileCont => {
+            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
@@ -148,7 +148,7 @@ pub(crate) fn coerce_types(
             }
             if !matches!(input_types[1], DataType::Float64) {
                 return Err(DataFusionError::Plan(format!(
-                    "The quantile argument for {:?} must be Float64, not {:?}.",
+                    "The percentile argument for {:?} must be Float64, not {:?}.",
                     agg_fun, input_types[1]
                 )));
             }
@@ -324,7 +324,7 @@ mod tests {
             }
         }
 
-        // ApproxQuantile input types
+        // ApproxPercentileCont input types
         let input_types = vec![
             vec![DataType::Int8, DataType::Float64],
             vec![DataType::Int16, DataType::Float64],
@@ -338,9 +338,13 @@ mod tests {
             vec![DataType::Float64, DataType::Float64],
         ];
         for input_type in &input_types {
-            let signature = aggregates::signature(&AggregateFunction::ApproxQuantile);
-            let result =
-                coerce_types(&AggregateFunction::ApproxQuantile, input_type, &signature);
+            let signature =
+                aggregates::signature(&AggregateFunction::ApproxPercentileCont);
+            let result = coerce_types(
+                &AggregateFunction::ApproxPercentileCont,
+                input_type,
+                &signature,
+            );
             assert_eq!(*input_type, result.unwrap());
         }
     }
