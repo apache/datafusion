@@ -585,14 +585,9 @@ mod tests {
         assert_batches_sorted_eq!(expected_lines, table_results);
         Ok(())
     }
-
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
-        let plan1_str = format!("{:?}", plan1);
-        let plan2_str = format!("{:?}", plan2);
-        println!("{}", plan1_str);
-        println!("{}", plan2_str);
-        assert_eq!(plan1_str, plan2_str);
+        assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
     }
 
     /// Create a logical plan from a SQL query
