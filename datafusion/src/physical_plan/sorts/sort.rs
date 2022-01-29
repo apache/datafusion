@@ -26,7 +26,9 @@ use crate::execution::memory_manager::{
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::metrics::{AggregatedMetricsSet, BaselineMetrics, MetricsSet};
+use crate::physical_plan::metrics::{
+    BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
+};
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
@@ -73,8 +75,8 @@ struct ExternalSorter {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     runtime: Arc<RuntimeEnv>,
-    metrics: AggregatedMetricsSet,
-    inner_metrics: BaselineMetrics,
+    metrics_set: CompositeMetricsSet,
+    metrics: BaselineMetrics,
 }
 
 impl ExternalSorter {
@@ -82,10 +84,10 @@ impl ExternalSorter {
         partition_id: usize,
         schema: SchemaRef,
         expr: Vec<PhysicalSortExpr>,
-        metrics: AggregatedMetricsSet,
+        metrics_set: CompositeMetricsSet,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
-        let inner_metrics = metrics.new_intermediate_baseline(partition_id);
+        let metrics = metrics_set.new_intermediate_baseline(partition_id);
         Self {
             id: MemoryConsumerId::new(partition_id),
             schema,
@@ -93,8 +95,8 @@ impl ExternalSorter {
             spills: Mutex::new(vec![]),
             expr,
             runtime,
+            metrics_set,
             metrics,
-            inner_metrics,
         }
     }
 
@@ -102,7 +104,7 @@ impl ExternalSorter {
         if input.num_rows() > 0 {
             let size = batch_byte_size(&input);
             self.try_grow(size).await?;
-            self.inner_metrics.mem_used().add(size);
+            self.metrics.mem_used().add(size);
             let mut in_mem_batches = self.in_mem_batches.lock().await;
             in_mem_batches.push(input);
         }
@@ -120,16 +122,18 @@ impl ExternalSorter {
         let mut in_mem_batches = self.in_mem_batches.lock().await;
 
         if self.spilled_before().await {
-            let baseline_metrics = self.metrics.new_intermediate_baseline(partition);
+            let tracking_metrics = self
+                .metrics_set
+                .new_intermediate_tracking(partition, self.runtime.clone());
             let mut streams: Vec<SortedStream> = vec![];
             if in_mem_batches.len() > 0 {
                 let in_mem_stream = in_mem_partial_sort(
                     &mut *in_mem_batches,
                     self.schema.clone(),
                     &self.expr,
-                    baseline_metrics,
+                    tracking_metrics,
                 )?;
-                let prev_used = self.inner_metrics.mem_used().set(0);
+                let prev_used = self.metrics.mem_used().set(0);
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
             }
 
@@ -139,25 +143,28 @@ impl ExternalSorter {
                 let stream = read_spill_as_stream(spill, self.schema.clone())?;
                 streams.push(SortedStream::new(stream, 0));
             }
-            let baseline_metrics = self.metrics.new_final_baseline(partition);
+            let tracking_metrics = self
+                .metrics_set
+                .new_final_tracking(partition, self.runtime.clone());
             Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
                 streams,
                 self.schema.clone(),
                 &self.expr,
-                baseline_metrics,
-                partition,
+                tracking_metrics,
                 self.runtime.clone(),
             )))
         } else if in_mem_batches.len() > 0 {
-            let baseline_metrics = self.metrics.new_final_baseline(partition);
+            let tracking_metrics = self
+                .metrics_set
+                .new_final_tracking(partition, self.runtime.clone());
             let result = in_mem_partial_sort(
                 &mut *in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
-                baseline_metrics,
+                tracking_metrics,
             );
-            self.inner_metrics.mem_used().set(0);
-            // TODO: the result size is not tracked
+            // Report to the memory manager we are no longer using memory
+            self.metrics.mem_used().set(0);
             result
         } else {
             Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
@@ -165,15 +172,15 @@ impl ExternalSorter {
     }
 
     fn used(&self) -> usize {
-        self.inner_metrics.mem_used().value()
+        self.metrics.mem_used().value()
     }
 
     fn spilled_bytes(&self) -> usize {
-        self.inner_metrics.spilled_bytes().value()
+        self.metrics.spilled_bytes().value()
     }
 
     fn spill_count(&self) -> usize {
-        self.inner_metrics.spill_count().value()
+        self.metrics.spill_count().value()
     }
 }
 
@@ -185,6 +192,12 @@ impl Debug for ExternalSorter {
             .field("spilled_bytes", &self.spilled_bytes())
             .field("spill_count", &self.spill_count())
             .finish()
+    }
+}
+
+impl Drop for ExternalSorter {
+    fn drop(&mut self) {
+        self.runtime.drop_consumer(self.id(), self.used());
     }
 }
 
@@ -222,27 +235,29 @@ impl MemoryConsumer for ExternalSorter {
             return Ok(0);
         }
 
-        let baseline_metrics = self.metrics.new_intermediate_baseline(partition);
+        let tracking_metrics = self
+            .metrics_set
+            .new_intermediate_tracking(partition, self.runtime.clone());
 
         let spillfile = self.runtime.disk_manager.create_tmp_file()?;
         let stream = in_mem_partial_sort(
             &mut *in_mem_batches,
             self.schema.clone(),
             &*self.expr,
-            baseline_metrics,
+            tracking_metrics,
         );
 
         spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
             .await?;
         let mut spills = self.spills.lock().await;
-        let used = self.inner_metrics.mem_used().set(0);
-        self.inner_metrics.record_spill(used);
+        let used = self.metrics.mem_used().set(0);
+        self.metrics.record_spill(used);
         spills.push(spillfile);
         Ok(used)
     }
 
     fn mem_used(&self) -> usize {
-        self.inner_metrics.mem_used().value()
+        self.metrics.mem_used().value()
     }
 }
 
@@ -251,14 +266,14 @@ fn in_mem_partial_sort(
     buffered_batches: &mut Vec<RecordBatch>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
-    baseline_metrics: BaselineMetrics,
+    tracking_metrics: MemTrackingMetrics,
 ) -> Result<SendableRecordBatchStream> {
     assert_ne!(buffered_batches.len(), 0);
 
     let result = {
         // NB timer records time taken on drop, so there are no
         // calls to `timer.done()` below.
-        let _timer = baseline_metrics.elapsed_compute().timer();
+        let _timer = tracking_metrics.elapsed_compute().timer();
 
         let pre_sort = if buffered_batches.len() == 1 {
             buffered_batches.pop()
@@ -276,7 +291,7 @@ fn in_mem_partial_sort(
     Ok(Box::pin(SizedRecordBatchStream::new(
         schema,
         vec![Arc::new(result.unwrap())],
-        baseline_metrics,
+        tracking_metrics,
     )))
 }
 
@@ -357,7 +372,7 @@ pub struct SortExec {
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
     /// Containing all metrics set created during sort
-    all_metrics: AggregatedMetricsSet,
+    metrics_set: CompositeMetricsSet,
     /// Preserve partitions of input plan
     preserve_partitioning: bool,
 }
@@ -381,7 +396,7 @@ impl SortExec {
         Self {
             expr,
             input,
-            all_metrics: AggregatedMetricsSet::new(),
+            metrics_set: CompositeMetricsSet::new(),
             preserve_partitioning,
         }
     }
@@ -470,14 +485,14 @@ impl ExecutionPlan for SortExec {
             input,
             partition,
             self.expr.clone(),
-            self.all_metrics.clone(),
+            self.metrics_set.clone(),
             runtime,
         )
         .await
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.all_metrics.aggregate_all())
+        Some(self.metrics_set.aggregate_all())
     }
 
     fn fmt_as(
@@ -537,27 +552,23 @@ async fn do_sort(
     mut input: SendableRecordBatchStream,
     partition_id: usize,
     expr: Vec<PhysicalSortExpr>,
-    metrics: AggregatedMetricsSet,
+    metrics_set: CompositeMetricsSet,
     runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
     let schema = input.schema();
-    let sorter = Arc::new(ExternalSorter::new(
+    let sorter = ExternalSorter::new(
         partition_id,
         schema.clone(),
         expr,
-        metrics,
+        metrics_set,
         runtime.clone(),
-    ));
-    runtime.register_consumer(&(sorter.clone() as Arc<dyn MemoryConsumer>));
-
+    );
+    runtime.register_requester(sorter.id());
     while let Some(batch) = input.next().await {
         let batch = batch?;
         sorter.insert_batch(batch).await?;
     }
-
-    let result = sorter.sort().await;
-    runtime.drop_consumer(sorter.id());
-    result
+    sorter.sort().await
 }
 
 #[cfg(test)]

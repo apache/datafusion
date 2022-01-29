@@ -19,11 +19,11 @@
 
 use crate::physical_plan::common::AbortOnDropMany;
 use crate::physical_plan::metrics::{
-    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
+    ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
 use std::any::Any;
 use std::collections::{BinaryHeap, VecDeque};
-use std::fmt::{Debug, Formatter};
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -41,9 +41,6 @@ use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::memory_manager::{
-    ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
-};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream, StreamWrapper};
 use crate::physical_plan::{
@@ -161,7 +158,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )));
         }
 
-        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
+        let tracking_metrics = MemTrackingMetrics::new(&self.metrics, partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
         match input_partitions {
@@ -193,8 +190,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     AbortOnDropMany(join_handles),
                     self.schema(),
                     &self.expr,
-                    baseline_metrics,
-                    partition,
+                    tracking_metrics,
                     runtime,
                 )))
             }
@@ -223,73 +219,24 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 }
 
+#[derive(Debug)]
 struct MergingStreams {
-    /// ConsumerId
-    id: MemoryConsumerId,
     /// The sorted input streams to merge together
     streams: Mutex<Vec<StreamWrapper>>,
     /// number of streams
     num_streams: usize,
-    /// Runtime
-    runtime: Arc<RuntimeEnv>,
-}
-
-impl Debug for MergingStreams {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.debug_struct("MergingStreams")
-            .field("id", &self.id())
-            .finish()
-    }
 }
 
 impl MergingStreams {
-    fn new(
-        partition: usize,
-        input_streams: Vec<StreamWrapper>,
-        runtime: Arc<RuntimeEnv>,
-    ) -> Self {
+    fn new(input_streams: Vec<StreamWrapper>) -> Self {
         Self {
-            id: MemoryConsumerId::new(partition),
             num_streams: input_streams.len(),
             streams: Mutex::new(input_streams),
-            runtime,
         }
     }
 
     fn num_streams(&self) -> usize {
         self.num_streams
-    }
-}
-
-#[async_trait]
-impl MemoryConsumer for MergingStreams {
-    fn name(&self) -> String {
-        "MergingStreams".to_owned()
-    }
-
-    fn id(&self) -> &MemoryConsumerId {
-        &self.id
-    }
-
-    fn memory_manager(&self) -> Arc<MemoryManager> {
-        self.runtime.memory_manager.clone()
-    }
-
-    fn type_(&self) -> &ConsumerType {
-        &ConsumerType::Tracking
-    }
-
-    async fn spill(&self) -> Result<usize> {
-        return Err(DataFusionError::Internal(format!(
-            "Calling spill on a tracking only consumer {}, {}",
-            self.name(),
-            self.id,
-        )));
-    }
-
-    fn mem_used(&self) -> usize {
-        let streams = self.streams.lock().unwrap();
-        streams.iter().map(StreamWrapper::mem_used).sum::<usize>()
     }
 }
 
@@ -299,7 +246,7 @@ pub(crate) struct SortPreservingMergeStream {
     schema: SchemaRef,
 
     /// The sorted input streams to merge together
-    streams: Arc<MergingStreams>,
+    streams: MergingStreams,
 
     /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
     _drop_helper: AbortOnDropMany<()>,
@@ -324,7 +271,7 @@ pub(crate) struct SortPreservingMergeStream {
     sort_options: Arc<Vec<SortOptions>>,
 
     /// used to record execution metrics
-    baseline_metrics: BaselineMetrics,
+    tracking_metrics: MemTrackingMetrics,
 
     /// If the stream has encountered an error
     aborted: bool,
@@ -335,25 +282,17 @@ pub(crate) struct SortPreservingMergeStream {
     /// min heap for record comparison
     min_heap: BinaryHeap<SortKeyCursor>,
 
-    /// runtime
-    runtime: Arc<RuntimeEnv>,
-}
-
-impl Drop for SortPreservingMergeStream {
-    fn drop(&mut self) {
-        self.runtime.drop_consumer(self.streams.id())
-    }
+    /// target batch size
+    batch_size: usize,
 }
 
 impl SortPreservingMergeStream {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_from_receivers(
         receivers: Vec<mpsc::Receiver<ArrowResult<RecordBatch>>>,
         _drop_helper: AbortOnDropMany<()>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        baseline_metrics: BaselineMetrics,
-        partition: usize,
+        tracking_metrics: MemTrackingMetrics,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         let stream_count = receivers.len();
@@ -362,23 +301,21 @@ impl SortPreservingMergeStream {
             .map(|_| VecDeque::new())
             .collect();
         let wrappers = receivers.into_iter().map(StreamWrapper::Receiver).collect();
-        let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
 
         SortPreservingMergeStream {
             schema,
             batches,
             cursor_finished: vec![true; stream_count],
-            streams,
+            streams: MergingStreams::new(wrappers),
             _drop_helper,
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
-            baseline_metrics,
+            tracking_metrics,
             aborted: false,
             in_progress: vec![],
             next_batch_id: 0,
             min_heap: BinaryHeap::with_capacity(stream_count),
-            runtime,
+            batch_size: runtime.batch_size(),
         }
     }
 
@@ -386,8 +323,7 @@ impl SortPreservingMergeStream {
         streams: Vec<SortedStream>,
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
-        baseline_metrics: BaselineMetrics,
-        partition: usize,
+        tracking_metrics: MemTrackingMetrics,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         let stream_count = streams.len();
@@ -395,27 +331,26 @@ impl SortPreservingMergeStream {
             .into_iter()
             .map(|_| VecDeque::new())
             .collect();
+        tracking_metrics.init_mem_used(streams.iter().map(|s| s.mem_used).sum());
         let wrappers = streams
             .into_iter()
             .map(|s| StreamWrapper::Stream(Some(s)))
             .collect();
-        let streams = Arc::new(MergingStreams::new(partition, wrappers, runtime.clone()));
-        runtime.register_consumer(&(streams.clone() as Arc<dyn MemoryConsumer>));
 
         Self {
             schema,
             batches,
             cursor_finished: vec![true; stream_count],
-            streams,
+            streams: MergingStreams::new(wrappers),
             _drop_helper: AbortOnDropMany(vec![]),
             column_expressions: expressions.iter().map(|x| x.expr.clone()).collect(),
             sort_options: Arc::new(expressions.iter().map(|x| x.options).collect()),
-            baseline_metrics,
+            tracking_metrics,
             aborted: false,
             in_progress: vec![],
             next_batch_id: 0,
             min_heap: BinaryHeap::with_capacity(stream_count),
-            runtime,
+            batch_size: runtime.batch_size(),
         }
     }
 
@@ -577,7 +512,7 @@ impl Stream for SortPreservingMergeStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.poll_next_inner(cx);
-        self.baseline_metrics.record_poll(poll)
+        self.tracking_metrics.record_poll(poll)
     }
 }
 
@@ -606,7 +541,7 @@ impl SortPreservingMergeStream {
         loop {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
-            let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
+            let elapsed_compute = self.tracking_metrics.elapsed_compute().clone();
             let _timer = elapsed_compute.timer();
 
             match self.min_heap.pop() {
@@ -630,7 +565,7 @@ impl SortPreservingMergeStream {
                         row_idx,
                     });
 
-                    if self.in_progress.len() == self.runtime.batch_size() {
+                    if self.in_progress.len() == self.batch_size {
                         return Poll::Ready(Some(self.build_record_batch()));
                     }
 
@@ -1263,7 +1198,7 @@ mod tests {
         }
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let baseline_metrics = BaselineMetrics::new(&metrics, 0);
+        let tracking_metrics = MemTrackingMetrics::new(&metrics, 0);
 
         let merge_stream = SortPreservingMergeStream::new_from_receivers(
             receivers,
@@ -1271,8 +1206,7 @@ mod tests {
             AbortOnDropMany(vec![]),
             batches.schema(),
             sort.as_slice(),
-            baseline_metrics,
-            0,
+            tracking_metrics,
             runtime.clone(),
         );
 

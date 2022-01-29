@@ -17,9 +17,10 @@
 
 //! Metrics for recording information about execution
 
-mod aggregated;
 mod baseline;
 mod builder;
+mod composite;
+mod tracker;
 mod value;
 
 use std::{
@@ -31,9 +32,10 @@ use std::{
 use hashbrown::HashMap;
 
 // public exports
-pub use aggregated::AggregatedMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
+pub use composite::CompositeMetricsSet;
+pub use tracker::MemTrackingMetrics;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
