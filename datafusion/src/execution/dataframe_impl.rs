@@ -558,33 +558,41 @@ mod tests {
 
         // pull the table out and compare the plans
         let table = ctx.table("test_table")?;
-        assert_same_plan(&df.to_logical_plan(), &table.to_logical_plan());
 
         // check that we correctly read from the table
-        let results = &table
+        let df_results = &table
             .aggregate(vec![col("c1")], vec![sum(col("c12"))])?
             .collect()
             .await?;
-        assert_batches_sorted_eq!(
-            vec![
-                "+----+---------------------+",
-                "| c1 | SUM(test_table.c12) |",
-                "+----+---------------------+",
-                "| a  | 10.238448667882977  |",
-                "| b  | 7.797734760124923   |",
-                "| c  | 13.860958726523545  |",
-                "| d  | 8.793968289758968   |",
-                "| e  | 10.206140546981722  |",
-                "+----+---------------------+",
-            ],
-            results
-        );
+        let table_results = &table
+            .aggregate(vec![col("c1")], vec![sum(col("c12"))])?
+            .collect()
+            .await?;
+
+        let expected_lines = vec![
+            "+----+---------------------+",
+            "| c1 | SUM(test_table.c12) |",
+            "+----+---------------------+",
+            "| a  | 10.238448667882977  |",
+            "| b  | 7.797734760124923   |",
+            "| c  | 13.860958726523545  |",
+            "| d  | 8.793968289758968   |",
+            "| e  | 10.206140546981722  |",
+            "+----+---------------------+",
+        ];
+
+        assert_batches_sorted_eq!(expected_lines, df_results);
+        assert_batches_sorted_eq!(expected_lines, table_results);
         Ok(())
     }
 
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
-        assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
+        let plan1_str = format!("{:?}", plan1);
+        let plan2_str = format!("{:?}", plan2);
+        println!("{}", plan1_str);
+        println!("{}", plan2_str);
+        assert_eq!(plan1_str, plan2_str);
     }
 
     /// Create a logical plan from a SQL query
