@@ -310,9 +310,8 @@ fn read_spill_as_stream(
         Sender<ArrowResult<RecordBatch>>,
         Receiver<ArrowResult<RecordBatch>>,
     ) = tokio::sync::mpsc::channel(2);
-    let schema_ref = schema.clone();
     let join_handle = task::spawn_blocking(move || {
-        if let Err(e) = read_spill(sender, path.path(), schema_ref) {
+        if let Err(e) = read_spill(sender, path.path()) {
             error!("Failure while reading spill file: {:?}. Error: {}", path, e);
         }
     });
@@ -340,16 +339,13 @@ fn write_sorted(
     Ok(())
 }
 
-fn read_spill(
-    sender: Sender<ArrowResult<RecordBatch>>,
-    path: &Path,
-    schena: SchemaRef,
-) -> Result<()> {
+fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
     let mut file = BufReader::new(File::open(&path)?);
     let metadata = read_file_metadata(&mut file)?;
     let reader = FileReader::new(file, metadata, None);
+    let reader_schema = Arc::new(reader.schema().clone());
     for chunk in reader {
-        let rb = RecordBatch::try_new(schena.clone(), chunk?.into_arrays());
+        let rb = RecordBatch::try_new(reader_schema.clone(), chunk?.into_arrays());
         sender
             .blocking_send(rb)
             .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
