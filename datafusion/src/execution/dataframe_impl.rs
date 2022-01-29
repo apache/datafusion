@@ -568,10 +568,7 @@ mod tests {
             .aggregate(group_expr.clone(), aggr_expr.clone())?
             .collect()
             .await?;
-        let table_results = &table
-            .aggregate(group_expr, aggr_expr)?
-            .collect()
-            .await?;
+        let table_results = &table.aggregate(group_expr, aggr_expr)?.collect().await?;
 
         assert_batches_sorted_eq!(
             vec![
