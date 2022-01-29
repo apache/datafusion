@@ -560,7 +560,7 @@ mod tests {
         let table = ctx.table("test_table")?;
 
         // check that we correctly read from the table
-        let df_results = &table
+        let df_results = &df_impl
             .aggregate(vec![col("c1")], vec![sum(col("c12"))])?
             .collect()
             .await?;
