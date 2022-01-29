@@ -557,7 +557,7 @@ mod tests {
         // register a dataframe as a table
         ctx.register_table("test_table", df_impl.clone())?;
 
-        // pull the table out and compare the plans
+        // pull the table out
         let table = ctx.table("test_table")?;
 
         let group_expr = vec![col("c1")];
