@@ -40,6 +40,8 @@ use crate::{
     },
     scalar::ScalarValue,
 };
+use arrow::array::new_null_array;
+use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::*,
@@ -59,6 +61,7 @@ use tokio::{
     task,
 };
 
+use crate::datasource::file_format::parquet::fetch_schema;
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
@@ -490,16 +493,17 @@ fn read_partition(
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
         let reader = object_reader.sync_reader()?;
 
+        let reader_schema = fetch_schema(object_reader)?;
+        let mapped_projections =
+            map_projections(&file_schema, &reader_schema, projection)?;
         let mut record_reader = read::RecordReader::try_new(
             reader,
-            Some(projection.to_vec()),
+            Some(mapped_projections.clone()),
             limit,
             None,
             None,
         )?;
-        // TODO : ???
-        let _mapped_projections =
-            map_projections(&file_schema, record_reader.schema(), projection)?;
+
         if let Some(pruning_predicate) = pruning_predicate {
             record_reader.set_groups_filter(Arc::new(build_row_group_predicate(
                 pruning_predicate,
@@ -508,14 +512,50 @@ fn read_partition(
             )));
         }
 
-        let schema = record_reader.schema().clone();
-        for chunk in record_reader {
-            let batch = RecordBatch::new_with_chunk(&schema, chunk?);
-            let proj_batch = partition_column_projector
-                .project(batch, &partitioned_file.partition_values);
-            response_tx
-                .blocking_send(proj_batch)
-                .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
+        let projected_schema = Arc::new(file_schema.clone().project(projection)?);
+        let read_schema = Arc::new(file_schema.clone().project(&mapped_projections)?);
+        let total_cols = &file_schema.fields().len();
+        for chunk_r in record_reader {
+            match chunk_r {
+                Ok(chunk) => {
+                    let mut cols: Vec<ArrayRef> = Vec::with_capacity(*total_cols);
+                    let batch_cols = chunk.columns().to_vec();
+
+                    for field_idx in projection {
+                        let merged_field = &file_schema.fields()[*field_idx];
+                        if let Some((batch_idx, _name)) =
+                            read_schema.column_with_name(merged_field.name())
+                        {
+                            cols.push(batch_cols[batch_idx].clone());
+                        } else {
+                            cols.push(
+                                new_null_array(
+                                    merged_field.data_type().clone(),
+                                    chunk.len(),
+                                )
+                                .into(),
+                            )
+                        }
+                    }
+                    let batch = RecordBatch::try_new(projected_schema.clone(), cols)?;
+                    let proj_batch = partition_column_projector
+                        .project(batch, &partitioned_file.partition_values);
+                    response_tx
+                        .blocking_send(proj_batch)
+                        .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
+                }
+                Err(e) => {
+                    let err_msg =
+                        format!("Error reading batch from {}: {}", partitioned_file, e);
+                    // send error to operator
+                    send_result(
+                        &response_tx,
+                        Err(ArrowError::ExternalFormat(err_msg.clone())),
+                    )?;
+                    // terminate thread with error
+                    return Err(DataFusionError::Execution(err_msg));
+                }
+            }
         }
     }
 
@@ -555,8 +595,6 @@ mod tests {
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
     ) -> Vec<RecordBatch> {
-        let runtime = Arc::new(RuntimeEnv::default());
-
         // When vec is dropped, temp files are deleted
         let files: Vec<_> = batches
             .into_iter()
@@ -579,7 +617,7 @@ mod tests {
                     iter.into_iter(),
                     schema_ref,
                     options,
-                    vec![Encoding::Plain, Encoding::Plain],
+                    vec![Encoding::Plain].repeat(schema_ref.fields.len()),
                 )
                 .unwrap();
 
@@ -630,6 +668,7 @@ mod tests {
             None,
         );
 
+        let runtime = Arc::new(RuntimeEnv::default());
         collect(Arc::new(parquet_exec), runtime)
             .await
             .expect("reading parquet data")

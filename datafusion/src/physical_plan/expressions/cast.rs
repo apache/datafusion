@@ -105,6 +105,7 @@ pub fn cast_with_error(
 ) -> Result<Box<dyn Array>> {
     let result = cast::cast(array, cast_type, options)?;
     if result.null_count() != array.null_count() {
+        println!("{result:?} : {array:?}");
         let casted_valids = result.validity().unwrap();
         let failed_casts = match array.validity() {
             Some(valids) => valids ^ casted_valids,

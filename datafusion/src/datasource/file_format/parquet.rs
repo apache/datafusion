@@ -262,7 +262,7 @@ fn summarize_min_max(
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
-fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
+pub fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
     let mut reader = object_reader.sync_reader()?;
     let meta_data = read_metadata(&mut reader)?;
     let schema = get_schema(&meta_data)?;
