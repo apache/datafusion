@@ -200,7 +200,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Window(window_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    convert_box_required!(window_agg.input)?;
+                    into_physical_plan!(window_agg.input, ctx)?;
                 let input_schema = window_agg
                     .input_schema
                     .as_ref()
@@ -382,7 +382,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    convert_box_required!(shuffle_writer.input)?;
+                    into_physical_plan!(shuffle_writer.input, ctx)?;
 
                 let output_partitioning = parse_protobuf_hash_partitioning(
                     shuffle_writer.output_partitioning.as_ref(),

@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -181,7 +180,8 @@ impl<T: 'static + AsExecutionPlan> ExecutorServer<T> {
         );
         info!("Start to run task {}", task_id_log);
 
-        let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
+        let plan: Arc<dyn ExecutionPlan> =
+            (&task.plan.unwrap()).try_into_physical_plan(self.executor.ctx.as_ref())?;
         let shuffle_output_partitioning =
             parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
 

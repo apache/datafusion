@@ -1264,7 +1264,7 @@ mod tests {
 
     mod ballista_round_trip {
         use super::*;
-        use ballista_core::serde::protobuf;
+        use ballista_core::serde::{protobuf, AsExecutionPlan};
         use datafusion::physical_plan::ExecutionPlan;
         use std::convert::TryInto;
 
@@ -1320,8 +1320,12 @@ mod tests {
             if env::var("TPCH_DATA").is_ok() {
                 let physical_plan = ctx.create_physical_plan(&plan).await?;
                 let proto: protobuf::PhysicalPlanNode =
-                    (physical_plan.clone()).try_into().unwrap();
-                let round_trip: Arc<dyn ExecutionPlan> = (&proto).try_into().unwrap();
+                    protobuf::PhysicalPlanNode::try_from_physical_plan(
+                        physical_plan.clone(),
+                    )
+                    .unwrap();
+                let round_trip: Arc<dyn ExecutionPlan> =
+                    (&proto).try_into_physical_plan(&ctx).unwrap();
                 assert_eq!(
                     format!("{:?}", physical_plan),
                     format!("{:?}", round_trip),
