@@ -163,6 +163,7 @@ impl ExternalSorter {
                 &self.expr,
                 tracking_metrics,
             );
+            // Report to the memory manager we are no longer using memory
             self.metrics.mem_used().set(0);
             result
         } else {
