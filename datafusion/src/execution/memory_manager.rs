@@ -248,7 +248,7 @@ pub struct MemoryManager {
     requesters: Arc<Mutex<HashSet<MemoryConsumerId>>>,
     pool_size: usize,
     requesters_total: Arc<Mutex<usize>>,
-    trackers_total: Arc<Mutex<usize>>,
+    trackers_total: AtomicUsize,
     cv: Condvar,
 }
 
@@ -270,7 +270,7 @@ impl MemoryManager {
                     requesters: Arc::new(Mutex::new(HashSet::new())),
                     pool_size,
                     requesters_total: Arc::new(Mutex::new(0)),
-                    trackers_total: Arc::new(Mutex::new(0)),
+                    trackers_total: AtomicUsize::new(0),
                     cv: Condvar::new(),
                 })
             }
@@ -278,17 +278,27 @@ impl MemoryManager {
     }
 
     fn get_tracker_total(&self) -> usize {
-        *self.trackers_total.lock().unwrap()
+        self.trackers_total.load(Ordering::SeqCst)
     }
 
     pub(crate) fn grow_tracker_usage(&self, delta: usize) {
-        *self.trackers_total.lock().unwrap() += delta;
+        self.trackers_total.fetch_add(delta, Ordering::SeqCst);
     }
 
     pub(crate) fn shrink_tracker_usage(&self, delta: usize) {
-        let mut total = self.trackers_total.lock().unwrap();
-        assert!(*total >= delta);
-        *total -= delta;
+        let update =
+            self.trackers_total
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                    if x >= delta {
+                        Some(x - delta)
+                    } else {
+                        None
+                    }
+                });
+        update.expect(&*format!(
+            "Tracker total memory shrink by {} underflow, current value is ",
+            delta
+        ));
     }
 
     fn get_requester_total(&self) -> usize {
@@ -360,9 +370,7 @@ impl MemoryManager {
                 *total -= mem_used;
             }
         }
-        let mut total = self.trackers_total.lock().unwrap();
-        assert!(*total >= mem_used);
-        *total -= mem_used;
+        self.shrink_tracker_usage(mem_used);
         self.cv.notify_all();
     }
 }
