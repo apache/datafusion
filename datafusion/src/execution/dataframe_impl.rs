@@ -551,10 +551,11 @@ mod tests {
     async fn register_table() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c12"])?;
         let mut ctx = ExecutionContext::new();
-        let df_impl = DataFrameImpl::new(ctx.state.clone(), &df.to_logical_plan());
+        let df_impl =
+            Arc::new(DataFrameImpl::new(ctx.state.clone(), &df.to_logical_plan()));
 
         // register a dataframe as a table
-        ctx.register_table("test_table", Arc::new(df_impl))?;
+        ctx.register_table("test_table", df_impl.clone())?;
 
         // pull the table out and compare the plans
         let table = ctx.table("test_table")?;
@@ -569,20 +570,36 @@ mod tests {
             .collect()
             .await?;
 
-        let expected_lines = vec![
-            "+----+---------------------+",
-            "| c1 | SUM(test_table.c12) |",
-            "+----+---------------------+",
-            "| a  | 10.238448667882977  |",
-            "| b  | 7.797734760124923   |",
-            "| c  | 13.860958726523545  |",
-            "| d  | 8.793968289758968   |",
-            "| e  | 10.206140546981722  |",
-            "+----+---------------------+",
-        ];
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+-----------------------------+",
+                "| c1 | SUM(aggregate_test_100.c12) |",
+                "+----+-----------------------------+",
+                "| a  | 10.238448667882977          |",
+                "| b  | 7.797734760124923           |",
+                "| c  | 13.860958726523545          |",
+                "| d  | 8.793968289758968           |",
+                "| e  | 10.206140546981722          |",
+                "+----+-----------------------------+",
+            ],
+            df_results
+        );
 
-        assert_batches_sorted_eq!(expected_lines, df_results);
-        assert_batches_sorted_eq!(expected_lines, table_results);
+        // the results are the same as the results from the view, modulo the leaf table name
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+---------------------+",
+                "| c1 | SUM(test_table.c12) |",
+                "+----+---------------------+",
+                "| a  | 10.238448667882977  |",
+                "| b  | 7.797734760124923   |",
+                "| c  | 13.860958726523545  |",
+                "| d  | 8.793968289758968   |",
+                "| e  | 10.206140546981722  |",
+                "+----+---------------------+",
+            ],
+            table_results
+        );
         Ok(())
     }
     /// Compare the formatted string representation of two plans for equality
