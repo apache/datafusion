@@ -523,7 +523,6 @@ macro_rules! compute_bool_op {
 /// LEFT is array, RIGHT is scalar value
 macro_rules! compute_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        // use std::convert::TryInto;
         let ll = $LEFT
             .as_any()
             .downcast_ref::<$DT>()
