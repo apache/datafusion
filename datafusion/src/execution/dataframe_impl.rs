@@ -560,13 +560,16 @@ mod tests {
         // pull the table out and compare the plans
         let table = ctx.table("test_table")?;
 
+        let group_expr = vec![col("c1")];
+        let aggr_expr = vec![sum(col("c12"))];
+
         // check that we correctly read from the table
         let df_results = &df_impl
-            .aggregate(vec![col("c1")], vec![sum(col("c12"))])?
+            .aggregate(group_expr.clone(), aggr_expr.clone())?
             .collect()
             .await?;
         let table_results = &table
-            .aggregate(vec![col("c1")], vec![sum(col("c12"))])?
+            .aggregate(group_expr, aggr_expr)?
             .collect()
             .await?;
 
