@@ -21,7 +21,7 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::memory_manager::{
-    ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
+    human_readable_size, ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
 };
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
@@ -348,7 +348,9 @@ fn write_sorted(
     writer.finish()?;
     debug!(
         "Spilled {} batches of total {} rows to disk, memory released {}",
-        writer.num_batches, writer.num_rows, writer.num_bytes
+        writer.num_batches,
+        writer.num_rows,
+        human_readable_size(writer.num_bytes as usize),
     );
     Ok(())
 }
