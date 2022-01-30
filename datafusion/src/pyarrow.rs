@@ -69,3 +69,78 @@ impl<'a> IntoPy<PyObject> for ScalarValue {
         self.to_pyarrow(py).unwrap()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::prepare_freethreaded_python;
+    use pyo3::py_run;
+    use pyo3::types::PyDict;
+    use pyo3::Python;
+
+    fn init_python() {
+        prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            if let Err(err) = py.run("import pyarrow", None, None) {
+                let locals = PyDict::new(py);
+                py.run(
+                    "import sys; executable = sys.executable; python_path = sys.path",
+                    None,
+                    Some(locals),
+                )
+                .expect("Couldn't get python info");
+                let executable: String =
+                    locals.get_item("executable").unwrap().extract().unwrap();
+                let python_path: Vec<&str> =
+                    locals.get_item("python_path").unwrap().extract().unwrap();
+
+                Err(err).expect(
+                    format!(
+                        "pyarrow not found\nExecutable: {}\nPython path: {:?}\n\
+                         HINT: try `pip install pyarrow`
+                         HINT: if wrong Python path, try `PYO3_PYTHON=$(which python)`",
+                        executable, python_path
+                    )
+                    .as_ref(),
+                )
+            }
+        })
+    }
+
+    #[test]
+    fn test_roundtrip() {
+        init_python();
+
+        let example_scalars = vec![
+            ScalarValue::Boolean(Some(true)),
+            ScalarValue::Int32(Some(23)),
+            ScalarValue::Float64(Some(12.34)),
+            ScalarValue::Utf8(Some("Hello!".to_string())),
+            ScalarValue::Date64(Some(2014)),
+        ];
+
+        Python::with_gil(|py| {
+            for scalar in example_scalars.iter() {
+                let result =
+                    ScalarValue::from_pyarrow(scalar.to_pyarrow(py).unwrap().as_ref(py))
+                        .unwrap();
+                assert_eq!(scalar, &result);
+            }
+        });
+    }
+
+    #[test]
+    fn test_py_scalar() {
+        init_python();
+
+        Python::with_gil(|py| {
+            let scalar_float = ScalarValue::Float64(Some(12.34));
+            let py_float = scalar_float.into_py(py).call_method0(py, "as_py").unwrap();
+            py_run!(py, py_float, "assert py_float == 12.34");
+
+            let scalar_string = ScalarValue::Utf8(Some("Hello!".to_string()));
+            let py_string = scalar_string.into_py(py).call_method0(py, "as_py").unwrap();
+            py_run!(py, py_string, "assert py_string == 'Hello!'");
+        });
+    }
+}
