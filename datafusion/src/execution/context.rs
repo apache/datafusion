@@ -1573,7 +1573,9 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let ctx = create_ctx(&tmp_dir, 1).await?;
 
-        let schema: Schema = DataFrame::schema(&*ctx.table("test").unwrap()).clone().into();
+        let schema: Schema = DataFrame::schema(&*ctx.table("test").unwrap())
+            .clone()
+            .into();
         assert!(!schema.field_with_name("c1")?.is_nullable());
 
         let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
