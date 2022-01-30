@@ -217,8 +217,6 @@ impl ExecutionPlan for ParquetExec {
 
         let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
 
-        // let file_schema_ref = self.base_config().file_schema.clone();
-        // let schema_adapter_clone = SchemaAdapter::new(self.projected_schema);
         let join_handle = task::spawn_blocking(move || {
             if let Err(e) = read_partition(
                 object_store.as_ref(),
