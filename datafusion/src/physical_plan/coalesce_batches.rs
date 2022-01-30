@@ -295,9 +295,8 @@ pub fn concat_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
-    use arrow::array::UInt32Array;
+    use crate::test::create_vec_batches;
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -323,23 +322,6 @@ mod tests {
 
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
-    }
-
-    fn create_vec_batches(schema: &Arc<Schema>, num_batches: usize) -> Vec<RecordBatch> {
-        let batch = create_batch(schema);
-        let mut vec = Vec::with_capacity(num_batches);
-        for _ in 0..num_batches {
-            vec.push(batch.clone());
-        }
-        vec
-    }
-
-    fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
-        )
-        .unwrap()
     }
 
     async fn coalesce_batches(
