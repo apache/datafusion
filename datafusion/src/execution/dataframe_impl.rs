@@ -602,6 +602,17 @@ mod tests {
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn register_dataframe() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c12"])?;
+        let mut ctx = ExecutionContext::new();
+
+        // register a dataframe as a table
+        ctx.register_table("test_table", df)?;
+        Ok(())
+    }
+
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
         assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
