@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Fuzz Test for various corner cases merging streams of RecordBatchs
+//! Fuzz Test for various corner cases merging streams of RecordBatches
 use std::sync::Arc;
 
 use arrow::{
@@ -32,6 +32,7 @@ use datafusion::{
         sorts::sort_preserving_merge::SortPreservingMergeExec,
     },
 };
+use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 use rand::{prelude::StdRng, Rng, SeedableRng};
 
 #[tokio::test]
@@ -147,35 +148,6 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
     }
 }
 
-/// Extracts the i32 values from the set of batches and returns them as a single Vec
-fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
-    batches
-        .iter()
-        .map(|batch| {
-            assert_eq!(batch.num_columns(), 1);
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .iter()
-        })
-        .flatten()
-        .collect()
-}
-
-// extract values from batches and sort them
-fn partitions_to_sorted_vec(partitions: &[Vec<RecordBatch>]) -> Vec<Option<i32>> {
-    let mut values: Vec<_> = partitions
-        .iter()
-        .map(|batches| batches_to_vec(batches).into_iter())
-        .flatten()
-        .collect();
-
-    values.sort_unstable();
-    values
-}
-
 /// Return the values `low..high` in order, in randomly sized
 /// record batches in a field named 'x' of type `Int32`
 fn make_staggered_batches(low: i32, high: i32, seed: u64) -> Vec<RecordBatch> {
@@ -197,24 +169,6 @@ fn make_staggered_batches(low: i32, high: i32, seed: u64) -> Vec<RecordBatch> {
     }
 
     add_empty_batches(batches, &mut rng)
-}
-
-/// Adds a random number of empty record batches into the stream
-fn add_empty_batches(batches: Vec<RecordBatch>, rng: &mut StdRng) -> Vec<RecordBatch> {
-    let schema = batches[0].schema();
-
-    batches
-        .into_iter()
-        .map(|batch| {
-            // insert 0, or 1 empty batches before and after the current batch
-            let empty_batch = RecordBatch::new_empty(schema.clone());
-            std::iter::repeat(empty_batch.clone())
-                .take(rng.gen_range(0..2))
-                .chain(std::iter::once(batch))
-                .chain(std::iter::repeat(empty_batch).take(rng.gen_range(0..2)))
-        })
-        .flatten()
-        .collect()
 }
 
 fn concat(mut v1: Vec<RecordBatch>, v2: Vec<RecordBatch>) -> Vec<RecordBatch> {
