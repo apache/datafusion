@@ -17,15 +17,22 @@
 
 //! DataFrame API for building and executing query plans.
 
+use crate::arrow::datatypes::Schema;
+use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
+use crate::datasource::TableProvider;
+use crate::datasource::TableType;
 use crate::error::Result;
+use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
     DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
 };
-use std::sync::Arc;
-
+use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::SendableRecordBatchStream;
+use crate::scalar::ScalarValue;
 use async_trait::async_trait;
+use std::any::Any;
+use std::sync::Arc;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
@@ -53,7 +60,7 @@ use async_trait::async_trait;
 /// # }
 /// ```
 #[async_trait]
-pub trait DataFrame: Send + Sync {
+pub trait DataFrame: TableProvider + Send + Sync {
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
     /// specified columns.
     ///
@@ -328,7 +335,7 @@ pub trait DataFrame: Send + Sync {
     /// where each column has a name, data type, and nullability attribute.
 
     /// ```
-    /// # use datafusion::prelude::*;
+    /// # use datafusion::prelude::{CsvReadOptions, ExecutionContext, DataFrame};
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
@@ -405,4 +412,61 @@ pub trait DataFrame: Send + Sync {
     /// # }
     /// ```
     fn except(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>>;
+}
+
+#[async_trait]
+impl<D> TableProvider for D
+where
+    D: DataFrame + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        let schema: Schema = self.to_logical_plan().schema().as_ref().into();
+        Arc::new(schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::View
+    }
+
+    async fn scan(
+        &self,
+        projection: &Option<Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let plan = self.to_logical_plan();
+        let expr = projection
+            .as_ref()
+            // construct projections
+            .map_or_else(
+                || Ok(Arc::new(DataFrameImpl::new(Default::default(), &plan)) as Arc<_>),
+                |projection| {
+                    let schema = TableProvider::schema(self).project(projection)?;
+                    let names = schema
+                        .fields()
+                        .iter()
+                        .map(|field| field.name().as_str())
+                        .collect::<Vec<_>>();
+                    self.select_columns(names.as_slice())
+                },
+            )?
+            // add predicates, otherwise use `true` as the predicate
+            .filter(filters.iter().cloned().fold(
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+                |acc, new| acc.and(new),
+            ))?;
+        // add a limit if given
+        DataFrameImpl::new(
+            Default::default(),
+            &limit
+                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
+                .to_logical_plan(),
+        )
+        .create_physical_plan()
+        .await
+    }
 }

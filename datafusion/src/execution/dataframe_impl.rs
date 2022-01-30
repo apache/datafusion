@@ -17,11 +17,8 @@
 
 //! Implementation of DataFrame API.
 
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 
-use crate::arrow::datatypes::Schema;
-use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::execution::context::{ExecutionContext, ExecutionContextState};
@@ -29,15 +26,12 @@ use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
-use crate::scalar::ScalarValue;
 use crate::{
     dataframe::*,
     physical_plan::{collect, collect_partitioned},
 };
 
 use crate::arrow::util::pretty;
-use crate::datasource::TableProvider;
-use crate::datasource::TableType;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
@@ -60,64 +54,11 @@ impl DataFrameImpl {
     }
 
     /// Create a physical plan
-    async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
+    pub(crate) async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let state = self.ctx_state.lock().unwrap().clone();
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
         ctx.create_physical_plan(&plan).await
-    }
-}
-
-#[async_trait]
-impl TableProvider for DataFrameImpl {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        let schema: Schema = self.plan.schema().as_ref().into();
-        Arc::new(schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::View
-    }
-
-    async fn scan(
-        &self,
-        projection: &Option<Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let expr = projection
-            .as_ref()
-            // construct projections
-            .map_or_else(
-                || Ok(Arc::new(Self::new(self.ctx_state.clone(), &self.plan)) as Arc<_>),
-                |projection| {
-                    let schema = TableProvider::schema(self).project(projection)?;
-                    let names = schema
-                        .fields()
-                        .iter()
-                        .map(|field| field.name().as_str())
-                        .collect::<Vec<_>>();
-                    self.select_columns(names.as_slice())
-                },
-            )?
-            // add predicates, otherwise use `true` as the predicate
-            .filter(filters.iter().cloned().fold(
-                Expr::Literal(ScalarValue::Boolean(Some(true))),
-                |acc, new| acc.and(new),
-            ))?;
-        // add a limit if given
-        Self::new(
-            self.ctx_state.clone(),
-            &limit
-                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
-                .to_logical_plan(),
-        )
-        .create_physical_plan()
-        .await
     }
 }
 
