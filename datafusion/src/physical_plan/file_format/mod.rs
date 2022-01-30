@@ -573,7 +573,7 @@ mod tests {
         let file_schema_3 =
             Arc::new(Schema::new(vec![Field::new("c3", DataType::Float32, true)]));
 
-        let adapter = SchemaAdapter::new(table_schema.clone());
+        let adapter = SchemaAdapter::new(table_schema);
 
         let projections1: Vec<usize> = vec![0, 1, 2];
         let projections2: Vec<usize> = vec![2];
