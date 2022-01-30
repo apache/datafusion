@@ -59,7 +59,7 @@ pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
 pub struct EmptyRecordBatchStream {
-    /// Schema
+    /// Schema wrapped by Arc
     schema: SchemaRef,
 }
 
@@ -384,9 +384,7 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) => *n,
-            Hash(_, n) => *n,
-            UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
         }
     }
 }
