@@ -25,4 +25,6 @@ pub mod options;
 pub mod runtime_env;
 
 pub use disk_manager::DiskManager;
-pub use memory_manager::{MemoryConsumer, MemoryConsumerId, MemoryManager};
+pub use memory_manager::{
+    human_readable_size, MemoryConsumer, MemoryConsumerId, MemoryManager,
+};

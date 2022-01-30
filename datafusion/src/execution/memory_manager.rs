@@ -392,7 +392,8 @@ const GB: u64 = 1 << 30;
 const MB: u64 = 1 << 20;
 const KB: u64 = 1 << 10;
 
-fn human_readable_size(size: usize) -> String {
+/// Present size in human readable form
+pub fn human_readable_size(size: usize) -> String {
     let size = size as u64;
     let (value, unit) = {
         if size >= 2 * TB {
