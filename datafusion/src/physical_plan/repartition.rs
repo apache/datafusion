@@ -447,7 +447,7 @@ struct RepartitionStream {
     /// Number of input partitions that have finished sending batches to this output channel
     num_input_partitions_processed: usize,
 
-    /// Schema
+    /// Schema wrapped by Arc
     schema: SchemaRef,
 
     /// channel containing the repartitioned batches
@@ -494,6 +494,7 @@ impl RecordBatchStream for RepartitionStream {
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
+    use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{collect, expressions::col, memory::MemoryExec},
@@ -508,7 +509,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow::{
-        array::{ArrayRef, StringArray, UInt32Array},
+        array::{ArrayRef, StringArray},
         error::ArrowError,
     };
     use futures::FutureExt;
@@ -599,23 +600,6 @@ mod tests {
 
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
-    }
-
-    fn create_vec_batches(schema: &Arc<Schema>, n: usize) -> Vec<RecordBatch> {
-        let batch = create_batch(schema);
-        let mut vec = Vec::with_capacity(n);
-        for _ in 0..n {
-            vec.push(batch.clone());
-        }
-        vec
-    }
-
-    fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
-        )
-        .unwrap()
     }
 
     async fn repartition(
