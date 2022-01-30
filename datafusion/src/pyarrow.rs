@@ -116,7 +116,7 @@ mod tests {
             ScalarValue::Int32(Some(23)),
             ScalarValue::Float64(Some(12.34)),
             ScalarValue::Utf8(Some("Hello!".to_string())),
-            ScalarValue::Date64(Some(2014)),
+            ScalarValue::Date32(Some(1234)),
         ];
 
         Python::with_gil(|py| {

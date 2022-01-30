@@ -259,6 +259,12 @@ jobs:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
           key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+      - uses: actions/setup-python@v2
+        with:
+          python-version: "3.8"
+      - name: Install PyArrow
+        run: |
+          pip install pyarrow
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
