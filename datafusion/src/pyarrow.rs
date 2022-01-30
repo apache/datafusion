@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::exceptions::{PyException, PyNotImplementedError};
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::PyNativeType;
 
 use crate::arrow::array::ArrayData;
 use crate::arrow::pyarrow::PyArrowConvert;
@@ -49,8 +48,13 @@ impl PyArrowConvert for ScalarValue {
         Ok(scalar)
     }
 
-    fn to_pyarrow(&self, _py: Python) -> PyResult<PyObject> {
-        Err(PyNotImplementedError::new_err("Not implemented"))
+    fn to_pyarrow(&self, py: Python) -> PyResult<PyObject> {
+        let array = self.to_array();
+        // convert to pyarrow array using C data interface
+        let pyarray = array.data_ref().clone().into_py(py);
+        let pyscalar = pyarray.call_method1(py, "__getitem__", (0,))?;
+
+        Ok(pyscalar)
     }
 }
 
