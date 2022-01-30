@@ -519,6 +519,16 @@ async fn test_interval_expressions() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "unicode_expressions")]
+#[tokio::test]
+async fn test_substring_expr() -> Result<()> {
+    test_expression!("substring('alphabet' from 2 for 1)", "l");
+    test_expression!("substring('alphabet' from 8)", "t");
+    test_expression!("substring('alphabet' for 1)", "a");
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_string_expressions() -> Result<()> {
     test_expression!("ascii('')", "0");

@@ -216,6 +216,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             for cte in &with.cte_tables {
+                // A `WITH` block can't use the same name for many times
+                let cte_name: &str = cte.alias.name.value.as_ref();
+                if ctes.contains_key(cte_name) {
+                    return Err(DataFusionError::SQL(ParserError(format!(
+                        "WITH query name {:?} specified more than once",
+                        cte_name
+                    ))));
+                }
                 // create logical plan & pass backreferencing CTEs
                 let logical_plan = self.query_to_plan_with_alias(
                     &cte.query,
@@ -1533,6 +1541,54 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ref op,
                 ref right,
             } => self.parse_sql_binary_op(left, op, right, schema),
+
+            SQLExpr::Substring {
+                expr,
+                substring_from,
+                substring_for,
+            } => {
+                #[cfg(feature = "unicode_expressions")]
+                {
+                    let arg = self.sql_expr_to_logical_expr(expr, schema)?;
+                    let args = match (substring_from, substring_for) {
+                        (Some(from_expr), Some(for_expr)) => {
+                            let from_logic =
+                                self.sql_expr_to_logical_expr(from_expr, schema)?;
+                            let for_logic =
+                                self.sql_expr_to_logical_expr(for_expr, schema)?;
+                            vec![arg, from_logic, for_logic]
+                        }
+                        (Some(from_expr), None) => {
+                            let from_logic =
+                                self.sql_expr_to_logical_expr(from_expr, schema)?;
+                            vec![arg, from_logic]
+                        }
+                        (None, Some(for_expr)) => {
+                            let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
+                            let for_logic =
+                                self.sql_expr_to_logical_expr(for_expr, schema)?;
+                            vec![arg, from_logic, for_logic]
+                        }
+                        _ => {
+                            return Err(DataFusionError::Plan(format!(
+                                "Substring without for/from is not valid {:?}",
+                                sql
+                            )))
+                        }
+                    };
+                    Ok(Expr::ScalarFunction {
+                        fun: functions::BuiltinScalarFunction::Substr,
+                        args,
+                    })
+                }
+
+                #[cfg(not(feature = "unicode_expressions"))]
+                {
+                    Err(DataFusionError::Internal(
+                        "statement substring requires compilation with feature flag: unicode_expressions.".to_string()
+                    ))
+                }
+            }
 
             SQLExpr::Trim { expr, trim_where } => {
                 let (fun, where_expr) = match trim_where {
@@ -3233,7 +3289,7 @@ mod tests {
             JOIN orders \
             ON id = customer_id";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3247,7 +3303,7 @@ mod tests {
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Filter: #orders.order_id > Int64(1)\
-        \n    Join: #person.id = #orders.customer_id\
+        \n    Inner Join: #person.id = #orders.customer_id\
         \n      TableScan: person projection=None\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3260,7 +3316,7 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Left Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    Filter: #orders.order_id > Int64(1)\
         \n      TableScan: orders projection=None";
@@ -3274,7 +3330,7 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Right Join: #person.id = #orders.customer_id\
         \n    Filter: #person.id > Int64(1)\
         \n      TableScan: person projection=None\
         \n    TableScan: orders projection=None";
@@ -3288,7 +3344,7 @@ mod tests {
             JOIN orders \
             ON person.id = orders.customer_id";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3301,7 +3357,7 @@ mod tests {
             JOIN person as person2 \
             USING (id)";
         let expected = "Projection: #person.first_name, #person.id\
-        \n  Join: Using #person.id = #person2.id\
+        \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
         quick_test(sql, expected);
@@ -3314,7 +3370,7 @@ mod tests {
             JOIN lineitem as lineitem2 \
             USING (l_item_id)";
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
-        \n  Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
+        \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
         \n    TableScan: lineitem2 projection=None";
         quick_test(sql, expected);
@@ -3328,8 +3384,8 @@ mod tests {
             JOIN lineitem ON o_item_id = l_item_id";
         let expected =
             "Projection: #person.id, #orders.order_id, #lineitem.l_description\
-            \n  Join: #orders.o_item_id = #lineitem.l_item_id\
-            \n    Join: #person.id = #orders.customer_id\
+            \n  Inner Join: #orders.o_item_id = #lineitem.l_item_id\
+            \n    Inner Join: #person.id = #orders.customer_id\
             \n      TableScan: person projection=None\
             \n      TableScan: orders projection=None\
             \n    TableScan: lineitem projection=None";
@@ -3862,8 +3918,8 @@ mod tests {
     fn cross_join_to_inner_join() {
         let sql = "select person.id from person, orders, lineitem where person.id = lineitem.l_item_id and orders.o_item_id = lineitem.l_description;";
         let expected = "Projection: #person.id\
-                                 \n  Join: #lineitem.l_description = #orders.o_item_id\
-                                 \n    Join: #person.id = #lineitem.l_item_id\
+                                 \n  Inner Join: #lineitem.l_description = #orders.o_item_id\
+                                 \n    Inner Join: #person.id = #lineitem.l_item_id\
                                  \n      TableScan: person projection=None\
                                  \n      TableScan: lineitem projection=None\
                                  \n    TableScan: orders projection=None";
@@ -3881,6 +3937,14 @@ mod tests {
                                     \n        TableScan: orders projection=None\
                                     \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
+    }
+
+    #[test]
+    fn cte_use_same_name_multiple_times() {
+        let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
+        let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
+        let result = logical_plan(sql).err().unwrap();
+        assert_eq!(expected, format!("{}", result));
     }
 }
 

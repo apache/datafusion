@@ -147,6 +147,7 @@ mod tests {
     use crate::from_slice::FromSlice;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::error::ArrowError;
     use futures::StreamExt;
     use std::collections::HashMap;
 
@@ -235,10 +236,13 @@ mod tests {
         let projection: Vec<usize> = vec![0, 4];
 
         match provider.scan(&Some(projection), &[], None).await {
-            Err(DataFusionError::Internal(e)) => {
-                assert_eq!("\"Projection index out of range\"", format!("{:?}", e))
+            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
+                assert_eq!(
+                    "\"project index 4 out of bounds, max field 3\"",
+                    format!("{:?}", e)
+                )
             }
-            _ => panic!("Scan should failed on invalid projection"),
+            res => panic!("Scan should failed on invalid projection, got {:?}", res),
         };
 
         Ok(())

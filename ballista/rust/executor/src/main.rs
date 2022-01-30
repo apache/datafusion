@@ -21,16 +21,18 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use arrow_flight::flight_service_server::FlightServiceServer;
-use ballista_executor::execution_loop;
+use ballista_executor::{execution_loop, executor_server};
 use log::info;
 use tempfile::TempDir;
 use tonic::transport::Server;
 use uuid::Uuid;
 
+use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::protobuf::{
     executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
     ExecutorRegistration,
 };
+use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
@@ -67,6 +69,7 @@ async fn main() -> Result<()> {
     let external_host = opt.external_host;
     let bind_host = opt.bind_host;
     let port = opt.bind_port;
+    let grpc_port = opt.bind_grpc_port;
 
     let addr = format!("{}:{}", bind_host, port);
     let addr = addr
@@ -94,32 +97,54 @@ async fn main() -> Result<()> {
             .clone()
             .map(executor_registration::OptionalHost::Host),
         port: port as u32,
+        grpc_port: grpc_port as u32,
     };
+    let executor_specification = ExecutorSpecification {
+        task_slots: opt.concurrent_tasks as u32,
+    };
+    let executor = Arc::new(Executor::new_with_specification(
+        &work_dir,
+        executor_specification,
+    ));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await
         .context("Could not connect to scheduler")?;
 
-    let executor = Arc::new(Executor::new(&work_dir));
+    let scheduler_policy = opt.task_scheduling_policy;
+    match scheduler_policy {
+        TaskSchedulingPolicy::PushStaged => {
+            tokio::spawn(executor_server::startup(
+                scheduler,
+                executor.clone(),
+                executor_meta,
+            ));
+        }
+        _ => {
+            tokio::spawn(execution_loop::poll_loop(
+                scheduler,
+                executor.clone(),
+                executor_meta,
+                opt.concurrent_tasks,
+            ));
+        }
+    }
 
-    let service = BallistaFlightService::new(executor.clone());
+    // Arrow flight service
+    {
+        let service = BallistaFlightService::new(executor.clone());
+        let server = FlightServiceServer::new(service);
+        info!(
+            "Ballista v{} Rust Executor listening on {:?}",
+            BALLISTA_VERSION, addr
+        );
+        let server_future =
+            tokio::spawn(Server::builder().add_service(server).serve(addr));
+        server_future
+            .await
+            .context("Tokio error")?
+            .context("Could not start executor server")?;
+    }
 
-    let server = FlightServiceServer::new(service);
-    info!(
-        "Ballista v{} Rust Executor listening on {:?}",
-        BALLISTA_VERSION, addr
-    );
-    let server_future = tokio::spawn(Server::builder().add_service(server).serve(addr));
-    tokio::spawn(execution_loop::poll_loop(
-        scheduler,
-        executor,
-        executor_meta,
-        opt.concurrent_tasks,
-    ));
-
-    server_future
-        .await
-        .context("Tokio error")?
-        .context("Could not start executor server")?;
     Ok(())
 }

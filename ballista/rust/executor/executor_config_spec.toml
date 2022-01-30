@@ -55,6 +55,12 @@ default = "50051"
 doc = "bind port"
 
 [[param]]
+name = "bind_grpc_port"
+type = "u16"
+default = "50052"
+doc = "bind grpc service port"
+
+[[param]]
 name = "work_dir"
 type = "String"
 doc = "Directory for temporary IPC files"
@@ -65,3 +71,10 @@ name = "concurrent_tasks"
 type = "usize"
 default = "4"
 doc = "Max concurrent tasks."
+
+[[param]]
+abbr = "s"
+name = "task_scheduling_policy"
+type = "ballista_core::config::TaskSchedulingPolicy"
+doc = "The task scheduing policy for the scheduler, see TaskSchedulingPolicy::variants() for options. Default: PullStaged"
+default = "ballista_core::config::TaskSchedulingPolicy::PullStaged"

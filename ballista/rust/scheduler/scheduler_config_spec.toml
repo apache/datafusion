@@ -58,3 +58,10 @@ name = "bind_port"
 type = "u16"
 default = "50050"
 doc = "bind port. Default: 50050"
+
+[[param]]
+abbr = "s"
+name = "scheduler_policy"
+type = "ballista_core::config::TaskSchedulingPolicy"
+doc = "The scheduing policy for the scheduler, see TaskSchedulingPolicy::variants() for options. Default: PullStaged"
+default = "ballista_core::config::TaskSchedulingPolicy::PullStaged"

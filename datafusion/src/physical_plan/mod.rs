@@ -59,7 +59,7 @@ pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
 pub struct EmptyRecordBatchStream {
-    /// Schema
+    /// Schema wrapped by Arc
     schema: SchemaRef,
 }
 
@@ -384,9 +384,7 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) => *n,
-            Hash(_, n) => *n,
-            UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
         }
     }
 }
@@ -584,6 +582,46 @@ pub trait Accumulator: Send + Sync + Debug {
 
     /// returns its value based on its current state.
     fn evaluate(&self) -> Result<ScalarValue>;
+}
+
+/// Applies an optional projection to a [`SchemaRef`], returning the
+/// projected schema
+///
+/// Example:
+/// ```
+/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use datafusion::physical_plan::project_schema;
+///
+/// // Schema with columns 'a', 'b', and 'c'
+/// let schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("a", DataType::Int32, true),
+///   Field::new("b", DataType::Int64, true),
+///   Field::new("c", DataType::Utf8, true),
+/// ]));
+///
+/// // Pick columns 'c' and 'b'
+/// let projection = Some(vec![2,1]);
+/// let projected_schema = project_schema(
+///    &schema,
+///    projection.as_ref()
+///  ).unwrap();
+///
+/// let expected_schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("c", DataType::Utf8, true),
+///   Field::new("b", DataType::Int64, true),
+/// ]));
+///
+/// assert_eq!(projected_schema, expected_schema);
+/// ```
+pub fn project_schema(
+    schema: &SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<SchemaRef> {
+    let schema = match projection {
+        Some(columns) => Arc::new(schema.project(columns)?),
+        None => Arc::clone(schema),
+    };
+    Ok(schema)
 }
 
 pub mod aggregates;

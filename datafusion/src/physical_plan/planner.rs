@@ -226,9 +226,9 @@ pub trait PhysicalPlanner {
     ///
     /// `expr`: the expression to convert
     ///
-    /// `input_dfschema`: the logical plan schema for evaluating `e`
+    /// `input_dfschema`: the logical plan schema for evaluating `expr`
     ///
-    /// `input_schema`: the physical schema for evaluating `e`
+    /// `input_schema`: the physical schema for evaluating `expr`
     fn create_physical_expr(
         &self,
         expr: &Expr,
