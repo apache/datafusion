@@ -17,8 +17,11 @@
 
 //! Implementation of DataFrame API.
 
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
+use crate::arrow::datatypes::Schema;
+use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::execution::context::{ExecutionContext, ExecutionContextState};
@@ -26,12 +29,15 @@ use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
+use crate::scalar::ScalarValue;
 use crate::{
     dataframe::*,
     physical_plan::{collect, collect_partitioned},
 };
 
 use crate::arrow::util::pretty;
+use crate::datasource::TableProvider;
+use crate::datasource::TableType;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
@@ -59,6 +65,59 @@ impl DataFrameImpl {
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
         ctx.create_physical_plan(&plan).await
+    }
+}
+
+#[async_trait]
+impl TableProvider for DataFrameImpl {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        let schema: Schema = self.plan.schema().as_ref().into();
+        Arc::new(schema)
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::View
+    }
+
+    async fn scan(
+        &self,
+        projection: &Option<Vec<usize>>,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let expr = projection
+            .as_ref()
+            // construct projections
+            .map_or_else(
+                || Ok(Arc::new(Self::new(self.ctx_state.clone(), &self.plan)) as Arc<_>),
+                |projection| {
+                    let schema = TableProvider::schema(self).project(projection)?;
+                    let names = schema
+                        .fields()
+                        .iter()
+                        .map(|field| field.name().as_str())
+                        .collect::<Vec<_>>();
+                    self.select_columns(names.as_slice())
+                },
+            )?
+            // add predicates, otherwise use `true` as the predicate
+            .filter(filters.iter().cloned().fold(
+                Expr::Literal(ScalarValue::Boolean(Some(true))),
+                |acc, new| acc.and(new),
+            ))?;
+        // add a limit if given
+        Self::new(
+            self.ctx_state.clone(),
+            &limit
+                .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
+                .to_logical_plan(),
+        )
+        .create_physical_plan()
+        .await
     }
 }
 
@@ -488,6 +547,61 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn register_table() -> Result<()> {
+        let df = test_table().await?.select_columns(&["c1", "c12"])?;
+        let mut ctx = ExecutionContext::new();
+        let df_impl =
+            Arc::new(DataFrameImpl::new(ctx.state.clone(), &df.to_logical_plan()));
+
+        // register a dataframe as a table
+        ctx.register_table("test_table", df_impl.clone())?;
+
+        // pull the table out
+        let table = ctx.table("test_table")?;
+
+        let group_expr = vec![col("c1")];
+        let aggr_expr = vec![sum(col("c12"))];
+
+        // check that we correctly read from the table
+        let df_results = &df_impl
+            .aggregate(group_expr.clone(), aggr_expr.clone())?
+            .collect()
+            .await?;
+        let table_results = &table.aggregate(group_expr, aggr_expr)?.collect().await?;
+
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+-----------------------------+",
+                "| c1 | SUM(aggregate_test_100.c12) |",
+                "+----+-----------------------------+",
+                "| a  | 10.238448667882977          |",
+                "| b  | 7.797734760124923           |",
+                "| c  | 13.860958726523545          |",
+                "| d  | 8.793968289758968           |",
+                "| e  | 10.206140546981722          |",
+                "+----+-----------------------------+",
+            ],
+            df_results
+        );
+
+        // the results are the same as the results from the view, modulo the leaf table name
+        assert_batches_sorted_eq!(
+            vec![
+                "+----+---------------------+",
+                "| c1 | SUM(test_table.c12) |",
+                "+----+---------------------+",
+                "| a  | 10.238448667882977  |",
+                "| b  | 7.797734760124923   |",
+                "| c  | 13.860958726523545  |",
+                "| d  | 8.793968289758968   |",
+                "| e  | 10.206140546981722  |",
+                "+----+---------------------+",
+            ],
+            table_results
+        );
+        Ok(())
+    }
     /// Compare the formatted string representation of two plans for equality
     fn assert_same_plan(plan1: &LogicalPlan, plan2: &LogicalPlan) {
         assert_eq!(format!("{:?}", plan1), format!("{:?}", plan2));
