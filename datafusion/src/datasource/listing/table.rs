@@ -266,6 +266,8 @@ impl ListingTable {
 mod tests {
     use arrow::datatypes::DataType;
 
+    use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+    use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -318,7 +320,7 @@ mod tests {
         let store = TestObjectStore::new_arc(&[("table/p1=v1/file.avro", 100)]);
 
         let opt = ListingOptions {
-            file_extension: ".avro".to_owned(),
+            file_extension: DEFAULT_AVRO_EXTENSION.to_owned(),
             format: Arc::new(AvroFormat {}),
             table_partition_cols: vec![String::from("p1")],
             target_partitions: 4,
@@ -419,7 +421,7 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
         let opt = ListingOptions {
-            file_extension: "parquet".to_owned(),
+            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
             format: Arc::new(ParquetFormat::default()),
             table_partition_cols: vec![],
             target_partitions: 2,
