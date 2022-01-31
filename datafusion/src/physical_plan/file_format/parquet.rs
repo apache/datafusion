@@ -44,14 +44,13 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use log::{debug, info};
+use log::debug;
 use parquet::file::{
     metadata::RowGroupMetaData,
     reader::{FileReader, SerializedFileReader},
     statistics::Statistics as ParquetStatistics,
 };
 
-use arrow::array::new_null_array;
 use fmt::Debug;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 
@@ -61,6 +60,7 @@ use tokio::{
 };
 
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
 
 use super::PartitionColumnProjector;
@@ -215,11 +215,12 @@ impl ExecutionPlan for ParquetExec {
             &self.base_config.table_partition_cols,
         );
 
-        let file_schema_ref = self.base_config().file_schema.clone();
+        let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
+
         let join_handle = task::spawn_blocking(move || {
             if let Err(e) = read_partition(
                 object_store.as_ref(),
-                file_schema_ref,
+                adapter,
                 partition_index,
                 &partition,
                 metrics,
@@ -420,33 +421,10 @@ fn build_row_group_predicate(
     }
 }
 
-// Map projections from the schema which merges all file schemas to projections on a particular
-// file
-fn map_projections(
-    merged_schema: &Schema,
-    file_schema: &Schema,
-    projections: &[usize],
-) -> Result<Vec<usize>> {
-    let mut mapped: Vec<usize> = vec![];
-    for idx in projections {
-        let field = merged_schema.field(*idx);
-        if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
-            if file_schema.field(mapped_idx).data_type() == field.data_type() {
-                mapped.push(mapped_idx)
-            } else {
-                let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
-                info!("{}", msg);
-                return Err(DataFusionError::Execution(msg));
-            }
-        }
-    }
-    Ok(mapped)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn read_partition(
     object_store: &dyn ObjectStore,
-    file_schema: SchemaRef,
+    schema_adapter: SchemaAdapter,
     partition_index: usize,
     partition: &[PartitionedFile],
     metrics: ExecutionPlanMetricsSet,
@@ -480,44 +458,20 @@ fn read_partition(
         }
 
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
-        let mapped_projections =
-            map_projections(&file_schema, &arrow_reader.get_schema()?, projection)?;
+        let adapted_projections =
+            schema_adapter.map_projections(&arrow_reader.get_schema()?, projection)?;
 
         let mut batch_reader =
-            arrow_reader.get_record_reader_by_columns(mapped_projections, batch_size)?;
+            arrow_reader.get_record_reader_by_columns(adapted_projections, batch_size)?;
         loop {
             match batch_reader.next() {
                 Some(Ok(batch)) => {
-                    let total_cols = &file_schema.fields().len();
-                    let batch_rows = batch.num_rows();
                     total_rows += batch.num_rows();
 
-                    let batch_schema = batch.schema();
-
-                    let mut cols: Vec<ArrayRef> = Vec::with_capacity(*total_cols);
-                    let batch_cols = batch.columns().to_vec();
-
-                    for field_idx in projection {
-                        let merged_field = &file_schema.fields()[*field_idx];
-                        if let Some((batch_idx, _name)) =
-                            batch_schema.column_with_name(merged_field.name().as_str())
-                        {
-                            cols.push(batch_cols[batch_idx].clone());
-                        } else {
-                            cols.push(new_null_array(
-                                merged_field.data_type(),
-                                batch_rows,
-                            ))
-                        }
-                    }
-
-                    let projected_schema = file_schema.clone().project(projection)?;
-
-                    let merged_batch =
-                        RecordBatch::try_new(Arc::new(projected_schema), cols)?;
+                    let adapted_batch = schema_adapter.adapt_batch(batch, projection)?;
 
                     let proj_batch = partition_column_projector
-                        .project(merged_batch, &partitioned_file.partition_values);
+                        .project(adapted_batch, &partitioned_file.partition_values);
 
                     send_result(&response_tx, proj_batch)?;
                     if limit.map(|l| total_rows >= l).unwrap_or(false) {

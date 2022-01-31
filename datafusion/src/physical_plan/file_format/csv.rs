@@ -170,6 +170,7 @@ impl ExecutionPlan for CsvExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::aggr_test_schema_with_missing_col;
     use crate::{
         datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},
         scalar::ScalarValue,
@@ -262,6 +263,52 @@ mod tests {
             "| a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |",
             "| b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |",
             "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+",
+        ];
+
+        crate::assert_batches_eq!(expected, &[batch]);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn csv_exec_with_missing_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let file_schema = aggr_test_schema_with_missing_col();
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = "aggregate_test_100.csv";
+        let path = format!("{}/csv/{}", testdata, filename);
+        let csv = CsvExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema,
+                file_groups: vec![vec![local_unpartitioned_file(path)]],
+                statistics: Statistics::default(),
+                projection: None,
+                limit: Some(5),
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        );
+        assert_eq!(14, csv.base_config.file_schema.fields().len());
+        assert_eq!(14, csv.projected_schema.fields().len());
+        assert_eq!(14, csv.schema().fields().len());
+
+        let mut it = csv.execute(0, runtime).await?;
+        let batch = it.next().await.unwrap()?;
+        assert_eq!(14, batch.num_columns());
+        assert_eq!(5, batch.num_rows());
+
+        let expected = vec![
+            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+-------------+",
+            "| c1 | c2 | c3  | c4     | c5         | c6                   | c7  | c8    | c9         | c10                  | c11         | c12                 | c13                            | missing_col |",
+            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+-------------+",
+            "| c  | 2  | 1   | 18109  | 2033001162 | -6513304855495910254 | 25  | 43062 | 1491205016 | 5863949479783605708  | 0.110830784 | 0.9294097332465232  | 6WfVFBVGJSQb7FhA7E0lBwdvjfZnSW |             |",
+            "| d  | 5  | -40 | 22614  | 706441268  | -7542719935673075327 | 155 | 14337 | 3373581039 | 11720144131976083864 | 0.69632107  | 0.3114712539863804  | C2GT5KVyOPZpgKVl110TyZO0NcJ434 |             |",
+            "| b  | 1  | 29  | -18218 | 994303988  | 5983957848665088916  | 204 | 9489  | 3275293996 | 14857091259186476033 | 0.53840446  | 0.17909035118828576 | AyYVExXK6AR2qUTxNZ7qRHQOVGMLcz |             |",
+            "| a  | 1  | -85 | -15154 | 1171968280 | 1919439543497968449  | 77  | 52286 | 774637006  | 12101411955859039553 | 0.12285209  | 0.6864391962767343  | 0keZ5G8BffGwgF2RwQD59TFzMStxCB |             |",
+            "| b  | 5  | -82 | 22080  | 1824882165 | 7373730676428214987  | 208 | 34331 | 3342719438 | 3330177516592499461  | 0.82634634  | 0.40975383525297016 | Ig1QcuKsjHXkproePdERo2w0mYzIqd |             |",
+            "+----+----+-----+--------+------------+----------------------+-----+-------+------------+----------------------+-------------+---------------------+--------------------------------+-------------+",
         ];
 
         crate::assert_batches_eq!(expected, &[batch]);
