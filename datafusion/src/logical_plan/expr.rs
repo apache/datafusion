@@ -26,7 +26,7 @@ use crate::logical_plan::{
     plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
 };
 use crate::optimizer::simplify_expressions::{ConstEvaluator, Simplifier};
-use crate::physical_plan::functions::{BuiltinScalarFunction, Volatility};
+use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
     window_functions,
