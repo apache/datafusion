@@ -24,7 +24,11 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::{
-    error::Result,
+    datasource::file_format::avro::AvroFormat,
+    datasource::file_format::csv::CsvFormat,
+    datasource::file_format::json::JsonFormat,
+    datasource::file_format::parquet::ParquetFormat,
+    error::{DataFusionError, Result},
     logical_plan::Expr,
     physical_plan::{
         empty::EmptyExec,
@@ -40,7 +44,68 @@ use crate::datasource::{
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
+/// Configuration for creating a 'ListingTable'  
+pub struct ListingTableConfig {
+    pub object_store: Arc<dyn ObjectStore>,
+    pub table_path: String,
+    pub file_schema: Option<SchemaRef>,
+    pub options: Option<ListingOptions>,
+}
+
+impl ListingTableConfig {
+    /// Creates new `ListingTableConfig`.  The `SchemaRef` and `ListingOptions` are inferred based on the suffix of the provided `table_path`.
+    pub async fn new(
+        object_store: Arc<dyn ObjectStore>,
+        table_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            object_store,
+            table_path: table_path.into(),
+            file_schema: None,
+            options: None,
+        }
+    }
+    pub fn with_schema(mut self, schema: SchemaRef) {
+        self.file_schema = Some(schema);
+    }
+
+    pub fn with_listing_options(mut self, listing_options: ListingOptions) {
+        self.options = Some(listing_options);
+    }
+
+    fn infer_options(&self) -> Result<ListingOptions> {
+        let tokens: Vec<&str> = self.table_path.split(".").collect();
+        let file_type = tokens.last().ok_or(DataFusionError::Internal(
+            "Unable to infer file suffix".into(),
+        ))?;
+
+        let format: Arc<dyn FileFormat> = match *file_type {
+            "avro" => Arc::new(AvroFormat::default()),
+            "csv" => Arc::new(CsvFormat::default()),
+            "json" => Arc::new(JsonFormat::default()),
+            "parquet" => Arc::new(ParquetFormat::default()),
+        };
+
+        let listing_options = ListingOptions {
+            format,
+            collect_stat: true,
+            file_extension: file_type.to_string(),
+            target_partitions: num_cpus::get(),
+            table_partition_cols: vec![],
+        };
+        Ok(listing_options)
+    }
+
+    async fn infer_schema(&self, options: &ListingOptions) -> Result<SchemaRef> {
+        let schema = options
+            .infer_schema(self.object_store.clone(), self.table_path.as_str())
+            .await?;
+        Ok(schema)
+    }
+}
+
 /// Options for creating a `ListingTable`
+#[derive(Clone)]
 pub struct ListingOptions {
     /// A suffix on which files should be filtered (leave empty to
     /// keep all files on the path)
@@ -118,12 +183,19 @@ impl ListingTable {
     /// The provided `schema` must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
-    pub fn new(
-        object_store: Arc<dyn ObjectStore>,
-        table_path: String,
-        file_schema: SchemaRef,
-        options: ListingOptions,
-    ) -> Self {
+    pub async fn new(config: ListingTableConfig) -> Result<Self> {
+        let options: ListingOptions = if let Some(opts) = config.options {
+            opts
+        } else {
+            config.infer_options()?
+        };
+
+        let file_schema: SchemaRef = if let Some(schema) = config.file_schema {
+            schema
+        } else {
+            config.infer_schema(&options.clone()).await?
+        };
+
         // Add the partition columns to the file schema
         let mut table_fields = file_schema.fields().clone();
         for part in &options.table_partition_cols {
@@ -134,13 +206,15 @@ impl ListingTable {
             ));
         }
 
-        Self {
-            object_store,
-            table_path,
+        let table = Self {
+            object_store: config.object_store,
+            table_path: config.table_path,
             file_schema,
             table_schema: Arc::new(Schema::new(table_fields)),
             options,
-        }
+        };
+
+        Ok(table)
     }
 
     /// Get object store ref
