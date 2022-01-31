@@ -24,16 +24,14 @@ mod roundtrip_tests {
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
     use core::panic;
-    use datafusion::arrow::datatypes::UnionMode;
-    use datafusion::logical_plan::Repartition;
     use datafusion::{
-        arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit},
+        arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
         datasource::object_store::local::LocalFileSystem,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder,
-            Partitioning, ToDFSchema,
+            Partitioning, Repartition, ToDFSchema,
         },
-        physical_plan::functions::BuiltinScalarFunction::Sqrt,
+        physical_plan::{aggregates, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
         scalar::ScalarValue,
         sql::parser::FileType,
@@ -997,6 +995,19 @@ mod roundtrip_tests {
             fun: Sqrt,
             args: vec![col("col")],
         };
+        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn roundtrip_approx_percentile_cont() -> Result<()> {
+        let test_expr = Expr::AggregateFunction {
+            fun: aggregates::AggregateFunction::ApproxPercentileCont,
+            args: vec![col("bananas"), lit(0.42)],
+            distinct: false,
+        };
+
         roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
 
         Ok(())

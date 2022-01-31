@@ -1647,6 +1647,15 @@ pub fn approx_distinct(expr: Expr) -> Expr {
     }
 }
 
+/// Calculate an approximation of the specified `percentile` for `expr`.
+pub fn approx_percentile_cont(expr: Expr, percentile: Expr) -> Expr {
+    Expr::AggregateFunction {
+        fun: aggregates::AggregateFunction::ApproxPercentileCont,
+        distinct: false,
+        args: vec![expr, percentile],
+    }
+}
+
 // TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
 // varying arity functions
 /// Create an convenience function representing a unary scalar function

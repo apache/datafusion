@@ -154,6 +154,26 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fn_approx_percentile_cont() -> Result<()> {
+    let expr = approx_percentile_cont(col("b"), lit(0.5));
+
+    let expected = vec![
+        "+-------------------------------------------+",
+        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
+        "+-------------------------------------------+",
+        "| 10                                        |",
+        "+-------------------------------------------+",
+    ];
+
+    let df = create_test_table()?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_batches_eq!(expected, &batches);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_fn_character_length() -> Result<()> {
     let expr = character_length(col("a"));
 
