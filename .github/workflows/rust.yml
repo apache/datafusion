@@ -265,6 +265,9 @@ jobs:
       - name: Install PyArrow
         run: |
           python -m pip install pyarrow
+      - name: Debug
+        run: |
+          ls $LD_LIBRARY_PATH
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
