@@ -76,9 +76,11 @@ impl ApproxPercentileCont {
         let lit = expr[1]
             .as_any()
             .downcast_ref::<Literal>()
-            .ok_or(DataFusionError::Internal(
-                "desired percentile argument must be float literal".to_string(),
-            ))?
+            .ok_or_else(|| {
+                DataFusionError::Internal(
+                    "desired percentile argument must be float literal".to_string(),
+                )
+            })?
             .value();
         let percentile = match lit {
             ScalarValue::Float32(Some(q)) => *q as f64,

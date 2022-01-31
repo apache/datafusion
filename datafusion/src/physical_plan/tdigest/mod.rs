@@ -266,7 +266,7 @@ impl TDigest {
     }
 
     fn merge_sorted_f64(&self, sorted_values: &[OrderedFloat<f64>]) -> TDigest {
-        debug_assert!(is_sorted(&sorted_values), "unsorted input to TDigest");
+        debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
         if sorted_values.is_empty() {
             return self.clone();
@@ -275,8 +275,8 @@ impl TDigest {
         let mut result = TDigest::new(self.max_size());
         result.count = OrderedFloat::from(self.count() + (sorted_values.len() as f64));
 
-        let maybe_min = OrderedFloat::from(*sorted_values.first().unwrap());
-        let maybe_max = OrderedFloat::from(*sorted_values.last().unwrap());
+        let maybe_min = *sorted_values.first().unwrap();
+        let maybe_max = *sorted_values.last().unwrap();
 
         if self.count() > 0.0 {
             result.min = std::cmp::min(self.min, maybe_min);
@@ -418,7 +418,7 @@ impl TDigest {
         let mut max = OrderedFloat::from(std::f64::NEG_INFINITY);
 
         let mut start: usize = 0;
-        for digest in digests.into_iter() {
+        for digest in digests.iter() {
             starts.push(start);
 
             let curr_count: f64 = digest.count();
