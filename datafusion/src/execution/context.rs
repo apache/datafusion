@@ -190,7 +190,6 @@ impl ExecutionContext {
             state: Arc::new(Mutex::new(ExecutionContextState {
                 catalog_list,
                 scalar_functions: HashMap::new(),
-                var_provider: HashMap::new(),
                 aggregate_functions: HashMap::new(),
                 config,
                 execution_props: ExecutionProps::new(),
@@ -324,8 +323,8 @@ impl ExecutionContext {
         self.state
             .lock()
             .unwrap()
-            .var_provider
-            .insert(variable_type, provider);
+            .execution_props
+            .add_var_provider(variable_type, provider);
     }
 
     /// Registers a scalar UDF within this context.
@@ -1115,9 +1114,14 @@ impl ExecutionConfig {
 /// An instance of this struct is created each time a [`LogicalPlan`] is prepared for
 /// execution (optimized). If the same plan is optimized multiple times, a new
 /// `ExecutionProps` is created each time.
+///
+/// It is important that this structure be cheap to create as it is
+/// done so during predicate pruning and expression simplification
 #[derive(Clone)]
 pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
+    /// providers for scalar variables
+    pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
 }
 
 impl Default for ExecutionProps {
@@ -1131,6 +1135,7 @@ impl ExecutionProps {
     pub fn new() -> Self {
         ExecutionProps {
             query_execution_start_time: chrono::Utc::now(),
+            var_providers: None,
         }
     }
 
@@ -1138,6 +1143,32 @@ impl ExecutionProps {
     pub fn start_execution(&mut self) -> &Self {
         self.query_execution_start_time = chrono::Utc::now();
         &*self
+    }
+
+    /// Registers a variable provider, returning the existing
+    /// provider, if any
+    pub fn add_var_provider(
+        &mut self,
+        var_type: VarType,
+        provider: Arc<dyn VarProvider + Send + Sync>,
+    ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
+        let mut var_providers = self.var_providers.take().unwrap_or_else(HashMap::new);
+
+        let old_provider = var_providers.insert(var_type, provider);
+
+        self.var_providers = Some(var_providers);
+
+        old_provider
+    }
+
+    /// Returns the provider for the var_type, if any
+    pub fn get_var_provider(
+        &self,
+        var_type: VarType,
+    ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
+        self.var_providers
+            .as_ref()
+            .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
     }
 }
 
@@ -1148,8 +1179,6 @@ pub struct ExecutionContextState {
     pub catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
     pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
-    /// Variable provider that are registered with the context
-    pub var_provider: HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>,
     /// Aggregate functions registered in the context
     pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Context configuration
@@ -1174,7 +1203,6 @@ impl ExecutionContextState {
         ExecutionContextState {
             catalog_list: Arc::new(MemoryCatalogList::new()),
             scalar_functions: HashMap::new(),
-            var_provider: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config: ExecutionConfig::new(),
             execution_props: ExecutionProps::new(),

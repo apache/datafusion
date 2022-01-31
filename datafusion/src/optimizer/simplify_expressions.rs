@@ -22,13 +22,13 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
 use crate::error::DataFusionError;
-use crate::execution::context::{ExecutionContextState, ExecutionProps};
+use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{lit, DFSchemaRef, Expr};
 use crate::logical_plan::{DFSchema, ExprRewriter, LogicalPlan, RewriteRecursion};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::Volatility;
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
+use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 
@@ -223,7 +223,7 @@ impl SimplifyExpressions {
 /// let rewritten = expr.rewrite(&mut const_evaluator).unwrap();
 /// assert_eq!(rewritten, lit(3) + col("a"));
 /// ```
-pub struct ConstEvaluator {
+pub struct ConstEvaluator<'a> {
     /// can_evaluate is used during the depth-first-search of the
     /// Expr tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -238,13 +238,12 @@ pub struct ConstEvaluator {
     /// descendants) so this Expr can be evaluated
     can_evaluate: Vec<bool>,
 
-    ctx_state: ExecutionContextState,
-    planner: DefaultPhysicalPlanner,
+    execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
 
-impl ExprRewriter for ConstEvaluator {
+impl<'a> ExprRewriter for ConstEvaluator<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
@@ -282,16 +281,11 @@ impl ExprRewriter for ConstEvaluator {
     }
 }
 
-impl ConstEvaluator {
+impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn new(execution_props: &ExecutionProps) -> Self {
-        let planner = DefaultPhysicalPlanner::default();
-        let ctx_state = ExecutionContextState {
-            execution_props: execution_props.clone(),
-            ..ExecutionContextState::new()
-        };
+    pub fn new(execution_props: &'a ExecutionProps) -> Self {
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -306,8 +300,7 @@ impl ConstEvaluator {
 
         Self {
             can_evaluate: vec![],
-            ctx_state,
-            planner,
+            execution_props,
             input_schema,
             input_batch,
         }
@@ -364,11 +357,11 @@ impl ConstEvaluator {
             return Ok(s);
         }
 
-        let phys_expr = self.planner.create_physical_expr(
+        let phys_expr = create_physical_expr(
             &expr,
             &self.input_schema,
             &self.input_batch.schema(),
-            &self.ctx_state,
+            self.execution_props,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
@@ -1141,6 +1134,7 @@ mod tests {
     ) {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1622,6 +1616,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let err = rule
@@ -1638,6 +1633,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let optimized_plan = rule
