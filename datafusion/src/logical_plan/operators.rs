@@ -64,6 +64,8 @@ pub enum Operator {
     RegexNotMatch,
     /// Case insensitive regex not match
     RegexNotIMatch,
+    /// Bitwise and, like `&`
+    BitwiseAnd,
 }
 
 impl fmt::Display for Operator {
@@ -90,6 +92,7 @@ impl fmt::Display for Operator {
             Operator::RegexNotIMatch => "!~*",
             Operator::IsDistinctFrom => "IS DISTINCT FROM",
             Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
+            Operator::BitwiseAnd => "&",
         };
         write!(f, "{}", display)
     }

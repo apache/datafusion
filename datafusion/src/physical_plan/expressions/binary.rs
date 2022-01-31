@@ -348,6 +348,103 @@ fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalA
     Ok(decimal_builder.finish())
 }
 
+/// The binary_bitwise_array_op macro only evaluates for integer types
+/// like int64, int32.
+/// It is used to do bitwise operation.
+macro_rules! binary_bitwise_array_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:tt, $ARRAY_TYPE:ident, $TYPE:ty) => {{
+        let len = $LEFT.len();
+        let left = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+        let right = $RIGHT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+        let result = (0..len)
+            .into_iter()
+            .map(|i| {
+                if left.is_null(i) || right.is_null(i) {
+                    None
+                } else {
+                    Some(left.value(i) $OP right.value(i))
+                }
+            })
+            .collect::<$ARRAY_TYPE>();
+        Ok(Arc::new(result))
+    }};
+}
+
+/// The binary_bitwise_array_op macro only evaluates for integer types
+/// like int64, int32.
+/// It is used to do bitwise operation on an array with a scalar.
+macro_rules! binary_bitwise_array_scalar {
+    ($LEFT:expr, $RIGHT:expr, $OP:tt, $ARRAY_TYPE:ident, $TYPE:ty) => {{
+        let len = $LEFT.len();
+        let array = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
+        let scalar = $RIGHT;
+        if scalar.is_null() {
+            Ok(new_null_array(array.data_type(), len))
+        } else {
+            let right: $TYPE = scalar.try_into().unwrap();
+            let result = (0..len)
+                .into_iter()
+                .map(|i| {
+                    if array.is_null(i) {
+                        None
+                    } else {
+                        Some(array.value(i) $OP right)
+                    }
+                })
+                .collect::<$ARRAY_TYPE>();
+            Ok(Arc::new(result) as ArrayRef)
+        }
+    }};
+}
+
+fn bitwise_and(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    match &left.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_op!(left, right, &, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_op!(left, right, &, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_op!(left, right, &, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_op!(left, right, &, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseAnd
+        ))),
+    }
+}
+
+fn bitwise_and_scalar(
+    array: &dyn Array,
+    scalar: ScalarValue,
+) -> Option<Result<ArrayRef>> {
+    let result = match array.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseAnd
+        ))),
+    };
+    Some(result)
+}
+
 /// Binary expression
 #[derive(Debug)]
 pub struct BinaryExpr {
@@ -880,6 +977,8 @@ pub fn binary_operator_data_type(
         | Operator::RegexNotIMatch
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
+        // bitwise operations return the common coerced type
+        Operator::BitwiseAnd => Ok(result_type),
         // math operations return the same value as the common coerced type
         Operator::Plus
         | Operator::Minus
@@ -1055,6 +1154,7 @@ impl BinaryExpr {
                 true,
                 true
             ),
+            Operator::BitwiseAnd => bitwise_and_scalar(array, scalar.clone()),
             // if scalar operation is not supported - fallback to array implementation
             _ => None,
         };
@@ -1143,6 +1243,7 @@ impl BinaryExpr {
             Operator::RegexNotIMatch => {
                 binary_string_array_flag_op!(left, right, regexp_is_match, true, true)
             }
+            Operator::BitwiseAnd => bitwise_and(left, right),
         }
     }
 }
@@ -1579,6 +1680,18 @@ mod tests {
             BooleanArray,
             DataType::Boolean,
             vec![false, false, false, false, true]
+        );
+        test_coercion!(
+            Int16Array,
+            DataType::Int16,
+            vec![1i16, 2i16, 3i16],
+            Int64Array,
+            DataType::Int64,
+            vec![10i64, 4i64, 5i64],
+            Operator::BitwiseAnd,
+            Int64Array,
+            DataType::Int64,
+            vec![0i64, 0i64, 1i64]
         );
         Ok(())
     }
@@ -2952,6 +3065,27 @@ mod tests {
         )
         .unwrap();
 
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_array_test() -> Result<()> {
+        let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right =
+            Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
+        let result = bitwise_and(left, right)?;
+        let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn bitwise_scalar_test() -> Result<()> {
+        let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let right = ScalarValue::from(3i32);
+        let result = bitwise_and_scalar(&left, right).unwrap()?;
+        let expected = Int32Array::from(vec![Some(0), None, Some(3)]);
+        assert_eq!(result.as_ref(), &expected);
         Ok(())
     }
 }
