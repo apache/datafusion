@@ -264,7 +264,7 @@ jobs:
           python-version: "3.8"
       - name: Install PyArrow
         run: |
-          pip install pyarrow
+          python -m pip install pyarrow
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}
