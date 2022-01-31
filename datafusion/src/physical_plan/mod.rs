@@ -659,6 +659,7 @@ pub mod repartition;
 pub mod sorts;
 pub mod stream;
 pub mod string_expressions;
+pub(crate) mod tdigest;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
