@@ -457,21 +457,29 @@ pub fn substr<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                                 start,
                                 count
                             )))
-                        } else if start <= 0 {
-                            Ok(Some(string.to_string()))
                         } else {
                             let graphemes = string.graphemes(true).collect::<Vec<&str>>();
-                            let start_pos = start as usize - 1;
-                            let count_usize = count as usize;
-                            if graphemes.len() < start_pos {
+                            let (start_pos, end_pos) = if start <= 0 {
+                                let end_pos = start + count - 1;
+                                (
+                                    0_usize,
+                                    if end_pos < 0 {
+                                        // we use 0 as workaround for usize to return empty string
+                                        0
+                                    } else {
+                                        end_pos as usize
+                                    },
+                                )
+                            } else {
+                                ((start - 1) as usize, (start + count - 1) as usize)
+                            };
+
+                            if end_pos == 0 || graphemes.len() < start_pos {
                                 Ok(Some("".to_string()))
-                            } else if graphemes.len() < start_pos + count_usize {
+                            } else if graphemes.len() < end_pos {
                                 Ok(Some(graphemes[start_pos..].concat()))
                             } else {
-                                Ok(Some(
-                                    graphemes[start_pos..start_pos + count_usize]
-                                        .concat(),
-                                ))
+                                Ok(Some(graphemes[start_pos..end_pos].concat()))
                             }
                         }
                     }
