@@ -165,13 +165,14 @@ impl ExecutionPlan for AvroExec {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-
     use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::object_store::local::{
         local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
     };
     use crate::scalar::ScalarValue;
+    use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
+    use sqlparser::ast::ObjectType::Schema;
 
     use super::*;
 
@@ -212,6 +213,67 @@ mod tests {
             "| 0  | true     | 0           |",
             "| 1  | false    | 1           |",
             "+----+----------+-------------+",
+        ];
+
+        crate::assert_batches_eq!(expected, &[batch]);
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        let batch = results.next().await;
+        assert!(batch.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn avro_exec_missing_column() -> Result<()> {
+        let testdata = crate::test_util::arrow_test_data();
+        let filename = format!("{}/avro/alltypes_plain.avro", testdata);
+        let actual_schema = AvroFormat {}
+            .infer_schema(local_object_reader_stream(vec![filename]))
+            .await?;
+
+        let mut fields = actual_schema.fields().clone();
+        fields.push(Field::new("missing_col", DataType::Int32, true));
+
+        let file_schema = Arc::new(Schema::new(fields));
+
+        let avro_exec = AvroExec::new(FileScanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
+            file_schema,
+            statistics: Statistics::default(),
+            // Include the missing column in the projection
+            projection: Some(vec![0, 1, 2, file_schema.fields().len()]),
+            limit: None,
+            table_partition_cols: vec![],
+        });
+        assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
+
+        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let batch = results
+            .next()
+            .await
+            .expect("plan iterator empty")
+            .expect("plan iterator returned an error");
+
+        let expected = vec![
+            "+----+----------+-------------+-------------+",
+            "| id | bool_col | tinyint_col | missing_col |",
+            "+----+----------+-------------+-------------+",
+            "| 4  | true     | 0           |             |",
+            "| 5  | false    | 1           |             |",
+            "| 6  | true     | 0           |             |",
+            "| 7  | false    | 1           |             |",
+            "| 2  | true     | 0           |             |",
+            "| 3  | false    | 1           |             |",
+            "| 0  | true     | 0           |             |",
+            "| 1  | false    | 1           |             |",
+            "+----+----------+-------------+-------------+",
         ];
 
         crate::assert_batches_eq!(expected, &[batch]);
