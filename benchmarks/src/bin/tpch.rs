@@ -54,6 +54,8 @@ use datafusion::{
     },
 };
 
+use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
+use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -652,13 +654,13 @@ fn get_table(
                     .with_delimiter(b',')
                     .with_has_header(true);
 
-                (Arc::new(format), path, ".csv")
+                (Arc::new(format), path, DEFAULT_CSV_EXTENSION)
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
                 let format = ParquetFormat::default().with_enable_pruning(true);
 
-                (Arc::new(format), path, ".parquet")
+                (Arc::new(format), path, DEFAULT_PARQUET_EXTENSION)
             }
             other => {
                 unimplemented!("Invalid file format '{}'", other);

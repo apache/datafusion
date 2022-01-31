@@ -221,7 +221,7 @@ impl ExecutionPlan for ParquetExec {
                 object_store.as_ref(),
                 file_schema_ref,
                 partition_index,
-                partition,
+                &partition,
                 metrics,
                 &projection,
                 &pruning_predicate,
@@ -230,7 +230,10 @@ impl ExecutionPlan for ParquetExec {
                 limit,
                 partition_col_proj,
             ) {
-                println!("Parquet reader thread terminated due to error: {:?}", e);
+                println!(
+                    "Parquet reader thread terminated due to error: {:?} for files: {:?}",
+                    e, partition
+                );
             }
         });
 
@@ -445,7 +448,7 @@ fn read_partition(
     object_store: &dyn ObjectStore,
     file_schema: SchemaRef,
     partition_index: usize,
-    partition: Vec<PartitionedFile>,
+    partition: &[PartitionedFile],
     metrics: ExecutionPlanMetricsSet,
     projection: &[usize],
     pruning_predicate: &Option<PruningPredicate>,

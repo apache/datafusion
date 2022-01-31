@@ -37,6 +37,8 @@ use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
+/// The default file extension of json files
+pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 /// New line delimited JSON `FileFormat` implementation.
 #[derive(Debug, Default)]
 pub struct JsonFormat {

@@ -24,8 +24,8 @@ use crate::{
     datasource::listing::{ListingOptions, ListingTable},
     datasource::{
         file_format::{
-            avro::AvroFormat,
-            csv::CsvFormat,
+            avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
+            csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
@@ -218,17 +218,20 @@ impl ExecutionContext {
                 ref file_type,
                 ref has_header,
             }) => {
-                let file_format = match file_type {
-                    FileType::CSV => {
-                        Ok(Arc::new(CsvFormat::default().with_has_header(*has_header))
-                            as Arc<dyn FileFormat>)
-                    }
-                    FileType::Parquet => {
-                        Ok(Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>)
-                    }
-                    FileType::Avro => {
-                        Ok(Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>)
-                    }
+                let (file_format, file_extension) = match file_type {
+                    FileType::CSV => Ok((
+                        Arc::new(CsvFormat::default().with_has_header(*has_header))
+                            as Arc<dyn FileFormat>,
+                        DEFAULT_CSV_EXTENSION,
+                    )),
+                    FileType::Parquet => Ok((
+                        Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_PARQUET_EXTENSION,
+                    )),
+                    FileType::Avro => Ok((
+                        Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_AVRO_EXTENSION,
+                    )),
                     _ => Err(DataFusionError::NotImplemented(format!(
                         "Unsupported file type {:?}.",
                         file_type
@@ -238,7 +241,7 @@ impl ExecutionContext {
                 let options = ListingOptions {
                     format: file_format,
                     collect_stat: false,
-                    file_extension: String::new(),
+                    file_extension: file_extension.to_owned(),
                     target_partitions: self
                         .state
                         .lock()
