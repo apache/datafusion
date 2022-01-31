@@ -419,7 +419,7 @@ fn bitwise_and(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-fn bitwise_and_scalar(array: &ArrayRef, scalar: ScalarValue) -> Option<Result<ArrayRef>> {
+fn bitwise_and_scalar(array: &dyn Array, scalar: ScalarValue) -> Option<Result<ArrayRef>> {
     let result = match array.data_type() {
         DataType::Int8 => {
             binary_bitwise_array_scalar!(array, scalar, &, Int8Array, i8)
