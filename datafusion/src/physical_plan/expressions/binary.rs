@@ -348,7 +348,7 @@ macro_rules! binary_bitwise_array_op {
                 if left.is_null(i) || right.is_null(i) {
                     None
                 } else {
-                    Some(left.value(i) & right.value(i))
+                    Some(left.value(i) $OP right.value(i))
                 }
             })
             .collect::<$ARRAY_TYPE>();
@@ -374,7 +374,7 @@ macro_rules! binary_bitwise_array_scalar {
                     if array.is_null(i) {
                         None
                     } else {
-                        Some(array.value(i) & right)
+                        Some(array.value(i) $OP right)
                     }
                 })
                 .collect::<$ARRAY_TYPE>();
