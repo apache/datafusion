@@ -359,7 +359,7 @@ static TIMESTAMPS: &[DataType] = &[
 static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
 
 /// the signatures supported by the function `fun`.
-pub fn signature(fun: &AggregateFunction) -> Signature {
+pub(super) fn signature(fun: &AggregateFunction) -> Signature {
     // note: the physical expression must accept the type returned by this function or the execution panics.
     match fun {
         AggregateFunction::Count
