@@ -16,20 +16,13 @@
 # under the License.
 
 [package]
-name = "datafusion-cli"
-version = "5.1.0"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
+name = "fuzz-utils"
+version = "0.1.0"
 edition = "2021"
-keywords = [ "arrow", "datafusion", "ballista", "query", "sql" ]
-license = "Apache-2.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-rust-version = "1.58"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "3", features = ["derive", "cargo"] }
-rustyline = "9.0"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
-datafusion = { path = "../datafusion", version = "6.0.0" }
-arrow = { version = "8.0.0" }
-ballista = { path = "../ballista/rust/client", version = "0.6.0" }
+arrow = { version = "8.0.0", features = ["prettyprint"] }
+rand = "0.8"
+env_logger = "0.9.0"

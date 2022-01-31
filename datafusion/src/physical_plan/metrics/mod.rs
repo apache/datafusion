@@ -19,6 +19,8 @@
 
 mod baseline;
 mod builder;
+mod composite;
+mod tracker;
 mod value;
 
 use std::{
@@ -32,7 +34,9 @@ use hashbrown::HashMap;
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use composite::CompositeMetricsSet;
+pub use tracker::MemTrackingMetrics;
+pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.

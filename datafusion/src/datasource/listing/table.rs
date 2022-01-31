@@ -29,7 +29,7 @@ use crate::{
     physical_plan::{
         empty::EmptyExec,
         file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
-        ExecutionPlan, Statistics,
+        project_schema, ExecutionPlan, Statistics,
     },
 };
 
@@ -179,12 +179,7 @@ impl TableProvider for ListingTable {
         // if no files need to be read, return an `EmptyExec`
         if partitioned_file_lists.is_empty() {
             let schema = self.schema();
-            let projected_schema = match &projection {
-                None => schema,
-                Some(p) => Arc::new(Schema::new(
-                    p.iter().map(|i| schema.field(*i).clone()).collect(),
-                )),
-            };
+            let projected_schema = project_schema(&schema, projection.as_ref())?;
             return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
         }
 
@@ -271,6 +266,8 @@ impl ListingTable {
 mod tests {
     use arrow::datatypes::DataType;
 
+    use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
+    use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -323,7 +320,7 @@ mod tests {
         let store = TestObjectStore::new_arc(&[("table/p1=v1/file.avro", 100)]);
 
         let opt = ListingOptions {
-            file_extension: ".avro".to_owned(),
+            file_extension: DEFAULT_AVRO_EXTENSION.to_owned(),
             format: Arc::new(AvroFormat {}),
             table_partition_cols: vec![String::from("p1")],
             target_partitions: 4,
@@ -424,7 +421,7 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
         let opt = ListingOptions {
-            file_extension: "parquet".to_owned(),
+            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
             format: Arc::new(ParquetFormat::default()),
             table_partition_cols: vec![],
             target_partitions: 2,

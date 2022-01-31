@@ -21,7 +21,7 @@ use std::task::Poll;
 
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 
-use super::{Count, ExecutionPlanMetricsSet, MetricBuilder, Time, Timestamp};
+use super::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time, Timestamp};
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator
@@ -56,6 +56,9 @@ pub struct BaselineMetrics {
     /// total spilled bytes during the execution of the operator
     spilled_bytes: Count,
 
+    /// current memory usage for the operator
+    mem_used: Gauge,
+
     /// output rows: the total output rows
     output_rows: Count,
 }
@@ -71,6 +74,7 @@ impl BaselineMetrics {
             elapsed_compute: MetricBuilder::new(metrics).elapsed_compute(partition),
             spill_count: MetricBuilder::new(metrics).spill_count(partition),
             spilled_bytes: MetricBuilder::new(metrics).spilled_bytes(partition),
+            mem_used: MetricBuilder::new(metrics).mem_used(partition),
             output_rows: MetricBuilder::new(metrics).output_rows(partition),
         }
     }
@@ -90,6 +94,11 @@ impl BaselineMetrics {
         &self.spilled_bytes
     }
 
+    /// return the metric for current memory usage
+    pub fn mem_used(&self) -> &Gauge {
+        &self.mem_used
+    }
+
     /// Record a spill of `spilled_bytes` size.
     pub fn record_spill(&self, spilled_bytes: usize) {
         self.spill_count.add(1);
@@ -104,7 +113,7 @@ impl BaselineMetrics {
     /// Records the fact that this operator's execution is complete
     /// (recording the `end_time` metric).
     ///
-    /// Note care should be taken to call `done()` maually if
+    /// Note care should be taken to call `done()` manually if
     /// `BaselineMetrics` is not `drop`ped immediately upon operator
     /// completion, as async streams may not be dropped immediately
     /// depending on the consumer.
@@ -118,6 +127,13 @@ impl BaselineMetrics {
     /// batch output for other thing
     pub fn record_output(&self, num_rows: usize) {
         self.output_rows.add(num_rows);
+    }
+
+    /// If not previously recorded `done()`, record
+    pub fn try_done(&self) {
+        if self.end_time.value().is_none() {
+            self.end_time.record()
+        }
     }
 
     /// Process a poll result of a stream producing output for an
@@ -142,10 +158,7 @@ impl BaselineMetrics {
 
 impl Drop for BaselineMetrics {
     fn drop(&mut self) {
-        // if not previously recorded, record
-        if self.end_time.value().is_none() {
-            self.end_time.record()
-        }
+        self.try_done()
     }
 }
 

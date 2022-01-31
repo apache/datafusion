@@ -63,26 +63,26 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::ScalarVariable(var_names) => {
                 self.accum.insert(Column::from_name(var_names.join(".")));
             }
-            Expr::Alias(_, _) => {}
-            Expr::Literal(_) => {}
-            Expr::BinaryExpr { .. } => {}
-            Expr::Not(_) => {}
-            Expr::IsNotNull(_) => {}
-            Expr::IsNull(_) => {}
-            Expr::Negative(_) => {}
-            Expr::Between { .. } => {}
-            Expr::Case { .. } => {}
-            Expr::Cast { .. } => {}
-            Expr::TryCast { .. } => {}
-            Expr::Sort { .. } => {}
-            Expr::ScalarFunction { .. } => {}
-            Expr::ScalarUDF { .. } => {}
-            Expr::WindowFunction { .. } => {}
-            Expr::AggregateFunction { .. } => {}
-            Expr::AggregateUDF { .. } => {}
-            Expr::InList { .. } => {}
-            Expr::Wildcard => {}
-            Expr::GetIndexedField { .. } => {}
+            Expr::Alias(_, _)
+            | Expr::Literal(_)
+            | Expr::BinaryExpr { .. }
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::Between { .. }
+            | Expr::Case { .. }
+            | Expr::Cast { .. }
+            | Expr::TryCast { .. }
+            | Expr::Sort { .. }
+            | Expr::ScalarFunction { .. }
+            | Expr::ScalarUDF { .. }
+            | Expr::WindowFunction { .. }
+            | Expr::AggregateFunction { .. }
+            | Expr::AggregateUDF { .. }
+            | Expr::InList { .. }
+            | Expr::Wildcard
+            | Expr::GetIndexedField { .. } => {}
         }
         Ok(Recursion::Continue(self))
     }
@@ -281,10 +281,19 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::BinaryExpr { left, right, .. } => {
             Ok(vec![left.as_ref().to_owned(), right.as_ref().to_owned()])
         }
-        Expr::IsNull(e) => Ok(vec![e.as_ref().to_owned()]),
-        Expr::IsNotNull(e) => Ok(vec![e.as_ref().to_owned()]),
-        Expr::ScalarFunction { args, .. } => Ok(args.clone()),
-        Expr::ScalarUDF { args, .. } => Ok(args.clone()),
+        Expr::IsNull(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::Cast { expr, .. }
+        | Expr::TryCast { expr, .. }
+        | Expr::Alias(expr, ..)
+        | Expr::Not(expr)
+        | Expr::Negative(expr)
+        | Expr::Sort { expr, .. }
+        | Expr::GetIndexedField { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
+        Expr::ScalarFunction { args, .. }
+        | Expr::ScalarUDF { args, .. }
+        | Expr::AggregateFunction { args, .. }
+        | Expr::AggregateUDF { args, .. } => Ok(args.clone()),
         Expr::WindowFunction {
             args,
             partition_by,
@@ -299,8 +308,6 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
             expr_list.extend(order_by.clone());
             Ok(expr_list)
         }
-        Expr::AggregateFunction { args, .. } => Ok(args.clone()),
-        Expr::AggregateUDF { args, .. } => Ok(args.clone()),
         Expr::Case {
             expr,
             when_then_expr,
@@ -322,15 +329,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
             }
             Ok(expr_list)
         }
-        Expr::Cast { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::TryCast { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Column(_) => Ok(vec![]),
-        Expr::Alias(expr, ..) => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Literal(_) => Ok(vec![]),
-        Expr::ScalarVariable(_) => Ok(vec![]),
-        Expr::Not(expr) => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Negative(expr) => Ok(vec![expr.as_ref().to_owned()]),
-        Expr::Sort { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
+        Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_) => Ok(vec![]),
         Expr::Between {
             expr, low, high, ..
         } => Ok(vec![
@@ -348,7 +347,6 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
-        Expr::GetIndexedField { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
     }
 }
 
@@ -473,9 +471,10 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         }
         Expr::Not(_) => Ok(Expr::Not(Box::new(expressions[0].clone()))),
         Expr::Negative(_) => Ok(Expr::Negative(Box::new(expressions[0].clone()))),
-        Expr::Column(_) => Ok(expr.clone()),
-        Expr::Literal(_) => Ok(expr.clone()),
-        Expr::ScalarVariable(_) => Ok(expr.clone()),
+        Expr::Column(_)
+        | Expr::Literal(_)
+        | Expr::InList { .. }
+        | Expr::ScalarVariable(_) => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..
         } => Ok(Expr::Sort {
@@ -504,7 +503,6 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 Ok(expr)
             }
         }
-        Expr::InList { .. } => Ok(expr.clone()),
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),

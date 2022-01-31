@@ -20,7 +20,7 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::physical_plan::metrics::BaselineMetrics;
+use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -33,6 +33,7 @@ use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::{metadata, File};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::task::JoinHandle;
@@ -42,7 +43,7 @@ pub struct SizedRecordBatchStream {
     schema: SchemaRef,
     batches: Vec<Arc<RecordBatch>>,
     index: usize,
-    baseline_metrics: BaselineMetrics,
+    metrics: MemTrackingMetrics,
 }
 
 impl SizedRecordBatchStream {
@@ -50,13 +51,15 @@ impl SizedRecordBatchStream {
     pub fn new(
         schema: SchemaRef,
         batches: Vec<Arc<RecordBatch>>,
-        baseline_metrics: BaselineMetrics,
+        metrics: MemTrackingMetrics,
     ) -> Self {
+        let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
+        metrics.init_mem_used(size);
         SizedRecordBatchStream {
             schema,
             index: 0,
             batches,
-            baseline_metrics,
+            metrics,
         }
     }
 }
@@ -74,7 +77,7 @@ impl Stream for SizedRecordBatchStream {
         } else {
             None
         });
-        self.baseline_metrics.record_poll(poll)
+        self.metrics.record_poll(poll)
     }
 }
 
@@ -387,7 +390,7 @@ mod tests {
 /// Write in Arrow IPC format.
 pub struct IPCWriter {
     /// path
-    pub path: String,
+    pub path: PathBuf,
     /// Inner writer
     pub writer: FileWriter<File>,
     /// bathes written
@@ -400,10 +403,10 @@ pub struct IPCWriter {
 
 impl IPCWriter {
     /// Create new writer
-    pub fn new(path: &str, schema: &Schema) -> Result<Self> {
+    pub fn new(path: &Path, schema: &Schema) -> Result<Self> {
         let file = File::create(path).map_err(|e| {
             DataFusionError::Execution(format!(
-                "Failed to create partition file at {}: {:?}",
+                "Failed to create partition file at {:?}: {:?}",
                 path, e
             ))
         })?;
@@ -411,7 +414,7 @@ impl IPCWriter {
             num_batches: 0,
             num_rows: 0,
             num_bytes: 0,
-            path: path.to_owned(),
+            path: path.into(),
             writer: FileWriter::try_new(file, schema)?,
         })
     }
@@ -432,7 +435,7 @@ impl IPCWriter {
     }
 
     /// Path write to
-    pub fn path(&self) -> &str {
+    pub fn path(&self) -> &Path {
         &self.path
     }
 }
