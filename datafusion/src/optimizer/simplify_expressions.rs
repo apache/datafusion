@@ -442,8 +442,6 @@ impl<'a> ExprRewriter for Simplifier<'a> {
         use Expr::*;
         use Operator::{And, Divide, Eq, Multiply, NotEq, Or};
 
-        let is_boolean_expr = self.is_boolean_type(&expr);
-
         let new_expr = match expr {
             //
             // Rules for Eq
@@ -676,11 +674,17 @@ impl<'a> ExprRewriter for Simplifier<'a> {
             // END
             //
             // ---> (X AND A) OR (Y AND B AND NOT X) OR ... (NOT (X OR Y) AND Q)
+            //
+            // Note: the rationale for this rewrite is that the expr can then be further
+            // simplified using the existing rules for AND/OR
             Case {
                 expr: None,
                 when_then_expr,
                 else_expr,
-            } if is_boolean_expr => {
+            } if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && self.is_boolean_type(&when_then_expr[0].1) =>
+            {
                 // The disjunction of all the when predicates encountered so far
                 let mut filter_expr = lit(false);
                 // The disjunction of all the cases
