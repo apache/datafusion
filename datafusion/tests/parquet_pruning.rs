@@ -537,7 +537,7 @@ impl ContextWithParquet {
             .await
             .expect("creating physical plan");
 
-        let runtime = self.ctx.state.lock().unwrap().runtime_env.clone();
+        let runtime = self.ctx.state.lock().runtime_env.clone();
         let results = datafusion::physical_plan::collect(physical_plan.clone(), runtime)
             .await
             .expect("Running");

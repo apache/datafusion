@@ -19,7 +19,8 @@
 extern crate criterion;
 use criterion::Criterion;
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use tokio::runtime::Runtime;
 
@@ -40,7 +41,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
+    let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
 }
 

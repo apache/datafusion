@@ -543,7 +543,7 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
     let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.expect(&msg);
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());

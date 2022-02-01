@@ -22,10 +22,12 @@ use std::{
     fmt::Display,
     sync::{
         atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     time::{Duration, Instant},
 };
+
+use parking_lot::Mutex;
 
 use chrono::{DateTime, Utc};
 
@@ -229,7 +231,7 @@ impl Timestamp {
 
     /// Sets the timestamps value to a specified time
     pub fn set(&self, now: DateTime<Utc>) {
-        *self.timestamp.lock().unwrap() = Some(now);
+        *self.timestamp.lock() = Some(now);
     }
 
     /// return the timestamps value at the last time `record()` was
@@ -237,7 +239,7 @@ impl Timestamp {
     ///
     /// Returns `None` if `record()` has not been called
     pub fn value(&self) -> Option<DateTime<Utc>> {
-        *self.timestamp.lock().unwrap()
+        *self.timestamp.lock()
     }
 
     /// sets the value of this timestamp to the minimum of this and other
@@ -249,7 +251,7 @@ impl Timestamp {
             (Some(v1), Some(v2)) => Some(if v1 < v2 { v1 } else { v2 }),
         };
 
-        *self.timestamp.lock().unwrap() = min;
+        *self.timestamp.lock() = min;
     }
 
     /// sets the value of this timestamp to the maximum of this and other
@@ -261,7 +263,7 @@ impl Timestamp {
             (Some(v1), Some(v2)) => Some(if v1 < v2 { v2 } else { v1 }),
         };
 
-        *self.timestamp.lock().unwrap() = max;
+        *self.timestamp.lock() = max;
     }
 }
 

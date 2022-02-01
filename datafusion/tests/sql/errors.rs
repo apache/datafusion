@@ -37,7 +37,7 @@ async fn test_cast_expressions_error() -> Result<()> {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let result = collect(plan, runtime).await;
 
     match result {
