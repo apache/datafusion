@@ -176,11 +176,12 @@ enum AggregateFunction {
   STDDEV=11;
   STDDEV_POP=12;
   CORRELATION=13;
+  APPROX_PERCENTILE_CONT = 14;
 }
 
 message AggregateExprNode {
   AggregateFunction aggr_function = 1;
-  LogicalExprNode expr = 2;
+  repeated LogicalExprNode expr = 2;
 }
 
 enum BuiltInWindowFunction {

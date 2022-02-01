@@ -31,6 +31,7 @@ pub(crate) fn coerce_types(
 ) -> Result<DataType> {
     // This result MUST be compatible with `binary_coerce`
     let result = match op {
+        Operator::BitwiseAnd => bitwise_coercion(lhs_type, rhs_type),
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
@@ -69,6 +70,25 @@ pub(crate) fn coerce_types(
             ),
         )),
         Some(t) => Ok(t)
+    }
+}
+
+fn bitwise_coercion(left_type: &DataType, right_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    if !is_numeric(left_type) || !is_numeric(right_type) {
+        return None;
+    }
+    if left_type == right_type && !is_dictionary(left_type) {
+        return Some(left_type.clone());
+    }
+    // TODO support other data type
+    match (left_type, right_type) {
+        (Int64, _) | (_, Int64) => Some(Int64),
+        (Int32, _) | (_, Int32) => Some(Int32),
+        (Int16, _) | (_, Int16) => Some(Int16),
+        (Int8, _) | (_, Int8) => Some(Int8),
+        _ => None,
     }
 }
 

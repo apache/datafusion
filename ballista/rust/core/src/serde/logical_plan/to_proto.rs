@@ -1074,6 +1074,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
                     }
+                    AggregateFunction::ApproxPercentileCont => {
+                        protobuf::AggregateFunction::ApproxPercentileCont
+                    }
                     AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
@@ -1099,11 +1102,13 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     }
                 };
 
-                let arg = &args[0];
-                let aggregate_expr = Box::new(protobuf::AggregateExprNode {
+                let aggregate_expr = protobuf::AggregateExprNode {
                     aggr_function: aggr_function.into(),
-                    expr: Some(Box::new(arg.try_into()?)),
-                });
+                    expr: args
+                        .iter()
+                        .map(|v| v.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                };
                 Ok(protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
                 })
@@ -1334,6 +1339,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
+            AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
         }
     }
 }

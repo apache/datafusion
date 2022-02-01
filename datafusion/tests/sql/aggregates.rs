@@ -354,6 +354,95 @@ async fn csv_query_approx_count() -> Result<()> {
     Ok(())
 }
 
+// This test executes the APPROX_PERCENTILE_CONT aggregation against the test
+// data, asserting the estimated quantiles are ±5% their actual values.
+//
+// Actual quantiles calculated with:
+//
+// ```r
+// read_csv("./testing/data/csv/aggregate_test_100.csv") |>
+//     select_if(is.numeric) |>
+//     summarise_all(~ quantile(., c(0.1, 0.5, 0.9)))
+// ```
+//
+// Giving:
+//
+// ```text
+//      c2    c3      c4           c5       c6    c7     c8          c9     c10   c11    c12
+//   <dbl> <dbl>   <dbl>        <dbl>    <dbl> <dbl>  <dbl>       <dbl>   <dbl> <dbl>  <dbl>
+// 1     1 -95.3 -22925. -1882606710  -7.25e18  18.9  2671.  472608672. 1.83e18 0.109 0.0714
+// 2     3  15.5   4599    377164262   1.13e18 134.  30634  2365817608. 9.30e18 0.491 0.551
+// 3     5 102.   25334.  1991374996.  7.37e18 231   57518. 3776538487. 1.61e19 0.834 0.946
+// ```
+//
+// Column `c12` is omitted due to a large relative error (~10%) due to the small
+// float values.
+#[tokio::test]
+async fn csv_query_approx_percentile_cont() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+
+    // Generate an assertion that the estimated $percentile value for $column is
+    // within 5% of the $actual percentile value.
+    macro_rules! percentile_test {
+        ($ctx:ident, column=$column:literal, percentile=$percentile:literal, actual=$actual:literal) => {
+            let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
+            let actual = execute_to_batches(&mut ctx, &sql).await;
+            //
+            //   "+------+",
+            //   "| q    |",
+            //   "+------+",
+            //   "| true |",
+            //   "+------+",
+            //
+            let want = ["+------+", "| q    |", "+------+", "| true |", "+------+"];
+            assert_batches_eq!(want, &actual);
+        };
+    }
+
+    percentile_test!(ctx, column = "c2", percentile = 0.1, actual = 1.0);
+    percentile_test!(ctx, column = "c2", percentile = 0.5, actual = 3.0);
+    percentile_test!(ctx, column = "c2", percentile = 0.9, actual = 5.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c3", percentile = 0.1, actual = -95.3);
+    percentile_test!(ctx, column = "c3", percentile = 0.5, actual = 15.5);
+    percentile_test!(ctx, column = "c3", percentile = 0.9, actual = 102.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c4", percentile = 0.1, actual = -22925.0);
+    percentile_test!(ctx, column = "c4", percentile = 0.5, actual = 4599.0);
+    percentile_test!(ctx, column = "c4", percentile = 0.9, actual = 25334.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c5", percentile = 0.1, actual = -1882606710.0);
+    percentile_test!(ctx, column = "c5", percentile = 0.5, actual = 377164262.0);
+    percentile_test!(ctx, column = "c5", percentile = 0.9, actual = 1991374996.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c6", percentile = 0.1, actual = -7.25e18);
+    percentile_test!(ctx, column = "c6", percentile = 0.5, actual = 1.13e18);
+    percentile_test!(ctx, column = "c6", percentile = 0.9, actual = 7.37e18);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c7", percentile = 0.1, actual = 18.9);
+    percentile_test!(ctx, column = "c7", percentile = 0.5, actual = 134.0);
+    percentile_test!(ctx, column = "c7", percentile = 0.9, actual = 231.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c8", percentile = 0.1, actual = 2671.0);
+    percentile_test!(ctx, column = "c8", percentile = 0.5, actual = 30634.0);
+    percentile_test!(ctx, column = "c8", percentile = 0.9, actual = 57518.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c9", percentile = 0.1, actual = 472608672.0);
+    percentile_test!(ctx, column = "c9", percentile = 0.5, actual = 2365817608.0);
+    percentile_test!(ctx, column = "c9", percentile = 0.9, actual = 3776538487.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c10", percentile = 0.1, actual = 1.83e18);
+    percentile_test!(ctx, column = "c10", percentile = 0.5, actual = 9.30e18);
+    percentile_test!(ctx, column = "c10", percentile = 0.9, actual = 1.61e19);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c11", percentile = 0.1, actual = 0.109);
+    percentile_test!(ctx, column = "c11", percentile = 0.5, actual = 0.491);
+    percentile_test!(ctx, column = "c11", percentile = 0.9, actual = 0.834);
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn query_count_without_from() -> Result<()> {
     let mut ctx = ExecutionContext::new();
