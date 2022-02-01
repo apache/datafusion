@@ -242,7 +242,7 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let batches = collect(physical_plan, runtime).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
@@ -289,7 +289,7 @@ async fn optimizers_catch_all_statistics() {
     )
     .unwrap();
 
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let actual = collect(physical_plan, runtime).await.unwrap();
 
     assert_eq!(actual.len(), 1);
