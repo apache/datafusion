@@ -266,6 +266,7 @@ impl TDigest {
     }
 
     fn merge_sorted_f64(&self, sorted_values: &[OrderedFloat<f64>]) -> TDigest {
+        #[cfg(debug_assertions)]
         debug_assert!(is_sorted(sorted_values), "unsorted input to TDigest");
 
         if sorted_values.is_empty() {
