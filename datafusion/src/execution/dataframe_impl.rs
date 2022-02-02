@@ -17,8 +17,9 @@
 
 //! Implementation of DataFrame API.
 
+use parking_lot::Mutex;
 use std::any::Any;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
@@ -61,7 +62,7 @@ impl DataFrameImpl {
 
     /// Create a physical plan
     async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let state = self.ctx_state.lock().unwrap().clone();
+        let state = self.ctx_state.lock().clone();
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
         ctx.create_physical_plan(&plan).await
@@ -221,7 +222,7 @@ impl DataFrame for DataFrameImpl {
     /// execute it, collecting all resulting batches into memory
     async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let plan = self.create_physical_plan().await?;
-        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        let runtime = self.ctx_state.lock().runtime_env.clone();
         Ok(collect(plan, runtime).await?)
     }
 
@@ -241,7 +242,7 @@ impl DataFrame for DataFrameImpl {
     /// execute it, returning a stream over a single partition
     async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
         let plan = self.create_physical_plan().await?;
-        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        let runtime = self.ctx_state.lock().runtime_env.clone();
         execute_stream(plan, runtime).await
     }
 
@@ -250,7 +251,7 @@ impl DataFrame for DataFrameImpl {
     /// partitioning
     async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
         let plan = self.create_physical_plan().await?;
-        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        let runtime = self.ctx_state.lock().runtime_env.clone();
         Ok(collect_partitioned(plan, runtime).await?)
     }
 
@@ -258,7 +259,7 @@ impl DataFrame for DataFrameImpl {
     /// execute it, returning a stream for each partition
     async fn execute_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
-        let runtime = self.ctx_state.lock().unwrap().runtime_env.clone();
+        let runtime = self.ctx_state.lock().runtime_env.clone();
         Ok(execute_stream_partitioned(plan, runtime).await?)
     }
 
@@ -275,7 +276,7 @@ impl DataFrame for DataFrameImpl {
     }
 
     fn registry(&self) -> Arc<dyn FunctionRegistry> {
-        let registry = self.ctx_state.lock().unwrap().clone();
+        let registry = self.ctx_state.lock().clone();
         Arc::new(registry)
     }
 

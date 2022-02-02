@@ -19,9 +19,10 @@
 //! representing collections of named schemas.
 
 use crate::catalog::schema::SchemaProvider;
+use parking_lot::RwLock;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Represent a list of named catalogs
 pub trait CatalogList: Sync + Send {
@@ -75,17 +76,17 @@ impl CatalogList for MemoryCatalogList {
         name: String,
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
-        let mut catalogs = self.catalogs.write().unwrap();
+        let mut catalogs = self.catalogs.write();
         catalogs.insert(name, catalog)
     }
 
     fn catalog_names(&self) -> Vec<String> {
-        let catalogs = self.catalogs.read().unwrap();
+        let catalogs = self.catalogs.read();
         catalogs.keys().map(|s| s.to_string()).collect()
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        let catalogs = self.catalogs.read().unwrap();
+        let catalogs = self.catalogs.read();
         catalogs.get(name).cloned()
     }
 }
@@ -129,7 +130,7 @@ impl MemoryCatalogProvider {
         name: impl Into<String>,
         schema: Arc<dyn SchemaProvider>,
     ) -> Option<Arc<dyn SchemaProvider>> {
-        let mut schemas = self.schemas.write().unwrap();
+        let mut schemas = self.schemas.write();
         schemas.insert(name.into(), schema)
     }
 }
@@ -140,12 +141,12 @@ impl CatalogProvider for MemoryCatalogProvider {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        let schemas = self.schemas.read().unwrap();
+        let schemas = self.schemas.read();
         schemas.keys().cloned().collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        let schemas = self.schemas.read().unwrap();
+        let schemas = self.schemas.read();
         schemas.get(name).cloned()
     }
 }

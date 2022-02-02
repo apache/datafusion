@@ -25,12 +25,13 @@ use crate::criterion::Criterion;
 use data_utils::create_table_provider;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use tokio::runtime::Runtime;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
-    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
+    let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 

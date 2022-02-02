@@ -28,11 +28,12 @@ use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::Stream;
 use hashbrown::HashMap;
+use parking_lot::RwLock;
 use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 pub mod sort;
@@ -135,7 +136,7 @@ impl SortKeyCursor {
             .collect::<Vec<_>>();
 
         self.init_cmp_if_needed(other, &zipped)?;
-        let map = self.batch_comparators.read().unwrap();
+        let map = self.batch_comparators.read();
         let cmp = map.get(&other.batch_id).ok_or_else(|| {
             DataFusionError::Execution(format!(
                 "Failed to find comparator for {} cmp {}",
@@ -172,10 +173,10 @@ impl SortKeyCursor {
         other: &SortKeyCursor,
         zipped: &[((&ArrayRef, &ArrayRef), &SortOptions)],
     ) -> Result<()> {
-        let hm = self.batch_comparators.read().unwrap();
+        let hm = self.batch_comparators.read();
         if !hm.contains_key(&other.batch_id) {
             drop(hm);
-            let mut map = self.batch_comparators.write().unwrap();
+            let mut map = self.batch_comparators.write();
             let cmp = map
                 .borrow_mut()
                 .entry(other.batch_id)
