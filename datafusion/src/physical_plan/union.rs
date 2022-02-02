@@ -143,6 +143,10 @@ impl ExecutionPlan for UnionExec {
             .reduce(stats_union)
             .unwrap_or_default()
     }
+
+    fn should_repartition_children(&self) -> bool {
+        false
+    }
 }
 
 /// Stream wrapper that records `BaselineMetrics` for a particular

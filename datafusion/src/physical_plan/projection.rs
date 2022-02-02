@@ -185,6 +185,10 @@ impl ExecutionPlan for ProjectionExec {
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
         )
     }
+
+    fn should_repartition_children(&self) -> bool {
+        false
+    }
 }
 
 /// If e is a direct column reference, returns the field level

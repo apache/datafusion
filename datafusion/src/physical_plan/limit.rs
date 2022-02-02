@@ -300,6 +300,10 @@ impl ExecutionPlan for LocalLimitExec {
             _ => Statistics::default(),
         }
     }
+
+    fn should_repartition_children(&self) -> bool {
+        false
+    }
 }
 
 /// Truncate a RecordBatch to maximum of n rows
