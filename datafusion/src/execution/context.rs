@@ -39,13 +39,11 @@ use crate::{
     },
 };
 use log::debug;
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Mutex,
-};
 use std::{fs, path::PathBuf};
 
 use futures::{StreamExt, TryStreamExt};
@@ -201,7 +199,7 @@ impl ExecutionContext {
 
     /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.lock().unwrap().runtime_env.clone()
+        self.state.lock().runtime_env.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -242,12 +240,7 @@ impl ExecutionContext {
                     format: file_format,
                     collect_stat: false,
                     file_extension: file_extension.to_owned(),
-                    target_partitions: self
-                        .state
-                        .lock()
-                        .unwrap()
-                        .config
-                        .target_partitions,
+                    target_partitions: self.state.lock().config.target_partitions,
                     table_partition_cols: vec![],
                 };
 
@@ -312,7 +305,7 @@ impl ExecutionContext {
         }
 
         // create a query planner
-        let state = self.state.lock().unwrap().clone();
+        let state = self.state.lock().clone();
         let query_planner = SqlToRel::new(&state);
         query_planner.statement_to_plan(&statements[0])
     }
@@ -325,7 +318,6 @@ impl ExecutionContext {
     ) {
         self.state
             .lock()
-            .unwrap()
             .execution_props
             .add_var_provider(variable_type, provider);
     }
@@ -340,7 +332,6 @@ impl ExecutionContext {
     pub fn register_udf(&mut self, f: ScalarUDF) {
         self.state
             .lock()
-            .unwrap()
             .scalar_functions
             .insert(f.name.clone(), Arc::new(f));
     }
@@ -355,7 +346,6 @@ impl ExecutionContext {
     pub fn register_udaf(&mut self, f: AggregateUDF) {
         self.state
             .lock()
-            .unwrap()
             .aggregate_functions
             .insert(f.name.clone(), Arc::new(f));
     }
@@ -369,7 +359,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let target_partitions = self.state.lock().config.target_partitions;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
@@ -400,7 +390,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let target_partitions = self.state.lock().config.target_partitions;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_csv(
@@ -422,7 +412,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let target_partitions = self.state.lock().config.target_partitions;
         let logical_plan =
             LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
                 .await?
@@ -477,8 +467,8 @@ impl ExecutionContext {
         uri: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options
-            .to_listing_options(self.state.lock().unwrap().config.target_partitions);
+        let listing_options =
+            options.to_listing_options(self.state.lock().config.target_partitions);
 
         self.register_listing_table(
             name,
@@ -495,7 +485,7 @@ impl ExecutionContext {
     /// executed against this context.
     pub async fn register_parquet(&mut self, name: &str, uri: &str) -> Result<()> {
         let (target_partitions, enable_pruning) = {
-            let m = self.state.lock().unwrap();
+            let m = self.state.lock();
             (m.config.target_partitions, m.config.parquet_pruning)
         };
         let file_format = ParquetFormat::default().with_enable_pruning(enable_pruning);
@@ -521,8 +511,8 @@ impl ExecutionContext {
         uri: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options
-            .to_listing_options(self.state.lock().unwrap().config.target_partitions);
+        let listing_options =
+            options.to_listing_options(self.state.lock().config.target_partitions);
 
         self.register_listing_table(name, uri, listing_options, options.schema)
             .await?;
@@ -542,7 +532,7 @@ impl ExecutionContext {
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
 
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         let catalog = if state.config.information_schema {
             Arc::new(CatalogWithInformationSchema::new(
                 Arc::downgrade(&state.catalog_list),
@@ -557,7 +547,7 @@ impl ExecutionContext {
 
     /// Retrieves a `CatalogProvider` instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.state.lock().unwrap().catalog_list.catalog(name)
+        self.state.lock().catalog_list.catalog(name)
     }
 
     /// Registers a object store with scheme using a custom `ObjectStore` so that
@@ -573,7 +563,6 @@ impl ExecutionContext {
 
         self.state
             .lock()
-            .unwrap()
             .object_store_registry
             .register_store(scheme, object_store)
     }
@@ -585,7 +574,6 @@ impl ExecutionContext {
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
         self.state
             .lock()
-            .unwrap()
             .object_store_registry
             .get_by_uri(uri)
             .map_err(DataFusionError::from)
@@ -605,7 +593,6 @@ impl ExecutionContext {
         let table_ref = table_ref.into();
         self.state
             .lock()
-            .unwrap()
             .schema_for_ref(table_ref)?
             .register_table(table_ref.table().to_owned(), provider)
     }
@@ -620,7 +607,6 @@ impl ExecutionContext {
         let table_ref = table_ref.into();
         self.state
             .lock()
-            .unwrap()
             .schema_for_ref(table_ref)?
             .deregister_table(table_ref.table())
     }
@@ -634,7 +620,7 @@ impl ExecutionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn DataFrame>> {
         let table_ref = table_ref.into();
-        let schema = self.state.lock().unwrap().schema_for_ref(table_ref)?;
+        let schema = self.state.lock().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
@@ -664,7 +650,6 @@ impl ExecutionContext {
         Ok(self
             .state
             .lock()
-            .unwrap()
             // a bare reference will always resolve to the default catalog and schema
             .schema_for_ref(TableReference::Bare { table: "" })?
             .table_names()
@@ -703,7 +688,7 @@ impl ExecutionContext {
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (state, planner) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.execution_props.start_execution();
 
             // We need to clone `state` to release the lock that is not `Send`. We could
@@ -815,7 +800,7 @@ impl ExecutionContext {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let state = &mut self.state.lock().unwrap();
+        let state = &mut self.state.lock();
         let execution_props = &mut state.execution_props.clone();
         let optimizers = &state.config.optimizers;
 
@@ -840,15 +825,15 @@ impl From<Arc<Mutex<ExecutionContextState>>> for ExecutionContext {
 
 impl FunctionRegistry for ExecutionContext {
     fn udfs(&self) -> HashSet<String> {
-        self.state.lock().unwrap().udfs()
+        self.state.lock().udfs()
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        self.state.lock().unwrap().udf(name)
+        self.state.lock().udf(name)
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        self.state.lock().unwrap().udaf(name)
+        self.state.lock().udaf(name)
     }
 }
 
@@ -1512,7 +1497,7 @@ mod tests {
 
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
 
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let runtime = ctx.state.lock().runtime_env.clone();
         let results = collect_partitioned(physical_plan, runtime).await?;
 
         // note that the order of partitions is not deterministic
@@ -1561,7 +1546,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
         let ctx = create_ctx(&tmp_dir, partition_count).await?;
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let runtime = ctx.state.lock().runtime_env.clone();
 
         let table = ctx.table("test")?;
         let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
@@ -1669,7 +1654,7 @@ mod tests {
         assert_eq!(1, physical_plan.schema().fields().len());
         assert_eq!("b", physical_plan.schema().field(0).name().as_str());
 
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let runtime = ctx.state.lock().runtime_env.clone();
         let batches = collect(physical_plan, runtime).await?;
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -3279,7 +3264,7 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let runtime = ctx.state.lock().runtime_env.clone();
         let result = collect(plan, runtime).await?;
 
         let expected = vec![
@@ -3585,7 +3570,7 @@ mod tests {
         ctx.register_catalog("my_catalog", catalog);
 
         let catalog_list_weak = {
-            let state = ctx.state.lock().unwrap();
+            let state = ctx.state.lock();
             Arc::downgrade(&state.catalog_list)
         };
 

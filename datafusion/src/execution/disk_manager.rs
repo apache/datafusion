@@ -20,9 +20,10 @@
 
 use crate::error::{DataFusionError, Result};
 use log::debug;
+use parking_lot::Mutex;
 use rand::{thread_rng, Rng};
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::{path::PathBuf, sync::Mutex};
 use tempfile::{Builder, NamedTempFile, TempDir};
 
 /// Configuration for temporary disk access
@@ -95,7 +96,7 @@ impl DiskManager {
 
     /// Return a temporary file from a randomized choice in the configured locations
     pub fn create_tmp_file(&self) -> Result<NamedTempFile> {
-        let mut local_dirs = self.local_dirs.lock().unwrap();
+        let mut local_dirs = self.local_dirs.lock();
 
         // Create a temporary directory if needed
         if local_dirs.is_empty() {
@@ -169,7 +170,6 @@ mod tests {
     fn local_dir_snapshot(dm: &DiskManager) -> Vec<PathBuf> {
         dm.local_dirs
             .lock()
-            .unwrap()
             .iter()
             .map(|p| p.path().into())
             .collect()
