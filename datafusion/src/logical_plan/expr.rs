@@ -20,10 +20,12 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
+use crate::execution::context::ExecutionProps;
 use crate::field_util::get_indexed_field;
 use crate::logical_plan::{
     plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
 };
+use crate::optimizer::simplify_expressions::{ConstEvaluator, Simplifier};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
@@ -971,6 +973,58 @@ impl Expr {
             Ok(expr)
         }
     }
+
+    /// Simplifies this [`Expr`]`s as much as possible, evaluating
+    /// constants and applying algebraic simplifications
+    ///
+    /// # Example:
+    /// `b > 2 AND b > 2`
+    /// can be written to
+    /// `b > 2`
+    ///
+    /// ```
+    /// use datafusion::logical_plan::*;
+    /// use datafusion::error::Result;
+    /// use datafusion::execution::context::ExecutionProps;
+    ///
+    /// /// Simple implementation that provides `Simplifier` the information it needs
+    /// #[derive(Default)]
+    /// struct Info {
+    ///   execution_props: ExecutionProps,
+    /// };
+    ///
+    /// impl SimplifyInfo for Info {
+    ///   fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+    ///     Ok(false)
+    ///   }
+    ///   fn nullable(&self, expr: &Expr) -> Result<bool> {
+    ///     Ok(true)
+    ///   }
+    ///   fn execution_props(&self) -> &ExecutionProps {
+    ///     &self.execution_props
+    ///   }
+    /// }
+    ///
+    /// // b < 2
+    /// let b_lt_2 = col("b").gt(lit(2));
+    ///
+    /// // (b < 2) OR (b < 2)
+    /// let expr = b_lt_2.clone().or(b_lt_2.clone());
+    ///
+    /// // (b < 2) OR (b < 2) --> (b < 2)
+    /// let expr = expr.simplify(&Info::default()).unwrap();
+    /// assert_eq!(expr, b_lt_2);
+    /// ```
+    pub fn simplify<S: SimplifyInfo>(self, info: &S) -> Result<Self> {
+        let mut rewriter = Simplifier::new(info);
+        let mut const_evaluator = ConstEvaluator::new(info.execution_props());
+
+        // TODO iterate until no changes are made during rewrite
+        // (evaluating constants can enable new simplifications and
+        // simplifications can enable new constant evaluation)
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        self.rewrite(&mut const_evaluator)?.rewrite(&mut rewriter)
+    }
 }
 
 impl Not for Expr {
@@ -1092,6 +1146,20 @@ pub trait ExprRewriter: Sized {
     fn mutate(&mut self, expr: Expr) -> Result<Expr>;
 }
 
+/// The information necessary to apply algebraic simplification to an
+/// [Expr]. See [SimplifyContext] for one implementation
+pub trait SimplifyInfo {
+    /// returns true if this Expr has boolean type
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool>;
+
+    /// returns true of this expr is nullable (could possibly be NULL)
+    fn nullable(&self, expr: &Expr) -> Result<bool>;
+
+    /// Returns details needed for partial expression evaluation
+    fn execution_props(&self) -> &ExecutionProps;
+}
+
+/// Helper struct for building [Expr::Case]
 pub struct CaseBuilder {
     expr: Option<Box<Expr>>,
     when_expr: Vec<Expr>,
