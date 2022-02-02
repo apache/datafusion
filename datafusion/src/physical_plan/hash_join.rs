@@ -288,11 +288,12 @@ impl ExecutionPlan for HashJoinExec {
         let left_data = {
             match self.mode {
                 PartitionMode::CollectLeft => {
-                    let mut build_side = self.build_side.lock().await;
+                    let build_side = self.build_side.lock().await;
 
                     match build_side.as_ref() {
                         Some(stream) => stream.clone(),
                         None => {
+                            std::mem::drop(build_side);
                             let start = Instant::now();
 
                             // merge all left parts into a single stream
@@ -333,8 +334,10 @@ impl ExecutionPlan for HashJoinExec {
                                 concat_batches(&self.left.schema(), &batches, num_rows)?;
 
                             let left_side = Arc::new((hashmap, single_batch));
-
-                            *build_side = Some(left_side.clone());
+                            {
+                                let mut build_side = self.build_side.lock().await;
+                                *build_side = Some(left_side.clone());
+                            }
 
                             debug!(
                                 "Built build-side of hash join containing {} rows in {} ms",
