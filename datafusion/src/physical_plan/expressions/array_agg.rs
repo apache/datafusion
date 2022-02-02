@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn array_agg_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
 
         let list = ScalarValue::List(
             Some(Box::new(vec![

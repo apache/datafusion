@@ -3681,8 +3681,8 @@ mod tests {
                 };
 
                 // create mock record batch
-                let ids = Arc::new(Int32Array::from_slice(vec![i as i32]));
-                let names = Arc::new(Utf8Array::<i32>::from_slice(vec!["test"]));
+                let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
+                let names = Arc::new(Utf8Array::<i32>::from_slice(&["test"]));
                 let schema_ref = schema.as_ref();
                 let parquet_schema = to_parquet_schema(schema_ref).unwrap();
                 let iter = vec![Ok(Chunk::new(vec![ids as ArrayRef, names as ArrayRef]))];

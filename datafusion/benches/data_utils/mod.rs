@@ -123,7 +123,7 @@ fn create_record_batch(
         schema,
         vec![
             Arc::new(Utf8Array::<i32>::from_slice(keys)),
-            Arc::new(Float32Array::from_slice(vec![i as f32; batch_size])),
+            Arc::new(Float32Array::from_slice(&[i as f32; batch_size])),
             Arc::new(Float64Array::from(values)),
             Arc::new(UInt64Array::from(integer_values_wide)),
             Arc::new(UInt64Array::from_slice(integer_values_narrow)),

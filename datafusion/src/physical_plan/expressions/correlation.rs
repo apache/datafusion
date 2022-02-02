@@ -284,10 +284,10 @@ mod tests {
 
     #[test]
     fn correlation_f64_6() -> Result<()> {
-        let a = Arc::new(Float64Array::from_slice(vec![
+        let a = Arc::new(Float64Array::from_slice(&[
             1_f64, 2_f64, 3_f64, 1.1_f64, 2.2_f64, 3.3_f64,
         ]));
-        let b = Arc::new(Float64Array::from_slice(vec![
+        let b = Arc::new(Float64Array::from_slice(&[
             4_f64, 5_f64, 6_f64, 4.4_f64, 5.5_f64, 6.6_f64,
         ]));
 

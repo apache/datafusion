@@ -967,7 +967,7 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
-            Arc::new(StringArray::from_slice(vec!["foo"])) as ArrayRef,
+            Arc::new(StringArray::from_slice(&["foo"])) as ArrayRef,
         )])
         .unwrap();
         let partitioning = Partitioning::Hash(
