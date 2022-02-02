@@ -259,6 +259,10 @@ impl ExecutionPlan for RepartitionExec {
     fn statistics(&self) -> Statistics {
         self.input.statistics()
     }
+
+    fn should_repartition_children(&self) -> bool {
+        false
+    }
 }
 
 impl RepartitionExec {
