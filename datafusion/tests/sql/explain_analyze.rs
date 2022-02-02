@@ -702,12 +702,14 @@ async fn test_physical_plan_display_indent_multi_children() {
         "        RepartitionExec: partitioning=Hash([Column { name: \"c1\", index: 0 }], 3)",
         "          ProjectionExec: expr=[c1@0 as c1]",
         "            ProjectionExec: expr=[c1@0 as c1]",
-        "              CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
+        "              RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
         "      CoalesceBatchesExec: target_batch_size=4096",
         "        RepartitionExec: partitioning=Hash([Column { name: \"c2\", index: 0 }], 3)",
         "          ProjectionExec: expr=[c2@0 as c2]",
         "            ProjectionExec: expr=[c1@0 as c2]",
-        "              CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
+        "              RepartitionExec: partitioning=RoundRobinBatch(3)",
+        "                CsvExec: files=[ARROW_TEST_DATA/csv/aggregate_test_100.csv], has_header=true, limit=None",
     ];
 
     let data_path = datafusion::test_util::arrow_test_data();
