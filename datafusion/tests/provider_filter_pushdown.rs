@@ -25,7 +25,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
-use datafusion::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
+use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -85,11 +85,11 @@ impl ExecutionPlan for CustomPlan {
         _runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
         let metrics = ExecutionPlanMetricsSet::new();
-        let baseline_metrics = BaselineMetrics::new(&metrics, partition);
+        let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema(),
             self.batches.clone(),
-            baseline_metrics,
+            tracking_metrics,
         )))
     }
 

@@ -17,23 +17,26 @@
 
 //! Metrics for recording information about execution
 
-mod aggregated;
 mod baseline;
 mod builder;
+mod composite;
+mod tracker;
 mod value;
 
+use parking_lot::Mutex;
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use hashbrown::HashMap;
 
 // public exports
-pub use aggregated::AggregatedMetricsSet;
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
+pub use composite::CompositeMetricsSet;
+pub use tracker::MemTrackingMetrics;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
@@ -337,12 +340,12 @@ impl ExecutionPlanMetricsSet {
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().expect("not poisoned").push(metric)
+        self.inner.lock().push(metric)
     }
 
     /// Return a clone of the inner MetricsSet
     pub fn clone_inner(&self) -> MetricsSet {
-        let guard = self.inner.lock().expect("not poisoned");
+        let guard = self.inner.lock();
         (*guard).clone()
     }
 }

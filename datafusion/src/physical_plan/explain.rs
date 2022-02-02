@@ -20,8 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use arrow::{array::*, datatypes::SchemaRef};
+use async_trait::async_trait;
+
 use super::SendableRecordBatchStream;
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
@@ -31,10 +35,6 @@ use crate::{
         Statistics,
     },
 };
-use arrow::{array::*, datatypes::SchemaRef};
-
-use crate::physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
-use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes
@@ -148,12 +148,12 @@ impl ExecutionPlan for ExplainExec {
         )?;
 
         let metrics = ExecutionPlanMetricsSet::new();
-        let baseline_metrics = BaselineMetrics::new(&metrics, partition);
+        let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
 
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema.clone(),
             vec![Arc::new(record_batch)],
-            baseline_metrics,
+            tracking_metrics,
         )))
     }
 

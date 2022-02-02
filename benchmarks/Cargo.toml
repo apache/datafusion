@@ -36,7 +36,7 @@ arrow = { package = "arrow2", version="0.9", features = ["io_csv", "io_json", "i
 datafusion = { path = "../datafusion" }
 ballista = { path = "../ballista/rust/client" }
 structopt = { version = "0.3", default-features = false }
-tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 futures = "0.3"
 env_logger = "0.9"
 mimalloc = { version = "0.1", optional = true, default-features = false }

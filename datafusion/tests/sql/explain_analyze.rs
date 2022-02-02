@@ -41,7 +41,7 @@ async fn explain_analyze_baseline_metrics() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(physical_plan.clone(), runtime).await.unwrap();
     let formatted = print::write(&results);
     println!("Query Output:\n\n{}", formatted);
@@ -327,7 +327,7 @@ async fn csv_explain_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
@@ -525,7 +525,7 @@ async fn csv_explain_verbose_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
@@ -610,9 +610,9 @@ order by
     Sort: #revenue DESC NULLS FIRST\
     \n  Projection: #customer.c_custkey, #customer.c_name, #SUM(lineitem.l_extendedprice * Int64(1) - lineitem.l_discount) AS revenue, #customer.c_acctbal, #nation.n_name, #customer.c_address, #customer.c_phone, #customer.c_comment\
     \n    Aggregate: groupBy=[[#customer.c_custkey, #customer.c_name, #customer.c_acctbal, #customer.c_phone, #nation.n_name, #customer.c_address, #customer.c_comment]], aggr=[[SUM(#lineitem.l_extendedprice * Int64(1) - #lineitem.l_discount)]]\
-    \n      Join: #customer.c_nationkey = #nation.n_nationkey\
-    \n        Join: #orders.o_orderkey = #lineitem.l_orderkey\
-    \n          Join: #customer.c_custkey = #orders.o_custkey\
+    \n      Inner Join: #customer.c_nationkey = #nation.n_nationkey\
+    \n        Inner Join: #orders.o_orderkey = #lineitem.l_orderkey\
+    \n          Inner Join: #customer.c_custkey = #orders.o_custkey\
     \n            TableScan: customer projection=Some([0, 1, 2, 3, 4, 5, 7])\
     \n            Filter: #orders.o_orderdate >= Date32(\"8674\") AND #orders.o_orderdate < Date32(\"8766\")\
     \n              TableScan: orders projection=Some([0, 1, 4]), filters=[#orders.o_orderdate >= Date32(\"8674\"), #orders.o_orderdate < Date32(\"8766\")]\

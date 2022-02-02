@@ -21,7 +21,6 @@ use pyo3::exceptions::{PyException, PyNotImplementedError};
 use pyo3::ffi::Py_uintptr_t;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use pyo3::PyNativeType;
 use std::sync::Arc;
 
 use crate::error::DataFusionError;

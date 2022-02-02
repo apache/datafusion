@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
