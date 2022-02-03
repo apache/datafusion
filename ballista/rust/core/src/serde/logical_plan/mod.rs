@@ -437,9 +437,9 @@ mod roundtrip_tests {
             &self,
             _prefix: &str,
         ) -> datafusion::error::Result<FileMetaStream> {
-            Err(DataFusionError::NotImplemented(format!(
-                "this is only a test object store"
-            )))
+            Err(DataFusionError::NotImplemented(
+                "this is only a test object store".to_string(),
+            ))
         }
 
         async fn list_dir(
@@ -447,18 +447,18 @@ mod roundtrip_tests {
             _prefix: &str,
             _delimiter: Option<String>,
         ) -> datafusion::error::Result<ListEntryStream> {
-            Err(DataFusionError::NotImplemented(format!(
-                "this is only a test object store"
-            )))
+            Err(DataFusionError::NotImplemented(
+                "this is only a test object store".to_string(),
+            ))
         }
 
         fn file_reader(
             &self,
             _file: SizedFile,
         ) -> datafusion::error::Result<Arc<dyn ObjectReader>> {
-            Err(DataFusionError::NotImplemented(format!(
-                "this is only a test object store"
-            )))
+            Err(DataFusionError::NotImplemented(
+                "this is only a test object store".to_string(),
+            ))
         }
     }
 
