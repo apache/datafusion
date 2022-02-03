@@ -129,6 +129,9 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::Stddev => AggregateFunction::Stddev,
             protobuf::AggregateFunction::StddevPop => AggregateFunction::StddevPop,
             protobuf::AggregateFunction::Correlation => AggregateFunction::Correlation,
+            protobuf::AggregateFunction::ApproxPercentileCont => {
+                AggregateFunction::ApproxPercentileCont
+            }
         }
     }
 }

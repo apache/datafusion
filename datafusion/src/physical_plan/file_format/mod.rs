@@ -35,11 +35,15 @@ pub use avro::AvroExec;
 pub use csv::CsvExec;
 pub use json::NdJsonExec;
 
+use crate::error::DataFusionError;
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
+    error::Result,
     scalar::ScalarValue,
 };
+use arrow::array::new_null_array;
 use lazy_static::lazy_static;
+use log::info;
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -162,6 +166,87 @@ impl<'a> Display for FileGroupsDisplay<'a> {
             })
             .collect();
         write!(f, "[{}]", parts.join(", "))
+    }
+}
+
+/// A utility which can adapt file-level record batches to a table schema which may have a schema
+/// obtained from merging multiple file-level schemas.
+///
+/// This is useful for enabling schema evolution in partitioned datasets.
+///
+/// This has to be done in two stages.
+///
+/// 1. Before reading the file, we have to map projected column indexes from the table schema to
+///    the file schema.
+///
+/// 2. After reading a record batch we need to map the read columns back to the expected columns
+///    indexes and insert null-valued columns wherever the file schema was missing a colum present
+///    in the table schema.
+#[derive(Clone, Debug)]
+pub(crate) struct SchemaAdapter {
+    /// Schema for the table
+    table_schema: SchemaRef,
+}
+
+impl SchemaAdapter {
+    pub(crate) fn new(table_schema: SchemaRef) -> SchemaAdapter {
+        Self { table_schema }
+    }
+
+    /// Map projected column indexes to the file schema. This will fail if the table schema
+    /// and the file schema contain a field with the same name and different types.
+    pub fn map_projections(
+        &self,
+        file_schema: &Schema,
+        projections: &[usize],
+    ) -> Result<Vec<usize>> {
+        let mut mapped: Vec<usize> = vec![];
+        for idx in projections {
+            let field = self.table_schema.field(*idx);
+            if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+                if file_schema.field(mapped_idx).data_type() == field.data_type() {
+                    mapped.push(mapped_idx)
+                } else {
+                    let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
+                    info!("{}", msg);
+                    return Err(DataFusionError::Execution(msg));
+                }
+            }
+        }
+        Ok(mapped)
+    }
+
+    /// Re-order projected columns by index in record batch to match table schema column ordering. If the record
+    /// batch does not contain a column for an expected field, insert a null-valued column at the
+    /// required column index.
+    pub fn adapt_batch(
+        &self,
+        batch: RecordBatch,
+        projections: &[usize],
+    ) -> Result<RecordBatch> {
+        let batch_rows = batch.num_rows();
+
+        let batch_schema = batch.schema();
+
+        let mut cols: Vec<ArrayRef> = Vec::with_capacity(batch.columns().len());
+        let batch_cols = batch.columns().to_vec();
+
+        for field_idx in projections {
+            let table_field = &self.table_schema.fields()[*field_idx];
+            if let Some((batch_idx, _name)) =
+                batch_schema.column_with_name(table_field.name().as_str())
+            {
+                cols.push(batch_cols[batch_idx].clone());
+            } else {
+                cols.push(new_null_array(table_field.data_type(), batch_rows))
+            }
+        }
+
+        let projected_schema = Arc::new(self.table_schema.clone().project(projections)?);
+
+        let merged_batch = RecordBatch::try_new(projected_schema, cols)?;
+
+        Ok(merged_batch)
     }
 }
 
@@ -465,6 +550,61 @@ mod tests {
             "+---+---+---+------+-----+",
         ];
         crate::assert_batches_eq!(expected, &[projected_batch]);
+    }
+
+    #[test]
+    fn schema_adapter_adapt_projections() {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Int64, true),
+            Field::new("c3", DataType::Int8, true),
+        ]));
+
+        let file_schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, true),
+            Field::new("c2", DataType::Int64, true),
+        ]);
+
+        let file_schema_2 = Arc::new(Schema::new(vec![
+            Field::new("c3", DataType::Int8, true),
+            Field::new("c2", DataType::Int64, true),
+        ]));
+
+        let file_schema_3 =
+            Arc::new(Schema::new(vec![Field::new("c3", DataType::Float32, true)]));
+
+        let adapter = SchemaAdapter::new(table_schema);
+
+        let projections1: Vec<usize> = vec![0, 1, 2];
+        let projections2: Vec<usize> = vec![2];
+
+        let mapped = adapter
+            .map_projections(&file_schema, projections1.as_slice())
+            .expect("mapping projections");
+
+        assert_eq!(mapped, vec![0, 1]);
+
+        let mapped = adapter
+            .map_projections(&file_schema, projections2.as_slice())
+            .expect("mapping projections");
+
+        assert!(mapped.is_empty());
+
+        let mapped = adapter
+            .map_projections(&file_schema_2, projections1.as_slice())
+            .expect("mapping projections");
+
+        assert_eq!(mapped, vec![1, 0]);
+
+        let mapped = adapter
+            .map_projections(&file_schema_2, projections2.as_slice())
+            .expect("mapping projections");
+
+        assert_eq!(mapped, vec![0]);
+
+        let mapped = adapter.map_projections(&file_schema_3, projections1.as_slice());
+
+        assert!(mapped.is_err());
     }
 
     // sets default for configs that play no role in projections

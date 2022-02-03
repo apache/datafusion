@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 
+use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat},
     listing::ListingOptions,
@@ -173,7 +174,7 @@ impl<'a> Default for NdJsonReadOptions<'a> {
         Self {
             schema: None,
             schema_infer_max_records: 1000,
-            file_extension: ".json",
+            file_extension: DEFAULT_JSON_EXTENSION,
         }
     }
 }
