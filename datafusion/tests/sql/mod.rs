@@ -99,6 +99,7 @@ pub mod window;
 pub mod information_schema;
 #[cfg_attr(not(feature = "unicode_expressions"), ignore)]
 pub mod unicode;
+mod explain;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
