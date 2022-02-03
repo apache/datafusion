@@ -249,7 +249,7 @@ impl SchemaAdapter {
 
         let projected_schema = Arc::new(self.table_schema.clone().project(projections)?);
 
-        let merged_batch = RecordBatch::try_new(projected_schema, cols)?;
+        let merged_batch = RecordBatch::try_new(projected_schema, cols.clone())?;
 
         Ok(merged_batch)
     }
