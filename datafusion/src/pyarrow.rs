@@ -97,8 +97,11 @@ mod tests {
                 Err(err).expect(
                     format!(
                         "pyarrow not found\nExecutable: {}\nPython path: {:?}\n\
-                         HINT: try `pip install pyarrow`
-                         HINT: if wrong Python path, try `PYO3_PYTHON=$(which python)`",
+                         HINT: try `pip install pyarrow`\n\
+                         NOTE: On Mac OS, you must compile against a Framework Python \
+                         (default in python.org installers and brew, but not pyenv)\n\
+                         NOTE: On Mac OS, PYO3 might point to incorrect path. Try \
+                         `export PYTHONPATH=$(python -c \"import sys; print(sys.path[-1])\")`\n",
                         executable, python_path
                     )
                     .as_ref(),
