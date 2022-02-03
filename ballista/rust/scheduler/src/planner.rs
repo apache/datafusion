@@ -260,7 +260,7 @@ mod test {
     };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
     use datafusion::prelude::ExecutionContext;
-    
+
     use std::sync::Arc;
     use uuid::Uuid;
 

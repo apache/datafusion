@@ -1264,9 +1264,8 @@ mod tests {
 
     mod ballista_round_trip {
         use super::*;
-        use ballista_core::serde::{protobuf, AsExecutionPlan};
+        use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan};
         use datafusion::physical_plan::ExecutionPlan;
-        use std::convert::TryInto;
 
         async fn round_trip_query(n: usize) -> Result<()> {
             let config = ExecutionConfig::new()
@@ -1298,8 +1297,9 @@ mod tests {
 
             // test logical plan round trip
             let plan = create_logical_plan(&mut ctx, n)?;
-            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
-            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            let proto: protobuf::LogicalPlanNode =
+                protobuf::LogicalPlanNode::try_from_logical_plan(&plan).unwrap();
+            let round_trip: LogicalPlan = (&proto).try_into_logical_plan(&ctx).unwrap();
             assert_eq!(
                 format!("{:?}", plan),
                 format!("{:?}", round_trip),
@@ -1308,8 +1308,9 @@ mod tests {
 
             // test optimized logical plan round trip
             let plan = ctx.optimize(&plan)?;
-            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
-            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            let proto: protobuf::LogicalPlanNode =
+                protobuf::LogicalPlanNode::try_from_logical_plan(&plan).unwrap();
+            let round_trip: LogicalPlan = (&proto).try_into_logical_plan(&ctx).unwrap();
             assert_eq!(
                 format!("{:?}", plan),
                 format!("{:?}", round_trip),

@@ -29,6 +29,7 @@ use datafusion::logical_plan::{
     Column, CreateExternalTable, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
 };
 use datafusion::prelude::ExecutionContext;
+use log::error;
 use prost::bytes::{Buf, BufMut};
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
@@ -218,6 +219,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     })?
                     .0;
 
+                println!(
+                    "Found object store {:?} for path {}",
+                    object_store,
+                    scan.path.as_str()
+                );
+
                 let provider = ListingTable::new(
                     object_store,
                     scan.path.clone(),
@@ -397,7 +404,14 @@ mod roundtrip_tests {
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
     use crate::serde::AsLogicalPlan;
+    use async_trait::async_trait;
     use core::panic;
+    use datafusion::datasource::listing::ListingTable;
+    use datafusion::datasource::object_store::{
+        FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
+    };
+    use datafusion::datasource::TableProvider;
+    use datafusion::error::DataFusionError;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
         datasource::object_store::local::LocalFileSystem,
@@ -411,7 +425,42 @@ mod roundtrip_tests {
         sql::parser::FileType,
     };
     use protobuf::arrow_type;
+    use sqlparser::test_utils::table;
     use std::{convert::TryInto, sync::Arc};
+
+    #[derive(Debug)]
+    struct TestObjectStore {}
+
+    #[async_trait]
+    impl ObjectStore for TestObjectStore {
+        async fn list_file(
+            &self,
+            _prefix: &str,
+        ) -> datafusion::error::Result<FileMetaStream> {
+            Err(DataFusionError::NotImplemented(format!(
+                "this is only a test object store"
+            )))
+        }
+
+        async fn list_dir(
+            &self,
+            _prefix: &str,
+            _delimiter: Option<String>,
+        ) -> datafusion::error::Result<ListEntryStream> {
+            Err(DataFusionError::NotImplemented(format!(
+                "this is only a test object store"
+            )))
+        }
+
+        fn file_reader(
+            &self,
+            _file: SizedFile,
+        ) -> datafusion::error::Result<Arc<dyn ObjectReader>> {
+            Err(DataFusionError::NotImplemented(format!(
+                "this is only a test object store"
+            )))
+        }
+    }
 
     //Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
     macro_rules! roundtrip_test {
@@ -435,7 +484,18 @@ mod roundtrip_tests {
                     .expect("from logical plan");
             let round_trip: LogicalPlan =
                 proto.try_into_logical_plan(&ctx).expect("to logical plan");
-            // roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, LogicalPlan);
+
+            assert_eq!(
+                format!("{:?}", $initial_struct),
+                format!("{:?}", round_trip)
+            );
+        };
+        ($initial_struct:ident, $ctx:ident) => {
+            let proto: protobuf::LogicalPlanNode =
+                protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
+                    .expect("from logical plan");
+            let round_trip: LogicalPlan =
+                proto.try_into_logical_plan(&$ctx).expect("to logical plan");
 
             assert_eq!(
                 format!("{:?}", $initial_struct),
@@ -1257,6 +1317,60 @@ mod roundtrip_tests {
         .map_err(BallistaError::DataFusionError)?;
 
         roundtrip_test!(plan);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn roundtrip_logical_plan_custom_ctx() -> Result<()> {
+        let ctx = ExecutionContext::new();
+        let custom_object_store = Arc::new(TestObjectStore {});
+        ctx.register_object_store("test", custom_object_store.clone());
+
+        let (os, _) = ctx.object_store("test://foo.csv")?;
+
+        println!("Object Store {:?}", os);
+
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("first_name", DataType::Utf8, false),
+            Field::new("last_name", DataType::Utf8, false),
+            Field::new("state", DataType::Utf8, false),
+            Field::new("salary", DataType::Int32, false),
+        ]);
+
+        let plan = LogicalPlanBuilder::scan_csv(
+            custom_object_store.clone(),
+            "test://employee.csv",
+            CsvReadOptions::new().schema(&schema).has_header(true),
+            Some(vec![3, 4]),
+            4,
+        )
+        .await
+        .and_then(|plan| plan.build())
+        .map_err(BallistaError::DataFusionError)?;
+
+        let proto: protobuf::LogicalPlanNode =
+            protobuf::LogicalPlanNode::try_from_logical_plan(&plan)
+                .expect("from logical plan");
+        let round_trip: LogicalPlan =
+            proto.try_into_logical_plan(&ctx).expect("to logical plan");
+
+        assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
+
+        let round_trip_store = match round_trip {
+            LogicalPlan::TableScan(scan) => {
+                match scan.source.as_ref().as_any().downcast_ref::<ListingTable>() {
+                    Some(listing_table) => {
+                        format!("{:?}", listing_table.object_store())
+                    }
+                    _ => panic!("expected a ListingTable"),
+                }
+            }
+            _ => panic!("expected a TableScan"),
+        };
+
+        assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
 
         Ok(())
     }
