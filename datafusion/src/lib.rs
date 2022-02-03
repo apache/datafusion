@@ -162,8 +162,8 @@
 //! * Sort: [`SortExec`](physical_plan::sort::SortExec)
 //! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
 //! * Limit: [`LocalLimitExec`](physical_plan::limit::LocalLimitExec) and [`GlobalLimitExec`](physical_plan::limit::GlobalLimitExec)
-//! * Scan a CSV: [`CsvExec`](physical_plan::csv::CsvExec)
-//! * Scan a Parquet: [`ParquetExec`](physical_plan::parquet::ParquetExec)
+//! * Scan a CSV: [`CsvExec`](physical_plan::file_format::CsvExec)
+//! * Scan a Parquet: [`ParquetExec`](physical_plan::file_format::ParquetExec)
 //! * Scan from memory: [`MemoryExec`](physical_plan::memory::MemoryExec)
 //! * Explain the plan: [`ExplainExec`](physical_plan::explain::ExplainExec)
 //!
