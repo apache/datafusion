@@ -20,6 +20,7 @@ use std::{any::Any, convert::TryInto, sync::Arc};
 use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute;
+use arrow::datatypes::DataType::Decimal;
 use arrow::datatypes::{DataType, Schema};
 
 use crate::error::{DataFusionError, Result};
@@ -247,9 +248,24 @@ fn evaluate_regex_case_insensitive<O: Offset>(
 
 fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn Array>> {
     use Operator::*;
-    if matches!(op, Plus | Minus | Divide | Multiply | Modulo | BitwiseAnd) {
+    if matches!(op, Plus) {
+        let arr: ArrayRef = match (lhs.data_type(), rhs.data_type()) {
+            (Decimal(p1, s1), Decimal(p2, s2)) => {
+                let left_array =
+                    lhs.as_any().downcast_ref::<PrimitiveArray<i128>>().unwrap();
+                let right_array =
+                    rhs.as_any().downcast_ref::<PrimitiveArray<i128>>().unwrap();
+                Arc::new(if *p1 == *p2 && *s1 == *s2 {
+                    compute::arithmetics::decimal::add(left_array, right_array)
+                } else {
+                    compute::arithmetics::decimal::adaptive_add(left_array, right_array)?
+                })
+            }
+            _ => compute::arithmetics::add(lhs, rhs).into(),
+        };
+        Ok(arr)
+    } else if matches!(op, Minus | Divide | Multiply | Modulo) {
         let arr = match op {
-            Operator::Plus => compute::arithmetics::add(lhs, rhs),
             Operator::Minus => compute::arithmetics::sub(lhs, rhs),
             Operator::Divide => compute::arithmetics::div(lhs, rhs),
             Operator::Multiply => compute::arithmetics::mul(lhs, rhs),
@@ -828,6 +844,7 @@ mod tests {
     use crate::error::Result;
     use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, lit};
+    use crate::test_util::create_decimal_array;
     use arrow::datatypes::{Field, SchemaRef};
     use arrow::error::ArrowError;
 
@@ -1015,7 +1032,11 @@ mod tests {
     }
 
     fn add_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
-        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let mut decimal_builder = Int128Vec::from_data(
+            left.data_type().clone(),
+            Vec::<i128>::with_capacity(left.len()),
+            None,
+        );
         for i in 0..left.len() {
             if left.is_null(i) || right.is_null(i) {
                 decimal_builder.push(None);
@@ -1027,7 +1048,11 @@ mod tests {
     }
 
     fn subtract_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
-        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let mut decimal_builder = Int128Vec::from_data(
+            left.data_type().clone(),
+            Vec::<i128>::with_capacity(left.len()),
+            None,
+        );
         for i in 0..left.len() {
             if left.is_null(i) || right.is_null(i) {
                 decimal_builder.push(None);
@@ -1043,7 +1068,11 @@ mod tests {
         right: &Int128Array,
         scale: u32,
     ) -> Result<Int128Array> {
-        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let mut decimal_builder = Int128Vec::from_data(
+            left.data_type().clone(),
+            Vec::<i128>::with_capacity(left.len()),
+            None,
+        );
         let divide = 10_i128.pow(scale);
         for i in 0..left.len() {
             if left.is_null(i) || right.is_null(i) {
@@ -1061,7 +1090,11 @@ mod tests {
         right: &Int128Array,
         scale: i32,
     ) -> Result<Int128Array> {
-        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let mut decimal_builder = Int128Vec::from_data(
+            left.data_type().clone(),
+            Vec::<i128>::with_capacity(left.len()),
+            None,
+        );
         let mul = 10_f64.powi(scale);
         for i in 0..left.len() {
             if left.is_null(i) || right.is_null(i) {
@@ -1081,7 +1114,11 @@ mod tests {
     }
 
     fn modulus_decimal(left: &Int128Array, right: &Int128Array) -> Result<Int128Array> {
-        let mut decimal_builder = Int128Vec::with_capacity(left.len());
+        let mut decimal_builder = Int128Vec::from_data(
+            left.data_type().clone(),
+            Vec::<i128>::with_capacity(left.len()),
+            None,
+        );
         for i in 0..left.len() {
             if left.is_null(i) || right.is_null(i) {
                 decimal_builder.push(None);
@@ -2133,25 +2170,6 @@ mod tests {
             .map(|i| i.map(|i| i * tree_depth))
             .collect();
         assert_eq!(result.as_ref(), &expected as &dyn Array);
-    }
-
-    fn create_decimal_array(
-        array: &[Option<i128>],
-        _precision: usize,
-        _scale: usize,
-    ) -> Result<Int128Array> {
-        let mut decimal_builder = Int128Vec::with_capacity(array.len());
-        for value in array {
-            match value {
-                None => {
-                    decimal_builder.push(None);
-                }
-                Some(v) => {
-                    decimal_builder.try_push(Some(*v))?;
-                }
-            }
-        }
-        Ok(decimal_builder.into())
     }
 
     #[test]

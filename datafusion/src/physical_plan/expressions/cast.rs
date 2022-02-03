@@ -105,7 +105,6 @@ pub fn cast_with_error(
 ) -> Result<Box<dyn Array>> {
     let result = cast::cast(array, cast_type, options)?;
     if result.null_count() != array.null_count() {
-        println!("{result:?} : {array:?}");
         let casted_valids = result.validity().unwrap();
         let failed_casts = match array.validity() {
             Some(valids) => valids ^ casted_valids,
@@ -192,6 +191,7 @@ mod tests {
     use crate::error::Result;
     use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::col;
+    use crate::test_util::create_decimal_array_from_slice;
     use arrow::{array::*, datatypes::*};
 
     type StringArray = Utf8Array<i32>;
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn test_cast_decimal_to_decimal() -> Result<()> {
         let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
@@ -315,7 +315,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
 
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
@@ -339,7 +339,7 @@ mod tests {
     fn test_cast_decimal_to_numeric() -> Result<()> {
         let array: Vec<i128> = vec![1, 2, 3, 4, 5];
         // decimal to i8
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -356,7 +356,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to i16
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -373,7 +373,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to i32
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -390,7 +390,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to i64
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 0),
@@ -408,7 +408,7 @@ mod tests {
         );
         // decimal to float32
         let array: Vec<i128> = vec![1234, 2222, 3, 4000, 5000];
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(10, 3),
@@ -425,7 +425,7 @@ mod tests {
             DEFAULT_DATAFUSION_CAST_OPTIONS
         );
         // decimal to float64
-        let decimal_array = Int128Array::from_slice(&array);
+        let decimal_array = create_decimal_array_from_slice(&array, 10, 3)?;
         generic_decimal_to_other_test_cast!(
             decimal_array,
             DataType::Decimal(20, 6),
