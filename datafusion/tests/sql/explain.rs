@@ -15,9 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Schema, Field};
-use datafusion::{logical_plan::{LogicalPlanBuilder, LogicalPlan, PlanType}, prelude::ExecutionContext};
-
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::{
+    logical_plan::{LogicalPlan, LogicalPlanBuilder, PlanType},
+    prelude::ExecutionContext,
+};
 
 #[test]
 fn optimize_explain() {
