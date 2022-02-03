@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines physical expressions that can evaluated at runtime during query execution
+//! Defines physical expressions for APPROX_MEDIAN that can be evaluated at runtime during query execution
 
 use std::any::Any;
 use std::sync::Arc;
