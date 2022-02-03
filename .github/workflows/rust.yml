@@ -230,6 +230,55 @@ jobs:
           # do not produce debug symbols to keep memory usage down
           RUSTFLAGS: "-C debuginfo=0"
 
+  test-datafusion-pyarrow:
+    needs: [linux-build-lib]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64]
+        rust: [stable]
+    container:
+      image: ${{ matrix.arch }}/rust
+      env:
+        # Disable full debug symbol generation to speed up CI build and keep memory down
+        # "1" means line tables only, which is useful for panic tracebacks.
+        RUSTFLAGS: "-C debuginfo=1"
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - name: Cache Cargo
+        uses: actions/cache@v2
+        with:
+          path: /github/home/.cargo
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: cargo-cache-
+      - name: Cache Rust dependencies
+        uses: actions/cache@v2
+        with:
+          path: /github/home/target
+          # this key equals the ones on `linux-build-lib` for re-use
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+      - uses: actions/setup-python@v2
+        with:
+          python-version: "3.8"
+      - name: Install PyArrow
+        run: |
+          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          python -m pip install pyarrow
+      - name: Setup Rust toolchain
+        run: |
+          rustup toolchain install ${{ matrix.rust }}
+          rustup default ${{ matrix.rust }}
+          rustup component add rustfmt
+      - name: Run tests
+        run: |
+          cd datafusion
+          cargo test --features=pyarrow
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
