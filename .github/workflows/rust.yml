@@ -264,7 +264,8 @@ jobs:
           python-version: "3.8"
       - name: Install PyArrow
         run: |
-          pip install pyarrow
+          echo "LIBRARY_PATH=$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          python -m pip install pyarrow
       - name: Setup Rust toolchain
         run: |
           rustup toolchain install ${{ matrix.rust }}

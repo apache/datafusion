@@ -100,7 +100,8 @@ mod tests {
                          HINT: try `pip install pyarrow`\n\
                          NOTE: On Mac OS, you must compile against a Framework Python \
                          (default in python.org installers and brew, but not pyenv)\n\
-                         NOTE: On Mac OS, PYO3 might point to incorrect path. Try \
+                         NOTE: On Mac OS, PYO3 might point to incorrect Python library \
+                         path when using virtual environments. Try \
                          `export PYTHONPATH=$(python -c \"import sys; print(sys.path[-1])\")`\n",
                         executable, python_path
                     )
