@@ -300,6 +300,11 @@ impl ExecutionPlan for LocalLimitExec {
             _ => Statistics::default(),
         }
     }
+
+    fn should_repartition_children(&self) -> bool {
+        // No reason to repartition children as this node is just limiting each input partition.
+        false
+    }
 }
 
 /// Truncate a RecordBatch to maximum of n rows
