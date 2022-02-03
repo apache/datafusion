@@ -393,7 +393,7 @@ impl PartialOrd for Expr {
 }
 
 /// Provides schema information needed by [Expr] methods such as
-/// [Expr::nullable] and [Expr::data_type]
+/// [Expr::nullable] and [Expr::data_type].
 ///
 /// Note that this trait is implemented for &[DFSchema] which is
 /// widely used in the DataFusion codebase.
@@ -405,7 +405,7 @@ pub trait ExprSchema {
     fn data_type(&self, col: &Column) -> Result<&DataType>;
 }
 
-// Implement for Arc<DFSchema>
+// Implement `ExprSchema` for `Arc<DFSchema>`
 impl<P: AsRef<DFSchema>> ExprSchema for P {
     fn nullable(&self, col: &Column) -> Result<bool> {
         self.as_ref().nullable(col)
@@ -427,13 +427,18 @@ impl ExprSchema for DFSchema {
 }
 
 impl Expr {
-    /// Returns the [arrow::datatypes::DataType] of the expression based on [DFSchema].
+    /// Returns the [arrow::datatypes::DataType] of the expression
+    /// based on [ExprSchema]
+    ///
+    /// Note: [DFSchema] implements [ExprSchema].
     ///
     /// # Errors
     ///
-    /// This function errors when it is not possible to compute its [arrow::datatypes::DataType].
-    /// This happens when e.g. the expression refers to a column that does not exist in the schema, or when
-    /// the expression is incorrectly typed (e.g. `[utf8] + [bool]`).
+    /// This function errors when it is not possible to compute its
+    /// [arrow::datatypes::DataType].  This happens when e.g. the
+    /// expression refers to a column that does not exist in the
+    /// schema, or when the expression is incorrectly typed
+    /// (e.g. `[utf8] + [bool]`).
     pub fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
             Expr::Alias(expr, _) | Expr::Sort { expr, .. } | Expr::Negative(expr) => {
@@ -506,12 +511,15 @@ impl Expr {
         }
     }
 
-    /// Returns the nullability of the expression based on [DFSchema].
+    /// Returns the nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [DFSchema] implements [ExprSchema].
     ///
     /// # Errors
     ///
-    /// This function errors when it is not possible to compute its nullability.
-    /// This happens when the expression refers to a column that does not exist in the schema.
+    /// This function errors when it is not possible to compute its
+    /// nullability.  This happens when the expression refers to a
+    /// column that does not exist in the schema.
     pub fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool> {
         match self {
             Expr::Alias(expr, _)
