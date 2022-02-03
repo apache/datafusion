@@ -16,7 +16,8 @@
 // under the License.
 
 use super::*;
-use datafusion::from_slice::FromSlice;
+use datafusion::{from_slice::FromSlice, physical_plan::collect_partitioned};
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
@@ -926,5 +927,61 @@ async fn csv_select_nested() -> Result<()> {
         "+----+----+------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn parallel_query_with_filter() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    let logical_plan =
+        ctx.create_logical_plan("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")?;
+    let logical_plan = ctx.optimize(&logical_plan)?;
+
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+
+    let runtime = ctx.state.lock().runtime_env.clone();
+    let results = collect_partitioned(physical_plan, runtime).await?;
+
+    // note that the order of partitions is not deterministic
+    let mut num_rows = 0;
+    for partition in &results {
+        for batch in partition {
+            num_rows += batch.num_rows();
+        }
+    }
+    assert_eq!(20, num_rows);
+
+    let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 10 |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 2  | 1  |",
+        "| 2  | 10 |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
     Ok(())
 }
