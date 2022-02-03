@@ -21,10 +21,11 @@ use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
 use hashbrown::HashSet;
 use log::debug;
+use parking_lot::{Condvar, Mutex};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -302,12 +303,12 @@ impl MemoryManager {
     }
 
     fn get_requester_total(&self) -> usize {
-        *self.requesters_total.lock().unwrap()
+        *self.requesters_total.lock()
     }
 
     /// Register a new memory requester
     pub(crate) fn register_requester(&self, requester_id: &MemoryConsumerId) {
-        self.requesters.lock().unwrap().insert(requester_id.clone());
+        self.requesters.lock().insert(requester_id.clone());
     }
 
     fn max_mem_for_requesters(&self) -> usize {
@@ -317,8 +318,8 @@ impl MemoryManager {
 
     /// Grow memory attempt from a consumer, return if we could grant that much to it
     async fn can_grow_directly(&self, required: usize, current: usize) -> bool {
-        let num_rqt = self.requesters.lock().unwrap().len();
-        let mut rqt_current_used = self.requesters_total.lock().unwrap();
+        let num_rqt = self.requesters.lock().len();
+        let mut rqt_current_used = self.requesters_total.lock();
         let mut rqt_max = self.max_mem_for_requesters();
 
         let granted;
@@ -339,7 +340,7 @@ impl MemoryManager {
             } else if current < min_per_rqt {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
                 // to spill instead spill self frequently with limited total mem
-                rqt_current_used = self.cv.wait(rqt_current_used).unwrap();
+                self.cv.wait(&mut rqt_current_used);
             } else {
                 granted = false;
                 break;
@@ -351,8 +352,8 @@ impl MemoryManager {
         granted
     }
 
-    fn record_free_then_acquire(&self, freed: usize, acquired: usize) {
-        let mut requesters_total = self.requesters_total.lock().unwrap();
+    fn record_free_then_acquire(&self, freed: usize, acquired: usize) -> usize {
+        let mut requesters_total = self.requesters_total.lock();
         assert!(*requesters_total >= freed);
         *requesters_total -= freed;
         *requesters_total += acquired;
@@ -363,9 +364,9 @@ impl MemoryManager {
     pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
         // find in requesters first
         {
-            let mut requesters = self.requesters.lock().unwrap();
+            let mut requesters = self.requesters.lock();
             if requesters.remove(id) {
-                let mut total = self.requesters_total.lock().unwrap();
+                let mut total = self.requesters_total.lock();
                 assert!(*total >= mem_used);
                 *total -= mem_used;
             }
@@ -381,7 +382,7 @@ impl Display for MemoryManager {
                "MemoryManager usage statistics: total {}, trackers used {}, total {} requesters used: {}",
                human_readable_size(self.pool_size),
                human_readable_size(self.get_tracker_total()),
-               self.requesters.lock().unwrap().len(),
+               self.requesters.lock().len(),
                human_readable_size(self.get_requester_total()),
         )
     }
@@ -558,7 +559,7 @@ mod tests {
         requester1.do_with_mem(10).await.unwrap();
         assert_eq!(requester1.get_spills(), 0);
         assert_eq!(requester1.mem_used(), 50);
-        assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 50);
+        assert_eq!(*runtime.memory_manager.requesters_total.lock(), 50);
 
         let requester2 = DummyRequester::new(0, runtime.clone());
         runtime.register_requester(requester2.id());
@@ -572,7 +573,7 @@ mod tests {
         assert_eq!(requester1.get_spills(), 1);
         assert_eq!(requester1.mem_used(), 10);
 
-        assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 40);
+        assert_eq!(*runtime.memory_manager.requesters_total.lock(), 40);
     }
 
     #[tokio::test]
