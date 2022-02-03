@@ -223,9 +223,8 @@ async fn csv_query_stddev_6() -> Result<()> {
 async fn csv_query_median_1() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT median(c2) FROM aggregate_test_100";
+    let sql = "SELECT approx_median(c2) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
     let expected = vec![vec!["3"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -235,9 +234,8 @@ async fn csv_query_median_1() -> Result<()> {
 async fn csv_query_median_2() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT median(c6) FROM aggregate_test_100";
+    let sql = "SELECT approx_median(c6) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
     let expected = vec![vec!["1146409980542786560"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -247,9 +245,8 @@ async fn csv_query_median_2() -> Result<()> {
 async fn csv_query_median_3() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv(&mut ctx).await?;
-    let sql = "SELECT median(c12) FROM aggregate_test_100";
+    let sql = "SELECT approx_median(c12) FROM aggregate_test_100";
     let mut actual = execute(&mut ctx, sql).await;
-    actual.sort();
     let expected = vec![vec!["0.5550065410522981"]];
     assert_float_eq(&expected, &actual);
     Ok(())

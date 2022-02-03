@@ -20,8 +20,8 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::aggregates::AggregateFunction;
 use crate::physical_plan::expressions::{
-    is_avg_support_arg_type, is_correlation_support_arg_type,
-    is_covariance_support_arg_type, is_median_support_arg_type,
+    is_approx_median_support_arg_type, is_avg_support_arg_type,
+    is_correlation_support_arg_type, is_covariance_support_arg_type,
     is_stddev_support_arg_type, is_sum_support_arg_type, is_variance_support_arg_type,
     try_cast,
 };
@@ -155,8 +155,8 @@ pub(crate) fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
-        AggregateFunction::Median => {
-            if !is_median_support_arg_type(&input_types[0]) {
+        AggregateFunction::ApproxMedian => {
+            if !is_approx_median_support_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]

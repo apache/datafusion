@@ -32,13 +32,13 @@ use super::format_state_name;
 
 /// MEDIAN aggregate expression
 #[derive(Debug)]
-pub struct Median {
+pub struct ApproxMedian {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
     data_type: DataType,
 }
 
-pub(crate) fn is_median_support_arg_type(arg_type: &DataType) -> bool {
+pub(crate) fn is_approx_median_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
         DataType::UInt8
@@ -54,8 +54,8 @@ pub(crate) fn is_median_support_arg_type(arg_type: &DataType) -> bool {
     )
 }
 
-impl Median {
-    /// Create a new MEDIAN aggregate function
+impl ApproxMedian {
+    /// Create a new APPROX_MEDIAN aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
@@ -69,7 +69,7 @@ impl Median {
     }
 }
 
-impl AggregateExpr for Median {
+impl AggregateExpr for ApproxMedian {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -80,7 +80,7 @@ impl AggregateExpr for Median {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(MedianAccumulator::try_new(
+        Ok(Box::new(ApproxMedianAccumulator::try_new(
             self.data_type.clone(),
         )?))
     }
@@ -129,16 +129,16 @@ impl AggregateExpr for Median {
     }
 }
 
-/// An accumulator to compute the median.
+/// An accumulator to compute the approx_median.
 /// It is using approx_percentile_cont under the hood, which is an approximation.
-/// We will revist this and may provide an implementation to calculate the exact median in the future.
+/// We will revist this and may provide an implementation to calculate the exact approx_median in the future.
 #[derive(Debug)]
-pub struct MedianAccumulator {
+pub struct ApproxMedianAccumulator {
     perc_cont: ApproxPercentileAccumulator,
 }
 
-impl MedianAccumulator {
-    /// Creates a new `MedianAccumulator`
+impl ApproxMedianAccumulator {
+    /// Creates a new `ApproxMedianAccumulator`
     pub fn try_new(data_type: DataType) -> Result<Self> {
         Ok(Self {
             perc_cont: ApproxPercentileAccumulator::new(0.5_f64, data_type),
@@ -146,7 +146,7 @@ impl MedianAccumulator {
     }
 }
 
-impl Accumulator for MedianAccumulator {
+impl Accumulator for ApproxMedianAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(self.perc_cont.get_digest().to_scalar_state())
     }
@@ -174,85 +174,85 @@ mod tests {
     use arrow::{array::*, datatypes::*};
 
     #[test]
-    fn median_f64_1() -> Result<()> {
+    fn approx_median_f64_1() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
-            Median,
+            ApproxMedian,
             ScalarValue::from(1.5_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn median_f64_2() -> Result<()> {
+    fn approx_median_f64_2() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
-            Median,
+            ApproxMedian,
             ScalarValue::from(2_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn median_f64_3() -> Result<()> {
+    fn approx_median_f64_3() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
             1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
         ]));
         generic_test_op!(
             a,
             DataType::Float64,
-            Median,
+            ApproxMedian,
             ScalarValue::from(3_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn median_i32() -> Result<()> {
+    fn approx_median_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
-            Median,
+            ApproxMedian,
             ScalarValue::from(3),
             DataType::Int32
         )
     }
 
     #[test]
-    fn median_u32() -> Result<()> {
+    fn approx_median_u32() -> Result<()> {
         let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
             1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
         ]));
         generic_test_op!(
             a,
             DataType::UInt32,
-            Median,
+            ApproxMedian,
             ScalarValue::from(3_u32),
             DataType::UInt32
         )
     }
 
     #[test]
-    fn median_f32() -> Result<()> {
+    fn approx_median_f32() -> Result<()> {
         let a: ArrayRef = Arc::new(Float32Array::from_slice(&[
             1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
         ]));
         generic_test_op!(
             a,
             DataType::Float32,
-            Median,
+            ApproxMedian,
             ScalarValue::from(3_f32),
             DataType::Float32
         )
     }
 
     #[test]
-    fn median_i32_with_nulls() -> Result<()> {
+    fn approx_median_i32_with_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -263,19 +263,38 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            Median,
+            ApproxMedian,
             ScalarValue::from(3),
             DataType::Int32
         )
     }
 
     #[test]
-    fn median_i32_all_nulls() -> Result<()> {
+    fn approx_median_i32_with_nulls_2() -> Result<()> {
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+            Some(5),
+            Some(1),
+            None,
+            None,
+            Some(3),
+            Some(4),
+        ]));
+        generic_test_op!(
+            a,
+            DataType::Int32,
+            ApproxMedian,
+            ScalarValue::from(2),
+            DataType::Int32
+        )
+    }
+
+    #[test]
+    fn approx_median_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None]));
         generic_test_op!(
             a,
             DataType::Int32,
-            Median,
+            ApproxMedian,
             ScalarValue::from(0),
             DataType::Int32
         )

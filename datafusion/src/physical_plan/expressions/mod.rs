@@ -44,10 +44,10 @@ mod lead_lag;
 mod literal;
 #[macro_use]
 mod min_max;
+mod approx_median;
 mod correlation;
 mod covariance;
 mod distinct_expressions;
-mod median;
 mod negative;
 mod not;
 mod nth_value;
@@ -66,6 +66,7 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
+pub(crate) use approx_median::{is_approx_median_support_arg_type, ApproxMedian};
 pub use approx_percentile_cont::{
     is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
 };
@@ -93,7 +94,6 @@ pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use lead_lag::{lag, lead};
 pub use literal::{lit, Literal};
-pub(crate) use median::{is_median_support_arg_type, Median};
 pub use min_max::{Max, Min};
 pub(crate) use min_max::{MaxAccumulator, MinAccumulator};
 pub use negative::{negative, NegativeExpr};
