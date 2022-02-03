@@ -302,6 +302,7 @@ impl ExecutionPlan for LocalLimitExec {
     }
 
     fn should_repartition_children(&self) -> bool {
+        // No reason to repartition children as this node is just limiting each input partition.
         false
     }
 }

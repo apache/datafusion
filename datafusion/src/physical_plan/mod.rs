@@ -150,7 +150,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Returns `true` if the direct children of this `ExecutionPlan` should be repartitioned
     /// to introduce greater concurrency to the plan
     ///
-    /// The default implementation returns `true` unless `Self::request_child_distribution`
+    /// The default implementation returns `true` unless `Self::required_child_distribution`
     /// returns `Distribution::SinglePartition`
     ///
     /// Operators that do not benefit from additional partitioning may want to return `false`

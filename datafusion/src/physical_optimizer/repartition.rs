@@ -115,6 +115,7 @@ mod tests {
     use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::{displayable, Statistics};
+    use crate::physical_plan::union::UnionExec;
     use crate::test::object_store::TestObjectStore;
 
     fn schema() -> SchemaRef {
@@ -223,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn repartition_ignores() -> Result<()> {
+    fn repartition_ignores_limit() -> Result<()> {
         let optimizer = Repartition {};
 
         let optimized = optimizer.optimize(
@@ -242,7 +243,33 @@ mod tests {
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "GlobalLimitExec: limit=100",
-            "LocalLimitExec: limit=100", // Should not repartition for LocalLimitExec
+            "LocalLimitExec: limit=100",
+            // Expect no repartition to happen for local limit
+            "ParquetExec: limit=None, partitions=[x]",
+        ];
+
+        assert_eq!(&trim_plan_display(&plan), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_union() -> Result<()> {
+        let optimizer = Repartition {};
+
+        let optimized = optimizer.optimize(
+            Arc::new(UnionExec::new(vec![parquet_exec(); 5])),
+            &ExecutionConfig::new().with_target_partitions(5),
+        )?;
+
+        let plan = displayable(optimized.as_ref()).indent().to_string();
+
+        let expected = &[
+            "UnionExec",
+            // Expect no repartition of ParquetExec
+            "ParquetExec: limit=None, partitions=[x]",
+            "ParquetExec: limit=None, partitions=[x]",
+            "ParquetExec: limit=None, partitions=[x]",
+            "ParquetExec: limit=None, partitions=[x]",
             "ParquetExec: limit=None, partitions=[x]",
         ];
 
