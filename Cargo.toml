@@ -31,3 +31,9 @@ members = [
 [profile.release]
 lto = true
 codegen-units = 1
+
+[patch.crates-io]
+# TODO: TEMPORARY
+arrow = { git = "https://github.com/apache/arrow-rs", rev = "43299cc3b9e4a0a7120fc9870f2e0e2d7d8746a0" }
+arrow-flight = { git = "https://github.com/apache/arrow-rs", rev = "43299cc3b9e4a0a7120fc9870f2e0e2d7d8746a0" }
+parquet = { git = "https://github.com/apache/arrow-rs", rev = "43299cc3b9e4a0a7120fc9870f2e0e2d7d8746a0" }
