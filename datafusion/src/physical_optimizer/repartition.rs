@@ -114,8 +114,8 @@ mod tests {
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-    use crate::physical_plan::{displayable, Statistics};
     use crate::physical_plan::union::UnionExec;
+    use crate::physical_plan::{displayable, Statistics};
     use crate::test::object_store::TestObjectStore;
 
     fn schema() -> SchemaRef {
