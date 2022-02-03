@@ -2194,9 +2194,9 @@ pub fn exprlist_to_fields<'a>(
 /// use datafusion::logical_plan::*;
 ///
 /// // create the expression sin(x) < 0.2
-/// let expr = call_buildin_scalar_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
+/// let expr = call_builtin_scalar_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
 /// ```
-pub fn call_buildin_scalar_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
+pub fn call_builtin_scalar_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
     match name.as_ref().parse::<functions::BuiltinScalarFunction>() {
         Ok(fun) => Ok(Expr::ScalarFunction { fun, args }),
         Err(e) => Err(e),
