@@ -26,7 +26,7 @@ use crate::error::{DataFusionError, Result};
 use crate::from_slice::FromSlice;
 use crate::logical_plan::builder::project_with_alias;
 use crate::logical_plan::dfschema::DFSchemaRef;
-use crate::logical_plan::LogicalPlanBuilder;
+use crate::logical_plan::{col, LogicalPlanBuilder};
 use crate::sql::parser::FileType;
 use arrow::array::Int8Array;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -609,13 +609,25 @@ impl LogicalPlan {
                 schema: _,
                 alias,
             }) => {
+                let outer_cols = outer
+                    .schema()
+                    .fields()
+                    .into_iter()
+                    .map(|field| col(field.name()))
+                    .collect::<Vec<Expr>>();
+                let outer_projection = outer_cols
+                    .into_iter()
+                    .chain(expr.clone().into_iter())
+                    .collect::<Vec<_>>();
                 let input = input.rewrite_to(outer).unwrap();
-                project_with_alias(input, expr.clone(), alias.clone())
+                project_with_alias(input, outer_projection, alias.clone())
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 let mut input = input.rewrite_to(outer).unwrap().clone();
+                dbg!(input.schema().clone());
                 // `predicate` may contain subqueries, so need rewrite to process subqueries
                 let new_predicate = predicate.rewrite_to(&mut input).unwrap();
+                dbg!(new_predicate.clone());
                 // use `new_predicate` instead of `predicate
                 // todo: delete the columns that are used to process subqueries
                 Ok(LogicalPlanBuilder::from(input)
@@ -630,7 +642,16 @@ impl LogicalPlan {
             LogicalPlan::Join(Join { .. }) => todo!(),
             LogicalPlan::CrossJoin(CrossJoin { .. }) => todo!(),
             LogicalPlan::Repartition(Repartition { .. }) => todo!(),
-            LogicalPlan::Union(Union { .. }) => todo!(),
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                let mut first = inputs[0].rewrite_to(outer).unwrap();
+                for input in inputs.into_iter().skip(1) {
+                    first = LogicalPlanBuilder::from(first)
+                        .union(input.clone())?
+                        .build()
+                        .unwrap()
+                }
+                Ok(first)
+            }
             LogicalPlan::TableScan(TableScan {
                 table_name,
                 source,
@@ -672,6 +693,7 @@ impl LogicalPlan {
                     .map(|f| f.field().clone())
                     .collect(),
             ));
+            dbg!(schema.clone());
             let fields_size = self.schema().fields().len();
             LogicalPlanBuilder::scan(
                 name,
@@ -690,7 +712,14 @@ impl LogicalPlan {
             .distinct()?
             .build()
             .unwrap();
-        let result_plan = distinct_outer_table.compute(expr).unwrap();
+        dbg!(distinct_outer_table.schema().fields()); // yes
+        let result_plan = distinct_outer_table
+            .get_table_scan()
+            .unwrap()
+            .compute(expr)
+            .unwrap();
+        dbg!(result_plan.schema().fields());
+        dbg!(outer_table.schema().fields());
         // join with outer_table
         let join_keys = outer_table
             .schema()
@@ -720,6 +749,7 @@ impl LogicalPlan {
                 .distinct()?
                 .build()
                 .unwrap();
+        dbg!(compute_result.schema().clone());
         // Add a column contains true to compute_result
         // 1. create a table contains one col on row, data type: bool, value: true
         // 2. cross join with `compute_result`

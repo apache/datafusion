@@ -91,6 +91,7 @@ pub mod predicates;
 pub mod projection;
 pub mod references;
 pub mod select;
+pub mod subquery;
 pub mod timestamp;
 pub mod udf;
 pub mod union;
