@@ -524,11 +524,6 @@ impl Expr {
         }
     }
 
-<<<<<<< HEAD
-    /// Returns the nullability of the expression based on [ExprSchema].
-    ///
-    /// Note: [DFSchema] implements [ExprSchema].
-=======
     pub fn rewrite_to(self, out_arity: usize, outer: &mut LogicalPlan) -> Result<Expr> {
         Ok(match self {
             Expr::Alias(_, _) => todo!(),
@@ -564,8 +559,9 @@ impl Expr {
         })
     }
 
-    /// Returns the nullability of the expression based on [arrow::datatypes::Schema].
->>>>>>> 956d7f1d (fix build)
+    /// Returns the nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [DFSchema] implements [ExprSchema].
     ///
     /// # Errors
     ///
