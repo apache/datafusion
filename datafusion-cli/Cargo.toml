@@ -17,6 +17,7 @@
 
 [package]
 name = "datafusion-cli"
+description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model. It supports executing SQL queries against CSV and Parquet files as well as querying directly against in-memory data."
 version = "5.1.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
