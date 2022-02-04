@@ -66,7 +66,7 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target/debug"
       - name: Build workspace in release mode
         run: |
-          cargo build --release
+          cargo check --release
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target/release"
