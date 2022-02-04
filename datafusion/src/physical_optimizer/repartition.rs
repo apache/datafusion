@@ -109,11 +109,12 @@ mod tests {
 
     use super::*;
     use crate::datasource::PartitionedFile;
-    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
+    use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, Statistics};
     use crate::test::object_store::TestObjectStore;
@@ -135,6 +136,17 @@ mod tests {
             },
             None,
         ))
+    }
+
+    fn sort_preserving_merge_exec(
+        input: Arc<dyn ExecutionPlan>,
+    ) -> Arc<dyn ExecutionPlan> {
+        let expr = vec![PhysicalSortExpr {
+            expr: col("c1", &schema()).unwrap(),
+            options: arrow::compute::SortOptions::default(),
+        }];
+
+        Arc::new(SortPreservingMergeExec::new(expr, input))
     }
 
     fn filter_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -270,6 +282,27 @@ mod tests {
             "ParquetExec: limit=None, partitions=[x]",
             "ParquetExec: limit=None, partitions=[x]",
             "ParquetExec: limit=None, partitions=[x]",
+            "ParquetExec: limit=None, partitions=[x]",
+        ];
+
+        assert_eq!(&trim_plan_display(&plan), &expected);
+        Ok(())
+    }
+
+    #[test]
+    fn repartition_ignores_sort_preserving_merge() -> Result<()> {
+        let optimizer = Repartition {};
+
+        let optimized = optimizer.optimize(
+            sort_preserving_merge_exec(parquet_exec()),
+            &ExecutionConfig::new().with_target_partitions(5),
+        )?;
+
+        let plan = displayable(optimized.as_ref()).indent().to_string();
+
+        let expected = &[
+            "SortPreservingMergeExec: [c1@0 ASC]",
+            // Expect no repartition of SortPreservingMergeExec
             "ParquetExec: limit=None, partitions=[x]",
         ];
 

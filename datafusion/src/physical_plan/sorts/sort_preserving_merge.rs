@@ -128,6 +128,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Distribution::UnspecifiedDistribution
     }
 
+    fn should_repartition_children(&self) -> bool {
+        // if the children are repartitioned they may no longer remain
+        // sorted
+        false
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }
