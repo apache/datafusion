@@ -524,7 +524,8 @@ impl Expr {
         }
     }
 
-    pub fn rewrite_to(self, out_arity: usize, outer: &mut LogicalPlan) -> Result<Expr> {
+    /// rewrite the subquery to apply to the outer logical plan
+    pub fn rewrite_to(&self, outer: &mut LogicalPlan) -> Result<Expr> {
         Ok(match self {
             Expr::Alias(_, _) => todo!(),
             Expr::Column(_) => todo!(),
@@ -548,8 +549,11 @@ impl Expr {
             Expr::AggregateUDF { .. } => todo!(),
             Expr::InList { .. } => todo!(),
             Expr::Wildcard => todo!(),
-            Expr::Exists(logicalPlan) => {
-                *outer = outer.process_subquery(logicalPlan.as_ref()).unwrap();
+            Expr::Exists(logical_plan) => {
+                *outer = outer
+                    .clone()
+                    .process_subquery(logical_plan.as_ref())
+                    .unwrap();
                 // finally, return the column contains `bool`
                 Expr::Column(Column {
                     relation: None,
@@ -839,7 +843,8 @@ impl Expr {
             Expr::Column(_)
             | Expr::ScalarVariable(_)
             | Expr::Literal(_)
-            | Expr::Wildcard => Ok(visitor),
+            | Expr::Wildcard
+            | Expr::Exists(_) => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
@@ -902,8 +907,6 @@ impl Expr {
                 list.iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))
             }
-            Expr::Wildcard | Expr::Exists(_) => Ok(visitor),
-            Expr::GetIndexedField { ref expr, .. } => expr.accept(visitor),
         }?;
 
         visitor.post_visit(self)

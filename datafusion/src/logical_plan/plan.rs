@@ -332,13 +332,6 @@ pub struct Join {
     pub null_equals_null: bool,
 }
 
-#[derive(Clone, PartialEq, Hash)]
-pub struct Map {
-    /// The incoming logical plan
-    pub input: Arc<LogicalPlan>,
-    /// Columns that append to table
-    pub columns: Vec<(Expr, DataType)>,
-}
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -600,7 +593,8 @@ impl LogicalPlan {
         Ok(visitor.using_columns)
     }
 
-    pub fn rewrite_to(self, outer: LogicalPlan) -> Result<Self> {
+    /// rewrite logical plan to flatten the subqueries
+    pub fn rewrite_to(&self, outer: LogicalPlan) -> Result<Self> {
         if let LogicalPlan::TableScan(TableScan { .. }) = &outer {
         } else {
             return Err(DataFusionError::Plan(format!(
@@ -612,18 +606,16 @@ impl LogicalPlan {
             LogicalPlan::Projection(Projection {
                 expr,
                 input,
-                schema,
+                schema: _,
                 alias,
             }) => {
-                let input = input.rewrite_to(outer.clone()).unwrap();
-                project_with_alias(input, expr, alias)
+                let input = input.rewrite_to(outer).unwrap();
+                project_with_alias(input, expr.clone(), alias.clone())
             }
             LogicalPlan::Filter(Filter { predicate, input }) => {
-                let mut input = input.rewrite_to(outer.clone()).unwrap();
+                let mut input = input.rewrite_to(outer).unwrap().clone();
                 // `predicate` may contain subqueries, so need rewrite to process subqueries
-                let new_predicate = predicate
-                    .rewrite_to(outer.schema().fields().len(), &mut input)
-                    .unwrap();
+                let new_predicate = predicate.rewrite_to(&mut input).unwrap();
                 // use `new_predicate` instead of `predicate
                 // todo: delete the columns that are used to process subqueries
                 Ok(LogicalPlanBuilder::from(input)
@@ -648,12 +640,12 @@ impl LogicalPlan {
                 limit,
             }) => LogicalPlanBuilder::from(outer)
                 .cross_join(&LogicalPlan::TableScan(TableScan {
-                    table_name,
-                    source,
-                    projection,
-                    projected_schema,
-                    filters,
-                    limit,
+                    table_name: table_name.to_string(),
+                    source: source.clone(),
+                    projection: projection.clone(),
+                    projected_schema: projected_schema.clone(),
+                    filters: filters.clone(),
+                    limit: limit.clone(),
                 }))?
                 .build(),
             LogicalPlan::EmptyRelation(EmptyRelation { .. }) => todo!(),
@@ -684,13 +676,14 @@ impl LogicalPlan {
             LogicalPlanBuilder::scan(
                 name,
                 Arc::new(EmptyTable::new(schema)),
-                Option::from((0..fields_size).collect()),
+                Option::from((0..fields_size).collect::<Vec<usize>>()),
             )?
             .build()
             .unwrap()
         })
     }
-    // process subqueries
+
+    /// process subqueries
     pub fn process_subquery(self, expr: &LogicalPlan) -> Result<LogicalPlan> {
         let outer_table = self.get_table_scan().unwrap();
         let distinct_outer_table = LogicalPlanBuilder::from(outer_table)
@@ -701,12 +694,14 @@ impl LogicalPlan {
         // join with outer_table
         todo!()
     }
-    // compute every row in outer_table for subquery
+
+    /// compute every row in outer_table for subquery
     fn compute(self, expr: &LogicalPlan) -> Result<LogicalPlan> {
-        let compute_result = LogicalPlanBuilder::from(expr.rewrite_to(self).unwrap())
-            .distinct()?
-            .build()
-            .unwrap();
+        let compute_result =
+            LogicalPlanBuilder::from(expr.clone().rewrite_to(self).unwrap())
+                .distinct()?
+                .build()
+                .unwrap();
         // Add a column contains true to compute_result
         // 1. create a table contains one col on row, data type: bool, value: true
         // 2. cross join with `compute_result`

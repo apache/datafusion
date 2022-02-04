@@ -31,7 +31,7 @@ use crate::logical_plan::{
     and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
     DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
-    TableScan, ToDFSchema, ToStringifiedPlan,
+    ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -138,7 +138,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )?
         .build()
         .unwrap();
-        plan.rewrite_to(outer_table)
+        plan.clone().rewrite_to(outer_table)
     }
 
     /// Generate a logical plan from an SQL statement
