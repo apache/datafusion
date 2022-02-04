@@ -1347,44 +1347,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn optimize_explain() {
-        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-
-        let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
-            .unwrap()
-            .explain(true, false)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        if let LogicalPlan::Explain(e) = &plan {
-            assert_eq!(e.stringified_plans.len(), 1);
-        } else {
-            panic!("plan was not an explain: {:?}", plan);
-        }
-
-        // now optimize the plan and expect to see more plans
-        let optimized_plan = ExecutionContext::new().optimize(&plan).unwrap();
-        if let LogicalPlan::Explain(e) = &optimized_plan {
-            // should have more than one plan
-            assert!(
-                e.stringified_plans.len() > 1,
-                "plans: {:#?}",
-                e.stringified_plans
-            );
-            // should have at least one optimized plan
-            let opt = e
-                .stringified_plans
-                .iter()
-                .any(|p| matches!(p.plan_type, PlanType::OptimizedLogicalPlan { .. }));
-
-            assert!(opt, "plans: {:#?}", e.stringified_plans);
-        } else {
-            panic!("plan was not an explain: {:?}", plan);
-        }
-    }
-
     #[tokio::test]
     async fn parallel_projection() -> Result<()> {
         let partition_count = 4;

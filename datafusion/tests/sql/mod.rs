@@ -96,6 +96,7 @@ pub mod udf;
 pub mod union;
 pub mod window;
 
+mod explain;
 pub mod information_schema;
 #[cfg_attr(not(feature = "unicode_expressions"), ignore)]
 pub mod unicode;
