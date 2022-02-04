@@ -686,13 +686,31 @@ impl LogicalPlan {
     /// process subqueries
     pub fn process_subquery(self, expr: &LogicalPlan) -> Result<LogicalPlan> {
         let outer_table = self.get_table_scan().unwrap();
-        let distinct_outer_table = LogicalPlanBuilder::from(outer_table)
+        let distinct_outer_table = LogicalPlanBuilder::from(outer_table.clone())
             .distinct()?
             .build()
             .unwrap();
         let result_plan = distinct_outer_table.compute(expr).unwrap();
         // join with outer_table
-        todo!()
+        let join_keys = outer_table
+            .schema()
+            .fields()
+            .iter()
+            .zip(
+                result_plan.schema().fields().as_slice()
+                    [0..outer_table.schema().fields().len()]
+                    .iter(),
+            )
+            .map(|(left_field, right_field)| {
+                (
+                    (Column::from_name(left_field.name())),
+                    (Column::from_name(right_field.name())),
+                )
+            })
+            .unzip();
+        LogicalPlanBuilder::from(outer_table)
+            .join(&result_plan, JoinType::Inner, join_keys)?
+            .build()
     }
 
     /// compute every row in outer_table for subquery

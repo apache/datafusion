@@ -557,7 +557,7 @@ impl Expr {
                 // finally, return the column contains `bool`
                 Expr::Column(Column {
                     relation: None,
-                    name: "".to_string(),
+                    name: "exists_subquery_col".to_string(),
                 })
             }
         })
