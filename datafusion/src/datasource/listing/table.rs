@@ -73,7 +73,7 @@ impl ListingTableConfig {
         self.options = Some(listing_options);
     }
 
-    fn infer_options(&self) -> Result<ListingOptions> {
+    fn infer_options(&mut self) -> Result<ListingOptions> {
         let tokens: Vec<&str> = self.table_path.split(".").collect();
         let file_type = tokens.last().ok_or(DataFusionError::Internal(
             "Unable to infer file suffix".into(),
@@ -93,13 +93,15 @@ impl ListingTableConfig {
             target_partitions: num_cpus::get(),
             table_partition_cols: vec![],
         };
+        self.options = Some(listing_options);
         Ok(listing_options)
     }
 
-    async fn infer_schema(&self, options: &ListingOptions) -> Result<SchemaRef> {
+    async fn infer_schema(&mut self, options: &ListingOptions) -> Result<SchemaRef> {
         let schema = options
             .infer_schema(self.object_store.clone(), self.table_path.as_str())
             .await?;
+        self.file_schema = Some(schema.clone());
         Ok(schema)
     }
 }
@@ -183,15 +185,15 @@ impl ListingTable {
     /// The provided `schema` must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
-    pub async fn new(config: ListingTableConfig) -> Result<Self> {
-        let options: ListingOptions = if let Some(opts) = config.options {
-            opts
+    pub async fn new(config: &mut ListingTableConfig) -> Result<Self> {
+        let options: ListingOptions = if let Some(opts) = &config.options {
+            opts.clone()
         } else {
             config.infer_options()?
         };
 
-        let file_schema: SchemaRef = if let Some(schema) = config.file_schema {
-            schema
+        let file_schema: SchemaRef = if let Some(schema) = &config.file_schema {
+            schema.clone()
         } else {
             config.infer_schema(&options.clone()).await?
         };
@@ -207,8 +209,8 @@ impl ListingTable {
         }
 
         let table = Self {
-            object_store: config.object_store,
-            table_path: config.table_path,
+            object_store: config.object_store.clone(),
+            table_path: config.table_path.clone(),
             file_schema,
             table_schema: Arc::new(Schema::new(table_fields)),
             options,
@@ -494,20 +496,22 @@ mod tests {
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
-        let opt = ListingOptions {
-            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
-            format: Arc::new(ParquetFormat::default()),
-            table_partition_cols: vec![],
-            target_partitions: 2,
-            collect_stat: true,
-        };
+        let config = ListingTableConfig::new(LocalFileSystem {}, filename).await;
+        // let opt = ListingOptions {
+        //     file_extension: "parquet".to_owned(),
+        //     format: Arc::new(ParquetFormat::default()),
+        //     table_partition_cols: vec![],
+        //     target_partitions: 2,
+        //     collect_stat: true,
+        // };
         // here we resolve the schema locally
-        let schema = opt
-            .infer_schema(Arc::new(LocalFileSystem {}), &filename)
-            .await
-            .expect("Infer schema");
-        let table =
-            ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
+        // let schema = opt
+        //     .infer_schema(Arc::new(LocalFileSystem {}), &filename)
+        //     .await
+        //     .expect("Infer schema");
+        // let table =
+        //     ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
+        let table = ListingTable::new(config).await?;
         Ok(Arc::new(table))
     }
 
