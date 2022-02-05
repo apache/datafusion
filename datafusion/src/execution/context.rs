@@ -1281,11 +1281,9 @@ mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
     use crate::from_slice::FromSlice;
-    use crate::logical_plan::plan::Projection;
-    use crate::logical_plan::TableScan;
     use crate::logical_plan::{binary_expr, lit, Operator};
+    use crate::physical_plan::collect;
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
-    use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
     use crate::variable::VarType;
     use crate::{
@@ -1311,7 +1309,6 @@ mod tests {
     use std::thread::{self, JoinHandle};
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
-    use test::*;
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
@@ -1345,62 +1342,6 @@ mod tests {
             Arc::as_ptr(&disk_manager),
             Arc::as_ptr(&ctx2.runtime_env().disk_manager)
         ));
-    }
-
-    #[tokio::test]
-    async fn parallel_projection() -> Result<()> {
-        let partition_count = 4;
-        let results = execute("SELECT c1, c2 FROM test", partition_count).await?;
-
-        let expected = vec![
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 3  | 1  |",
-            "| 3  | 2  |",
-            "| 3  | 3  |",
-            "| 3  | 4  |",
-            "| 3  | 5  |",
-            "| 3  | 6  |",
-            "| 3  | 7  |",
-            "| 3  | 8  |",
-            "| 3  | 9  |",
-            "| 3  | 10 |",
-            "| 2  | 1  |",
-            "| 2  | 2  |",
-            "| 2  | 3  |",
-            "| 2  | 4  |",
-            "| 2  | 5  |",
-            "| 2  | 6  |",
-            "| 2  | 7  |",
-            "| 2  | 8  |",
-            "| 2  | 9  |",
-            "| 2  | 10 |",
-            "| 1  | 1  |",
-            "| 1  | 2  |",
-            "| 1  | 3  |",
-            "| 1  | 4  |",
-            "| 1  | 5  |",
-            "| 1  | 6  |",
-            "| 1  | 7  |",
-            "| 1  | 8  |",
-            "| 1  | 9  |",
-            "| 1  | 10 |",
-            "| 0  | 1  |",
-            "| 0  | 2  |",
-            "| 0  | 3  |",
-            "| 0  | 4  |",
-            "| 0  | 5  |",
-            "| 0  | 6  |",
-            "| 0  | 7  |",
-            "| 0  | 8  |",
-            "| 0  | 9  |",
-            "| 0  | 10 |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-
-        Ok(())
     }
 
     #[tokio::test]
@@ -1443,184 +1384,6 @@ mod tests {
 
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn parallel_query_with_filter() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let partition_count = 4;
-        let ctx = create_ctx(&tmp_dir, partition_count).await?;
-
-        let logical_plan =
-            ctx.create_logical_plan("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")?;
-        let logical_plan = ctx.optimize(&logical_plan)?;
-
-        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-
-        let runtime = ctx.state.lock().runtime_env.clone();
-        let results = collect_partitioned(physical_plan, runtime).await?;
-
-        // note that the order of partitions is not deterministic
-        let mut num_rows = 0;
-        for partition in &results {
-            for batch in partition {
-                num_rows += batch.num_rows();
-            }
-        }
-        assert_eq!(20, num_rows);
-
-        let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
-        let expected = vec![
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 1  | 1  |",
-            "| 1  | 10 |",
-            "| 1  | 2  |",
-            "| 1  | 3  |",
-            "| 1  | 4  |",
-            "| 1  | 5  |",
-            "| 1  | 6  |",
-            "| 1  | 7  |",
-            "| 1  | 8  |",
-            "| 1  | 9  |",
-            "| 2  | 1  |",
-            "| 2  | 10 |",
-            "| 2  | 2  |",
-            "| 2  | 3  |",
-            "| 2  | 4  |",
-            "| 2  | 5  |",
-            "| 2  | 6  |",
-            "| 2  | 7  |",
-            "| 2  | 8  |",
-            "| 2  | 9  |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn projection_on_table_scan() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let partition_count = 4;
-        let ctx = create_ctx(&tmp_dir, partition_count).await?;
-        let runtime = ctx.state.lock().runtime_env.clone();
-
-        let table = ctx.table("test")?;
-        let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
-            .project(vec![col("c2")])?
-            .build()?;
-
-        let optimized_plan = ctx.optimize(&logical_plan)?;
-        match &optimized_plan {
-            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-                LogicalPlan::TableScan(TableScan {
-                    source,
-                    projected_schema,
-                    ..
-                }) => {
-                    assert_eq!(source.schema().fields().len(), 3);
-                    assert_eq!(projected_schema.fields().len(), 1);
-                }
-                _ => panic!("input to projection should be TableScan"),
-            },
-            _ => panic!("expect optimized_plan to be projection"),
-        }
-
-        let expected = "Projection: #test.c2\
-        \n  TableScan: test projection=Some([1])";
-        assert_eq!(format!("{:?}", optimized_plan), expected);
-
-        let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
-
-        assert_eq!(1, physical_plan.schema().fields().len());
-        assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
-
-        let batches = collect(physical_plan, runtime).await?;
-        assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn preserve_nullability_on_projection() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let ctx = create_ctx(&tmp_dir, 1).await?;
-
-        let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
-        assert!(!schema.field_with_name("c1")?.is_nullable());
-
-        let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
-            .project(vec![col("c1")])?
-            .build()?;
-
-        let plan = ctx.optimize(&plan)?;
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn projection_on_memory_scan() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-        ]);
-        let schema = SchemaRef::new(schema);
-
-        let partitions = vec![vec![RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
-                Arc::new(Int32Array::from_slice(&[3, 12, 12, 120])),
-            ],
-        )?]];
-
-        let plan = LogicalPlanBuilder::scan_memory(partitions, schema, None)?
-            .project(vec![col("b")])?
-            .build()?;
-        assert_fields_eq(&plan, vec!["b"]);
-
-        let ctx = ExecutionContext::new();
-        let optimized_plan = ctx.optimize(&plan)?;
-        match &optimized_plan {
-            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-                LogicalPlan::TableScan(TableScan {
-                    source,
-                    projected_schema,
-                    ..
-                }) => {
-                    assert_eq!(source.schema().fields().len(), 3);
-                    assert_eq!(projected_schema.fields().len(), 1);
-                }
-                _ => panic!("input to projection should be InMemoryScan"),
-            },
-            _ => panic!("expect optimized_plan to be projection"),
-        }
-
-        let expected = format!(
-            "Projection: #{}.b\
-        \n  TableScan: {} projection=Some([1])",
-            UNNAMED_TABLE, UNNAMED_TABLE
-        );
-        assert_eq!(format!("{:?}", optimized_plan), expected);
-
-        let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
-
-        assert_eq!(1, physical_plan.schema().fields().len());
-        assert_eq!("b", physical_plan.schema().field(0).name().as_str());
-
-        let runtime = ctx.state.lock().runtime_env.clone();
-        let batches = collect(physical_plan, runtime).await?;
-        assert_eq!(1, batches.len());
-        assert_eq!(1, batches[0].num_columns());
-        assert_eq!(4, batches[0].num_rows());
 
         Ok(())
     }
