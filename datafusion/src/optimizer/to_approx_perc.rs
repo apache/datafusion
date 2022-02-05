@@ -19,13 +19,12 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Aggregate, Projection};
-use crate::logical_plan::{col, columnize_expr, DFSchema, Expr, LogicalPlan};
-use crate::physical_plan::aggregates;
+use crate::logical_plan::plan::Aggregate;
+use crate::logical_plan::{Expr, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use hashbrown::HashSet;
-use std::sync::Arc;
+use crate::physical_plan::aggregates;
+use crate::scalar::ScalarValue;
 
 /// espression/function to approx_percentile optimizer rule
 ///  ```text
@@ -46,6 +45,12 @@ impl ToApproxPerc {
     }
 }
 
+impl Default for ToApproxPerc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Aggregate(Aggregate {
@@ -55,25 +60,9 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
             group_expr,
         }) => {
             let new_aggr_expr = aggr_expr
-            .iter()
-            .map(|agg_expr| match agg_expr {
-                Expr::AggregateFunction { fun, args, .. } => {
-                    let mut new_args = args.clone();
-                    match fun {
-                        aggregates::AggregateFunction::ApproxMedian => {
-                            //new_args.push(lit(0.5_f64));
-                            Expr::AggregateFunction {
-                                fun: aggregates::AggregateFunction::ApproxPercentileCont,
-                                args: new_args,
-                                distinct: false,
-                            }
-                        }
-                        _ => agg_expr.clone(),
-                    }
-                }
-                _ => agg_expr.clone(),
-            })
-            .collect::<Vec<_>>();
+                .iter()
+                .map(|agg_expr| replace_with_percentile(agg_expr).unwrap())
+                .collect::<Vec<_>>();
 
             Ok(LogicalPlan::Aggregate(Aggregate {
                 input: input.clone(),
@@ -82,7 +71,41 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 group_expr: group_expr.clone(),
             }))
         }
-        _ => Ok(plan.clone())
+        _ => optimize_children(plan),
+    }
+}
+
+fn optimize_children(plan: &LogicalPlan) -> Result<LogicalPlan> {
+    let expr = plan.expressions();
+    let inputs = plan.inputs();
+    let new_inputs = inputs
+        .iter()
+        .map(|plan| optimize(plan))
+        .collect::<Result<Vec<_>>>()?;
+    utils::from_plan(plan, &expr, &new_inputs)
+}
+
+fn replace_with_percentile(expr: &Expr) -> Result<Expr> {
+    match expr {
+        Expr::AggregateFunction {
+            fun,
+            args,
+            distinct,
+        } => {
+            let mut new_args = args.clone();
+            let mut new_func = fun.clone();
+            if fun == &aggregates::AggregateFunction::ApproxMedian {
+                new_args.push(Expr::Literal(ScalarValue::Float64(Some(0.5_f64))));
+                new_func = aggregates::AggregateFunction::ApproxPercentileCont;
+            }
+
+            Ok(Expr::AggregateFunction {
+                fun: new_func,
+                args: new_args,
+                distinct: *distinct,
+            })
+        }
+        _ => Ok(expr.clone()),
     }
 }
 
@@ -99,153 +122,40 @@ impl OptimizerRule for ToApproxPerc {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use crate::logical_plan::{col, count, count_distinct, lit, max, LogicalPlanBuilder};
-//     use crate::physical_plan::aggregates;
-//     use crate::test::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logical_plan::{col, LogicalPlanBuilder};
+    use crate::physical_plan::aggregates;
+    use crate::test::*;
 
-//     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-//         let rule = SingleDistinctToGroupBy::new();
-//         let optimized_plan = rule
-//             .optimize(plan, &ExecutionProps::new())
-//             .expect("failed to optimize plan");
-//         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
-//         assert_eq!(formatted_plan, expected);
-//     }
+    fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
+        let rule = ToApproxPerc::new();
+        let optimized_plan = rule
+            .optimize(plan, &ExecutionProps::new())
+            .expect("failed to optimize plan");
+        let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
+        assert_eq!(formatted_plan, expected);
+    }
 
-//     #[test]
-//     fn not_exist_distinct() -> Result<()> {
-//         let table_scan = test_table_scan()?;
+    #[test]
+    fn median_1() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let expr = Expr::AggregateFunction {
+            fun: aggregates::AggregateFunction::ApproxMedian,
+            distinct: false,
+            args: vec![col("b")],
+        };
 
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(Vec::<Expr>::new(), vec![max(col("b"))])?
-//             .build()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![expr])?
+            .build()?;
 
-//         // Do nothing
-//         let expected = "Aggregate: groupBy=[[]], aggr=[[MAX(#test.b)]] [MAX(test.b):UInt32;N]\
-//                             \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        // Do nothing
+        let expected = "Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#test.b, Float64(0.5))]] [APPROXMEDIAN(test.b):UInt32;N]\
+                            \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-
-//     #[test]
-//     fn single_distinct() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
-//             .build()?;
-
-//         // Should work
-//         let expected = "Projection: #COUNT(alias1) AS COUNT(DISTINCT test.b) [COUNT(DISTINCT test.b):UInt64;N]\
-//                             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#alias1)]] [COUNT(alias1):UInt64;N]\
-//                             \n    Aggregate: groupBy=[[#test.b AS alias1]], aggr=[[]] [alias1:UInt32]\
-//                             \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-
-//     #[test]
-//     fn single_distinct_expr() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(Vec::<Expr>::new(), vec![count_distinct(lit(2) * col("b"))])?
-//             .build()?;
-
-//         let expected = "Projection: #COUNT(alias1) AS COUNT(DISTINCT Int32(2) * test.b) [COUNT(DISTINCT Int32(2) * test.b):UInt64;N]\
-//                             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#alias1)]] [COUNT(alias1):UInt64;N]\
-//                             \n    Aggregate: groupBy=[[Int32(2) * #test.b AS alias1]], aggr=[[]] [alias1:Int32]\
-//                             \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-
-//     #[test]
-//     fn single_distinct_and_groupby() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
-//             .build()?;
-
-//         // Should work
-//         let expected = "Projection: #test.a AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):UInt64;N]\
-//                             \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#alias1)]] [a:UInt32, COUNT(alias1):UInt64;N]\
-//                             \n    Aggregate: groupBy=[[#test.a, #test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
-//                             \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-
-//     #[test]
-//     fn two_distinct_and_groupby() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(
-//                 vec![col("a")],
-//                 vec![count_distinct(col("b")), count_distinct(col("c"))],
-//             )?
-//             .build()?;
-
-//         // Do nothing
-//         let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b), COUNT(DISTINCT #test.c)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, COUNT(DISTINCT test.c):UInt64;N]\
-//                             \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-
-//     #[test]
-//     fn one_field_two_distinct_and_groupby() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(
-//                 vec![col("a")],
-//                 vec![
-//                     count_distinct(col("b")),
-//                     Expr::AggregateFunction {
-//                         fun: aggregates::AggregateFunction::Max,
-//                         distinct: true,
-//                         args: vec![col("b")],
-//                     },
-//                 ],
-//             )?
-//             .build()?;
-//         // Should work
-//         let expected = "Projection: #test.a AS a, #COUNT(alias1) AS COUNT(DISTINCT test.b), #MAX(alias1) AS MAX(DISTINCT test.b) [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, MAX(DISTINCT test.b):UInt32;N]\
-//                             \n  Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(#alias1), MAX(#alias1)]] [a:UInt32, COUNT(alias1):UInt64;N, MAX(alias1):UInt32;N]\
-//                             \n    Aggregate: groupBy=[[#test.a, #test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]\
-//                             \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-
-//     #[test]
-//     fn distinct_and_common() -> Result<()> {
-//         let table_scan = test_table_scan()?;
-
-//         let plan = LogicalPlanBuilder::from(table_scan)
-//             .aggregate(
-//                 vec![col("a")],
-//                 vec![count_distinct(col("b")), count(col("c"))],
-//             )?
-//             .build()?;
-
-//         // Do nothing
-//         let expected = "Aggregate: groupBy=[[#test.a]], aggr=[[COUNT(DISTINCT #test.b), COUNT(#test.c)]] [a:UInt32, COUNT(DISTINCT test.b):UInt64;N, COUNT(test.c):UInt64;N]\
-//                             \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
-
-//         assert_optimized_plan_eq(&plan, expected);
-//         Ok(())
-//     }
-// }
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+}
