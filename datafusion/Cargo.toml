@@ -47,9 +47,10 @@ pyarrow = ["pyo3", "arrow/pyarrow"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
-avro = ["avro-rs", "num-traits"]
+avro = ["avro-rs", "num-traits", "datafusion-common/avro"]
 
 [dependencies]
+datafusion-common = { path = "../datafusion-common" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
 arrow = { version = "8.0.0", features = ["prettyprint"] }
