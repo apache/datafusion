@@ -22,9 +22,9 @@ use ahash::{CallHasher, RandomState};
 use arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Date64Array, DecimalArray,
     DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeStringArray, StringArray, TimestampSecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type,
