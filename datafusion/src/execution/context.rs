@@ -924,12 +924,14 @@ impl Default for ExecutionConfig {
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
                 Arc::new(SimplifyExpressions::new()),
+                // Renaming functions to percentile early in case 
+                // other optimizations can be applied later
+                Arc::new(ToApproxPerc::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
-                Arc::new(ToApproxPerc::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
             ],
             physical_optimizers: vec![
