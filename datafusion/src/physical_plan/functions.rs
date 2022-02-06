@@ -46,17 +46,16 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::{ArrayRef, NullArray},
+    array::ArrayRef,
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
     record_batch::RecordBatch,
 };
-use fmt::{Debug, Formatter};
-use std::convert::From;
-use std::{any::Any, fmt, sync::Arc};
-
+pub use datafusion_expr::NullColumnarValue;
 pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
+use fmt::{Debug, Formatter};
+use std::{any::Any, fmt, sync::Arc};
 
 /// Scalar function
 ///
@@ -1203,17 +1202,6 @@ impl fmt::Display for ScalarFunctionExpr {
                 .collect::<Vec<String>>()
                 .join(", ")
         )
-    }
-}
-
-/// null columnar values are implemented as a null array in order to pass batch
-/// num_rows
-type NullColumnarValue = ColumnarValue;
-
-impl From<&RecordBatch> for NullColumnarValue {
-    fn from(batch: &RecordBatch) -> Self {
-        let num_rows = batch.num_rows();
-        ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
     }
 }
 
