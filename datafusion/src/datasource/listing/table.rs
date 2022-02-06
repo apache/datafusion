@@ -65,12 +65,22 @@ impl ListingTableConfig {
             options: None,
         }
     }
-    pub fn with_schema(mut self, schema: SchemaRef) {
-        self.file_schema = Some(schema);
+    pub fn with_schema(self, schema: SchemaRef) -> Self {
+        Self {
+            object_store: self.object_store,
+            table_path: self.table_path,
+            file_schema: Some(schema),
+            options: self.options,
+        }
     }
 
-    pub fn with_listing_options(mut self, listing_options: ListingOptions) {
-        self.options = Some(listing_options);
+    pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
+        Self {
+            object_store: self.object_store,
+            table_path: self.table_path,
+            file_schema: self.file_schema,
+            options: Some(listing_options),
+        }
     }
 
     fn infer_options(&mut self) -> Result<ListingOptions> {
@@ -185,17 +195,15 @@ impl ListingTable {
     /// The provided `schema` must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
-    pub async fn new(config: &mut ListingTableConfig) -> Result<Self> {
-        let options: ListingOptions = if let Some(opts) = &config.options {
-            opts.clone()
-        } else {
-            config.infer_options()?
+    pub async fn new(mut config: ListingTableConfig) -> Result<Self> {
+        let options = match config.options {
+            Some(ref cfg) => cfg.clone(),
+            None => config.infer_options()?,
         };
 
-        let file_schema: SchemaRef = if let Some(schema) = &config.file_schema {
-            schema.clone()
-        } else {
-            config.infer_schema(&options.clone()).await?
+        let file_schema = match config.file_schema {
+            Some(schema) => schema,
+            None => config.infer_schema(&options).await?,
         };
 
         // Add the partition columns to the file schema
@@ -382,8 +390,9 @@ mod tests {
         let schema = opt
             .infer_schema(Arc::new(LocalFileSystem {}), &filename)
             .await?;
-        let table =
-            ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
+        let config =
+            ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename).await;
+        let table = ListingTable::new(config).await?;
         let exec = table.scan(&None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
@@ -393,20 +402,10 @@ mod tests {
 
     #[tokio::test]
     async fn read_empty_table() -> Result<()> {
-        let store = TestObjectStore::new_arc(&[("table/p1=v1/file.avro", 100)]);
-
-        let opt = ListingOptions {
-            file_extension: DEFAULT_AVRO_EXTENSION.to_owned(),
-            format: Arc::new(AvroFormat {}),
-            table_partition_cols: vec![String::from("p1")],
-            target_partitions: 4,
-            collect_stat: true,
-        };
-
-        let file_schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
-
-        let table =
-            ListingTable::new(store, "table/".to_owned(), Arc::new(file_schema), opt);
+        let path = String::from("table/p1=v1/file.avro");
+        let store = TestObjectStore::new_arc(&[(&path, 100)]);
+        let config = ListingTableConfig::new(store, &path).await;
+        let table = ListingTable::new(config).await?;
         assert_eq!(
             columns(&table.schema()),
             vec!["a".to_owned(), "p1".to_owned()]
@@ -496,21 +495,8 @@ mod tests {
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
-        let config = ListingTableConfig::new(LocalFileSystem {}, filename).await;
-        // let opt = ListingOptions {
-        //     file_extension: "parquet".to_owned(),
-        //     format: Arc::new(ParquetFormat::default()),
-        //     table_partition_cols: vec![],
-        //     target_partitions: 2,
-        //     collect_stat: true,
-        // };
-        // here we resolve the schema locally
-        // let schema = opt
-        //     .infer_schema(Arc::new(LocalFileSystem {}), &filename)
-        //     .await
-        //     .expect("Infer schema");
-        // let table =
-        //     ListingTable::new(Arc::new(LocalFileSystem {}), filename, schema, opt);
+        let config =
+            ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename).await;
         let table = ListingTable::new(config).await?;
         Ok(Arc::new(table))
     }
@@ -538,8 +524,9 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let table =
-            ListingTable::new(mock_store, table_prefix.to_owned(), Arc::new(schema), opt);
+        let config = ListingTableConfig::new(mock_store, table_prefix.to_owned()).await;
+
+        let table = ListingTable::new(config).await?;
 
         let (file_list, _) = table.list_files_for_scan(&[], None).await?;
 
