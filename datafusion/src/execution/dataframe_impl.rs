@@ -321,12 +321,12 @@ mod tests {
 
     use super::*;
     use crate::execution::options::CsvReadOptions;
-    use crate::physical_plan::functions::ScalarFunctionImplementation;
-    use crate::physical_plan::functions::Volatility;
     use crate::physical_plan::{window_functions, ColumnarValue};
     use crate::{assert_batches_sorted_eq, execution::context::ExecutionContext};
     use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
+    use datafusion_expr::ScalarFunctionImplementation;
+    use datafusion_expr::Volatility;
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {

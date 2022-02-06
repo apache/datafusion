@@ -19,8 +19,14 @@ mod accumulator;
 mod aggregate_function;
 mod built_in_function;
 mod columnar_value;
+pub mod expr;
+pub mod expr_fn;
+mod function;
+mod literal;
 mod operator;
 mod signature;
+mod udaf;
+mod udf;
 mod window_frame;
 mod window_function;
 
@@ -28,7 +34,16 @@ pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::{ColumnarValue, NullColumnarValue};
+pub use expr::Expr;
+pub use expr_fn::col;
+pub use function::{
+    AccumulatorFunctionImplementation, ReturnTypeFunction, ScalarFunctionImplementation,
+    StateTypeFunction,
+};
+pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};
+pub use udaf::AggregateUDF;
+pub use udf::ScalarUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
