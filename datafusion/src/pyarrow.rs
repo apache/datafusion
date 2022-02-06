@@ -15,20 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
 use crate::arrow::array::ArrayData;
 use crate::arrow::pyarrow::PyArrowConvert;
-use crate::error::DataFusionError;
 use crate::scalar::ScalarValue;
-
-impl From<DataFusionError> for PyErr {
-    fn from(err: DataFusionError) -> PyErr {
-        PyException::new_err(err.to_string())
-    }
-}
 
 impl PyArrowConvert for ScalarValue {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
