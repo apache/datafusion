@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod column;
+mod dfschema;
 mod error;
 
+pub use column::Column;
+pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{DataFusionError, Result};

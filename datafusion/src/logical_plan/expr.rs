@@ -34,151 +34,13 @@ use crate::physical_plan::{
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
+pub use datafusion_common::{Column, ExprSchema};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
-use std::convert::Infallible;
 use std::fmt;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
-use std::str::FromStr;
 use std::sync::Arc;
-
-/// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Column {
-    /// relation/table name.
-    pub relation: Option<String>,
-    /// field/column name.
-    pub name: String,
-}
-
-impl Column {
-    /// Create Column from unqualified name.
-    pub fn from_name(name: impl Into<String>) -> Self {
-        Self {
-            relation: None,
-            name: name.into(),
-        }
-    }
-
-    /// Deserialize a fully qualified name string into a column
-    pub fn from_qualified_name(flat_name: &str) -> Self {
-        use sqlparser::tokenizer::Token;
-
-        let dialect = sqlparser::dialect::GenericDialect {};
-        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
-        if let Ok(tokens) = tokenizer.tokenize() {
-            if let [Token::Word(relation), Token::Period, Token::Word(name)] =
-                tokens.as_slice()
-            {
-                return Column {
-                    relation: Some(relation.value.clone()),
-                    name: name.value.clone(),
-                };
-            }
-        }
-        // any expression that's not in the form of `foo.bar` will be treated as unqualified column
-        // name
-        Column {
-            relation: None,
-            name: String::from(flat_name),
-        }
-    }
-
-    /// Serialize column into a flat name string
-    pub fn flat_name(&self) -> String {
-        match &self.relation {
-            Some(r) => format!("{}.{}", r, self.name),
-            None => self.name.clone(),
-        }
-    }
-
-    /// Normalizes `self` if is unqualified (has no relation name)
-    /// with an explicit qualifier from the first matching input
-    /// schemas.
-    ///
-    /// For example, `foo` will be normalized to `t.foo` if there is a
-    /// column named `foo` in a relation named `t` found in `schemas`
-    pub fn normalize(self, plan: &LogicalPlan) -> Result<Self> {
-        let schemas = plan.all_schemas();
-        let using_columns = plan.using_columns()?;
-        self.normalize_with_schemas(&schemas, &using_columns)
-    }
-
-    // Internal implementation of normalize
-    fn normalize_with_schemas(
-        self,
-        schemas: &[&Arc<DFSchema>],
-        using_columns: &[HashSet<Column>],
-    ) -> Result<Self> {
-        if self.relation.is_some() {
-            return Ok(self);
-        }
-
-        for schema in schemas {
-            let fields = schema.fields_with_unqualified_name(&self.name);
-            match fields.len() {
-                0 => continue,
-                1 => {
-                    return Ok(fields[0].qualified_column());
-                }
-                _ => {
-                    // More than 1 fields in this schema have their names set to self.name.
-                    //
-                    // This should only happen when a JOIN query with USING constraint references
-                    // join columns using unqualified column name. For example:
-                    //
-                    // ```sql
-                    // SELECT id FROM t1 JOIN t2 USING(id)
-                    // ```
-                    //
-                    // In this case, both `t1.id` and `t2.id` will match unqualified column `id`.
-                    // We will use the relation from the first matched field to normalize self.
-
-                    // Compare matched fields with one USING JOIN clause at a time
-                    for using_col in using_columns {
-                        let all_matched = fields
-                            .iter()
-                            .all(|f| using_col.contains(&f.qualified_column()));
-                        // All matched fields belong to the same using column set, in orther words
-                        // the same join clause. We simply pick the qualifer from the first match.
-                        if all_matched {
-                            return Ok(fields[0].qualified_column());
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(DataFusionError::Plan(format!(
-            "Column {} not found in provided schemas",
-            self
-        )))
-    }
-}
-
-impl From<&str> for Column {
-    fn from(c: &str) -> Self {
-        Self::from_qualified_name(c)
-    }
-}
-
-impl FromStr for Column {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(s.into())
-    }
-}
-
-impl fmt::Display for Column {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.relation {
-            Some(r) => write!(f, "#{}.{}", r, self.name),
-            None => write!(f, "#{}", self.name),
-        }
-    }
-}
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -389,40 +251,6 @@ impl PartialOrd for Expr {
         let o = hasher.finish();
 
         Some(s.cmp(&o))
-    }
-}
-
-/// Provides schema information needed by [Expr] methods such as
-/// [Expr::nullable] and [Expr::data_type].
-///
-/// Note that this trait is implemented for &[DFSchema] which is
-/// widely used in the DataFusion codebase.
-pub trait ExprSchema {
-    /// Is this column reference nullable?
-    fn nullable(&self, col: &Column) -> Result<bool>;
-
-    /// What is the datatype of this column?
-    fn data_type(&self, col: &Column) -> Result<&DataType>;
-}
-
-// Implement `ExprSchema` for `Arc<DFSchema>`
-impl<P: AsRef<DFSchema>> ExprSchema for P {
-    fn nullable(&self, col: &Column) -> Result<bool> {
-        self.as_ref().nullable(col)
-    }
-
-    fn data_type(&self, col: &Column) -> Result<&DataType> {
-        self.as_ref().data_type(col)
-    }
-}
-
-impl ExprSchema for DFSchema {
-    fn nullable(&self, col: &Column) -> Result<bool> {
-        Ok(self.field_from_column(col)?.is_nullable())
-    }
-
-    fn data_type(&self, col: &Column) -> Result<&DataType> {
-        Ok(self.field_from_column(col)?.data_type())
     }
 }
 
