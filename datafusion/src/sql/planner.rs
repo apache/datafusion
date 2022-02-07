@@ -36,7 +36,7 @@ use crate::logical_plan::{
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
-use crate::sql::utils::make_decimal_type;
+use crate::sql::utils::{make_decimal_type, normalize_ident};
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::udaf::AggregateUDF,
@@ -1191,7 +1191,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SelectItem::UnnamedExpr(expr) => self.sql_to_rex(expr, schema),
             SelectItem::ExprWithAlias { expr, alias } => Ok(Alias(
                 Box::new(self.sql_to_rex(expr, schema)?),
-                alias.value.clone(),
+                normalize_ident(alias),
             )),
             SelectItem::Wildcard => Ok(Expr::Wildcard),
             SelectItem::QualifiedWildcard(_) => Err(DataFusionError::NotImplemented(
@@ -1392,6 +1392,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Identifier(ref id) => {
                 if id.value.starts_with('@') {
+                    // TODO: figure out if ScalarVariables should be insensitive.
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
@@ -1401,7 +1402,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
                     Ok(Expr::Column(Column {
                         relation: None,
-                        name: id.value.clone(),
+                        name: normalize_ident(id),
                     }))
                 }
             }
@@ -1418,8 +1419,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names: Vec<_> =
-                    ids.iter().map(|id| id.value.clone()).collect();
+                let mut var_names: Vec<_> = ids.iter().map(normalize_ident).collect();
 
                 if &var_names[0][0..1] == "@" {
                     Ok(Expr::ScalarVariable(var_names))
@@ -1639,13 +1639,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    // if there is a quote style, then don't normalize
-                    // the name, otherwise normalize to lowercase
-                    let ident = &function.name.0[0];
-                    match ident.quote_style {
-                        Some(_) => ident.value.clone(),
-                        None => ident.value.to_ascii_lowercase(),
-                    }
+                    normalize_ident(&function.name.0[0])
                 };
 
                 // first, scalar built-in
