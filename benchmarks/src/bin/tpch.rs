@@ -1331,6 +1331,7 @@ mod tests {
                 path: PathBuf::from(path.to_string()),
                 file_format: "tbl".to_string(),
                 mem_table: false,
+                output_path: None,
             };
             let actual = benchmark_datafusion(opt).await?;
 
