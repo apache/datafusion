@@ -116,11 +116,9 @@ async fn run_received_tasks<T: 'static + AsExecutionPlan>(
     );
     info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
-    // let plan: Arc<dyn ExecutionPlan> =
-    //     task.plan.unwrap().try_into_physical_plan(&executor.ctx)?; //(&task.plan.unwrap()).try_into().unwrap();
 
-    let plan: Arc<dyn ExecutionPlan> = T::try_decode(&task.plan.as_slice())
-        .and_then(|proto| proto.try_into_physical_plan(&executor.ctx.as_ref()))?;
+    let plan: Arc<dyn ExecutionPlan> = T::try_decode(task.plan.as_slice())
+        .and_then(|proto| proto.try_into_physical_plan(executor.ctx.as_ref()))?;
 
     let shuffle_output_partitioning =
         parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
