@@ -445,6 +445,14 @@ impl ExecutionPlan for SortExec {
         vec![self.input.clone()]
     }
 
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        Some(&self.expr)
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,

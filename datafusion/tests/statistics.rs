@@ -25,8 +25,9 @@ use datafusion::{
     error::{DataFusionError, Result},
     logical_plan::Expr,
     physical_plan::{
-        project_schema, ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning,
-        SendableRecordBatchStream, Statistics,
+        expressions::PhysicalSortExpr, project_schema, ColumnStatistics,
+        DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
+        Statistics,
     },
     prelude::ExecutionContext,
     scalar::ScalarValue,
@@ -117,6 +118,10 @@ impl ExecutionPlan for StatisticsValidation {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(2)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

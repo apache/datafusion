@@ -147,24 +147,59 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         Distribution::UnspecifiedDistribution
     }
 
-    /// Returns `true` if the direct children of this `ExecutionPlan` should be repartitioned
-    /// to introduce greater concurrency to the plan
+    /// Returns `true` if this operator relies on its inputs being
+    /// produced in a certain order (for example that they are sorted a particular way) for correctness.
     ///
-    /// The default implementation returns `true` unless `Self::required_child_distribution`
-    /// returns `Distribution::SinglePartition`
+    /// If `true` is returned, DataFusion will not apply certain
+    /// optimizations which might reorder the inputs (such as
+    /// repartitioning to increase concurrency).
     ///
-    /// Operators that do not benefit from additional partitioning may want to return `false`
-    fn should_repartition_children(&self) -> bool {
-        !matches!(
-            self.required_child_distribution(),
-            Distribution::SinglePartition
-        )
+    /// The default implementation returns `false`
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
+
+    /// Returns `false` if this operator's implementation may reorder
+    /// rows within or between partitions.
+    ///
+    /// For example, Projection, Filter, and Limit maintain the order
+    /// of inputs -- they may transform values (Projection) or not
+    /// produce the same number of rows that went in (Filter and
+    /// Limit), but the rows that are produced go in the same way.
+    ///
+    /// DataFusion uses this metadata to apply certain optimizations
+    /// such as automatically repartitioning correctly.
+    ///
+    /// The default implementation returns `false`
+    fn maintains_input_order(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if this operator would benefit from
+    /// partitioning its input (and thus from more parallelism). For
+    /// operators that do very little work the overhead of extra
+    /// parallelism may outweigh any benefits
+    ///
+    /// The default implementation returns `true`
+    fn benefits_from_input_partitioning(&self) -> bool {
+        // give me MOAR CPUs
+        true
+    }
+
+    /// If the output of this operator is sorted, returns `Some(keys)`
+    /// with the description of how it was sorted.
+    ///
+    /// For example, Sort, (obviously) produces sorted output as does
+    /// SortPreservingMergeStream. Less obviously `Projection`
+    /// produces sorted output if its input was sorted as it does not
+    /// reorder the input rows
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
+
     /// Returns a new plan where all children were replaced by new plans.
     /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
     fn with_new_children(

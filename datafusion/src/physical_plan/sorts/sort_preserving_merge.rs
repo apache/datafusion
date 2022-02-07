@@ -128,10 +128,12 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Distribution::UnspecifiedDistribution
     }
 
-    fn should_repartition_children(&self) -> bool {
-        // if the children are repartitioned they may no longer remain
-        // sorted
-        false
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        Some(&self.expr)
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

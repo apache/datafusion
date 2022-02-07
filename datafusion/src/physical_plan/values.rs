@@ -17,6 +17,7 @@
 
 //! Values execution plan
 
+use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
@@ -117,6 +118,10 @@ impl ExecutionPlan for ValuesExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn with_new_children(
