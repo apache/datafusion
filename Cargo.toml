@@ -18,6 +18,7 @@
 [workspace]
 members = [
     "datafusion",
+    "datafusion-common",
     "datafusion-cli",
     "datafusion-examples",
     "benchmarks",
