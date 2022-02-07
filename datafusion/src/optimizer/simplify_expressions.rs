@@ -24,8 +24,8 @@ use arrow::record_batch::RecordBatch;
 use crate::error::DataFusionError;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::{
-    lit, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan, RewriteRecursion,
-    SimplifyInfo,
+    lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
+    LogicalPlan, RewriteRecursion, SimplifyInfo,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -252,6 +252,7 @@ impl SimplifyExpressions {
 ///
 /// ```
 /// # use datafusion::prelude::*;
+/// # use datafusion::logical_plan::ExprRewritable;
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///

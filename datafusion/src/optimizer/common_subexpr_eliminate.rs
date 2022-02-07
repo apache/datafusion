@@ -23,8 +23,8 @@ use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
     col,
     plan::{Aggregate, Sort},
-    DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan, Recursion,
-    RewriteRecursion,
+    DFField, DFSchema, Expr, ExprRewritable, ExprRewriter, ExprVisitable,
+    ExpressionVisitor, LogicalPlan, Recursion, RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
