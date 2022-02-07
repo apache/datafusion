@@ -279,8 +279,18 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                             )));
                         };
 
+                        let mut buf: Vec<u8> = vec![];
+                        U::try_from_physical_plan(plan)
+                            .and_then(|m| m.try_encode(&mut buf))
+                            .map_err(|e| {
+                                Status::internal(format!(
+                                    "error serializing execution plan: {:?}",
+                                    e
+                                ))
+                            })?;
+
                         ret[idx].push(TaskDefinition {
-                            plan: Some(plan.try_into().unwrap()),
+                            plan: buf,
                             task_id: status.partition_id,
                             output_partitioning: hash_partitioning_to_proto(
                                 output_partitioning,
@@ -481,8 +491,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                                 plan_clone
                             )));
                         };
+                        let mut buf: Vec<u8> = vec![];
+                        U::try_from_physical_plan(plan)
+                            .and_then(|m| m.try_encode(&mut buf))
+                            .map_err(|e| {
+                                Status::internal(format!(
+                                    "error serializing execution plan: {:?}",
+                                    e
+                                ))
+                            })?;
                         Ok(Some(TaskDefinition {
-                            plan: Some(plan.try_into().unwrap()),
+                            plan: buf,
                             task_id: status.partition_id,
                             output_partitioning: hash_partitioning_to_proto(
                                 output_partitioning,

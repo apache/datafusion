@@ -180,8 +180,13 @@ impl<T: 'static + AsExecutionPlan> ExecutorServer<T> {
         );
         info!("Start to run task {}", task_id_log);
 
-        let plan: Arc<dyn ExecutionPlan> =
-            (&task.plan.unwrap()).try_into_physical_plan(self.executor.ctx.as_ref())?;
+        let encoded_plan = &task.plan.as_slice();
+
+        let plan: Arc<dyn ExecutionPlan> = T::try_decode(encoded_plan)
+            .and_then(|proto| proto.try_into_physical_plan(self.executor.ctx.as_ref()))?;
+
+        // let plan: Arc<dyn ExecutionPlan> =
+        //     (&task.plan.unwrap()).try_into_physical_plan(self.executor.ctx.as_ref())?;
         let shuffle_output_partitioning =
             parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
 
