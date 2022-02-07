@@ -38,7 +38,7 @@ use expressions::{
     avg_return_type, correlation_return_type, covariance_return_type, stddev_return_type,
     sum_return_type, variance_return_type,
 };
-use std::{fmt, str::FromStr, sync::Arc};
+use std::sync::Arc;
 
 /// the implementation of an aggregate function
 pub type AccumulatorFunctionImplementation =
@@ -49,79 +49,7 @@ pub type AccumulatorFunctionImplementation =
 pub type StateTypeFunction =
     Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
 
-/// Enum of all built-in aggregate functions
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
-pub enum AggregateFunction {
-    /// count
-    Count,
-    /// sum
-    Sum,
-    /// min
-    Min,
-    /// max
-    Max,
-    /// avg
-    Avg,
-    /// Approximate aggregate function
-    ApproxDistinct,
-    /// array_agg
-    ArrayAgg,
-    /// Variance (Sample)
-    Variance,
-    /// Variance (Population)
-    VariancePop,
-    /// Standard Deviation (Sample)
-    Stddev,
-    /// Standard Deviation (Population)
-    StddevPop,
-    /// Covariance (Sample)
-    Covariance,
-    /// Covariance (Population)
-    CovariancePop,
-    /// Correlation
-    Correlation,
-    /// Approximate continuous percentile function
-    ApproxPercentileCont,
-}
-
-impl fmt::Display for AggregateFunction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // uppercase of the debug.
-        write!(f, "{}", format!("{:?}", self).to_uppercase())
-    }
-}
-
-impl FromStr for AggregateFunction {
-    type Err = DataFusionError;
-    fn from_str(name: &str) -> Result<AggregateFunction> {
-        Ok(match name {
-            "min" => AggregateFunction::Min,
-            "max" => AggregateFunction::Max,
-            "count" => AggregateFunction::Count,
-            "avg" => AggregateFunction::Avg,
-            "sum" => AggregateFunction::Sum,
-            "approx_distinct" => AggregateFunction::ApproxDistinct,
-            "array_agg" => AggregateFunction::ArrayAgg,
-            "var" => AggregateFunction::Variance,
-            "var_samp" => AggregateFunction::Variance,
-            "var_pop" => AggregateFunction::VariancePop,
-            "stddev" => AggregateFunction::Stddev,
-            "stddev_samp" => AggregateFunction::Stddev,
-            "stddev_pop" => AggregateFunction::StddevPop,
-            "covar" => AggregateFunction::Covariance,
-            "covar_samp" => AggregateFunction::Covariance,
-            "covar_pop" => AggregateFunction::CovariancePop,
-            "corr" => AggregateFunction::Correlation,
-            "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {}",
-                    name
-                )));
-            }
-        })
-    }
-}
+pub use datafusion_expr::AggregateFunction;
 
 /// Returns the datatype of the aggregate function.
 /// This is used to get the returned data type for aggregate expr.
