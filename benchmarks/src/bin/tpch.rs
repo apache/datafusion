@@ -393,7 +393,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
     Ok(())
 }
 
-fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &PathBuf) -> Result<()> {
+fn write_summary_json(benchmark_run: &mut BenchmarkRun, path: &Path) -> Result<()> {
     let json =
         serde_json::to_string_pretty(&benchmark_run).expect("summary is serializable");
     let filename = format!(
