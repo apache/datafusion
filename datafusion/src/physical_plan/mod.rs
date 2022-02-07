@@ -142,6 +142,15 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
+    /// If the output of this operator is sorted, returns `Some(keys)`
+    /// with the description of how it was sorted.
+    ///
+    /// For example, Sort, (obviously) produces sorted output as does
+    /// SortPreservingMergeStream. Less obviously `Projection`
+    /// produces sorted output if its input was sorted as it does not
+    /// reorder the input rows
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+
     /// Specifies the data distribution requirements of all the children for this operator
     fn required_child_distribution(&self) -> Distribution {
         Distribution::UnspecifiedDistribution
@@ -185,15 +194,6 @@ pub trait ExecutionPlan: Debug + Send + Sync {
         // give me MOAR CPUs
         true
     }
-
-    /// If the output of this operator is sorted, returns `Some(keys)`
-    /// with the description of how it was sorted.
-    ///
-    /// For example, Sort, (obviously) produces sorted output as does
-    /// SortPreservingMergeStream. Less obviously `Projection`
-    /// produces sorted output if its input was sorted as it does not
-    /// reorder the input rows
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
