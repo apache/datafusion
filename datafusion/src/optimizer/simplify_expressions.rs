@@ -735,8 +735,8 @@ mod tests {
     use super::*;
     use crate::assert_contains;
     use crate::logical_plan::{
-        and, binary_expr, col, create_udf, lit, lit_timestamp_nano, DFField, Expr,
-        LogicalPlanBuilder,
+        and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
+        Expr, LogicalPlanBuilder,
     };
     use crate::physical_plan::functions::{make_scalar_function, BuiltinScalarFunction};
     use crate::physical_plan::udf::ScalarUDF;
@@ -1010,46 +1010,29 @@ mod tests {
     #[test]
     fn test_const_evaluator_scalar_functions() {
         // concat("foo", "bar") --> "foobar"
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("foo"), lit("bar")],
-            fun: BuiltinScalarFunction::Concat,
-        };
+        let expr = call_fn("concat", vec![lit("foo"), lit("bar")]).unwrap();
         test_evaluate(expr, lit("foobar"));
 
         // ensure arguments are also constant folded
         // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-        let concat1 = Expr::ScalarFunction {
-            args: vec![lit("bar"), lit("baz")],
-            fun: BuiltinScalarFunction::Concat,
-        };
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("foo"), concat1],
-            fun: BuiltinScalarFunction::Concat,
-        };
+        let concat1 = call_fn("concat", vec![lit("bar"), lit("baz")]).unwrap();
+        let expr = call_fn("concat", vec![lit("foo"), concat1]).unwrap();
         test_evaluate(expr, lit("foobarbaz"));
 
         // Check non string arguments
         // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400000000000i64)
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("2020-09-08T12:00:00+00:00")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr =
+            call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
         test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = Expr::ScalarFunction {
-            args: vec![col("a")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = Expr::ScalarFunction {
-            args: vec![col("a")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
         // volatile / stable functions should not be evaluated
@@ -1090,10 +1073,7 @@ mod tests {
     }
 
     fn now_expr() -> Expr {
-        Expr::ScalarFunction {
-            args: vec![],
-            fun: BuiltinScalarFunction::Now,
-        }
+        call_fn("now", vec![]).unwrap()
     }
 
     fn cast_to_int64_expr(expr: Expr) -> Expr {
@@ -1104,10 +1084,7 @@ mod tests {
     }
 
     fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
-        Expr::ScalarFunction {
-            args: vec![lit(arg.into())],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        }
+        call_fn("to_timestamp", vec![lit(arg.into())]).unwrap()
     }
 
     #[test]
