@@ -15,12 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use pyo3::prelude::*;
-use pyo3::types::PyList;
+//! PyArrow
 
-use crate::arrow::array::ArrayData;
-use crate::arrow::pyarrow::PyArrowConvert;
-use crate::scalar::ScalarValue;
+use crate::{DataFusionError, ScalarValue};
+use arrow::array::ArrayData;
+use arrow::pyarrow::PyArrowConvert;
+use pyo3::exceptions::PyException;
+use pyo3::prelude::PyErr;
+use pyo3::types::PyList;
+use pyo3::{FromPyObject, IntoPy, PyAny, PyObject, PyResult, Python};
+
+impl From<DataFusionError> for PyErr {
+    fn from(err: DataFusionError) -> PyErr {
+        PyException::new_err(err.to_string())
+    }
+}
 
 impl PyArrowConvert for ScalarValue {
     fn from_pyarrow(value: &PyAny) -> PyResult<Self> {
@@ -68,7 +77,6 @@ mod tests {
     use pyo3::prepare_freethreaded_python;
     use pyo3::py_run;
     use pyo3::types::PyDict;
-    use pyo3::Python;
 
     fn init_python() {
         prepare_freethreaded_python();
