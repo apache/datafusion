@@ -24,7 +24,7 @@ use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
-        listing::{ListingOptions, ListingTable},
+        listing::{ListingOptions, ListingTable, ListingTableConfig},
         object_store::{
             local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
             ObjectReader, ObjectStore, SizedFile,
@@ -49,7 +49,8 @@ async fn csv_filter_with_file_col() -> Result<()> {
         ],
         &["date"],
         "mytable",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and date!=c1 LIMIT 5")
@@ -85,7 +86,8 @@ async fn csv_projection_on_partition() -> Result<()> {
         ],
         &["date"],
         "mytable",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT c1, date FROM t WHERE date='2021-10-27' LIMIT 5")
@@ -122,7 +124,8 @@ async fn csv_grouping_by_partition() -> Result<()> {
         ],
         &["date"],
         "mytable",
-    );
+    )
+    .await;
 
     let result = ctx
         .sql("SELECT date, count(*), count(distinct(c1)) FROM t WHERE date<='2021-10-27' GROUP BY date")
@@ -271,7 +274,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
     Ok(())
 }
 
-fn register_partitioned_aggregate_csv(
+async fn register_partitioned_aggregate_csv(
     ctx: &mut ExecutionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
@@ -280,13 +283,15 @@ fn register_partitioned_aggregate_csv(
     let testdata = arrow_test_data();
     let csv_file_path = format!("{}/csv/aggregate_test_100.csv", testdata);
     let file_schema = test_util::aggr_test_schema();
-    let object_store = MirroringObjectStore::new_arc(csv_file_path, store_paths);
+    let object_store = MirroringObjectStore::new_arc(csv_file_path.clone(), store_paths);
 
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
 
-    let table =
-        ListingTable::new(object_store, table_path.to_owned(), file_schema, options);
+    let config = ListingTableConfig::new(object_store, table_path)
+        .with_listing_options(options)
+        .with_schema(file_schema);
+    let table = ListingTable::try_new(config).await.unwrap();
 
     ctx.register_table("t", Arc::new(table))
         .expect("registering listing table failed");
@@ -313,8 +318,11 @@ async fn register_partitioned_alltypes_parquet(
         .await
         .expect("Parquet schema inference failed");
 
-    let table =
-        ListingTable::new(object_store, table_path.to_owned(), file_schema, options);
+    let config = ListingTableConfig::new(object_store, table_path)
+        .with_listing_options(options)
+        .with_schema(file_schema);
+
+    let table = ListingTable::try_new(config).await.unwrap();
 
     ctx.register_table("t", Arc::new(table))
         .expect("registering listing table failed");
