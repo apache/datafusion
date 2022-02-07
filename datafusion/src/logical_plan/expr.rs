@@ -2235,6 +2235,20 @@ pub fn exprlist_to_fields<'a>(
     expr.into_iter().map(|e| e.to_field(input_schema)).collect()
 }
 
+/// Calls a named built in function
+/// ```
+/// use datafusion::logical_plan::*;
+///
+/// // create the expression sin(x) < 0.2
+/// let expr = call_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
+/// ```
+pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
+    match name.as_ref().parse::<functions::BuiltinScalarFunction>() {
+        Ok(fun) => Ok(Expr::ScalarFunction { fun, args }),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{col, lit, when};

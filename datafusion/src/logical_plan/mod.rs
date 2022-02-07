@@ -37,7 +37,7 @@ pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use display::display_schema;
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
-    avg, binary_expr, bit_length, btrim, case, ceil, character_length, chr, col,
+    avg, binary_expr, bit_length, btrim, call_fn, case, ceil, character_length, chr, col,
     columnize_expr, combine_filters, concat, concat_ws, cos, count, count_distinct,
     create_udaf, create_udf, date_part, date_trunc, digest, exp, exprlist_to_fields,
     floor, in_list, initcap, left, length, lit, lit_timestamp_nano, ln, log10, log2,
