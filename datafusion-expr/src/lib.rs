@@ -16,7 +16,11 @@
 // under the License.
 
 mod aggregate_function;
+mod operator;
+mod window_frame;
 mod window_function;
 
 pub use aggregate_function::AggregateFunction;
+pub use operator::Operator;
+pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
