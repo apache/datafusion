@@ -43,13 +43,14 @@ simd = ["arrow/simd"]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 regex_expressions = ["regex"]
 unicode_expressions = ["unicode-segmentation"]
-pyarrow = ["pyo3", "arrow/pyarrow"]
+pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
-avro = ["avro-rs", "num-traits"]
+avro = ["avro-rs", "num-traits", "datafusion-common/avro"]
 
 [dependencies]
+datafusion-common = { path = "../datafusion-common", version = "6.0.0" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
 arrow = { version = "8.0.0", features = ["prettyprint"] }
