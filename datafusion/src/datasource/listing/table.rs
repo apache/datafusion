@@ -46,9 +46,13 @@ use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_file
 
 /// Configuration for creating a 'ListingTable'  
 pub struct ListingTableConfig {
+    /// `ObjectStore` that contains the files for the `ListingTable`.
     pub object_store: Arc<dyn ObjectStore>,
+    /// Path on the `ObjectStore` for creating `ListingTable`.
     pub table_path: String,
+    /// Optional `SchemaRef` for the to be created `ListingTable`.
     pub file_schema: Option<SchemaRef>,
+    /// Optional `ListingOptions` for the to be created `ListingTable`.
     pub options: Option<ListingOptions>,
 }
 
@@ -65,6 +69,7 @@ impl ListingTableConfig {
             options: None,
         }
     }
+    /// Add `schema` to `ListingTableConfig`
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             object_store: self.object_store,
@@ -74,6 +79,7 @@ impl ListingTableConfig {
         }
     }
 
+    /// Add `listing_options` to `ListingTableConfig`
     pub fn with_listing_options(self, listing_options: ListingOptions) -> Self {
         Self {
             object_store: self.object_store,
@@ -199,7 +205,10 @@ pub struct ListingTable {
 
 impl ListingTable {
     /// Create new table that lists the FS to get the files to scan.
-    /// The provided `schema` must be resolved before creating the table
+    /// Takes a `ListingTableConfig` as input which requires an `ObjectStore` and `table_path`.
+    /// `ListingOptions` and `SchemaRef` are optional.  If they are not
+    /// provided the file type is inferred based on the file suffix.
+    /// If the schema is provided then it must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
     pub async fn try_new(mut config: ListingTableConfig) -> Result<Self> {
