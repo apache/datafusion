@@ -21,11 +21,10 @@ description = "DataFusion is an in-memory query engine that uses Apache Arrow as
 version = "6.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-readme = "../README.md"
+readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
-publish = false
 edition = "2021"
 rust-version = "1.58"
 

@@ -19,4 +19,6 @@
 
 # DataFusion Common
 
-This is an internal module for the most fundamental types of DataFusion.
+This is an internal module for the most fundamental types of [DataFusion][df].
+
+[df]: https://crates.io/crates/datafusion
