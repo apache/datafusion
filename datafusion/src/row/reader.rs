@@ -44,6 +44,44 @@ pub fn read_as_batch(
     output.output().map_err(DataFusionError::ArrowError)
 }
 
+macro_rules! get_idx {
+    ($NATIVE: ident, $SELF: ident, $IDX: ident) => {{
+        $SELF.assert_index_valid($IDX);
+        let offset = $SELF.field_offsets[$IDX];
+        $NATIVE::from_le_bytes(
+            $SELF.data[$SELF.base_offset + offset..].try_into().unwrap(),
+        )
+    }};
+}
+
+macro_rules! fn_get_idx {
+    ($NATIVE: ident) => {
+        paste::item! {
+            fn [<get_ $NATIVE>](&self, idx: usize) -> $NATIVE {
+                self.assert_index_valid(idx);
+                let offset = self.field_offsets[idx];
+                $NATIVE::from_le_bytes(
+                    self.data[self.base_offset + offset..].try_into().unwrap(),
+                )
+            }
+        }
+    };
+}
+
+macro_rules! fn_get_idx_opt {
+    ($NATIVE: ident) => {
+        paste::item! {
+            fn [<get_ $NATIVE _opt>](&self, idx: usize) -> Option<$NATIVE> {
+                if self.is_valid_at(idx) {
+                    Some(self.[<get_ $NATIVE>](idx))
+                } else {
+                    None
+                }
+            }
+        }
+    };
+}
+
 struct RowReader<'a> {
     data: &'a [u8],
     base_offset: usize,
@@ -96,70 +134,22 @@ impl<'a> RowReader<'a> {
         self.data[self.base_offset + offset]
     }
 
-    fn get_u16(&self, idx: usize) -> u16 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        u16::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_u32(&self, idx: usize) -> u32 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        u32::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_u64(&self, idx: usize) -> u64 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        u64::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_i8(&self, idx: usize) -> i8 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        i8::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_i16(&self, idx: usize) -> i16 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        i16::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_i32(&self, idx: usize) -> i32 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        i32::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_i64(&self, idx: usize) -> i64 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        i64::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_f32(&self, idx: usize) -> f32 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        f32::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
-
-    fn get_f64(&self, idx: usize) -> f64 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        f64::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
-    }
+    fn_get_idx!(u16);
+    fn_get_idx!(u32);
+    fn_get_idx!(u64);
+    fn_get_idx!(i8);
+    fn_get_idx!(i16);
+    fn_get_idx!(i32);
+    fn_get_idx!(i64);
+    fn_get_idx!(f32);
+    fn_get_idx!(f64);
 
     fn get_date32(&self, idx: usize) -> i32 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        i32::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
+        get_idx!(i32, self, idx)
     }
 
     fn get_date64(&self, idx: usize) -> i64 {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        i64::from_le_bytes(self.data[self.base_offset + offset..].try_into().unwrap())
+        get_idx!(i64, self, idx)
     }
 
     fn get_utf8(&self, idx: usize) -> &str {
@@ -181,93 +171,17 @@ impl<'a> RowReader<'a> {
         &self.data[varlena_offset..varlena_offset + len]
     }
 
-    fn get_bool_opt(&self, idx: usize) -> Option<bool> {
-        if self.is_valid_at(idx) {
-            Some(self.get_bool(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_u8_opt(&self, idx: usize) -> Option<u8> {
-        if self.is_valid_at(idx) {
-            Some(self.get_u8(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_u16_opt(&self, idx: usize) -> Option<u16> {
-        if self.is_valid_at(idx) {
-            Some(self.get_u16(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_u32_opt(&self, idx: usize) -> Option<u32> {
-        if self.is_valid_at(idx) {
-            Some(self.get_u32(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_u64_opt(&self, idx: usize) -> Option<u64> {
-        if self.is_valid_at(idx) {
-            Some(self.get_u64(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_i8_opt(&self, idx: usize) -> Option<i8> {
-        if self.is_valid_at(idx) {
-            Some(self.get_i8(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_i16_opt(&self, idx: usize) -> Option<i16> {
-        if self.is_valid_at(idx) {
-            Some(self.get_i16(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_i32_opt(&self, idx: usize) -> Option<i32> {
-        if self.is_valid_at(idx) {
-            Some(self.get_i32(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_i64_opt(&self, idx: usize) -> Option<i64> {
-        if self.is_valid_at(idx) {
-            Some(self.get_i64(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_f32_opt(&self, idx: usize) -> Option<f32> {
-        if self.is_valid_at(idx) {
-            Some(self.get_f32(idx))
-        } else {
-            None
-        }
-    }
-
-    fn get_f64_opt(&self, idx: usize) -> Option<f64> {
-        if self.is_valid_at(idx) {
-            Some(self.get_f64(idx))
-        } else {
-            None
-        }
-    }
+    fn_get_idx_opt!(bool);
+    fn_get_idx_opt!(u8);
+    fn_get_idx_opt!(u16);
+    fn_get_idx_opt!(u32);
+    fn_get_idx_opt!(u64);
+    fn_get_idx_opt!(i8);
+    fn_get_idx_opt!(i16);
+    fn_get_idx_opt!(i32);
+    fn_get_idx_opt!(i64);
+    fn_get_idx_opt!(f32);
+    fn_get_idx_opt!(f64);
 
     fn get_date32_opt(&self, idx: usize) -> Option<i32> {
         if self.is_valid_at(idx) {

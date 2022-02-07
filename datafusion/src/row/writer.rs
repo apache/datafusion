@@ -17,7 +17,7 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
-use crate::row::bitmap::{get_bit, set_bit};
+use crate::row::bitmap::set_bit;
 use crate::row::{estimate_row_width, fixed_size, get_offsets, null_width, supported};
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
@@ -47,6 +47,26 @@ pub fn write_batch_unchecked(
         current_offset += row_width;
     }
     offsets
+}
+
+macro_rules! set_idx {
+    ($WIDTH: literal, $SELF: ident, $IDX: ident, $VALUE: ident) => {{
+        $SELF.assert_index_valid($IDX);
+        let offset = $SELF.field_offsets[$IDX];
+        $SELF.data[offset..offset + $WIDTH].copy_from_slice(&$VALUE.to_le_bytes());
+    }};
+}
+
+macro_rules! fn_set_idx {
+    ($NATIVE: ident, $WIDTH: literal) => {
+        paste::item! {
+            fn [<set_ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
+                self.assert_index_valid(idx);
+                let offset = self.field_offsets[idx];
+                self.data[offset..offset + $WIDTH].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+    };
 }
 
 /// Reusable row writer backed by Vec<u8>
@@ -120,23 +140,14 @@ impl RowWriter {
         self.data[offset] = value;
     }
 
-    fn set_u16(&mut self, idx: usize, value: u16) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn set_u32(&mut self, idx: usize, value: u32) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn set_u64(&mut self, idx: usize, value: u64) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-    }
+    fn_set_idx!(u16, 2);
+    fn_set_idx!(u32, 4);
+    fn_set_idx!(u64, 8);
+    fn_set_idx!(i16, 2);
+    fn_set_idx!(i32, 4);
+    fn_set_idx!(i64, 8);
+    fn_set_idx!(f32, 4);
+    fn_set_idx!(f64, 8);
 
     fn set_i8(&mut self, idx: usize, value: i8) {
         self.assert_index_valid(idx);
@@ -144,46 +155,12 @@ impl RowWriter {
         self.data[offset] = value.to_le_bytes()[0];
     }
 
-    fn set_i16(&mut self, idx: usize, value: i16) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn set_i32(&mut self, idx: usize, value: i32) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn set_i64(&mut self, idx: usize, value: i64) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn set_f32(&mut self, idx: usize, value: f32) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-    }
-
-    fn set_f64(&mut self, idx: usize, value: f64) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-    }
-
     fn set_date32(&mut self, idx: usize, value: i32) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        set_idx!(4, self, idx, value)
     }
 
     fn set_date64(&mut self, idx: usize, value: i64) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
-        self.data[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        set_idx!(8, self, idx, value)
     }
 
     fn set_offset_size(&mut self, idx: usize, size: usize) {
