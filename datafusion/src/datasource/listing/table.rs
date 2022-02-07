@@ -102,10 +102,10 @@ impl ListingTableConfig {
     }
 
     fn infer_options(&mut self) -> Result<ListingOptions> {
-        let tokens: Vec<&str> = self.table_path.split(".").collect();
-        let file_type = tokens.last().ok_or(DataFusionError::Internal(
-            "Unable to infer file suffix".into(),
-        ))?;
+        let tokens: Vec<&str> = self.table_path.split('.').collect();
+        let file_type = tokens.last().ok_or_else(|| {
+            DataFusionError::Internal("Unable to infer file suffix".into())
+        })?;
 
         let format = ListingTableConfig::infer_format(*file_type)?;
 
