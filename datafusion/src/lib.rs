@@ -224,9 +224,6 @@ pub use parquet;
 
 pub(crate) mod field_util;
 
-#[cfg(feature = "pyarrow")]
-mod pyarrow;
-
 pub mod from_slice;
 
 #[cfg(test)]

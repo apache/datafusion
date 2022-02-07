@@ -26,10 +26,6 @@ use arrow::error::ArrowError;
 #[cfg(feature = "avro")]
 use avro_rs::Error as AvroError;
 use parquet::errors::ParquetError;
-#[cfg(feature = "pyarrow")]
-use pyo3::exceptions::PyException;
-#[cfg(feature = "pyarrow")]
-use pyo3::prelude::PyErr;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
@@ -84,13 +80,6 @@ impl From<io::Error> for DataFusionError {
 impl From<ArrowError> for DataFusionError {
     fn from(e: ArrowError) -> Self {
         DataFusionError::ArrowError(e)
-    }
-}
-
-#[cfg(feature = "pyarrow")]
-impl From<DataFusionError> for PyErr {
-    fn from(err: DataFusionError) -> PyErr {
-        PyException::new_err(err.to_string())
     }
 }
 
