@@ -19,4 +19,4 @@
 
 # DataFusion Common
 
-This is an internal module for the most fundamental types of datafusion.
+This is an internal module for the most fundamental types of DataFusion.
