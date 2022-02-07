@@ -595,6 +595,17 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, false)
     }
 
+    fn normalize(
+        plan: &LogicalPlan,
+        column: impl Into<Column> + Clone,
+    ) -> Result<Column> {
+        let schemas = plan.all_schemas();
+        let using_columns = plan.using_columns()?;
+        column
+            .into()
+            .normalize_with_schemas(&schemas, &using_columns)
+    }
+
     /// Apply a join with on constraint and specified null equality
     /// If null_equals_null is true then null == null, else null != null
     pub fn join_detailed(
@@ -633,7 +644,10 @@ impl LogicalPlanBuilder {
                             match (l_is_left, l_is_right, r_is_left, r_is_right) {
                                 (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
                                 (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
-                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                                _ => (
+                                    Self::normalize(&self.plan, l),
+                                    Self::normalize(right, r),
+                                ),
                             }
                         }
                         (Some(lr), None) => {
@@ -643,9 +657,12 @@ impl LogicalPlanBuilder {
                                 right.schema().field_with_qualified_name(lr, &l.name);
 
                             match (l_is_left, l_is_right) {
-                                (Ok(_), _) => (Ok(l), r.normalize(right)),
-                                (_, Ok(_)) => (r.normalize(&self.plan), Ok(l)),
-                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                                (Ok(_), _) => (Ok(l), Self::normalize(right, r)),
+                                (_, Ok(_)) => (Self::normalize(&self.plan, r), Ok(l)),
+                                _ => (
+                                    Self::normalize(&self.plan, l),
+                                    Self::normalize(right, r),
+                                ),
                             }
                         }
                         (None, Some(rr)) => {
@@ -655,22 +672,25 @@ impl LogicalPlanBuilder {
                                 right.schema().field_with_qualified_name(rr, &r.name);
 
                             match (r_is_left, r_is_right) {
-                                (Ok(_), _) => (Ok(r), l.normalize(right)),
-                                (_, Ok(_)) => (l.normalize(&self.plan), Ok(r)),
-                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                                (Ok(_), _) => (Ok(r), Self::normalize(right, l)),
+                                (_, Ok(_)) => (Self::normalize(&self.plan, l), Ok(r)),
+                                _ => (
+                                    Self::normalize(&self.plan, l),
+                                    Self::normalize(right, r),
+                                ),
                             }
                         }
                         (None, None) => {
                             let mut swap = false;
-                            let left_key =
-                                l.clone().normalize(&self.plan).or_else(|_| {
+                            let left_key = Self::normalize(&self.plan, l.clone())
+                                .or_else(|_| {
                                     swap = true;
-                                    l.normalize(right)
+                                    Self::normalize(right, l)
                                 });
                             if swap {
-                                (r.normalize(&self.plan), left_key)
+                                (Self::normalize(&self.plan, r), left_key)
                             } else {
-                                (left_key, r.normalize(right))
+                                (left_key, Self::normalize(right, r))
                             }
                         }
                     }
@@ -705,11 +725,11 @@ impl LogicalPlanBuilder {
         let left_keys: Vec<Column> = using_keys
             .clone()
             .into_iter()
-            .map(|c| c.into().normalize(&self.plan))
+            .map(|c| Self::normalize(&self.plan, c))
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = using_keys
             .into_iter()
-            .map(|c| c.into().normalize(right))
+            .map(|c| Self::normalize(right, c))
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
