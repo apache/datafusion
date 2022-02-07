@@ -54,7 +54,7 @@ pub struct ListingTableConfig {
 
 impl ListingTableConfig {
     /// Creates new `ListingTableConfig`.  The `SchemaRef` and `ListingOptions` are inferred based on the suffix of the provided `table_path`.
-    pub async fn new(
+    pub fn new(
         object_store: Arc<dyn ObjectStore>,
         table_path: impl Into<String>,
     ) -> Self {
@@ -83,18 +83,25 @@ impl ListingTableConfig {
         }
     }
 
+    fn infer_format(suffix: &str) -> Result<Arc<dyn FileFormat>> {
+        match suffix {
+            "avro" => Ok(Arc::new(AvroFormat::default())),
+            "csv" => Ok(Arc::new(CsvFormat::default())),
+            "json" => Ok(Arc::new(JsonFormat::default())),
+            "parquet" => Ok(Arc::new(ParquetFormat::default())),
+            _ => Err(DataFusionError::Internal(
+                "Unable to infer file type".into(),
+            )),
+        }
+    }
+
     fn infer_options(&mut self) -> Result<ListingOptions> {
         let tokens: Vec<&str> = self.table_path.split(".").collect();
         let file_type = tokens.last().ok_or(DataFusionError::Internal(
             "Unable to infer file suffix".into(),
         ))?;
 
-        let format: Arc<dyn FileFormat> = match *file_type {
-            "avro" => Arc::new(AvroFormat::default()),
-            "csv" => Arc::new(CsvFormat::default()),
-            "json" => Arc::new(JsonFormat::default()),
-            "parquet" => Arc::new(ParquetFormat::default()),
-        };
+        let format = ListingTableConfig::infer_format(*file_type)?;
 
         let listing_options = ListingOptions {
             format,
@@ -103,7 +110,7 @@ impl ListingTableConfig {
             target_partitions: num_cpus::get(),
             table_partition_cols: vec![],
         };
-        self.options = Some(listing_options);
+        self.options = Some(listing_options.clone());
         Ok(listing_options)
     }
 
@@ -195,7 +202,7 @@ impl ListingTable {
     /// The provided `schema` must be resolved before creating the table
     /// and should contain the fields of the file without the table
     /// partitioning columns.
-    pub async fn new(mut config: ListingTableConfig) -> Result<Self> {
+    pub async fn try_new(mut config: ListingTableConfig) -> Result<Self> {
         let options = match config.options {
             Some(ref cfg) => cfg.clone(),
             None => config.infer_options()?,
@@ -390,9 +397,9 @@ mod tests {
         let schema = opt
             .infer_schema(Arc::new(LocalFileSystem {}), &filename)
             .await?;
-        let config =
-            ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename).await;
-        let table = ListingTable::new(config).await?;
+        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename)
+            .with_schema(schema);
+        let table = ListingTable::try_new(config).await?;
         let exec = table.scan(&None, &[], None).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
@@ -404,8 +411,8 @@ mod tests {
     async fn read_empty_table() -> Result<()> {
         let path = String::from("table/p1=v1/file.avro");
         let store = TestObjectStore::new_arc(&[(&path, 100)]);
-        let config = ListingTableConfig::new(store, &path).await;
-        let table = ListingTable::new(config).await?;
+        let config = ListingTableConfig::new(store, &path);
+        let table = ListingTable::try_new(config).await?;
         assert_eq!(
             columns(&table.schema()),
             vec!["a".to_owned(), "p1".to_owned()]
@@ -495,9 +502,8 @@ mod tests {
     async fn load_table(name: &str) -> Result<Arc<dyn TableProvider>> {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, name);
-        let config =
-            ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename).await;
-        let table = ListingTable::new(config).await?;
+        let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), filename);
+        let table = ListingTable::try_new(config).await?;
         Ok(Arc::new(table))
     }
 
@@ -524,9 +530,11 @@ mod tests {
 
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, false)]);
 
-        let config = ListingTableConfig::new(mock_store, table_prefix.to_owned()).await;
+        let config = ListingTableConfig::new(mock_store, table_prefix.to_owned())
+            .with_listing_options(opt)
+            .with_schema(Arc::new(schema));
 
-        let table = ListingTable::new(config).await?;
+        let table = ListingTable::try_new(config).await?;
 
         let (file_list, _) = table.list_files_for_scan(&[], None).await?;
 
