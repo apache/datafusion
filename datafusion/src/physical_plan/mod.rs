@@ -189,10 +189,15 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// operators that do very little work the overhead of extra
     /// parallelism may outweigh any benefits
     ///
-    /// The default implementation returns `true`
+    /// The default implementation returns `true` unless this operator
+    /// has signalled it requiers a single child input partition.
     fn benefits_from_input_partitioning(&self) -> bool {
-        // give me MOAR CPUs
-        true
+        // By default try to maximize parallelism with more CPUs if
+        // possible
+        !matches!(
+            self.required_child_distribution(),
+            Distribution::SinglePartition
+        )
     }
 
     /// Get a list of child execution plans that provide the input for this plan. The returned list
