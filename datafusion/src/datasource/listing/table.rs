@@ -442,7 +442,7 @@ mod tests {
         let store = TestObjectStore::new_arc(&[(&path, 100)]);
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
-        let config = ListingTableConfig::new(store, &path)
+        let config = ListingTableConfig::new(store, "table/")
             .infer_options()?
             .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
