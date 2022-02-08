@@ -927,10 +927,13 @@ impl Default for ExecutionConfig {
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
-                Arc::new(ToApproxPerc::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
+                // ToApproxPerc must be applied last because
+                // it rewrites only the function and may interfere with
+                // other rules
+                Arc::new(ToApproxPerc::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
