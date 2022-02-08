@@ -148,24 +148,33 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// For example, Sort, (obviously) produces sorted output as does
     /// SortPreservingMergeStream. Less obviously `Projection`
     /// produces sorted output if its input was sorted as it does not
-    /// reorder the input rows
+    /// reorder the input rows,
+    ///
+    /// It is safe to return `None` here if your operator does not
+    /// have any particular output order here
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
 
-    /// Specifies the data distribution requirements of all the children for this operator
+    /// Specifies the data distribution requirements of all the
+    /// children for this operator
     fn required_child_distribution(&self) -> Distribution {
         Distribution::UnspecifiedDistribution
     }
 
     /// Returns `true` if this operator relies on its inputs being
-    /// produced in a certain order (for example that they are sorted a particular way) for correctness.
+    /// produced in a certain order (for example that they are sorted
+    /// a particular way) for correctness.
     ///
     /// If `true` is returned, DataFusion will not apply certain
     /// optimizations which might reorder the inputs (such as
     /// repartitioning to increase concurrency).
     ///
-    /// The default implementation returns `false`
+    /// The default implementation returns `true`
+    ///
+    /// WARNING: if you override this default and return `false`, your
+    /// operator can not rely on datafusion preserving the input order
+    /// as it will likely not.
     fn relies_on_input_order(&self) -> bool {
-        false
+        true
     }
 
     /// Returns `false` if this operator's implementation may reorder
@@ -180,6 +189,10 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// such as automatically repartitioning correctly.
     ///
     /// The default implementation returns `false`
+    ///
+    /// WARNING: if you override this default, you *MUST* ensure that
+    /// the operator's maintains the ordering invariant or else
+    /// DataFusion may produce incorrect results.
     fn maintains_input_order(&self) -> bool {
         false
     }

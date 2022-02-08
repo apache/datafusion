@@ -122,13 +122,17 @@ impl ExecutionPlan for ProjectionExec {
         self.input.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
     fn maintains_input_order(&self) -> bool {
         // tell optimizer this operator doesn't reorder its input
         true
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(

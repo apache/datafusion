@@ -19,8 +19,8 @@
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
 use crate::physical_plan::Partitioning::*;
+use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
 use crate::{error::Result, execution::context::ExecutionConfig};
 
 /// Optimizer that introduces repartition to introduce more

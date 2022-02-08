@@ -445,6 +445,11 @@ impl ExecutionPlan for SortExec {
         vec![self.input.clone()]
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        // this operator resorts everything
+        false
+    }
+
     fn benefits_from_input_partitioning(&self) -> bool {
         false
     }

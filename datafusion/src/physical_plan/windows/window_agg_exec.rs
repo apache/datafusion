@@ -115,12 +115,16 @@ impl ExecutionPlan for WindowAggExec {
         self.input.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
     fn maintains_input_order(&self) -> bool {
         true
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        self.input.output_ordering()
+    fn relies_on_input_order(&self) -> bool {
+        true
     }
 
     fn required_child_distribution(&self) -> Distribution {

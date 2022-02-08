@@ -87,6 +87,10 @@ impl ExecutionPlan for AnalyzeExec {
         None
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         mut children: Vec<Arc<dyn ExecutionPlan>>,

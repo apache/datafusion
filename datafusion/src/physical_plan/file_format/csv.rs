@@ -89,6 +89,10 @@ impl ExecutionPlan for CsvExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }

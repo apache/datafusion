@@ -90,6 +90,10 @@ impl ExecutionPlan for UnresolvedShuffleExec {
         None
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }

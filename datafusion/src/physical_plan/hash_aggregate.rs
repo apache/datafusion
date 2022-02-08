@@ -213,6 +213,10 @@ impl ExecutionPlan for HashAggregateExec {
         None
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     async fn execute(
         &self,
         partition: usize,
