@@ -246,7 +246,7 @@ impl LogicalPlanBuilder {
         let config = ListingTableConfig::new(object_store, path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config).await?;
+        let provider = ListingTable::try_new(config)?;
 
         Self::scan(table_name, Arc::new(provider), projection)
     }
@@ -299,7 +299,7 @@ impl LogicalPlanBuilder {
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
 
-        let provider = ListingTable::try_new(config).await?;
+        let provider = ListingTable::try_new(config)?;
         Self::scan(table_name, Arc::new(provider), projection)
     }
 
@@ -347,7 +347,7 @@ impl LogicalPlanBuilder {
         let config = ListingTableConfig::new(object_store, path)
             .with_listing_options(listing_options)
             .with_schema(resolved_schema);
-        let provider = ListingTable::try_new(config).await?;
+        let provider = ListingTable::try_new(config)?;
 
         Self::scan(table_name, Arc::new(provider), projection)
     }
