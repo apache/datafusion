@@ -46,7 +46,9 @@ pub trait ExpressionVisitor<E: ExprVisitable = Expr>: Sized {
     }
 }
 
+/// trait for types that can be visited by [`ExpressionVisitor`]
 pub trait ExprVisitable: Sized {
+    /// accept a visitor, calling `visit` on all children of this
     fn accept<V: ExpressionVisitor<Self>>(&self, visitor: V) -> Result<V>;
 }
 

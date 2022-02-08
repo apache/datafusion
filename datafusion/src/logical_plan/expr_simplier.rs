@@ -36,7 +36,9 @@ pub trait SimplifyInfo {
     fn execution_props(&self) -> &ExecutionProps;
 }
 
+/// trait for types that can be simplified
 pub trait ExprSimplifiable: Sized {
+    /// simplify this trait object using the given SimplifyInfo
     fn simplify<S: SimplifyInfo>(self, info: &S) -> Result<Self>;
 }
 

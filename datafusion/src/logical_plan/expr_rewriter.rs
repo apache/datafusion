@@ -55,7 +55,9 @@ pub trait ExprRewriter<E: ExprRewritable = Expr>: Sized {
     fn mutate(&mut self, expr: E) -> Result<E>;
 }
 
+/// a trait for marking types that are rewritable by [ExprRewriter]
 pub trait ExprRewritable: Sized {
+    /// rewrite the expression tree using the given [ExprRewriter]
     fn rewrite<R: ExprRewriter<Self>>(self, rewriter: &mut R) -> Result<Self>;
 }
 
