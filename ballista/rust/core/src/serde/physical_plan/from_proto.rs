@@ -626,7 +626,6 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                 let ctx_state = ExecutionContextState {
                     catalog_list,
                     scalar_functions: Default::default(),
-                    var_provider: Default::default(),
                     aggregate_functions: Default::default(),
                     config: ExecutionConfig::new(),
                     execution_props: ExecutionProps::new(),
@@ -636,7 +635,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
 
                 let fun_expr = functions::create_physical_fun(
                     &(&scalar_function).into(),
-                    &ctx_state,
+                    &ctx_state.execution_props,
                 )?;
 
                 Arc::new(ScalarFunctionExpr::new(

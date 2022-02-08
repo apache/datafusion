@@ -25,7 +25,7 @@ use std::{any::Any, convert::TryInto};
 
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
-use crate::field_util::{FieldExt, SchemaExt};
+use crate::field_util::SchemaExt;
 use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
@@ -40,13 +40,14 @@ use crate::{
     },
     scalar::ScalarValue,
 };
+use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
     datatypes::*,
     error::Result as ArrowResult,
     io::parquet::read::{self, RowGroupMetaData},
 };
-use log::{debug, info};
+use log::debug;
 
 use parquet::statistics::{
     BinaryStatistics as ParquetBinaryStatistics,
@@ -59,7 +60,9 @@ use tokio::{
     task,
 };
 
+use crate::datasource::file_format::parquet::fetch_schema;
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
 
 use super::PartitionColumnProjector;
@@ -213,13 +216,14 @@ impl ExecutionPlan for ParquetExec {
             &self.base_config.table_partition_cols,
         );
 
-        let file_schema_ref = self.base_config().file_schema.clone();
+        let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
+
         let join_handle = task::spawn_blocking(move || {
             if let Err(e) = read_partition(
                 object_store.as_ref(),
-                file_schema_ref,
+                adapter,
                 partition_index,
-                partition,
+                &partition,
                 metrics,
                 &projection,
                 &pruning_predicate,
@@ -228,7 +232,10 @@ impl ExecutionPlan for ParquetExec {
                 limit,
                 partition_col_proj,
             ) {
-                println!("Parquet reader thread terminated due to error: {:?}", e);
+                println!(
+                    "Parquet reader thread terminated due to error: {:?} for files: {:?}",
+                    e, partition
+                );
             }
         });
 
@@ -441,35 +448,12 @@ fn build_row_group_predicate(
     }
 }
 
-// Map projections from the schema which merges all file schemas to projections on a particular
-// file
-fn map_projections(
-    merged_schema: &Schema,
-    file_schema: &Schema,
-    projections: &[usize],
-) -> Result<Vec<usize>> {
-    let mut mapped: Vec<usize> = vec![];
-    for idx in projections {
-        let field = merged_schema.field(*idx);
-        if let Ok(mapped_idx) = file_schema.index_of(field.name()) {
-            if file_schema.field(mapped_idx).data_type() == field.data_type() {
-                mapped.push(mapped_idx)
-            } else {
-                let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
-                info!("{}", msg);
-                return Err(DataFusionError::Execution(msg));
-            }
-        }
-    }
-    Ok(mapped)
-}
-
 #[allow(clippy::too_many_arguments)]
 fn read_partition(
     object_store: &dyn ObjectStore,
-    file_schema: SchemaRef,
+    schema_adapter: SchemaAdapter,
     partition_index: usize,
-    partition: Vec<PartitionedFile>,
+    partition: &[PartitionedFile],
     metrics: ExecutionPlanMetricsSet,
     projection: &[usize],
     pruning_predicate: &Option<PruningPredicate>,
@@ -478,7 +462,8 @@ fn read_partition(
     limit: Option<usize>,
     mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
-    for partitioned_file in partition {
+    let mut total_rows = 0;
+    'outer: for partitioned_file in partition {
         debug!("Reading file {}", &partitioned_file.file_meta.path());
 
         let file_metrics = ParquetFileMetrics::new(
@@ -490,16 +475,17 @@ fn read_partition(
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
         let reader = object_reader.sync_reader()?;
 
+        let file_schema = fetch_schema(object_reader)?;
+        let adapted_projections =
+            schema_adapter.map_projections(&file_schema.clone(), projection)?;
         let mut record_reader = read::RecordReader::try_new(
             reader,
-            Some(projection.to_vec()),
+            Some(adapted_projections.clone()),
             limit,
             None,
             None,
         )?;
-        // TODO : ???
-        let _mapped_projections =
-            map_projections(&file_schema, record_reader.schema(), projection)?;
+
         if let Some(pruning_predicate) = pruning_predicate {
             record_reader.set_groups_filter(Arc::new(build_row_group_predicate(
                 pruning_predicate,
@@ -508,14 +494,40 @@ fn read_partition(
             )));
         }
 
-        let schema = record_reader.schema().clone();
-        for chunk in record_reader {
-            let batch = RecordBatch::new_with_chunk(&schema, chunk?);
-            let proj_batch = partition_column_projector
-                .project(batch, &partitioned_file.partition_values);
-            response_tx
-                .blocking_send(proj_batch)
-                .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
+        let read_schema = record_reader.schema().clone();
+        for chunk_r in record_reader {
+            match chunk_r {
+                Ok(chunk) => {
+                    total_rows += chunk.len();
+
+                    let batch = RecordBatch::try_new(
+                        read_schema.clone(),
+                        chunk.columns().to_vec(),
+                    )?;
+
+                    let adapted_batch = schema_adapter.adapt_batch(batch, projection)?;
+
+                    let proj_batch = partition_column_projector
+                        .project(adapted_batch, &partitioned_file.partition_values);
+                    response_tx
+                        .blocking_send(proj_batch)
+                        .map_err(|x| DataFusionError::Execution(format!("{}", x)))?;
+                    if limit.map(|l| total_rows >= l).unwrap_or(false) {
+                        break 'outer;
+                    }
+                }
+                Err(e) => {
+                    let err_msg =
+                        format!("Error reading batch from {}: {}", partitioned_file, e);
+                    // send error to operator
+                    send_result(
+                        &response_tx,
+                        Err(ArrowError::ExternalFormat(err_msg.clone())),
+                    )?;
+                    // terminate thread with error
+                    return Err(DataFusionError::Execution(err_msg));
+                }
+            }
         }
     }
 
@@ -555,8 +567,6 @@ mod tests {
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
     ) -> Vec<RecordBatch> {
-        let runtime = Arc::new(RuntimeEnv::default());
-
         // When vec is dropped, temp files are deleted
         let files: Vec<_> = batches
             .into_iter()
@@ -579,7 +589,7 @@ mod tests {
                     iter.into_iter(),
                     schema_ref,
                     options,
-                    vec![Encoding::Plain, Encoding::Plain],
+                    vec![Encoding::Plain].repeat(schema_ref.fields.len()),
                 )
                 .unwrap();
 
@@ -630,6 +640,7 @@ mod tests {
             None,
         );
 
+        let runtime = Arc::new(RuntimeEnv::default());
         collect(Arc::new(parquet_exec), runtime)
             .await
             .expect("reading parquet data")

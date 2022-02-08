@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn variance_f64_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1_f64, 2_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn variance_f64_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
             1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
         ]));
         generic_test_op!(
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn variance_f64_3() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
             1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
         ]));
         generic_test_op!(
@@ -385,7 +385,7 @@ mod tests {
 
     #[test]
     fn variance_f64_4() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1.1_f64, 2_f64, 3_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -397,7 +397,7 @@ mod tests {
 
     #[test]
     fn variance_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn variance_u32() -> Result<()> {
-        let a: ArrayRef = Arc::new(UInt32Array::from_slice(vec![
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
             1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
         ]));
         generic_test_op!(
@@ -424,7 +424,7 @@ mod tests {
     #[test]
     fn variance_f32() -> Result<()> {
         let a: ArrayRef =
-            Float32Vec::from_slice(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]).as_arc();
+            Float32Vec::from_slice(&[1_f32, 2_f32, 3_f32, 4_f32, 5_f32]).as_arc();
         generic_test_op!(
             a,
             DataType::Float32,
@@ -447,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_variance_1_input() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[1_f64]));
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 

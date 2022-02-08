@@ -27,6 +27,7 @@ use crate::record_batch::RecordBatch;
 use arrow::compute::sort::SortOptions;
 
 mod approx_distinct;
+mod approx_percentile_cont;
 mod array_agg;
 mod average;
 #[macro_use]
@@ -65,6 +66,9 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
+pub use approx_percentile_cont::{
+    is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
+};
 pub use array_agg::ArrayAgg;
 pub(crate) use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};

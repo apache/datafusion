@@ -113,7 +113,7 @@ impl BaselineMetrics {
     /// Records the fact that this operator's execution is complete
     /// (recording the `end_time` metric).
     ///
-    /// Note care should be taken to call `done()` maually if
+    /// Note care should be taken to call `done()` manually if
     /// `BaselineMetrics` is not `drop`ped immediately upon operator
     /// completion, as async streams may not be dropped immediately
     /// depending on the consumer.
@@ -127,6 +127,13 @@ impl BaselineMetrics {
     /// batch output for other thing
     pub fn record_output(&self, num_rows: usize) {
         self.output_rows.add(num_rows);
+    }
+
+    /// If not previously recorded `done()`, record
+    pub fn try_done(&self) {
+        if self.end_time.value().is_none() {
+            self.end_time.record()
+        }
     }
 
     /// Process a poll result of a stream producing output for an
@@ -151,10 +158,7 @@ impl BaselineMetrics {
 
 impl Drop for BaselineMetrics {
     fn drop(&mut self) {
-        // if not previously recorded, record
-        if self.end_time.value().is_none() {
-            self.end_time.record()
-        }
+        self.try_done()
     }
 }
 

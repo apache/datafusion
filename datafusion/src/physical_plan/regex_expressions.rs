@@ -302,7 +302,7 @@ mod tests {
         ]);
 
         let patterns = Utf8Array::<i32>::from_slice(&vec![r"x.*-(\d*)-.*"; 4]);
-        let flags = Utf8Array::<i32>::from_slice(vec!["i"; 4]);
+        let flags = Utf8Array::<i32>::from_slice(&["i"; 4]);
 
         let result = regexp_matches(&array, &patterns, Some(&flags))?;
 
@@ -317,9 +317,9 @@ mod tests {
 
     #[test]
     fn test_case_sensitive_regexp_match() {
-        let values = StringArray::from_slice(vec!["abc"; 5]);
+        let values = StringArray::from_slice(&["abc"; 5]);
         let patterns =
-            StringArray::from_slice(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+            StringArray::from_slice(&["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
         let expected = vec![
             Some(vec![Some("a")]),
             None,
@@ -337,10 +337,10 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_regexp_match() {
-        let values = StringArray::from_slice(vec!["abc"; 5]);
+        let values = StringArray::from_slice(&["abc"; 5]);
         let patterns =
-            StringArray::from_slice(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-        let flags = StringArray::from_slice(vec!["i"; 5]);
+            StringArray::from_slice(&["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from_slice(&["i"; 5]);
 
         let expected = vec![
             Some(vec![Some("a")]),

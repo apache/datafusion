@@ -26,6 +26,7 @@ use crate::field_util::SchemaExt;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use std::fmt::Formatter;
 use std::{
     collections::HashSet,
     fmt::{self, Display},
@@ -47,6 +48,20 @@ pub enum JoinType {
     Semi,
     /// Anti Join
     Anti,
+}
+
+impl Display for JoinType {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        let join_type = match self {
+            JoinType::Inner => "Inner",
+            JoinType::Left => "Left",
+            JoinType::Right => "Right",
+            JoinType::Full => "Full",
+            JoinType::Semi => "Semi",
+            JoinType::Anti => "Anti",
+        };
+        write!(f, "{}", join_type)
+    }
 }
 
 /// Join constraint
@@ -934,16 +949,22 @@ impl LogicalPlan {
                     LogicalPlan::Join(Join {
                         on: ref keys,
                         join_constraint,
+                        join_type,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "Join: {}", join_expr.join(", "))
+                                write!(f, "{} Join: {}", join_type, join_expr.join(", "))
                             }
                             JoinConstraint::Using => {
-                                write!(f, "Join: Using {}", join_expr.join(", "))
+                                write!(
+                                    f,
+                                    "{} Join: Using {}",
+                                    join_type,
+                                    join_expr.join(", ")
+                                )
                             }
                         }
                     }

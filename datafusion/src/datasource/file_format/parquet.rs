@@ -141,7 +141,7 @@ fn summarize_min_max(
                 if let Some(max_value) = &mut max_values[i] {
                     if let Some(v) = stats.max_value {
                         match max_value.update_batch(&[Arc::new(
-                            arrow::array::$ARRAY_TYPE::from_slice(vec![v]),
+                            arrow::array::$ARRAY_TYPE::from_slice(&[v]),
                         )]) {
                             Ok(_) => {}
                             Err(_) => {
@@ -153,7 +153,7 @@ fn summarize_min_max(
                 if let Some(min_value) = &mut min_values[i] {
                     if let Some(v) = stats.min_value {
                         match min_value.update_batch(&[Arc::new(
-                            arrow::array::$ARRAY_TYPE::from_slice(vec![v]),
+                            arrow::array::$ARRAY_TYPE::from_slice(&[v]),
                         )]) {
                             Ok(_) => {}
                             Err(_) => {
@@ -180,7 +180,7 @@ fn summarize_min_max(
                 if let Some(max_value) = &mut max_values[i] {
                     if let Some(v) = stats.max_value {
                         match max_value
-                            .update_batch(&[Arc::new(BooleanArray::from_slice(vec![v]))])
+                            .update_batch(&[Arc::new(BooleanArray::from_slice(&[v]))])
                         {
                             Ok(_) => {}
                             Err(_) => {
@@ -192,7 +192,7 @@ fn summarize_min_max(
                 if let Some(min_value) = &mut min_values[i] {
                     if let Some(v) = stats.min_value {
                         match min_value
-                            .update_batch(&[Arc::new(BooleanArray::from_slice(vec![v]))])
+                            .update_batch(&[Arc::new(BooleanArray::from_slice(&[v]))])
                         {
                             Ok(_) => {}
                             Err(_) => {
@@ -262,7 +262,7 @@ fn summarize_min_max(
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
-fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
+pub fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
     let mut reader = object_reader.sync_reader()?;
     let meta_data = read_metadata(&mut reader)?;
     let schema = get_schema(&meta_data)?;

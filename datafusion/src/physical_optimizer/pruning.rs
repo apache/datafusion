@@ -38,15 +38,16 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
 
+use crate::execution::context::ExecutionProps;
 use crate::field_util::{FieldExt, SchemaExt};
-use crate::physical_plan::expressions::cast::cast_with_error;
+use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
+use crate::physical_plan::planner::create_physical_expr;
 use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
-    execution::context::ExecutionContextState,
     logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
-    physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
+    physical_plan::{ColumnarValue, PhysicalExpr},
 };
 
 /// Interface to pass statistics information to [`PruningPredicates`]
@@ -132,12 +133,14 @@ impl PruningPredicate {
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
         let stat_dfschema = DFSchema::try_from(stat_schema.clone())?;
-        let execution_context_state = ExecutionContextState::new();
-        let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
+
+        // TODO allow these properties to be passed in
+        let execution_props = ExecutionProps::new();
+        let predicate_expr = create_physical_expr(
             &logical_predicate_expr,
             &stat_dfschema,
             &stat_schema,
-            &execution_context_state,
+            &execution_props,
         )?;
         Ok(Self {
             schema,
@@ -371,7 +374,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
         let array =
-            cast_with_error(array.as_ref(), data_type, cast::CastOptions::default())?
+            cast::cast(array.as_ref(), data_type, DEFAULT_DATAFUSION_CAST_OPTIONS)?
                 .into();
 
         fields.push(stat_field.clone());

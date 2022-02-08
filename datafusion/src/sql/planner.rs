@@ -700,14 +700,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Generate a logic plan from an SQL select
-    fn select_to_plan(
+    /// Generate a logic plan from selection clause, the function contain optimization for cross join to inner join
+    /// Related PR: https://github.com/apache/arrow-datafusion/pull/1566
+    fn plan_selection(
         &self,
         select: &Select,
-        ctes: &mut HashMap<String, LogicalPlan>,
-        alias: Option<String>,
+        plans: Vec<LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        let plans = self.plan_from_tables(&select.from, ctes)?;
         let plan = match &select.selection {
             Some(predicate_expr) => {
                 // build join schema
@@ -825,9 +824,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
             }
         };
-        let plan = plan?;
+        plan
+    }
 
-        // The SELECT expressions, with wildcards expanded.
+    /// Generate a logic plan from an SQL select
+    fn select_to_plan(
+        &self,
+        select: &Select,
+        ctes: &mut HashMap<String, LogicalPlan>,
+        alias: Option<String>,
+    ) -> Result<LogicalPlan> {
+        // process `from` clause
+        let plans = self.plan_from_tables(&select.from, ctes)?;
+
+        // process `where` clause
+        let plan = self.plan_selection(select, plans)?;
+
+        // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(&plan, select)?;
 
         // having and group by clause may reference aliases defined in select projection
@@ -876,6 +889,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // All of the aggregate expressions (deduplicated).
         let aggr_exprs = find_aggregate_exprs(&aggr_expr_haystack);
 
+        // All of the group by expressions
         let group_by_exprs = select
             .group_by
             .iter()
@@ -894,6 +908,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             })
             .collect::<Result<Vec<Expr>>>()?;
 
+        // process group by, aggregation or having
         let (plan, select_exprs_post_aggr, having_expr_post_aggr_opt) = if !group_by_exprs
             .is_empty()
             || !aggr_exprs.is_empty()
@@ -934,7 +949,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             plan
         };
 
-        // window function
+        // process window function
         let window_func_exprs = find_window_exprs(&select_exprs_post_aggr);
 
         let plan = if window_func_exprs.is_empty() {
@@ -943,6 +958,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             LogicalPlanBuilder::window_plan(plan, window_func_exprs)?
         };
 
+        // process distinct clause
         let plan = if select.distinct {
             return LogicalPlanBuilder::from(plan)
                 .aggregate(select_exprs_post_aggr, iter::empty::<Expr>())?
@@ -950,6 +966,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } else {
             plan
         };
+
+        // generate the final projection plan
         project_with_alias(plan, select_exprs_post_aggr, alias)
     }
 
@@ -1261,6 +1279,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGRegexIMatch => Ok(Operator::RegexIMatch),
             BinaryOperator::PGRegexNotMatch => Ok(Operator::RegexNotMatch),
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
+            BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL binary operator {:?}",
                 op
@@ -3292,7 +3311,7 @@ mod tests {
             JOIN orders \
             ON id = customer_id";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3306,7 +3325,7 @@ mod tests {
             ON id = customer_id AND order_id > 1 ";
         let expected = "Projection: #person.id, #orders.order_id\
         \n  Filter: #orders.order_id > Int64(1)\
-        \n    Join: #person.id = #orders.customer_id\
+        \n    Inner Join: #person.id = #orders.customer_id\
         \n      TableScan: person projection=None\
         \n      TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3319,7 +3338,7 @@ mod tests {
             LEFT JOIN orders \
             ON id = customer_id AND order_id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Left Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    Filter: #orders.order_id > Int64(1)\
         \n      TableScan: orders projection=None";
@@ -3333,7 +3352,7 @@ mod tests {
             RIGHT JOIN orders \
             ON id = customer_id AND id > 1";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Right Join: #person.id = #orders.customer_id\
         \n    Filter: #person.id > Int64(1)\
         \n      TableScan: person projection=None\
         \n    TableScan: orders projection=None";
@@ -3347,7 +3366,7 @@ mod tests {
             JOIN orders \
             ON person.id = orders.customer_id";
         let expected = "Projection: #person.id, #orders.order_id\
-        \n  Join: #person.id = #orders.customer_id\
+        \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
         quick_test(sql, expected);
@@ -3360,7 +3379,7 @@ mod tests {
             JOIN person as person2 \
             USING (id)";
         let expected = "Projection: #person.first_name, #person.id\
-        \n  Join: Using #person.id = #person2.id\
+        \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
         \n    TableScan: person2 projection=None";
         quick_test(sql, expected);
@@ -3373,7 +3392,7 @@ mod tests {
             JOIN lineitem as lineitem2 \
             USING (l_item_id)";
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
-        \n  Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
+        \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
         \n    TableScan: lineitem2 projection=None";
         quick_test(sql, expected);
@@ -3387,8 +3406,8 @@ mod tests {
             JOIN lineitem ON o_item_id = l_item_id";
         let expected =
             "Projection: #person.id, #orders.order_id, #lineitem.l_description\
-            \n  Join: #orders.o_item_id = #lineitem.l_item_id\
-            \n    Join: #person.id = #orders.customer_id\
+            \n  Inner Join: #orders.o_item_id = #lineitem.l_item_id\
+            \n    Inner Join: #person.id = #orders.customer_id\
             \n      TableScan: person projection=None\
             \n      TableScan: orders projection=None\
             \n    TableScan: lineitem projection=None";
@@ -3921,8 +3940,8 @@ mod tests {
     fn cross_join_to_inner_join() {
         let sql = "select person.id from person, orders, lineitem where person.id = lineitem.l_item_id and orders.o_item_id = lineitem.l_description;";
         let expected = "Projection: #person.id\
-                                 \n  Join: #lineitem.l_description = #orders.o_item_id\
-                                 \n    Join: #person.id = #lineitem.l_item_id\
+                                 \n  Inner Join: #lineitem.l_description = #orders.o_item_id\
+                                 \n    Inner Join: #person.id = #lineitem.l_item_id\
                                  \n      TableScan: person projection=None\
                                  \n      TableScan: lineitem projection=None\
                                  \n    TableScan: orders projection=None";

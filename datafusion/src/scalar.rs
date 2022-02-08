@@ -2631,7 +2631,7 @@ mod tests {
         // Convert to length-2 array
         let array = scalar.to_array_of_size(2);
         let expected_vals = vec![
-            (field_a.clone(), Int32Vec::from_slice(vec![23, 23]).as_arc()),
+            (field_a.clone(), Int32Vec::from_slice(&[23, 23]).as_arc()),
             (
                 field_b.clone(),
                 Arc::new(BooleanArray::from_slice(&vec![false, false])) as ArrayRef,
@@ -2645,8 +2645,8 @@ mod tests {
                 Arc::new(StructArray::from_data(
                     DataType::Struct(vec![field_e.clone(), field_f.clone()]),
                     vec![
-                        Int16Vec::from_slice(vec![2, 2]).as_arc(),
-                        Int64Vec::from_slice(vec![3, 3]).as_arc(),
+                        Int16Vec::from_slice(&[2, 2]).as_arc(),
+                        Int64Vec::from_slice(&[3, 3]).as_arc(),
                     ],
                     None,
                 )) as ArrayRef,
@@ -2722,7 +2722,7 @@ mod tests {
         let array: ArrayRef = ScalarValue::iter_to_array(scalars).unwrap();
 
         let expected = Arc::new(struct_array_from(vec![
-            (field_a, Int32Vec::from_slice(vec![23, 7, -1000]).as_arc()),
+            (field_a, Int32Vec::from_slice(&[23, 7, -1000]).as_arc()),
             (
                 field_b,
                 Arc::new(BooleanArray::from_slice(&vec![false, true, true])) as ArrayRef,
@@ -2737,8 +2737,8 @@ mod tests {
                 Arc::new(StructArray::from_data(
                     DataType::Struct(vec![field_e, field_f]),
                     vec![
-                        Int16Vec::from_slice(vec![2, 4, 6]).as_arc(),
-                        Int64Vec::from_slice(vec![3, 5, 7]).as_arc(),
+                        Int16Vec::from_slice(&[2, 4, 6]).as_arc(),
+                        Int64Vec::from_slice(&[3, 5, 7]).as_arc(),
                     ],
                     None,
                 )) as ArrayRef,

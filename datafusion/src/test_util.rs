@@ -20,8 +20,8 @@
 use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
-use crate::field_util::SchemaExt;
-use arrow::datatypes::{DataType, Field, Schema};
+use crate::field_util::{FieldExt, SchemaExt};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -254,6 +254,32 @@ pub fn aggr_test_schema() -> Arc<Schema> {
     Arc::new(schema)
 }
 
+/// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
+pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
+    let mut f1 = Field::new("c1", DataType::Utf8, false);
+    f1.set_metadata(Some(BTreeMap::from_iter(
+        vec![("testing".into(), "test".into())].into_iter(),
+    )));
+    let schema = Schema::new(vec![
+        f1,
+        Field::new("c2", DataType::UInt32, false),
+        Field::new("c3", DataType::Int8, false),
+        Field::new("c4", DataType::Int16, false),
+        Field::new("c5", DataType::Int32, false),
+        Field::new("c6", DataType::Int64, false),
+        Field::new("c7", DataType::UInt8, false),
+        Field::new("c8", DataType::UInt16, false),
+        Field::new("c9", DataType::UInt32, false),
+        Field::new("c10", DataType::UInt64, false),
+        Field::new("c11", DataType::Float32, false),
+        Field::new("c12", DataType::Float64, false),
+        Field::new("c13", DataType::Utf8, false),
+        Field::new("missing_col", DataType::Int64, true),
+    ]);
+
+    Arc::new(schema)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,4 +333,41 @@ mod tests {
         let res = parquet_test_data();
         assert!(PathBuf::from(res).is_dir());
     }
+}
+
+#[cfg(test)]
+pub fn create_decimal_array(
+    array: &[Option<i128>],
+    precision: usize,
+    scale: usize,
+) -> crate::error::Result<arrow::array::Int128Array> {
+    use arrow::array::{Int128Vec, TryPush};
+    let mut decimal_builder = Int128Vec::from_data(
+        DataType::Decimal(precision, scale),
+        Vec::<i128>::with_capacity(array.len()),
+        None,
+    );
+
+    for value in array {
+        match value {
+            None => {
+                decimal_builder.push(None);
+            }
+            Some(v) => {
+                decimal_builder.try_push(Some(*v))?;
+            }
+        }
+    }
+    Ok(decimal_builder.into())
+}
+
+#[cfg(test)]
+pub fn create_decimal_array_from_slice(
+    array: &[i128],
+    precision: usize,
+    scale: usize,
+) -> crate::error::Result<arrow::array::Int128Array> {
+    let decimal_array_values: Vec<Option<i128>> =
+        array.into_iter().map(|v| Some(*v)).collect();
+    create_decimal_array(&decimal_array_values, precision, scale)
 }

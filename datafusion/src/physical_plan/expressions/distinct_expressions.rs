@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn distinct_array_agg_i32() -> Result<()> {
-        let col: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 7, 4, 5, 2]));
+        let col: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 7, 4, 5, 2]));
 
         let out = ScalarValue::List(
             Some(Box::new(vec![

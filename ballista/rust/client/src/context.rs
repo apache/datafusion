@@ -17,11 +17,12 @@
 
 //! Distributed execution context.
 
+use parking_lot::Mutex;
 use sqlparser::ast::Statement;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
@@ -142,7 +143,7 @@ impl BallistaContext {
 
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
-            let guard = self.state.lock().unwrap();
+            let guard = self.state.lock();
             create_df_ctx_with_ballista_query_planner(
                 &guard.scheduler_host,
                 guard.scheduler_port,
@@ -162,7 +163,7 @@ impl BallistaContext {
 
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
-            let guard = self.state.lock().unwrap();
+            let guard = self.state.lock();
             create_df_ctx_with_ballista_query_planner(
                 &guard.scheduler_host,
                 guard.scheduler_port,
@@ -186,7 +187,7 @@ impl BallistaContext {
 
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
-            let guard = self.state.lock().unwrap();
+            let guard = self.state.lock();
             create_df_ctx_with_ballista_query_planner(
                 &guard.scheduler_host,
                 guard.scheduler_port,
@@ -203,7 +204,7 @@ impl BallistaContext {
         name: &str,
         table: Arc<dyn TableProvider>,
     ) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.tables.insert(name.to_owned(), table);
         Ok(())
     }
@@ -280,7 +281,7 @@ impl BallistaContext {
     /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             create_df_ctx_with_ballista_query_planner(
                 &state.scheduler_host,
                 state.scheduler_port,
@@ -291,7 +292,7 @@ impl BallistaContext {
         let is_show = self.is_show_statement(sql).await?;
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             ctx = ExecutionContext::with_config(
                 ExecutionConfig::new().with_information_schema(
                     state.config.default_with_information_schema(),
@@ -301,7 +302,7 @@ impl BallistaContext {
 
         // register tables with DataFusion context
         {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             for (name, prov) in &state.tables {
                 ctx.register_table(
                     TableReference::Bare { table: name },
@@ -483,7 +484,7 @@ mod tests {
             .unwrap();
 
         {
-            let mut guard = context.state.lock().unwrap();
+            let mut guard = context.state.lock();
             let csv_table = guard.tables.get("single_nan");
 
             if let Some(table_provide) = csv_table {

@@ -22,19 +22,70 @@ use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 
 use crate::error::DataFusionError;
-use crate::execution::context::{ExecutionContextState, ExecutionProps};
+use crate::execution::context::ExecutionProps;
 use crate::field_util::SchemaExt;
-use crate::logical_plan::{lit, DFSchemaRef, Expr};
-use crate::logical_plan::{DFSchema, ExprRewriter, LogicalPlan, RewriteRecursion};
+use crate::logical_plan::{
+    lit, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan, RewriteRecursion,
+    SimplifyInfo,
+};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::functions::Volatility;
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
+use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 
-/// Simplifies plans by rewriting [`Expr`]`s evaluating constants
-/// and applying algebraic simplifications
+/// Provides simplification information based on schema and properties
+struct SimplifyContext<'a, 'b> {
+    schemas: Vec<&'a DFSchemaRef>,
+    props: &'b ExecutionProps,
+}
+
+impl<'a, 'b> SimplifyContext<'a, 'b> {
+    /// Create a new SimplifyContext
+    pub fn new(schemas: Vec<&'a DFSchemaRef>, props: &'b ExecutionProps) -> Self {
+        Self { schemas, props }
+    }
+}
+
+impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
+    /// returns true if this Expr has boolean type
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+        for schema in &self.schemas {
+            if let Ok(DataType::Boolean) = expr.get_type(schema) {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+    /// Returns true if expr is nullable
+    fn nullable(&self, expr: &Expr) -> Result<bool> {
+        self.schemas
+            .iter()
+            .find_map(|schema| {
+                // expr may be from another input, so ignore errors
+                // by converting to None to keep trying
+                expr.nullable(schema.as_ref()).ok()
+            })
+            .ok_or_else(|| {
+                // This means we weren't able to compute `Expr::nullable` with
+                // *any* input schemas, signalling a problem
+                DataFusionError::Internal(format!(
+                    "Could not find find columns in '{}' during simplify",
+                    expr
+                ))
+            })
+    }
+
+    fn execution_props(&self) -> &ExecutionProps {
+        self.props
+    }
+}
+
+/// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
+/// [`Expr`]`s evaluating constants and applying algebraic
+/// simplifications
 ///
 /// # Introduction
 /// It uses boolean algebra laws to simplify or reduce the number of terms in expressions.
@@ -45,7 +96,7 @@ use crate::{error::Result, logical_plan::Operator};
 /// `Filter: b > 2`
 ///
 #[derive(Default)]
-pub struct SimplifyExpressions {}
+pub(crate) struct SimplifyExpressions {}
 
 /// returns true if `needle` is found in a chain of search_op
 /// expressions. Such as: (A AND B) AND C
@@ -151,9 +202,7 @@ impl OptimizerRule for SimplifyExpressions {
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let mut simplifier = Simplifier::new(plan.all_schemas());
-
-        let mut const_evaluator = ConstEvaluator::new(execution_props);
+        let info = SimplifyContext::new(plan.all_schemas(), execution_props);
 
         let new_inputs = plan
             .inputs()
@@ -169,15 +218,8 @@ impl OptimizerRule for SimplifyExpressions {
                 // Constant folding should not change expression name.
                 let name = &e.name(plan.schema());
 
-                // TODO iterate until no changes are made
-                // during rewrite (evaluating constants can
-                // enable new simplifications and
-                // simplifications can enable new constant
-                // evaluation)
-                let new_e = e
-                    // fold constants and then simplify
-                    .rewrite(&mut const_evaluator)?
-                    .rewrite(&mut simplifier)?;
+                // Apply the actual simplification logic
+                let new_e = e.simplify(&info)?;
 
                 let new_name = &new_e.name(plan.schema());
 
@@ -224,7 +266,7 @@ impl SimplifyExpressions {
 /// let rewritten = expr.rewrite(&mut const_evaluator).unwrap();
 /// assert_eq!(rewritten, lit(3) + col("a"));
 /// ```
-pub struct ConstEvaluator {
+pub struct ConstEvaluator<'a> {
     /// can_evaluate is used during the depth-first-search of the
     /// Expr tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -239,13 +281,12 @@ pub struct ConstEvaluator {
     /// descendants) so this Expr can be evaluated
     can_evaluate: Vec<bool>,
 
-    ctx_state: ExecutionContextState,
-    planner: DefaultPhysicalPlanner,
+    execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
 
-impl ExprRewriter for ConstEvaluator {
+impl<'a> ExprRewriter for ConstEvaluator<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
@@ -283,16 +324,11 @@ impl ExprRewriter for ConstEvaluator {
     }
 }
 
-impl ConstEvaluator {
+impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn new(execution_props: &ExecutionProps) -> Self {
-        let planner = DefaultPhysicalPlanner::default();
-        let ctx_state = ExecutionContextState {
-            execution_props: execution_props.clone(),
-            ..ExecutionContextState::new()
-        };
+    pub fn new(execution_props: &'a ExecutionProps) -> Self {
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -307,8 +343,7 @@ impl ConstEvaluator {
 
         Self {
             can_evaluate: vec![],
-            ctx_state,
-            planner,
+            execution_props,
             input_schema,
             input_batch,
         }
@@ -365,11 +400,11 @@ impl ConstEvaluator {
             return Ok(s);
         }
 
-        let phys_expr = self.planner.create_physical_expr(
+        let phys_expr = create_physical_expr(
             &expr,
             &self.input_schema,
             self.input_batch.schema(),
-            &self.ctx_state,
+            self.execution_props,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
@@ -397,52 +432,23 @@ impl ConstEvaluator {
 /// * `false = true` and `true = false` to `false`
 /// * `!!expr` to `expr`
 /// * `expr = null` and `expr != null` to `null`
-pub(crate) struct Simplifier<'a> {
-    /// input schemas
-    schemas: Vec<&'a DFSchemaRef>,
+pub(crate) struct Simplifier<'a, S> {
+    info: &'a S,
 }
 
-impl<'a> Simplifier<'a> {
-    pub fn new(schemas: Vec<&'a DFSchemaRef>) -> Self {
-        Self { schemas }
-    }
-
-    fn is_boolean_type(&self, expr: &Expr) -> bool {
-        for schema in &self.schemas {
-            if let Ok(DataType::Boolean) = expr.get_type(schema) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    /// Returns true if expr is nullable
-    fn nullable(&self, expr: &Expr) -> Result<bool> {
-        self.schemas
-            .iter()
-            .find_map(|schema| {
-                // expr may be from another input, so ignore errors
-                // by converting to None to keep trying
-                expr.nullable(schema.as_ref()).ok()
-            })
-            .ok_or_else(|| {
-                // This means we weren't able to compute `Expr::nullable` with
-                // *any* input schemas, signalling a problem
-                DataFusionError::Internal(format!(
-                    "Could not find find columns in '{}' during simplify",
-                    expr
-                ))
-            })
+impl<'a, S> Simplifier<'a, S> {
+    pub fn new(info: &'a S) -> Self {
+        Self { info }
     }
 }
 
-impl<'a> ExprRewriter for Simplifier<'a> {
+impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         use Expr::*;
         use Operator::{And, Divide, Eq, Multiply, NotEq, Or};
 
+        let info = self.info;
         let new_expr = match expr {
             //
             // Rules for Eq
@@ -455,7 +461,7 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: Eq,
                 right,
-            } if is_bool_lit(&left) && self.is_boolean_type(&right) => {
+            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left) {
                     Some(true) => *right,
                     Some(false) => Not(right),
@@ -469,7 +475,7 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: Eq,
                 right,
-            } if is_bool_lit(&right) && self.is_boolean_type(&left) => {
+            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right) {
                     Some(true) => *left,
                     Some(false) => Not(left),
@@ -488,7 +494,7 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: NotEq,
                 right,
-            } if is_bool_lit(&left) && self.is_boolean_type(&right) => {
+            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
                 match as_bool_lit(*left) {
                     Some(true) => Not(right),
                     Some(false) => *right,
@@ -502,7 +508,7 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: NotEq,
                 right,
-            } if is_bool_lit(&right) && self.is_boolean_type(&left) => {
+            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
                 match as_bool_lit(*right) {
                     Some(true) => Not(left),
                     Some(false) => *left,
@@ -555,13 +561,13 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: Or,
                 right,
-            } if !self.nullable(&right)? && is_op_with(And, &right, &left) => *left,
+            } if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
             // (A AND B) OR A --> A (if B not null)
             BinaryExpr {
                 left,
                 op: Or,
                 right,
-            } if !self.nullable(&left)? && is_op_with(And, &left, &right) => *right,
+            } if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
 
             //
             // Rules for AND
@@ -608,13 +614,13 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: And,
                 right,
-            } if !self.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
+            } if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
             // (A OR B) AND A --> A (if B not null)
             BinaryExpr {
                 left,
                 op: And,
                 right,
-            } if !self.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
+            } if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
 
             //
             // Rules for Multiply
@@ -651,7 +657,7 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 left,
                 op: Divide,
                 right,
-            } if !self.nullable(&left)? && left == right => lit(1),
+            } if !info.nullable(&left)? && left == right => lit(1),
 
             //
             // Rules for Not
@@ -662,6 +668,54 @@ impl<'a> ExprRewriter for Simplifier<'a> {
                 Not(negated_inner) => *negated_inner,
                 _ => unreachable!(),
             },
+
+            //
+            // Rules for Case
+            //
+
+            // CASE
+            //   WHEN X THEN A
+            //   WHEN Y THEN B
+            //   ...
+            //   ELSE Q
+            // END
+            //
+            // ---> (X AND A) OR (Y AND B AND NOT X) OR ... (NOT (X OR Y) AND Q)
+            //
+            // Note: the rationale for this rewrite is that the expr can then be further
+            // simplified using the existing rules for AND/OR
+            Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            } if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&when_then_expr[0].1)? =>
+            {
+                // The disjunction of all the when predicates encountered so far
+                let mut filter_expr = lit(false);
+                // The disjunction of all the cases
+                let mut out_expr = lit(false);
+
+                for (when, then) in when_then_expr {
+                    let case_expr = when
+                        .as_ref()
+                        .clone()
+                        .and(filter_expr.clone().not())
+                        .and(*then);
+
+                    out_expr = out_expr.or(case_expr);
+                    filter_expr = filter_expr.or(*when);
+                }
+
+                if let Some(else_expr) = else_expr {
+                    let case_expr = filter_expr.not().and(*else_expr);
+                    out_expr = out_expr.or(case_expr);
+                }
+
+                // Do a first pass at simplification
+                out_expr.rewrite(self)?
+            }
 
             expr => {
                 // no additional rewrites possible
@@ -1142,6 +1196,7 @@ mod tests {
     ) {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1167,15 +1222,9 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let mut rewriter = Simplifier::new(vec![&schema]);
-
         let execution_props = ExecutionProps::new();
-        let mut const_evaluator = ConstEvaluator::new(&execution_props);
-
-        expr.rewrite(&mut rewriter)
-            .expect("expected to simplify")
-            .rewrite(&mut const_evaluator)
-            .expect("expected to const evaluate")
+        let info = SimplifyContext::new(vec![&schema], &execution_props);
+        expr.simplify(&info).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -1292,6 +1341,11 @@ mod tests {
 
     #[test]
     fn simplify_expr_case_when_then_else() {
+        // CASE WHERE c2 != false THEN "ok" == "not_ok" ELSE c2 == true
+        // -->
+        // CASE WHERE c2 THEN false ELSE c2
+        // -->
+        // false
         assert_eq!(
             simplify(Expr::Case {
                 expr: None,
@@ -1301,11 +1355,85 @@ mod tests {
                 )],
                 else_expr: Some(Box::new(col("c2").eq(lit(true)))),
             }),
-            Expr::Case {
+            col("c2").not().and(col("c2")) // #1716
+        );
+
+        // CASE WHERE c2 != false THEN "ok" == "ok" ELSE c2
+        // -->
+        // CASE WHERE c2 THEN true ELSE c2
+        // -->
+        // c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
                 expr: None,
-                when_then_expr: vec![(Box::new(col("c2")), Box::new(lit(false)))],
+                when_then_expr: vec![(
+                    Box::new(col("c2").not_eq(lit(false))),
+                    Box::new(lit("ok").eq(lit("ok"))),
+                )],
+                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
+            })),
+            col("c2").or(col("c2").not().and(col("c2"))) // #1716
+        );
+
+        // CASE WHERE ISNULL(c2) THEN true ELSE c2
+        // -->
+        // ISNULL(c2) OR c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(col("c2").is_null()),
+                    Box::new(lit(true)),
+                )],
                 else_expr: Some(Box::new(col("c2"))),
-            }
+            })),
+            col("c2")
+                .is_null()
+                .or(col("c2").is_null().not().and(col("c2")))
+        );
+
+        // CASE WHERE c1 then true WHERE c2 then false ELSE true
+        // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
+        // --> c1 OR (NOT(c1 OR c2))
+        // --> NOT(c1) AND c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![
+                    (Box::new(col("c1")), Box::new(lit(true)),),
+                    (Box::new(col("c2")), Box::new(lit(false)),)
+                ],
+                else_expr: Some(Box::new(lit(true))),
+            })),
+            col("c1").or(col("c1").or(col("c2")).not())
+        );
+
+        // CASE WHERE c1 then true WHERE c2 then true ELSE false
+        // --> c1 OR (NOT(c1) AND c2 AND TRUE) OR (NOT(c1 OR c2) AND FALSE)
+        // --> c1 OR (NOT(c1) AND c2)
+        // --> c1 OR c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![
+                    (Box::new(col("c1")), Box::new(lit(true)),),
+                    (Box::new(col("c2")), Box::new(lit(false)),)
+                ],
+                else_expr: Some(Box::new(lit(true))),
+            })),
+            col("c1").or(col("c1").or(col("c2")).not())
         );
     }
 
@@ -1623,6 +1751,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let err = rule
@@ -1639,6 +1768,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let optimized_plan = rule

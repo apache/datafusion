@@ -44,13 +44,13 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Utf8Array::<i32>::from_slice(vec![
+            Arc::new(Utf8Array::<i32>::from_slice(&[
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from_slice(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
 
@@ -148,6 +148,26 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
     ];
 
     assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_approx_percentile_cont() -> Result<()> {
+    let expr = approx_percentile_cont(col("b"), lit(0.5));
+
+    let expected = vec![
+        "+-------------------------------------------+",
+        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
+        "+-------------------------------------------+",
+        "| 10                                        |",
+        "+-------------------------------------------+",
+    ];
+
+    let df = create_test_table()?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_batches_eq!(expected, &batches);
 
     Ok(())
 }

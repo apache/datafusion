@@ -33,7 +33,7 @@ use super::{
     type_coercion::{coerce, data_types},
     ColumnarValue, PhysicalExpr,
 };
-use crate::execution::context::ExecutionContextState;
+use crate::execution::context::ExecutionProps;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
@@ -766,7 +766,7 @@ fn bit_length(array: &dyn Array) -> ArrowResult<Box<dyn Array>> {
 /// Create a physical scalar function.
 pub fn create_physical_fun(
     fun: &BuiltinScalarFunction,
-    ctx_state: &ExecutionContextState,
+    execution_props: &ExecutionProps,
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
@@ -865,7 +865,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Now => {
             // bind value for now at plan time
             Arc::new(datetime_expressions::make_now(
-                ctx_state.execution_props.query_execution_start_time,
+                execution_props.query_execution_start_time,
             ))
         }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
@@ -1202,7 +1202,7 @@ pub fn create_physical_expr(
     fun: &BuiltinScalarFunction,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    ctx_state: &ExecutionContextState,
+    execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
 
@@ -1299,7 +1299,7 @@ pub fn create_physical_expr(
             }
         }),
         // These don't need args and input schema
-        _ => create_physical_fun(fun, ctx_state)?,
+        _ => create_physical_fun(fun, execution_props)?,
     };
 
     Ok(Arc::new(ScalarFunctionExpr::new(
@@ -1761,14 +1761,14 @@ mod tests {
         ($FUNC:ident, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
             // used to provide type annotation
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
-            let ctx_state = ExecutionContextState::new();
+            let execution_props = ExecutionProps::new();
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
             let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
 
             let expr =
-                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &ctx_state)?;
+                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
 
             // type is correct
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TYPE);
@@ -3627,6 +3627,18 @@ mod tests {
         test_function!(
             Substr,
             &[
+                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+            ],
+            Ok(Some("joséésoj")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(1))),
             ],
@@ -3717,6 +3729,61 @@ mod tests {
                 lit(ScalarValue::Int64(Some(20))),
             ],
             Ok(Some("phabet")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Ok(Some("alph")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from 5 (10 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(10))),
+            ],
+            Ok(Some("alph")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from -1 (4 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(4))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from 0 (5 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Ok(Some("")),
             &str,
             Utf8,
             StringArray
@@ -3930,7 +3997,7 @@ mod tests {
 
     #[test]
     fn test_empty_arguments_error() -> Result<()> {
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // pick some arbitrary functions to test
@@ -3942,7 +4009,7 @@ mod tests {
         ];
 
         for fun in funs.iter() {
-            let expr = create_physical_expr(fun, &[], &schema, &ctx_state);
+            let expr = create_physical_expr(fun, &[], &schema, &execution_props);
 
             match expr {
                 Ok(..) => {
@@ -3973,13 +4040,13 @@ mod tests {
 
     #[test]
     fn test_empty_arguments() -> Result<()> {
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
 
         for fun in funs.iter() {
-            create_physical_expr(fun, &[], &schema, &ctx_state)?;
+            create_physical_expr(fun, &[], &schema, &execution_props)?;
         }
         Ok(())
     }
@@ -3995,13 +4062,13 @@ mod tests {
             Field::new("b", value2.data_type().clone(), false),
         ]);
         let columns: Vec<ArrayRef> = vec![value1, value2];
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
 
         let expr = create_physical_expr(
             &BuiltinScalarFunction::Array,
             &[col("a", &schema)?, col("b", &schema)?],
             &schema,
-            &ctx_state,
+            &execution_props,
         )?;
 
         // evaluate works
@@ -4048,7 +4115,7 @@ mod tests {
     fn test_regexp_match() -> Result<()> {
         use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
 
         // concat(value, value)
         let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
@@ -4058,7 +4125,7 @@ mod tests {
             &BuiltinScalarFunction::RegexpMatch,
             &[col("a", &schema)?, pattern],
             &schema,
-            &ctx_state,
+            &execution_props,
         )?;
 
         // type is correct
@@ -4088,7 +4155,7 @@ mod tests {
     fn test_regexp_match_all_literals() -> Result<()> {
         use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
 
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
@@ -4097,7 +4164,7 @@ mod tests {
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
             &schema,
-            &ctx_state,
+            &execution_props,
         )?;
 
         // type is correct

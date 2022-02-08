@@ -227,7 +227,7 @@ mod tests {
     fn get_indexed_field_invalid_list_index() -> Result<()> {
         let schema = list_schema("l");
         let expr = col("l", &schema).unwrap();
-        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int8(Some(0)), "This feature is not implemented: get indexed field is only possible on lists with int64 indexes. Tried List(Field { name: \"item\", data_type: Utf8, nullable: true, metadata: {} }) with 0 index")
+        get_indexed_field_test_failure(schema, expr,  ScalarValue::Int8(Some(0)), "This feature is not implemented: get indexed field is only possible on lists with int64 indexes. Tried List(Field { name: \"item\", data_type: Utf8, is_nullable: true, metadata: {} }) with 0 index")
     }
 
     fn build_struct(
