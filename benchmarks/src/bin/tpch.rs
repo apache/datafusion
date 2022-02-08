@@ -1388,12 +1388,11 @@ mod tests {
                     .has_header(false)
                     .file_extension(".tbl");
                 let listing_options = options.to_listing_options(1);
-                let provider = ListingTable::new(
-                    Arc::new(LocalFileSystem {}),
-                    format!("{}/{}.tbl", tpch_data_path, table),
-                    Arc::new(schema),
-                    listing_options,
-                );
+                let config =
+                    ListingTableConfig::new(Arc::new(LocalFileSystem {}), tpch_data_path)
+                        .with_listing_options(listing_options)
+                        .with_schema(schema);
+                let provider = ListingTable::try_new(config)?;
                 ctx.register_table(table, Arc::new(provider))?;
             }
 
