@@ -282,8 +282,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             let proto =
                 U::try_from_physical_plan(plan, self.codec.physical_extension_codec())?;
             proto.try_encode(&mut buf)?;
-            // let proto: PhysicalPlanNode = plan.try_into()?;
-            // encode_protobuf(&proto)?
+
             buf
         };
         self.config_client.clone().put(key, value).await
@@ -306,8 +305,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         let value = U::try_decode(value.as_slice())?;
         let plan =
             value.try_into_physical_plan(ctx, self.codec.physical_extension_codec())?;
-        // let value: PhysicalPlanNode = decode_protobuf(value)?;
-        // Ok((&value).try_into()?)
+
         Ok(plan)
     }
 

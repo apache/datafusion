@@ -30,9 +30,6 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::logical_plan::plan::Extension;
-// use datafusion::logical_plan::{
-//     Column, CreateExternalTable, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
-// };
 use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
