@@ -29,6 +29,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures::{AsyncRead, Stream, StreamExt};
+use url::Url;
 
 use local::LocalFileSystem;
 
@@ -219,24 +220,42 @@ impl ObjectStoreRegistry {
 
     /// Get a suitable store for the URI based on it's scheme. For example:
     /// - URI with scheme `file://` or no schema will return the default LocalFS store
-    /// - URI with scheme `s3://` will return the S3 store if it's registered
+    /// - URI with scheme `s3://host:port` will return the S3 store if it's registered
     /// Returns a tuple with the store and the self-described uri of the file in that store
     pub fn get_by_uri<'a>(
         &self,
         uri: &'a str,
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
-        if let Some((scheme, _path)) = uri.split_once("://") {
-            let stores = self.object_stores.read();
-            let store = stores
-                .get(&*scheme.to_lowercase())
-                .map(Clone::clone)
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "No suitable object store found for {}",
-                        scheme
-                    ))
-                })?;
-            Ok((store, uri))
+        // We do not support the remote object store on Windows OS
+        if let Some((_scheme, _path)) = uri.split_once("://") {
+            match Url::parse(uri) {
+                Ok(url) => {
+                    let host = if url.has_host() {
+                        format!("://{}", url.host().unwrap())
+                    } else {
+                        "".to_string()
+                    };
+                    let port = if url.port().is_some() {
+                        format!(":{}", url.port().unwrap())
+                    } else {
+                        "".to_string()
+                    };
+                    let store_key = format!("{}{}{}", url.scheme(), host, port);
+                    let stores = self.object_stores.read();
+                    let store =
+                        stores.get(&store_key).map(Clone::clone).ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "No suitable object store found for {}",
+                                store_key
+                            ))
+                        })?;
+                    Ok((store, uri))
+                }
+                Err(_) => {
+                    // in case of the uri is a relative URL without a base
+                    Ok((Arc::new(LocalFileSystem), uri))
+                }
+            }
         } else {
             Ok((Arc::new(LocalFileSystem), uri))
         }

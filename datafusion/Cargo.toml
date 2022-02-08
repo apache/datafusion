@@ -81,6 +81,7 @@ num-traits = { version = "0.2", optional = true }
 pyo3 = { version = "0.15", optional = true }
 tempfile = "3"
 parking_lot = "0.12"
+url = "^2.2"
 
 [dev-dependencies]
 criterion = "0.3"
