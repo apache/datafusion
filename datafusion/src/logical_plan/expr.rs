@@ -20,10 +20,12 @@
 
 pub use super::Operator;
 use crate::error::{DataFusionError, Result};
+use crate::execution::context::ExecutionProps;
 use crate::field_util::get_indexed_field;
 use crate::logical_plan::{
     plan::Aggregate, window_frames, DFField, DFSchema, LogicalPlan,
 };
+use crate::optimizer::simplify_expressions::{ConstEvaluator, Simplifier};
 use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, udf::ScalarUDF,
@@ -32,151 +34,13 @@ use crate::physical_plan::{
 use crate::{physical_plan::udaf::AggregateUDF, scalar::ScalarValue};
 use aggregates::{AccumulatorFunctionImplementation, StateTypeFunction};
 use arrow::{compute::can_cast_types, datatypes::DataType};
+pub use datafusion_common::{Column, ExprSchema};
 use functions::{ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::collections::{HashMap, HashSet};
-use std::convert::Infallible;
 use std::fmt;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::ops::Not;
-use std::str::FromStr;
 use std::sync::Arc;
-
-/// A named reference to a qualified field in a schema.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Column {
-    /// relation/table name.
-    pub relation: Option<String>,
-    /// field/column name.
-    pub name: String,
-}
-
-impl Column {
-    /// Create Column from unqualified name.
-    pub fn from_name(name: impl Into<String>) -> Self {
-        Self {
-            relation: None,
-            name: name.into(),
-        }
-    }
-
-    /// Deserialize a fully qualified name string into a column
-    pub fn from_qualified_name(flat_name: &str) -> Self {
-        use sqlparser::tokenizer::Token;
-
-        let dialect = sqlparser::dialect::GenericDialect {};
-        let mut tokenizer = sqlparser::tokenizer::Tokenizer::new(&dialect, flat_name);
-        if let Ok(tokens) = tokenizer.tokenize() {
-            if let [Token::Word(relation), Token::Period, Token::Word(name)] =
-                tokens.as_slice()
-            {
-                return Column {
-                    relation: Some(relation.value.clone()),
-                    name: name.value.clone(),
-                };
-            }
-        }
-        // any expression that's not in the form of `foo.bar` will be treated as unqualified column
-        // name
-        Column {
-            relation: None,
-            name: String::from(flat_name),
-        }
-    }
-
-    /// Serialize column into a flat name string
-    pub fn flat_name(&self) -> String {
-        match &self.relation {
-            Some(r) => format!("{}.{}", r, self.name),
-            None => self.name.clone(),
-        }
-    }
-
-    /// Normalizes `self` if is unqualified (has no relation name)
-    /// with an explicit qualifier from the first matching input
-    /// schemas.
-    ///
-    /// For example, `foo` will be normalized to `t.foo` if there is a
-    /// column named `foo` in a relation named `t` found in `schemas`
-    pub fn normalize(self, plan: &LogicalPlan) -> Result<Self> {
-        let schemas = plan.all_schemas();
-        let using_columns = plan.using_columns()?;
-        self.normalize_with_schemas(&schemas, &using_columns)
-    }
-
-    // Internal implementation of normalize
-    fn normalize_with_schemas(
-        self,
-        schemas: &[&Arc<DFSchema>],
-        using_columns: &[HashSet<Column>],
-    ) -> Result<Self> {
-        if self.relation.is_some() {
-            return Ok(self);
-        }
-
-        for schema in schemas {
-            let fields = schema.fields_with_unqualified_name(&self.name);
-            match fields.len() {
-                0 => continue,
-                1 => {
-                    return Ok(fields[0].qualified_column());
-                }
-                _ => {
-                    // More than 1 fields in this schema have their names set to self.name.
-                    //
-                    // This should only happen when a JOIN query with USING constraint references
-                    // join columns using unqualified column name. For example:
-                    //
-                    // ```sql
-                    // SELECT id FROM t1 JOIN t2 USING(id)
-                    // ```
-                    //
-                    // In this case, both `t1.id` and `t2.id` will match unqualified column `id`.
-                    // We will use the relation from the first matched field to normalize self.
-
-                    // Compare matched fields with one USING JOIN clause at a time
-                    for using_col in using_columns {
-                        let all_matched = fields
-                            .iter()
-                            .all(|f| using_col.contains(&f.qualified_column()));
-                        // All matched fields belong to the same using column set, in orther words
-                        // the same join clause. We simply pick the qualifer from the first match.
-                        if all_matched {
-                            return Ok(fields[0].qualified_column());
-                        }
-                    }
-                }
-            }
-        }
-
-        Err(DataFusionError::Plan(format!(
-            "Column {} not found in provided schemas",
-            self
-        )))
-    }
-}
-
-impl From<&str> for Column {
-    fn from(c: &str) -> Self {
-        Self::from_qualified_name(c)
-    }
-}
-
-impl FromStr for Column {
-    type Err = Infallible;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(s.into())
-    }
-}
-
-impl fmt::Display for Column {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.relation {
-            Some(r) => write!(f, "#{}.{}", r, self.name),
-            None => write!(f, "#{}", self.name),
-        }
-    }
-}
 
 /// `Expr` is a central struct of DataFusion's query API, and
 /// represent logical expressions such as `A + 1`, or `CAST(c1 AS
@@ -391,19 +255,24 @@ impl PartialOrd for Expr {
 }
 
 impl Expr {
-    /// Returns the [arrow::datatypes::DataType] of the expression based on [arrow::datatypes::Schema].
+    /// Returns the [arrow::datatypes::DataType] of the expression
+    /// based on [ExprSchema]
+    ///
+    /// Note: [DFSchema] implements [ExprSchema].
     ///
     /// # Errors
     ///
-    /// This function errors when it is not possible to compute its [arrow::datatypes::DataType].
-    /// This happens when e.g. the expression refers to a column that does not exist in the schema, or when
-    /// the expression is incorrectly typed (e.g. `[utf8] + [bool]`).
-    pub fn get_type(&self, schema: &DFSchema) -> Result<DataType> {
+    /// This function errors when it is not possible to compute its
+    /// [arrow::datatypes::DataType].  This happens when e.g. the
+    /// expression refers to a column that does not exist in the
+    /// schema, or when the expression is incorrectly typed
+    /// (e.g. `[utf8] + [bool]`).
+    pub fn get_type<S: ExprSchema>(&self, schema: &S) -> Result<DataType> {
         match self {
             Expr::Alias(expr, _) | Expr::Sort { expr, .. } | Expr::Negative(expr) => {
                 expr.get_type(schema)
             }
-            Expr::Column(c) => Ok(schema.field_from_column(c)?.data_type().clone()),
+            Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::ScalarVariable(_) => Ok(DataType::Utf8),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
@@ -470,13 +339,16 @@ impl Expr {
         }
     }
 
-    /// Returns the nullability of the expression based on [arrow::datatypes::Schema].
+    /// Returns the nullability of the expression based on [ExprSchema].
+    ///
+    /// Note: [DFSchema] implements [ExprSchema].
     ///
     /// # Errors
     ///
-    /// This function errors when it is not possible to compute its nullability.
-    /// This happens when the expression refers to a column that does not exist in the schema.
-    pub fn nullable(&self, input_schema: &DFSchema) -> Result<bool> {
+    /// This function errors when it is not possible to compute its
+    /// nullability.  This happens when the expression refers to a
+    /// column that does not exist in the schema.
+    pub fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool> {
         match self {
             Expr::Alias(expr, _)
             | Expr::Not(expr)
@@ -484,7 +356,7 @@ impl Expr {
             | Expr::Sort { expr, .. }
             | Expr::Between { expr, .. }
             | Expr::InList { expr, .. } => expr.nullable(input_schema),
-            Expr::Column(c) => Ok(input_schema.field_from_column(c)?.is_nullable()),
+            Expr::Column(c) => input_schema.nullable(c),
             Expr::Literal(value) => Ok(value.is_null()),
             Expr::Case {
                 when_then_expr,
@@ -559,7 +431,11 @@ impl Expr {
     ///
     /// This function errors when it is impossible to cast the
     /// expression to the target [arrow::datatypes::DataType].
-    pub fn cast_to(self, cast_to_type: &DataType, schema: &DFSchema) -> Result<Expr> {
+    pub fn cast_to<S: ExprSchema>(
+        self,
+        cast_to_type: &DataType,
+        schema: &S,
+    ) -> Result<Expr> {
         // TODO(kszucs): most of the operations do not validate the type correctness
         // like all of the binary expressions below. Perhaps Expr should track the
         // type of the expression?
@@ -971,6 +847,58 @@ impl Expr {
             Ok(expr)
         }
     }
+
+    /// Simplifies this [`Expr`]`s as much as possible, evaluating
+    /// constants and applying algebraic simplifications
+    ///
+    /// # Example:
+    /// `b > 2 AND b > 2`
+    /// can be written to
+    /// `b > 2`
+    ///
+    /// ```
+    /// use datafusion::logical_plan::*;
+    /// use datafusion::error::Result;
+    /// use datafusion::execution::context::ExecutionProps;
+    ///
+    /// /// Simple implementation that provides `Simplifier` the information it needs
+    /// #[derive(Default)]
+    /// struct Info {
+    ///   execution_props: ExecutionProps,
+    /// };
+    ///
+    /// impl SimplifyInfo for Info {
+    ///   fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+    ///     Ok(false)
+    ///   }
+    ///   fn nullable(&self, expr: &Expr) -> Result<bool> {
+    ///     Ok(true)
+    ///   }
+    ///   fn execution_props(&self) -> &ExecutionProps {
+    ///     &self.execution_props
+    ///   }
+    /// }
+    ///
+    /// // b < 2
+    /// let b_lt_2 = col("b").gt(lit(2));
+    ///
+    /// // (b < 2) OR (b < 2)
+    /// let expr = b_lt_2.clone().or(b_lt_2.clone());
+    ///
+    /// // (b < 2) OR (b < 2) --> (b < 2)
+    /// let expr = expr.simplify(&Info::default()).unwrap();
+    /// assert_eq!(expr, b_lt_2);
+    /// ```
+    pub fn simplify<S: SimplifyInfo>(self, info: &S) -> Result<Self> {
+        let mut rewriter = Simplifier::new(info);
+        let mut const_evaluator = ConstEvaluator::new(info.execution_props());
+
+        // TODO iterate until no changes are made during rewrite
+        // (evaluating constants can enable new simplifications and
+        // simplifications can enable new constant evaluation)
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        self.rewrite(&mut const_evaluator)?.rewrite(&mut rewriter)
+    }
 }
 
 impl Not for Expr {
@@ -1092,6 +1020,20 @@ pub trait ExprRewriter: Sized {
     fn mutate(&mut self, expr: Expr) -> Result<Expr>;
 }
 
+/// The information necessary to apply algebraic simplification to an
+/// [Expr]. See [SimplifyContext] for one implementation
+pub trait SimplifyInfo {
+    /// returns true if this Expr has boolean type
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool>;
+
+    /// returns true of this expr is nullable (could possibly be NULL)
+    fn nullable(&self, expr: &Expr) -> Result<bool>;
+
+    /// Returns details needed for partial expression evaluation
+    fn execution_props(&self) -> &ExecutionProps;
+}
+
+/// Helper struct for building [Expr::Case]
 pub struct CaseBuilder {
     expr: Option<Box<Expr>>,
     when_expr: Vec<Expr>,
@@ -2121,6 +2063,20 @@ pub fn exprlist_to_fields<'a>(
     expr.into_iter().map(|e| e.to_field(input_schema)).collect()
 }
 
+/// Calls a named built in function
+/// ```
+/// use datafusion::logical_plan::*;
+///
+/// // create the expression sin(x) < 0.2
+/// let expr = call_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
+/// ```
+pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
+    match name.as_ref().parse::<functions::BuiltinScalarFunction>() {
+        Ok(fun) => Ok(Expr::ScalarFunction { fun, args }),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{col, lit, when};
@@ -2488,5 +2444,58 @@ mod tests {
         let result =
             combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
         assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
+    }
+
+    #[test]
+    fn expr_schema_nullability() {
+        let expr = col("foo").eq(lit(1));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        assert!(expr
+            .nullable(&MockExprSchema::new().with_nullable(true))
+            .unwrap());
+    }
+
+    #[test]
+    fn expr_schema_data_type() {
+        let expr = col("foo");
+        assert_eq!(
+            DataType::Utf8,
+            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8))
+                .unwrap()
+        );
+    }
+
+    struct MockExprSchema {
+        nullable: bool,
+        data_type: DataType,
+    }
+
+    impl MockExprSchema {
+        fn new() -> Self {
+            Self {
+                nullable: false,
+                data_type: DataType::Null,
+            }
+        }
+
+        fn with_nullable(mut self, nullable: bool) -> Self {
+            self.nullable = nullable;
+            self
+        }
+
+        fn with_data_type(mut self, data_type: DataType) -> Self {
+            self.data_type = data_type;
+            self
+        }
+    }
+
+    impl ExprSchema for MockExprSchema {
+        fn nullable(&self, _col: &Column) -> Result<bool> {
+            Ok(self.nullable)
+        }
+
+        fn data_type(&self, _col: &Column) -> Result<&DataType> {
+            Ok(&self.data_type)
+        }
     }
 }

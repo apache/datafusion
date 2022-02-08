@@ -37,7 +37,7 @@ pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use display::display_schema;
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
-    avg, binary_expr, bit_length, btrim, case, ceil, character_length, chr, col,
+    avg, binary_expr, bit_length, btrim, call_fn, case, ceil, character_length, chr, col,
     columnize_expr, combine_filters, concat, concat_ws, cos, count, count_distinct,
     create_udaf, create_udf, date_part, date_trunc, digest, exp, exprlist_to_fields,
     floor, in_list, initcap, left, length, lit, lit_timestamp_nano, ln, log10, log2,
@@ -46,7 +46,8 @@ pub use expr::{
     rewrite_sort_cols_by_aggs, right, round, rpad, rtrim, sha224, sha256, sha384, sha512,
     signum, sin, split_part, sqrt, starts_with, strpos, substr, sum, tan, to_hex,
     translate, trim, trunc, unalias, unnormalize_col, unnormalize_cols, upper, when,
-    Column, Expr, ExprRewriter, ExpressionVisitor, Literal, Recursion, RewriteRecursion,
+    Column, Expr, ExprRewriter, ExprSchema, ExpressionVisitor, Literal, Recursion,
+    RewriteRecursion, SimplifyInfo,
 };
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;

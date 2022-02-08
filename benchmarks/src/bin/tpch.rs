@@ -265,7 +265,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
     let mut ctx = ExecutionContext::with_config(config);
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
 
     // register tables
     for table in TABLES {
@@ -547,7 +547,7 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let result = collect(physical_plan.clone(), runtime).await?;
     if debug {
         println!(

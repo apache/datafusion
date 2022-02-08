@@ -20,10 +20,11 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
+use parking_lot::Mutex;
 use std::fs::File;
 use std::iter::Iterator;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{any::Any, pin::Pin};
 

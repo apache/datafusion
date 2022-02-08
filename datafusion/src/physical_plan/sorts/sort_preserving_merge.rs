@@ -21,11 +21,12 @@ use crate::physical_plan::common::AbortOnDropMany;
 use crate::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
+use parking_lot::Mutex;
 use std::any::Any;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fmt::Debug;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::{
@@ -368,7 +369,7 @@ impl SortPreservingMergeStream {
         }
         let mut empty_batch = false;
         {
-            let mut streams = self.streams.streams.lock().unwrap();
+            let mut streams = self.streams.streams.lock();
 
             let stream = &mut streams[idx];
             if stream.is_terminated() {

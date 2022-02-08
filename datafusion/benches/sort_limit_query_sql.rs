@@ -22,7 +22,8 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 extern crate arrow;
 extern crate datafusion;
@@ -38,7 +39,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
+    let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
 }
 
@@ -81,18 +82,18 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
     rt.block_on(async {
         // create local execution context
         let mut ctx = ExecutionContext::new();
-        ctx.state.lock().unwrap().config.target_partitions = 1;
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        ctx.state.lock().config.target_partitions = 1;
+        let runtime = ctx.state.lock().runtime_env.clone();
 
         let mem_table = MemTable::load(Arc::new(csv), Some(partitions), runtime)
             .await
             .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))
             .unwrap();
-        ctx_holder.lock().unwrap().push(Arc::new(Mutex::new(ctx)))
+        ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().unwrap().get(0).unwrap().clone();
+    let ctx = ctx_holder.lock().get(0).unwrap().clone();
     ctx
 }
 

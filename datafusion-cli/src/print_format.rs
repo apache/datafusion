@@ -21,11 +21,10 @@ use arrow::json::{ArrayWriter, LineDelimitedWriter};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::arrow::util::pretty;
 use datafusion::error::{DataFusionError, Result};
-use std::fmt;
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
-#[derive(Debug, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, clap::ArgEnum, Clone)]
 pub enum PrintFormat {
     Csv,
     Tsv,
@@ -34,40 +33,11 @@ pub enum PrintFormat {
     NdJson,
 }
 
-/// returns all print formats
-pub fn all_print_formats() -> Vec<PrintFormat> {
-    vec![
-        PrintFormat::Csv,
-        PrintFormat::Tsv,
-        PrintFormat::Table,
-        PrintFormat::Json,
-        PrintFormat::NdJson,
-    ]
-}
-
 impl FromStr for PrintFormat {
-    type Err = ();
-    fn from_str(s: &str) -> std::result::Result<Self, ()> {
-        match s.to_lowercase().as_str() {
-            "csv" => Ok(Self::Csv),
-            "tsv" => Ok(Self::Tsv),
-            "table" => Ok(Self::Table),
-            "json" => Ok(Self::Json),
-            "ndjson" => Ok(Self::NdJson),
-            _ => Err(()),
-        }
-    }
-}
+    type Err = String;
 
-impl fmt::Display for PrintFormat {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::Csv => write!(f, "csv"),
-            Self::Tsv => write!(f, "tsv"),
-            Self::Table => write!(f, "table"),
-            Self::Json => write!(f, "json"),
-            Self::NdJson => write!(f, "ndjson"),
-        }
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        clap::ArgEnum::from_str(s, true)
     }
 }
 
@@ -122,38 +92,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::from_slice::FromSlice;
     use std::sync::Arc;
-
-    #[test]
-    fn test_from_str() {
-        let format = "csv".parse::<PrintFormat>().unwrap();
-        assert_eq!(PrintFormat::Csv, format);
-
-        let format = "tsv".parse::<PrintFormat>().unwrap();
-        assert_eq!(PrintFormat::Tsv, format);
-
-        let format = "json".parse::<PrintFormat>().unwrap();
-        assert_eq!(PrintFormat::Json, format);
-
-        let format = "ndjson".parse::<PrintFormat>().unwrap();
-        assert_eq!(PrintFormat::NdJson, format);
-
-        let format = "table".parse::<PrintFormat>().unwrap();
-        assert_eq!(PrintFormat::Table, format);
-    }
-
-    #[test]
-    fn test_to_str() {
-        assert_eq!("csv", PrintFormat::Csv.to_string());
-        assert_eq!("table", PrintFormat::Table.to_string());
-        assert_eq!("tsv", PrintFormat::Tsv.to_string());
-        assert_eq!("json", PrintFormat::Json.to_string());
-        assert_eq!("ndjson", PrintFormat::NdJson.to_string());
-    }
-
-    #[test]
-    fn test_from_str_failure() {
-        assert!("pretty".parse::<PrintFormat>().is_err());
-    }
 
     #[test]
     fn test_print_batches_with_sep() {

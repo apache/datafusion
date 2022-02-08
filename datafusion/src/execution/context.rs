@@ -39,13 +39,11 @@ use crate::{
     },
 };
 use log::debug;
+use parking_lot::Mutex;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Mutex,
-};
 use std::{fs, path::PathBuf};
 
 use futures::{StreamExt, TryStreamExt};
@@ -203,7 +201,7 @@ impl ExecutionContext {
 
     /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.lock().unwrap().runtime_env.clone()
+        self.state.lock().runtime_env.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -244,12 +242,7 @@ impl ExecutionContext {
                     format: file_format,
                     collect_stat: false,
                     file_extension: file_extension.to_owned(),
-                    target_partitions: self
-                        .state
-                        .lock()
-                        .unwrap()
-                        .config
-                        .target_partitions,
+                    target_partitions: self.state.lock().config.target_partitions,
                     table_partition_cols: vec![],
                 };
 
@@ -314,7 +307,7 @@ impl ExecutionContext {
         }
 
         // create a query planner
-        let state = self.state.lock().unwrap().clone();
+        let state = self.state.lock().clone();
         let query_planner = SqlToRel::new(&state);
         query_planner.statement_to_plan(&statements[0])
     }
@@ -327,7 +320,6 @@ impl ExecutionContext {
     ) {
         self.state
             .lock()
-            .unwrap()
             .execution_props
             .add_var_provider(variable_type, provider);
     }
@@ -342,7 +334,6 @@ impl ExecutionContext {
     pub fn register_udf(&mut self, f: ScalarUDF) {
         self.state
             .lock()
-            .unwrap()
             .scalar_functions
             .insert(f.name.clone(), Arc::new(f));
     }
@@ -357,7 +348,6 @@ impl ExecutionContext {
     pub fn register_udaf(&mut self, f: AggregateUDF) {
         self.state
             .lock()
-            .unwrap()
             .aggregate_functions
             .insert(f.name.clone(), Arc::new(f));
     }
@@ -371,7 +361,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let target_partitions = self.state.lock().config.target_partitions;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
@@ -402,7 +392,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let target_partitions = self.state.lock().config.target_partitions;
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_csv(
@@ -424,7 +414,7 @@ impl ExecutionContext {
     ) -> Result<Arc<dyn DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().unwrap().config.target_partitions;
+        let target_partitions = self.state.lock().config.target_partitions;
         let logical_plan =
             LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
                 .await?
@@ -479,8 +469,8 @@ impl ExecutionContext {
         uri: &str,
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options
-            .to_listing_options(self.state.lock().unwrap().config.target_partitions);
+        let listing_options =
+            options.to_listing_options(self.state.lock().config.target_partitions);
 
         self.register_listing_table(
             name,
@@ -497,7 +487,7 @@ impl ExecutionContext {
     /// executed against this context.
     pub async fn register_parquet(&mut self, name: &str, uri: &str) -> Result<()> {
         let (target_partitions, enable_pruning) = {
-            let m = self.state.lock().unwrap();
+            let m = self.state.lock();
             (m.config.target_partitions, m.config.parquet_pruning)
         };
         let file_format = ParquetFormat::default().with_enable_pruning(enable_pruning);
@@ -523,8 +513,8 @@ impl ExecutionContext {
         uri: &str,
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options = options
-            .to_listing_options(self.state.lock().unwrap().config.target_partitions);
+        let listing_options =
+            options.to_listing_options(self.state.lock().config.target_partitions);
 
         self.register_listing_table(name, uri, listing_options, options.schema)
             .await?;
@@ -544,7 +534,7 @@ impl ExecutionContext {
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
 
-        let state = self.state.lock().unwrap();
+        let state = self.state.lock();
         let catalog = if state.config.information_schema {
             Arc::new(CatalogWithInformationSchema::new(
                 Arc::downgrade(&state.catalog_list),
@@ -559,7 +549,7 @@ impl ExecutionContext {
 
     /// Retrieves a `CatalogProvider` instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.state.lock().unwrap().catalog_list.catalog(name)
+        self.state.lock().catalog_list.catalog(name)
     }
 
     /// Registers a object store with scheme using a custom `ObjectStore` so that
@@ -575,7 +565,6 @@ impl ExecutionContext {
 
         self.state
             .lock()
-            .unwrap()
             .object_store_registry
             .register_store(scheme, object_store)
     }
@@ -587,7 +576,6 @@ impl ExecutionContext {
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
         self.state
             .lock()
-            .unwrap()
             .object_store_registry
             .get_by_uri(uri)
             .map_err(DataFusionError::from)
@@ -607,7 +595,6 @@ impl ExecutionContext {
         let table_ref = table_ref.into();
         self.state
             .lock()
-            .unwrap()
             .schema_for_ref(table_ref)?
             .register_table(table_ref.table().to_owned(), provider)
     }
@@ -622,7 +609,6 @@ impl ExecutionContext {
         let table_ref = table_ref.into();
         self.state
             .lock()
-            .unwrap()
             .schema_for_ref(table_ref)?
             .deregister_table(table_ref.table())
     }
@@ -636,7 +622,7 @@ impl ExecutionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn DataFrame>> {
         let table_ref = table_ref.into();
-        let schema = self.state.lock().unwrap().schema_for_ref(table_ref)?;
+        let schema = self.state.lock().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
@@ -666,7 +652,6 @@ impl ExecutionContext {
         Ok(self
             .state
             .lock()
-            .unwrap()
             // a bare reference will always resolve to the default catalog and schema
             .schema_for_ref(TableReference::Bare { table: "" })?
             .table_names()
@@ -705,7 +690,7 @@ impl ExecutionContext {
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (state, planner) = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self.state.lock();
             state.execution_props.start_execution();
 
             // We need to clone `state` to release the lock that is not `Send`. We could
@@ -817,7 +802,7 @@ impl ExecutionContext {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let state = &mut self.state.lock().unwrap();
+        let state = &mut self.state.lock();
         let execution_props = &mut state.execution_props.clone();
         let optimizers = &state.config.optimizers;
 
@@ -842,15 +827,15 @@ impl From<Arc<Mutex<ExecutionContextState>>> for ExecutionContext {
 
 impl FunctionRegistry for ExecutionContext {
     fn udfs(&self) -> HashSet<String> {
-        self.state.lock().unwrap().udfs()
+        self.state.lock().udfs()
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        self.state.lock().unwrap().udf(name)
+        self.state.lock().udf(name)
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        self.state.lock().unwrap().udaf(name)
+        self.state.lock().udaf(name)
     }
 }
 
@@ -1302,11 +1287,9 @@ mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
     use crate::from_slice::FromSlice;
-    use crate::logical_plan::plan::Projection;
-    use crate::logical_plan::TableScan;
     use crate::logical_plan::{binary_expr, lit, Operator};
+    use crate::physical_plan::collect;
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
-    use crate::physical_plan::{collect, collect_partitioned};
     use crate::test;
     use crate::variable::VarType;
     use crate::{
@@ -1332,7 +1315,6 @@ mod tests {
     use std::thread::{self, JoinHandle};
     use std::{io::prelude::*, sync::Mutex};
     use tempfile::TempDir;
-    use test::*;
 
     #[tokio::test]
     async fn shared_memory_and_disk_manager() {
@@ -1366,100 +1348,6 @@ mod tests {
             Arc::as_ptr(&disk_manager),
             Arc::as_ptr(&ctx2.runtime_env().disk_manager)
         ));
-    }
-
-    #[test]
-    fn optimize_explain() {
-        let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
-
-        let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
-            .unwrap()
-            .explain(true, false)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        if let LogicalPlan::Explain(e) = &plan {
-            assert_eq!(e.stringified_plans.len(), 1);
-        } else {
-            panic!("plan was not an explain: {:?}", plan);
-        }
-
-        // now optimize the plan and expect to see more plans
-        let optimized_plan = ExecutionContext::new().optimize(&plan).unwrap();
-        if let LogicalPlan::Explain(e) = &optimized_plan {
-            // should have more than one plan
-            assert!(
-                e.stringified_plans.len() > 1,
-                "plans: {:#?}",
-                e.stringified_plans
-            );
-            // should have at least one optimized plan
-            let opt = e
-                .stringified_plans
-                .iter()
-                .any(|p| matches!(p.plan_type, PlanType::OptimizedLogicalPlan { .. }));
-
-            assert!(opt, "plans: {:#?}", e.stringified_plans);
-        } else {
-            panic!("plan was not an explain: {:?}", plan);
-        }
-    }
-
-    #[tokio::test]
-    async fn parallel_projection() -> Result<()> {
-        let partition_count = 4;
-        let results = execute("SELECT c1, c2 FROM test", partition_count).await?;
-
-        let expected = vec![
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 3  | 1  |",
-            "| 3  | 2  |",
-            "| 3  | 3  |",
-            "| 3  | 4  |",
-            "| 3  | 5  |",
-            "| 3  | 6  |",
-            "| 3  | 7  |",
-            "| 3  | 8  |",
-            "| 3  | 9  |",
-            "| 3  | 10 |",
-            "| 2  | 1  |",
-            "| 2  | 2  |",
-            "| 2  | 3  |",
-            "| 2  | 4  |",
-            "| 2  | 5  |",
-            "| 2  | 6  |",
-            "| 2  | 7  |",
-            "| 2  | 8  |",
-            "| 2  | 9  |",
-            "| 2  | 10 |",
-            "| 1  | 1  |",
-            "| 1  | 2  |",
-            "| 1  | 3  |",
-            "| 1  | 4  |",
-            "| 1  | 5  |",
-            "| 1  | 6  |",
-            "| 1  | 7  |",
-            "| 1  | 8  |",
-            "| 1  | 9  |",
-            "| 1  | 10 |",
-            "| 0  | 1  |",
-            "| 0  | 2  |",
-            "| 0  | 3  |",
-            "| 0  | 4  |",
-            "| 0  | 5  |",
-            "| 0  | 6  |",
-            "| 0  | 7  |",
-            "| 0  | 8  |",
-            "| 0  | 9  |",
-            "| 0  | 10 |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-
-        Ok(())
     }
 
     #[tokio::test]
@@ -1502,184 +1390,6 @@ mod tests {
 
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn parallel_query_with_filter() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let partition_count = 4;
-        let ctx = create_ctx(&tmp_dir, partition_count).await?;
-
-        let logical_plan =
-            ctx.create_logical_plan("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")?;
-        let logical_plan = ctx.optimize(&logical_plan)?;
-
-        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
-        let results = collect_partitioned(physical_plan, runtime).await?;
-
-        // note that the order of partitions is not deterministic
-        let mut num_rows = 0;
-        for partition in &results {
-            for batch in partition {
-                num_rows += batch.num_rows();
-            }
-        }
-        assert_eq!(20, num_rows);
-
-        let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
-        let expected = vec![
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 1  | 1  |",
-            "| 1  | 10 |",
-            "| 1  | 2  |",
-            "| 1  | 3  |",
-            "| 1  | 4  |",
-            "| 1  | 5  |",
-            "| 1  | 6  |",
-            "| 1  | 7  |",
-            "| 1  | 8  |",
-            "| 1  | 9  |",
-            "| 2  | 1  |",
-            "| 2  | 10 |",
-            "| 2  | 2  |",
-            "| 2  | 3  |",
-            "| 2  | 4  |",
-            "| 2  | 5  |",
-            "| 2  | 6  |",
-            "| 2  | 7  |",
-            "| 2  | 8  |",
-            "| 2  | 9  |",
-            "+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn projection_on_table_scan() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let partition_count = 4;
-        let ctx = create_ctx(&tmp_dir, partition_count).await?;
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
-
-        let table = ctx.table("test")?;
-        let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
-            .project(vec![col("c2")])?
-            .build()?;
-
-        let optimized_plan = ctx.optimize(&logical_plan)?;
-        match &optimized_plan {
-            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-                LogicalPlan::TableScan(TableScan {
-                    source,
-                    projected_schema,
-                    ..
-                }) => {
-                    assert_eq!(source.schema().fields().len(), 3);
-                    assert_eq!(projected_schema.fields().len(), 1);
-                }
-                _ => panic!("input to projection should be TableScan"),
-            },
-            _ => panic!("expect optimized_plan to be projection"),
-        }
-
-        let expected = "Projection: #test.c2\
-        \n  TableScan: test projection=Some([1])";
-        assert_eq!(format!("{:?}", optimized_plan), expected);
-
-        let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
-
-        assert_eq!(1, physical_plan.schema().fields().len());
-        assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
-
-        let batches = collect(physical_plan, runtime).await?;
-        assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn preserve_nullability_on_projection() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let ctx = create_ctx(&tmp_dir, 1).await?;
-
-        let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
-        assert!(!schema.field_with_name("c1")?.is_nullable());
-
-        let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
-            .project(vec![col("c1")])?
-            .build()?;
-
-        let plan = ctx.optimize(&plan)?;
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert!(!physical_plan.schema().field_with_name("c1")?.is_nullable());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn projection_on_memory_scan() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-            Field::new("c", DataType::Int32, false),
-        ]);
-        let schema = SchemaRef::new(schema);
-
-        let partitions = vec![vec![RecordBatch::try_new(
-            schema.clone(),
-            vec![
-                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
-                Arc::new(Int32Array::from_slice(&[3, 12, 12, 120])),
-            ],
-        )?]];
-
-        let plan = LogicalPlanBuilder::scan_memory(partitions, schema, None)?
-            .project(vec![col("b")])?
-            .build()?;
-        assert_fields_eq(&plan, vec!["b"]);
-
-        let ctx = ExecutionContext::new();
-        let optimized_plan = ctx.optimize(&plan)?;
-        match &optimized_plan {
-            LogicalPlan::Projection(Projection { input, .. }) => match &**input {
-                LogicalPlan::TableScan(TableScan {
-                    source,
-                    projected_schema,
-                    ..
-                }) => {
-                    assert_eq!(source.schema().fields().len(), 3);
-                    assert_eq!(projected_schema.fields().len(), 1);
-                }
-                _ => panic!("input to projection should be InMemoryScan"),
-            },
-            _ => panic!("expect optimized_plan to be projection"),
-        }
-
-        let expected = format!(
-            "Projection: #{}.b\
-        \n  TableScan: {} projection=Some([1])",
-            UNNAMED_TABLE, UNNAMED_TABLE
-        );
-        assert_eq!(format!("{:?}", optimized_plan), expected);
-
-        let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
-
-        assert_eq!(1, physical_plan.schema().fields().len());
-        assert_eq!("b", physical_plan.schema().field(0).name().as_str());
-
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
-        let batches = collect(physical_plan, runtime).await?;
-        assert_eq!(1, batches.len());
-        assert_eq!(1, batches[0].num_columns());
-        assert_eq!(4, batches[0].num_rows());
 
         Ok(())
     }
@@ -3285,7 +2995,7 @@ mod tests {
 
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
-        let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+        let runtime = ctx.state.lock().runtime_env.clone();
         let result = collect(plan, runtime).await?;
 
         let expected = vec![
@@ -3591,7 +3301,7 @@ mod tests {
         ctx.register_catalog("my_catalog", catalog);
 
         let catalog_list_weak = {
-            let state = ctx.state.lock().unwrap();
+            let state = ctx.state.lock();
             Arc::downgrade(&state.catalog_list)
         };
 
@@ -3653,6 +3363,173 @@ mod tests {
         let result = df.collect().await.unwrap();
 
         assert_eq!(result[0].schema().metadata(), result[1].schema().metadata());
+    }
+
+    #[tokio::test]
+    async fn normalized_column_identifiers() {
+        // create local execution context
+        let mut ctx = ExecutionContext::new();
+
+        // register csv file with the execution context
+        ctx.register_csv(
+            "case_insensitive_test",
+            "tests/example.csv",
+            CsvReadOptions::new(),
+        )
+        .await
+        .unwrap();
+
+        let sql = "SELECT A, b FROM case_insensitive_test";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let sql = "SELECT t.A, b FROM case_insensitive_test AS t";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        // Aliases
+
+        let sql = "SELECT t.A as x, b FROM case_insensitive_test AS t";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| x | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let sql = "SELECT t.A AS X, b FROM case_insensitive_test AS t";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| x | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let sql = r#"SELECT t.A AS "X", b FROM case_insensitive_test AS t"#;
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| X | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        // Order by
+
+        let sql = "SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY x";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| x | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let sql = "SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY X";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| x | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let sql = r#"SELECT t.A AS "X", b FROM case_insensitive_test AS t ORDER BY "X""#;
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| X | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        // Where
+
+        let sql = "SELECT a, b FROM case_insensitive_test where A IS NOT null";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| a | b |",
+            "+---+---+",
+            "| 1 | 2 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        // Group by
+
+        let sql = "SELECT a as x, count(*) as c FROM case_insensitive_test GROUP BY X";
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| x | c |",
+            "+---+---+",
+            "| 1 | 1 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
+
+        let sql =
+            r#"SELECT a as "X", count(*) as c FROM case_insensitive_test GROUP BY "X""#;
+        let result = plan_and_collect(&mut ctx, sql)
+            .await
+            .expect("ran plan correctly");
+        let expected = vec![
+            "+---+---+",
+            "| X | c |",
+            "+---+---+",
+            "| 1 | 1 |",
+            "+---+---+",
+        ];
+        assert_batches_sorted_eq!(expected, &result);
     }
 
     struct MyPhysicalPlanner {}

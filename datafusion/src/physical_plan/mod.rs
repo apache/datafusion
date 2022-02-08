@@ -135,14 +135,32 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef;
+
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
+
     /// Specifies the data distribution requirements of all the children for this operator
     fn required_child_distribution(&self) -> Distribution {
         Distribution::UnspecifiedDistribution
     }
+
+    /// Returns `true` if the direct children of this `ExecutionPlan` should be repartitioned
+    /// to introduce greater concurrency to the plan
+    ///
+    /// The default implementation returns `true` unless `Self::required_child_distribution`
+    /// returns `Distribution::SinglePartition`
+    ///
+    /// Operators that do not benefit from additional partitioning may want to return `false`
+    fn should_repartition_children(&self) -> bool {
+        !matches!(
+            self.required_child_distribution(),
+            Distribution::SinglePartition
+        )
+    }
+
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).

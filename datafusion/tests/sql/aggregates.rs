@@ -26,7 +26,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
