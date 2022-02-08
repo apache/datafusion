@@ -17,13 +17,17 @@
 
 //! Ballista Rust executor binary.
 
+use chrono::{DateTime, Duration, Utc};
 use std::sync::Arc;
+use std::time::Duration as Core_Duration;
 
 use anyhow::{Context, Result};
 use arrow_flight::flight_service_server::FlightServiceServer;
 use ballista_executor::{execution_loop, executor_server};
-use log::info;
+use log::{error, info};
 use tempfile::TempDir;
+use tokio::fs::ReadDir;
+use tokio::{fs, time};
 use tonic::transport::Server;
 use uuid::Uuid;
 
@@ -112,6 +116,21 @@ async fn main() -> Result<()> {
         .context("Could not connect to scheduler")?;
 
     let scheduler_policy = opt.task_scheduling_policy;
+    let cleanup_ttl = opt.executor_cleanup_ttl;
+
+    if opt.executor_cleanup_enable {
+        let interval = opt.executor_cleanup_interval;
+        let mut interval_time = time::interval(Core_Duration::from_secs(interval));
+        tokio::spawn(async move {
+            loop {
+                interval_time.tick().await;
+                clean_shuffle_data_loop(&work_dir, cleanup_ttl)
+                    .await
+                    .unwrap();
+            }
+        });
+    }
+
     match scheduler_policy {
         TaskSchedulingPolicy::PushStaged => {
             tokio::spawn(executor_server::startup(
@@ -147,4 +166,67 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// This function will scheduled periodically for cleanup executor
+async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
+    let mut dir = fs::read_dir(work_dir).await?;
+    let mut to_deleted = Vec::new();
+    let mut need_delete_dir;
+
+    while let Some(child) = dir.next_entry().await? {
+        let metadata = child.metadata().await?;
+        if metadata.is_dir() {
+            let dir = fs::read_dir(child.path()).await?;
+            match check_modified_time_in_dirs(vec![dir], seconds).await {
+                Ok(x) => match x {
+                    true => {
+                        need_delete_dir = child.path().into_os_string();
+                        to_deleted.push(need_delete_dir)
+                    }
+                    false => {}
+                },
+                Err(e) => {
+                    error!("Fail in clean_shuffle_data_loop {:?}", e)
+                }
+            }
+        }
+    }
+    info!(
+        "Executor work_dir {:?} not modified in {:?} seconds will be deleted ",
+        &to_deleted, seconds
+    );
+    for del in to_deleted {
+        fs::remove_dir_all(del).await?;
+    }
+    Ok(())
+}
+
+/// Determines if a directory all files are older than cutoff seconds.
+async fn check_modified_time_in_dirs(
+    mut vec: Vec<ReadDir>,
+    seconds: i64,
+) -> Result<bool> {
+    let cutoff = Utc::now() - Duration::seconds(seconds);
+
+    while !vec.is_empty() {
+        let mut dir = vec.pop().unwrap();
+        while let Some(child) = dir.next_entry().await? {
+            let meta = child.metadata().await?;
+            match meta.is_dir() {
+                true => {
+                    let dir = fs::read_dir(child.path()).await?;
+                    vec.push(dir);
+                }
+                false => {
+                    let modified_time: DateTime<Utc> =
+                        meta.modified().map(chrono::DateTime::from).unwrap();
+                    if modified_time > cutoff {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+    Ok(true)
 }
