@@ -21,6 +21,8 @@
 
 mod fmt;
 
+pub use fmt::fmt;
+
 const BIT_MASK: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
 const UNSET_BIT_MASK: [u8; 8] = [
     255 - 1,
@@ -32,6 +34,7 @@ const UNSET_BIT_MASK: [u8; 8] = [
     255 - 64,
     255 - 128,
 ];
+const ALL_VALID_MASK: [u8; 8] = [1, 3, 7, 15, 31, 63, 127, 255];
 
 /// Returns whether bit at position `i` in `byte` is set or not
 #[inline]
@@ -55,12 +58,6 @@ pub fn set_bit(data: &mut [u8], i: usize, value: bool) {
     data[i / 8] = set(data[i / 8], i % 8, value);
 }
 
-/// Returns whether bit at position `i` in `data` is set or not
-#[inline]
-pub fn get_bit(data: &[u8], i: usize) -> bool {
-    is_set(data[i / 8], i % 8)
-}
-
 /// Returns whether bit at position `i` in `data` is set or not.
 ///
 /// # Safety
@@ -76,60 +73,54 @@ pub fn bytes_for(bits: usize) -> usize {
     bits.saturating_add(7) / 8
 }
 
-/// Returns the number of zero bits in the slice offsetted by `offset` and a length of `length`.
-/// # Panics
-/// This function panics iff `(offset + len).saturating_add(7) / 8 >= slice.len()`
-/// because it corresponds to the situation where `len` is beyond bounds.
-pub fn count_zeros(slice: &[u8], offset: usize, len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    };
+/// Returns if all fields are valid
+pub fn all_valid(data: &[u8], n: usize) -> bool {
+    for item in data.iter().take(n / 8) {
+        if *item != ALL_VALID_MASK[7] {
+            return false;
+        }
+    }
+    if n % 8 == 0 {
+        true
+    } else {
+        data[n / 8] == ALL_VALID_MASK[n % 8 - 1]
+    }
+}
 
-    let mut slice = &slice[offset / 8..(offset + len).saturating_add(7) / 8];
-    let offset = offset % 8;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::Rng;
 
-    if (offset + len) / 8 == 0 {
-        // all within a single byte
-        let byte = (slice[0] >> offset) << (8 - len);
-        return len - byte.count_ones() as usize;
+    fn test_validity(bs: &[bool]) {
+        let mut data = vec![0; bytes_for(bs.len())];
+        for (i, b) in bs.iter().enumerate() {
+            set_bit(&mut data, i, *b);
+        }
+        let expected = bs.iter().all(|f| *f);
+        assert_eq!(all_valid(&data, bs.len()), expected);
     }
 
-    // slice: [a1,a2,a3,a4], [a5,a6,a7,a8]
-    // offset: 3
-    // len: 4
-    // [__,__,__,a4], [a5,a6,a7,__]
-    let mut set_count = 0;
-    if offset != 0 {
-        // count all ignoring the first `offset` bits
-        // i.e. [__,__,__,a4]
-        set_count += (slice[0] >> offset).count_ones() as usize;
-        slice = &slice[1..];
+    #[test]
+    fn test_all_valid() {
+        let sizes = [4, 8, 12, 16, 19, 23, 32, 44];
+        for i in sizes {
+            {
+                // contains false
+                let input = {
+                    let mut rng = rand::thread_rng();
+                    let mut input: Vec<bool> = vec![false; i];
+                    rng.fill(&mut input[..]);
+                    input
+                };
+                test_validity(&input);
+            }
+
+            {
+                // all true
+                let input = vec![true; i];
+                test_validity(&input);
+            }
+        }
     }
-    if (offset + len) % 8 != 0 {
-        let end_offset = (offset + len) % 8; // i.e. 3 + 4 = 7
-        let last_index = slice.len() - 1;
-        // count all ignoring the last `offset` bits
-        // i.e. [a5,a6,a7,__]
-        set_count += (slice[last_index] << (8 - end_offset)).count_ones() as usize;
-        slice = &slice[..last_index];
-    }
-
-    // finally, count any and all bytes in the middle in groups of 8
-    let mut chunks = slice.chunks_exact(8);
-    set_count += chunks
-        .by_ref()
-        .map(|chunk| {
-            let a = u64::from_ne_bytes(chunk.try_into().unwrap());
-            a.count_ones() as usize
-        })
-        .sum::<usize>();
-
-    // and any bytes that do not fit in the group
-    set_count += chunks
-        .remainder()
-        .iter()
-        .map(|byte| byte.count_ones() as usize)
-        .sum::<usize>();
-
-    len - set_count
 }

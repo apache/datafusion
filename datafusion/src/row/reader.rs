@@ -18,9 +18,9 @@
 //! Accessing row from raw bytes
 
 use crate::error::{DataFusionError, Result};
-use crate::row::bitmap::get_bit;
-use crate::row::{get_offsets, null_width, supported};
-use arrow::array::{make_builder, Array, ArrayBuilder};
+use crate::row::bitmap::{all_valid, bytes_for, get_bit_unchecked};
+use crate::row::{get_offsets, supported};
+use arrow::array::{make_builder, ArrayBuilder};
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -36,8 +36,8 @@ pub fn read_as_batch(
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
     let mut row = RowReader::new(&schema, data);
 
-    for i in 0..row_num {
-        row.point_to(offsets[i]);
+    for offset in offsets.iter().take(row_num) {
+        row.point_to(*offset);
         read_row(&row, &mut output, &schema)?
     }
 
@@ -45,24 +45,24 @@ pub fn read_as_batch(
 }
 
 macro_rules! get_idx {
-    ($NATIVE: ident, $SELF: ident, $IDX: ident) => {{
+    ($NATIVE: ident, $SELF: ident, $IDX: ident, $WIDTH: literal) => {{
         $SELF.assert_index_valid($IDX);
         let offset = $SELF.field_offsets[$IDX];
-        $NATIVE::from_le_bytes(
-            $SELF.data[$SELF.base_offset + offset..].try_into().unwrap(),
-        )
+        let start = $SELF.base_offset + offset;
+        let end = start + $WIDTH;
+        $NATIVE::from_le_bytes($SELF.data[start..end].try_into().unwrap())
     }};
 }
 
 macro_rules! fn_get_idx {
-    ($NATIVE: ident) => {
+    ($NATIVE: ident, $WIDTH: literal) => {
         paste::item! {
             fn [<get_ $NATIVE>](&self, idx: usize) -> $NATIVE {
                 self.assert_index_valid(idx);
                 let offset = self.field_offsets[idx];
-                $NATIVE::from_le_bytes(
-                    self.data[self.base_offset + offset..].try_into().unwrap(),
-                )
+                let start = self.base_offset + offset;
+                let end = start + $WIDTH;
+                $NATIVE::from_le_bytes(self.data[start..end].try_into().unwrap())
             }
         }
     };
@@ -86,19 +86,28 @@ struct RowReader<'a> {
     data: &'a [u8],
     base_offset: usize,
     field_count: usize,
+    null_width: usize,
     field_offsets: Vec<usize>,
+}
+
+impl<'a> std::fmt::Debug for RowReader<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let null_bits = self.null_bits();
+        super::bitmap::fmt(null_bits, 0, self.null_width, f)
+    }
 }
 
 impl<'a> RowReader<'a> {
     fn new(schema: &Arc<Schema>, data: &'a [u8]) -> Self {
-        assert!(supported(&schema));
+        assert!(supported(schema));
         let field_count = schema.fields().len();
-        let null_width = null_width(field_count);
-        let (field_offsets, _) = get_offsets(null_width, &schema);
+        let null_width = bytes_for(field_count);
+        let (field_offsets, _) = get_offsets(null_width, schema);
         Self {
             data,
             base_offset: 0,
             field_count,
+            null_width,
             field_offsets,
         }
     }
@@ -113,12 +122,20 @@ impl<'a> RowReader<'a> {
         assert!(idx < self.field_count);
     }
 
-    // ----------------------
-    // Accessors
-    // ----------------------
+    #[inline(always)]
+    fn null_bits(&self) -> &[u8] {
+        let start = self.base_offset;
+        &self.data[start..start + self.null_width]
+    }
+
+    #[inline(always)]
+    fn all_valid(&self) -> bool {
+        let null_bits = self.null_bits();
+        all_valid(null_bits, self.field_count)
+    }
 
     fn is_valid_at(&self, idx: usize) -> bool {
-        get_bit(&self.data, idx)
+        unsafe { get_bit_unchecked(self.null_bits(), idx) }
     }
 
     fn get_bool(&self, idx: usize) -> bool {
@@ -134,22 +151,22 @@ impl<'a> RowReader<'a> {
         self.data[self.base_offset + offset]
     }
 
-    fn_get_idx!(u16);
-    fn_get_idx!(u32);
-    fn_get_idx!(u64);
-    fn_get_idx!(i8);
-    fn_get_idx!(i16);
-    fn_get_idx!(i32);
-    fn_get_idx!(i64);
-    fn_get_idx!(f32);
-    fn_get_idx!(f64);
+    fn_get_idx!(u16, 2);
+    fn_get_idx!(u32, 4);
+    fn_get_idx!(u64, 8);
+    fn_get_idx!(i8, 1);
+    fn_get_idx!(i16, 2);
+    fn_get_idx!(i32, 4);
+    fn_get_idx!(i64, 8);
+    fn_get_idx!(f32, 4);
+    fn_get_idx!(f64, 8);
 
     fn get_date32(&self, idx: usize) -> i32 {
-        get_idx!(i32, self, idx)
+        get_idx!(i32, self, idx, 4)
     }
 
     fn get_date64(&self, idx: usize) -> i64 {
-        get_idx!(i64, self, idx)
+        get_idx!(i64, self, idx, 8)
     }
 
     fn get_utf8(&self, idx: usize) -> &str {
@@ -206,14 +223,6 @@ impl<'a> RowReader<'a> {
             None
         }
     }
-
-    fn get_binary_opt(&self, idx: usize) -> Option<&[u8]> {
-        if self.is_valid_at(idx) {
-            Some(self.get_binary(idx))
-        } else {
-            None
-        }
-    }
 }
 
 fn read_row(
@@ -221,13 +230,24 @@ fn read_row(
     batch: &mut MutableRecordBatch,
     schema: &Arc<Schema>,
 ) -> Result<()> {
-    for ((col_idx, to), field) in batch
-        .arrays
-        .iter_mut()
-        .enumerate()
-        .zip(schema.fields().iter())
-    {
-        read_field(to, field.data_type(), col_idx, row)?
+    if row.all_valid() {
+        for ((col_idx, to), field) in batch
+            .arrays
+            .iter_mut()
+            .enumerate()
+            .zip(schema.fields().iter())
+        {
+            read_field_null_free(to, field.data_type(), col_idx, row)?
+        }
+    } else {
+        for ((col_idx, to), field) in batch
+            .arrays
+            .iter_mut()
+            .enumerate()
+            .zip(schema.fields().iter())
+        {
+            read_field(to, field.data_type(), col_idx, row)?
+        }
     }
     Ok(())
 }
@@ -304,6 +324,80 @@ fn read_field(
             } else {
                 to.append_null()?;
             }
+        }
+        _ => unimplemented!(),
+    }
+    Ok(())
+}
+
+fn read_field_null_free(
+    to: &mut Box<dyn ArrayBuilder>,
+    dt: &DataType,
+    col_idx: usize,
+    row: &RowReader,
+) -> Result<()> {
+    use arrow::array::*;
+    use DataType::*;
+    match dt {
+        Boolean => {
+            let to = to.as_any_mut().downcast_mut::<BooleanBuilder>().unwrap();
+            to.append_value(row.get_bool(col_idx))?;
+        }
+        UInt8 => {
+            let to = to.as_any_mut().downcast_mut::<UInt8Builder>().unwrap();
+            to.append_value(row.get_u8(col_idx))?;
+        }
+        UInt16 => {
+            let to = to.as_any_mut().downcast_mut::<UInt16Builder>().unwrap();
+            to.append_value(row.get_u16(col_idx))?;
+        }
+        UInt32 => {
+            let to = to.as_any_mut().downcast_mut::<UInt32Builder>().unwrap();
+            to.append_value(row.get_u32(col_idx))?;
+        }
+        UInt64 => {
+            let to = to.as_any_mut().downcast_mut::<UInt64Builder>().unwrap();
+            to.append_value(row.get_u64(col_idx))?;
+        }
+        Int8 => {
+            let to = to.as_any_mut().downcast_mut::<Int8Builder>().unwrap();
+            to.append_value(row.get_i8(col_idx))?;
+        }
+        Int16 => {
+            let to = to.as_any_mut().downcast_mut::<Int16Builder>().unwrap();
+            to.append_value(row.get_i16(col_idx))?;
+        }
+        Int32 => {
+            let to = to.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
+            to.append_value(row.get_i32(col_idx))?;
+        }
+        Int64 => {
+            let to = to.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
+            to.append_value(row.get_i64(col_idx))?;
+        }
+        Float32 => {
+            let to = to.as_any_mut().downcast_mut::<Float32Builder>().unwrap();
+            to.append_value(row.get_f32(col_idx))?;
+        }
+        Float64 => {
+            let to = to.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
+            to.append_value(row.get_f64(col_idx))?;
+        }
+        Date32 => {
+            let to = to.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
+            to.append_value(row.get_date32(col_idx))?;
+        }
+        Date64 => {
+            let to = to.as_any_mut().downcast_mut::<Date64Builder>().unwrap();
+            to.append_value(row.get_date64(col_idx))?;
+        }
+        Utf8 => {
+            let to = to.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
+            to.append_value(row.get_utf8(col_idx))?;
+        }
+        Binary => {
+            let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
+            to.append_value(row.get_binary(col_idx))?;
         }
         _ => unimplemented!(),
     }

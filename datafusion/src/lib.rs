@@ -223,6 +223,7 @@ pub use arrow;
 pub use parquet;
 
 pub(crate) mod field_util;
+#[allow(dead_code)]
 pub(crate) mod row;
 
 #[cfg(feature = "pyarrow")]

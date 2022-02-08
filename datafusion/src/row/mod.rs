@@ -40,11 +40,6 @@ mod writer;
 const UTF8_DEFAULT_SIZE: usize = 20;
 const BINARY_DEFAULT_SIZE: usize = 100;
 
-/// Get number of bytes needed for null bit set
-fn null_width(num_fields: usize) -> usize {
-    num_fields.saturating_add(7) / 8
-}
-
 /// Get relative offsets for each field and total width for values
 fn get_offsets(null_width: usize, schema: &Arc<Schema>) -> (Vec<usize>, usize) {
     let mut offsets = vec![];
@@ -97,8 +92,8 @@ fn type_width(dt: &DataType) -> usize {
     }
 }
 
-fn estimate_row_width(schema: &Arc<Schema>) -> usize {
-    let mut width = 0;
+fn estimate_row_width(null_width: usize, schema: &Arc<Schema>) -> usize {
+    let mut width = null_width;
     for f in schema.fields() {
         width += type_width(f.data_type());
         match f.data_type() {
@@ -123,9 +118,115 @@ fn supported(schema: &Arc<Schema>) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::error::Result;
+    use crate::row::reader::read_as_batch;
+    use crate::row::writer::write_batch_unchecked;
+    use arrow::record_batch::RecordBatch;
+    use arrow::{array::*, datatypes::*};
+    use DataType::*;
 
-    #[test]
-    fn round_trip() {
-        assert!(true)
+    macro_rules! fn_test_single_type {
+        ($ARRAY: ident, $TYPE: expr, $VEC: expr) => {
+            paste::item! {
+                #[test]
+                #[allow(non_snake_case)]
+                fn [<test_single_ $TYPE>]() -> Result<()> {
+                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
+                    let a = $ARRAY::from($VEC);
+                    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+                    let mut vector = vec![0; 1024];
+                    let row_offsets =
+                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+                    let output_batch = { read_as_batch(&mut vector, schema, row_offsets)? };
+                    assert_eq!(batch, output_batch);
+                    Ok(())
+                }
+            }
+        };
     }
+
+    fn_test_single_type!(
+        BooleanArray,
+        Boolean,
+        vec![Some(true), Some(false), None, Some(true), None]
+    );
+
+    fn_test_single_type!(
+        Int8Array,
+        Int8,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        Int16Array,
+        Int16,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        Int32Array,
+        Int32,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        Int64Array,
+        Int64,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        UInt8Array,
+        UInt8,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        UInt16Array,
+        UInt16,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        UInt32Array,
+        UInt32,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        UInt64Array,
+        UInt64,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        Float32Array,
+        Float32,
+        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)]
+    );
+
+    fn_test_single_type!(
+        Float64Array,
+        Float64,
+        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)]
+    );
+
+    fn_test_single_type!(
+        Date32Array,
+        Date32,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        Date64Array,
+        Date64,
+        vec![Some(5), Some(7), None, Some(0), Some(111)]
+    );
+
+    fn_test_single_type!(
+        StringArray,
+        Utf8,
+        vec![Some("hello"), Some("world"), None, Some(""), Some("")]
+    );
 }

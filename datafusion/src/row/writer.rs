@@ -17,8 +17,8 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
-use crate::row::bitmap::set_bit;
-use crate::row::{estimate_row_width, fixed_size, get_offsets, null_width, supported};
+use crate::row::bitmap::{bytes_for, set_bit};
+use crate::row::{estimate_row_width, fixed_size, get_offsets, supported};
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -45,6 +45,7 @@ pub fn write_batch_unchecked(
         output[current_offset..current_offset + row_width]
             .copy_from_slice(writer.get_row());
         current_offset += row_width;
+        writer.reset()
     }
     offsets
 }
@@ -84,12 +85,12 @@ pub struct RowWriter {
 impl RowWriter {
     /// new
     pub fn new(schema: &Arc<Schema>) -> Self {
-        assert!(supported(&schema));
+        assert!(supported(schema));
         let field_count = schema.fields().len();
-        let null_width = null_width(field_count);
-        let (field_offsets, values_width) = get_offsets(null_width, &schema);
-        let mut init_capacity = estimate_row_width(&schema);
-        if !fixed_size(&schema) {
+        let null_width = bytes_for(field_count);
+        let (field_offsets, values_width) = get_offsets(null_width, schema);
+        let mut init_capacity = estimate_row_width(null_width, schema);
+        if !fixed_size(schema) {
             // double the capacity to avoid repeated resize
             init_capacity *= 2;
         }
@@ -174,7 +175,7 @@ impl RowWriter {
         let size = bytes.len();
         self.set_offset_size(idx, size);
         let varlena_offset = self.varlena_offset;
-        self.data[varlena_offset..varlena_offset + size].copy_from_slice(&bytes);
+        self.data[varlena_offset..varlena_offset + size].copy_from_slice(bytes);
         self.varlena_offset += size;
         self.varlena_width += size;
     }
@@ -184,7 +185,7 @@ impl RowWriter {
         let size = value.len();
         self.set_offset_size(idx, size);
         let varlena_offset = self.varlena_offset;
-        self.data[varlena_offset..varlena_offset + size].copy_from_slice(&value);
+        self.data[varlena_offset..varlena_offset + size].copy_from_slice(value);
         self.varlena_offset += size;
         self.varlena_width += size;
     }
