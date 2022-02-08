@@ -437,6 +437,10 @@ impl ExecutionPlan for TopKExec {
         None
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn required_child_distribution(&self) -> Distribution {
         Distribution::SinglePartition
     }
