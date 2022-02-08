@@ -20,6 +20,7 @@
 use arrow::datatypes::DataType;
 use sqlparser::ast::Ident;
 
+use crate::logical_plan::ExprVisitable;
 use crate::logical_plan::{Expr, LogicalPlan};
 use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
 use crate::{

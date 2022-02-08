@@ -16,11 +16,15 @@
 // under the License.
 
 mod aggregate_function;
+mod built_in_function;
 mod operator;
+mod signature;
 mod window_frame;
 mod window_function;
 
 pub use aggregate_function::AggregateFunction;
+pub use built_in_function::BuiltinScalarFunction;
 pub use operator::Operator;
+pub use signature::{Signature, TypeSignature, Volatility};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
