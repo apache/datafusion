@@ -168,28 +168,31 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// This function will scheduled periodically for cleanup executor
+/// This function will scheduled periodically for cleanup executor.
+/// Will only clean the dir under work_dir not include file
 async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
     let mut dir = fs::read_dir(work_dir).await?;
     let mut to_deleted = Vec::new();
     let mut need_delete_dir;
-
-    while let Some(child) = dir.next_entry().await? {
-        let metadata = child.metadata().await?;
-        if metadata.is_dir() {
-            let dir = fs::read_dir(child.path()).await?;
-            match check_modified_time_in_dirs(vec![dir], seconds).await {
-                Ok(x) => match x {
-                    true => {
-                        need_delete_dir = child.path().into_os_string();
-                        to_deleted.push(need_delete_dir)
+    while let Some(child) = dir.next_entry().await.unwrap() {
+        if let Ok(metadata) = child.metadata().await {
+            if metadata.is_dir() {
+                let dir = fs::read_dir(child.path()).await?;
+                match check_modified_time_in_dirs(vec![dir], seconds).await {
+                    Ok(x) => match x {
+                        true => {
+                            need_delete_dir = child.path().into_os_string();
+                            to_deleted.push(need_delete_dir)
+                        }
+                        false => {}
+                    },
+                    Err(e) => {
+                        error!("Fail in clean_shuffle_data_loop {:?}", e)
                     }
-                    false => {}
-                },
-                Err(e) => {
-                    error!("Fail in clean_shuffle_data_loop {:?}", e)
                 }
             }
+        } else {
+            error!("can not get meta from file{:?}", child)
         }
     }
     info!(
@@ -229,4 +232,43 @@ async fn check_modified_time_in_dirs(
         }
     }
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::clean_shuffle_data_loop;
+    use std::fs;
+    use std::fs::File;
+    use std::io::Write;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    #[tokio::test]
+    async fn test_executor_clean_up() {
+        let work_dir = TempDir::new().unwrap().into_path();
+        let job_dir = work_dir.as_path().join("job_id");
+        let file_path = job_dir.as_path().join("tmp.csv");
+        let data = "Jorge,2018-12-13T12:12:10.011Z\n\
+                    Andrew,2018-11-13T17:11:10.011Z";
+        fs::create_dir(job_dir).unwrap();
+        File::create(&file_path)
+            .expect("creating temp file")
+            .write_all(data.as_bytes())
+            .expect("writing data");
+
+        let work_dir_clone = work_dir.clone();
+
+        let count1 = fs::read_dir(work_dir.clone()).unwrap().count();
+        assert_eq!(count1, 1);
+        let mut handles = vec![];
+        handles.push(tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            clean_shuffle_data_loop(work_dir_clone.to_str().unwrap(), 1)
+                .await
+                .unwrap();
+        }));
+        futures::future::join_all(handles).await;
+        let count2 = fs::read_dir(work_dir.clone()).unwrap().count();
+        assert_eq!(count2, 0);
+    }
 }
