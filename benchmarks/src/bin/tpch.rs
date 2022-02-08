@@ -51,7 +51,7 @@ use datafusion::{
 use datafusion::{
     arrow::util::pretty,
     datasource::{
-        listing::{ListingOptions, ListingTable},
+        listing::{ListingOptions, ListingTable, ListingTableConfig},
         object_store::local::LocalFileSystem,
     },
 };
@@ -724,12 +724,11 @@ fn get_table(
         table_partition_cols: vec![],
     };
 
-    Ok(Arc::new(ListingTable::new(
-        Arc::new(LocalFileSystem {}),
-        path,
-        schema,
-        options,
-    )))
+    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), path)
+        .with_listing_options(options)
+        .with_schema(schema);
+
+    Ok(Arc::new(ListingTable::try_new(config)?))
 }
 
 fn get_schema(table: &str) -> Schema {
