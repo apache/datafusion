@@ -283,7 +283,7 @@ async fn register_partitioned_aggregate_csv(
     let testdata = arrow_test_data();
     let csv_file_path = format!("{}/csv/aggregate_test_100.csv", testdata);
     let file_schema = test_util::aggr_test_schema();
-    let object_store = MirroringObjectStore::new_arc(csv_file_path.clone(), store_paths);
+    let object_store = MirroringObjectStore::new_arc(csv_file_path, store_paths);
 
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
