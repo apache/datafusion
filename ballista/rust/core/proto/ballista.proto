@@ -265,7 +265,13 @@ message LogicalPlanNode {
     AnalyzeNode analyze = 14;
     CrossJoinNode cross_join = 15;
     ValuesNode values = 16;
+    ExtensionPlanNode extension = 17;
   }
+}
+
+message ExtensionPlanNode {
+  bytes plan = 1;
+  repeated LogicalPlanNode inputs = 2;
 }
 
 message ProjectionColumns {

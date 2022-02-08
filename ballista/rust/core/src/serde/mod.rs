@@ -24,12 +24,15 @@ use std::sync::Arc;
 use std::{convert::TryInto, io::Cursor};
 
 use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
-use datafusion::logical_plan::{JoinConstraint, JoinType, LogicalPlan, Operator};
+use datafusion::logical_plan::{
+    JoinConstraint, JoinType, LogicalPlan, Operator, UserDefinedLogicalNode,
+};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::logical_plan::plan::Extension;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::ExecutionContext;
 use prost::Message;
@@ -69,11 +72,26 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
     fn try_into_logical_plan(
         &self,
         ctx: &ExecutionContext,
+        extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan, BallistaError>;
 
-    fn try_from_logical_plan(plan: &LogicalPlan) -> Result<Self, BallistaError>
+    fn try_from_logical_plan(
+        plan: &LogicalPlan,
+        extension_codec: &dyn LogicalExtensionCodec,
+    ) -> Result<Self, BallistaError>
     where
         Self: Sized;
+}
+
+pub trait LogicalExtensionCodec: Debug + Send + Sync {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &Vec<LogicalPlan>,
+    ) -> Result<Extension, BallistaError>;
+
+    fn try_encode(&self, node: Extension, buf: &mut Vec<u8>)
+        -> Result<(), BallistaError>;
 }
 
 pub trait AsExecutionPlan: Debug + Send + Sync + Clone {

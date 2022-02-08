@@ -16,7 +16,10 @@
 // under the License.
 
 use crate::error::BallistaError;
-use crate::serde::{proto_error, protobuf, str_to_byte, AsLogicalPlan};
+use crate::serde::protobuf::ExtensionPlanNode;
+use crate::serde::{
+    proto_error, protobuf, str_to_byte, AsLogicalPlan, LogicalExtensionCodec,
+};
 use crate::{convert_required, into_logical_plan};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::datasource::file_format::avro::AvroFormat;
@@ -25,6 +28,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable};
 use datafusion::datasource::object_store::local::LocalFileSystem;
+use datafusion::logical_plan::plan::Extension;
 use datafusion::logical_plan::{
     Column, CreateExternalTable, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
 };
@@ -64,6 +68,7 @@ impl AsLogicalPlan for LogicalPlanNode {
     fn try_into_logical_plan(
         &self,
         ctx: &ExecutionContext,
+        extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan, BallistaError> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
@@ -98,7 +103,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Projection(projection) => {
-                let input: LogicalPlan = into_logical_plan!(projection.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(projection.input, &ctx, extension_codec)?;
                 let x: Vec<Expr> = projection
                     .expr
                     .iter()
@@ -117,7 +123,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Selection(selection) => {
-                let input: LogicalPlan = into_logical_plan!(selection.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(selection.input, &ctx, extension_codec)?;
                 let expr: Expr = selection
                     .expr
                     .as_ref()
@@ -131,7 +138,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Window(window) => {
-                let input: LogicalPlan = into_logical_plan!(window.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(window.input, &ctx, extension_codec)?;
                 let window_expr = window
                     .window_expr
                     .iter()
@@ -143,7 +151,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Aggregate(aggregate) => {
-                let input: LogicalPlan = into_logical_plan!(aggregate.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(aggregate.input, &ctx, extension_codec)?;
                 let group_expr = aggregate
                     .group_expr
                     .iter()
@@ -242,7 +251,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 .map_err(|e| e.into())
             }
             LogicalPlanType::Sort(sort) => {
-                let input: LogicalPlan = into_logical_plan!(sort.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(sort.input, &ctx, extension_codec)?;
                 let sort_expr: Vec<Expr> = sort
                     .expr
                     .iter()
@@ -255,7 +265,8 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_plan::Partitioning;
-                let input: LogicalPlan = into_logical_plan!(repartition.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(repartition.input, &ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
                     BallistaError::General(String::from(
@@ -308,21 +319,24 @@ impl AsLogicalPlan for LogicalPlanNode {
                 }))
             }
             LogicalPlanType::Analyze(analyze) => {
-                let input: LogicalPlan = into_logical_plan!(analyze.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(analyze.input, &ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(analyze.verbose, true)?
                     .build()
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Explain(explain) => {
-                let input: LogicalPlan = into_logical_plan!(explain.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(explain.input, &ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(explain.verbose, false)?
                     .build()
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Limit(limit) => {
-                let input: LogicalPlan = into_logical_plan!(limit.input, &ctx)?;
+                let input: LogicalPlan =
+                    into_logical_plan!(limit.input, &ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .limit(limit.limit as usize)?
                     .build()
@@ -350,16 +364,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
 
-                let builder =
-                    LogicalPlanBuilder::from(into_logical_plan!(join.left, &ctx)?);
+                let builder = LogicalPlanBuilder::from(into_logical_plan!(
+                    join.left,
+                    &ctx,
+                    extension_codec
+                )?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join(
-                        &into_logical_plan!(join.right, &ctx)?,
+                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                     )?,
                     JoinConstraint::Using => builder.join_using(
-                        &into_logical_plan!(join.right, &ctx)?,
+                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
                         join_type.into(),
                         left_keys,
                     )?,
@@ -368,18 +385,29 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build().map_err(|e| e.into())
             }
             LogicalPlanType::CrossJoin(crossjoin) => {
-                let left = into_logical_plan!(crossjoin.left, &ctx)?;
-                let right = into_logical_plan!(crossjoin.right, &ctx)?;
+                let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
+                let right = into_logical_plan!(crossjoin.right, &ctx, extension_codec)?;
 
                 LogicalPlanBuilder::from(left)
                     .cross_join(&right)?
                     .build()
                     .map_err(|e| e.into())
             }
+            LogicalPlanType::Extension(ExtensionPlanNode { plan, inputs }) => {
+                let mut input_plans: Vec<LogicalPlan> = vec![];
+                for input in inputs {
+                    input_plans.push(input.try_into_logical_plan(&ctx, extension_codec)?);
+                }
+                let extension_node = extension_codec.try_decode(plan, &input_plans)?;
+                Ok(LogicalPlan::Extension(extension_node))
+            }
         }
     }
 
-    fn try_from_logical_plan(plan: &LogicalPlan) -> Result<Self, BallistaError>
+    fn try_from_logical_plan(
+        plan: &LogicalPlan,
+        extension_codec: &dyn LogicalExtensionCodec,
+    ) -> Result<Self, BallistaError>
     where
         Self: Sized,
     {
@@ -389,9 +417,9 @@ impl AsLogicalPlan for LogicalPlanNode {
 
 #[macro_export]
 macro_rules! into_logical_plan {
-    ($PB:expr, $CTX:expr) => {{
+    ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_logical_plan(&$CTX)
+            field.as_ref().try_into_logical_plan(&$CTX, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
