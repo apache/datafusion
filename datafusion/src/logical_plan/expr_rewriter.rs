@@ -20,6 +20,7 @@
 use super::Expr;
 use crate::logical_plan::plan::Aggregate;
 use crate::logical_plan::DFSchema;
+use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::LogicalPlan;
 use datafusion_common::Column;
 use datafusion_common::Result;
