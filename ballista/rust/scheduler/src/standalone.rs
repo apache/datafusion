@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ballista_core::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 use ballista_core::serde::BallistaCodec;
 use ballista_core::{
-    error::Result,
-    serde::protobuf::{
-        scheduler_grpc_server::SchedulerGrpcServer, LogicalPlanNode, PhysicalPlanNode,
-    },
+    error::Result, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
     BALLISTA_VERSION,
 };
 use datafusion::prelude::ExecutionContext;
@@ -35,14 +33,15 @@ use crate::{state::StandaloneClient, SchedulerServer};
 pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
-    let server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> = SchedulerServer::new(
-        Arc::new(client),
-        "ballista".to_string(),
-        Arc::new(RwLock::new(ExecutionContext::new())),
-        BallistaCodec::default(),
-    );
-
-    let server = SchedulerGrpcServer::new(server);
+    let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+        SchedulerServer::new(
+            Arc::new(client),
+            "ballista".to_string(),
+            Arc::new(RwLock::new(ExecutionContext::new())),
+            BallistaCodec::default(),
+        );
+    scheduler_server.init().await?;
+    let server = SchedulerGrpcServer::new(scheduler_server);
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;
