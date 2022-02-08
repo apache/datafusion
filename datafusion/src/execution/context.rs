@@ -459,7 +459,7 @@ impl ExecutionContext {
         let config = ListingTableConfig::new(object_store, path)
             .with_listing_options(options)
             .with_schema(resolved_schema);
-        let table = ListingTable::try_new(config).await?;
+        let table = ListingTable::try_new(config)?;
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
