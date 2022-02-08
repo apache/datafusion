@@ -1,0 +1,330 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! Built-in functions
+
+use crate::Volatility;
+use datafusion_common::{DataFusionError, Result};
+use std::fmt;
+use std::str::FromStr;
+
+/// Enum of all built-in scalar functions
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum BuiltinScalarFunction {
+    // math functions
+    /// abs
+    Abs,
+    /// acos
+    Acos,
+    /// asin
+    Asin,
+    /// atan
+    Atan,
+    /// ceil
+    Ceil,
+    /// cos
+    Cos,
+    /// Digest
+    Digest,
+    /// exp
+    Exp,
+    /// floor
+    Floor,
+    /// ln, Natural logarithm
+    Ln,
+    /// log, same as log10
+    Log,
+    /// log10
+    Log10,
+    /// log2
+    Log2,
+    /// round
+    Round,
+    /// signum
+    Signum,
+    /// sin
+    Sin,
+    /// sqrt
+    Sqrt,
+    /// tan
+    Tan,
+    /// trunc
+    Trunc,
+
+    // string functions
+    /// construct an array from columns
+    Array,
+    /// ascii
+    Ascii,
+    /// bit_length
+    BitLength,
+    /// btrim
+    Btrim,
+    /// character_length
+    CharacterLength,
+    /// chr
+    Chr,
+    /// concat
+    Concat,
+    /// concat_ws
+    ConcatWithSeparator,
+    /// date_part
+    DatePart,
+    /// date_trunc
+    DateTrunc,
+    /// initcap
+    InitCap,
+    /// left
+    Left,
+    /// lpad
+    Lpad,
+    /// lower
+    Lower,
+    /// ltrim
+    Ltrim,
+    /// md5
+    MD5,
+    /// nullif
+    NullIf,
+    /// octet_length
+    OctetLength,
+    /// random
+    Random,
+    /// regexp_replace
+    RegexpReplace,
+    /// repeat
+    Repeat,
+    /// replace
+    Replace,
+    /// reverse
+    Reverse,
+    /// right
+    Right,
+    /// rpad
+    Rpad,
+    /// rtrim
+    Rtrim,
+    /// sha224
+    SHA224,
+    /// sha256
+    SHA256,
+    /// sha384
+    SHA384,
+    /// Sha512
+    SHA512,
+    /// split_part
+    SplitPart,
+    /// starts_with
+    StartsWith,
+    /// strpos
+    Strpos,
+    /// substr
+    Substr,
+    /// to_hex
+    ToHex,
+    /// to_timestamp
+    ToTimestamp,
+    /// to_timestamp_millis
+    ToTimestampMillis,
+    /// to_timestamp_micros
+    ToTimestampMicros,
+    /// to_timestamp_seconds
+    ToTimestampSeconds,
+    ///now
+    Now,
+    /// translate
+    Translate,
+    /// trim
+    Trim,
+    /// upper
+    Upper,
+    /// regexp_match
+    RegexpMatch,
+}
+
+impl BuiltinScalarFunction {
+    /// an allowlist of functions to take zero arguments, so that they will get special treatment
+    /// while executing.
+    pub fn supports_zero_argument(&self) -> bool {
+        matches!(
+            self,
+            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now
+        )
+    }
+    /// Returns the [Volatility] of the builtin function.
+    pub fn volatility(&self) -> Volatility {
+        match self {
+            //Immutable scalar builtins
+            BuiltinScalarFunction::Abs => Volatility::Immutable,
+            BuiltinScalarFunction::Acos => Volatility::Immutable,
+            BuiltinScalarFunction::Asin => Volatility::Immutable,
+            BuiltinScalarFunction::Atan => Volatility::Immutable,
+            BuiltinScalarFunction::Ceil => Volatility::Immutable,
+            BuiltinScalarFunction::Cos => Volatility::Immutable,
+            BuiltinScalarFunction::Exp => Volatility::Immutable,
+            BuiltinScalarFunction::Floor => Volatility::Immutable,
+            BuiltinScalarFunction::Ln => Volatility::Immutable,
+            BuiltinScalarFunction::Log => Volatility::Immutable,
+            BuiltinScalarFunction::Log10 => Volatility::Immutable,
+            BuiltinScalarFunction::Log2 => Volatility::Immutable,
+            BuiltinScalarFunction::Round => Volatility::Immutable,
+            BuiltinScalarFunction::Signum => Volatility::Immutable,
+            BuiltinScalarFunction::Sin => Volatility::Immutable,
+            BuiltinScalarFunction::Sqrt => Volatility::Immutable,
+            BuiltinScalarFunction::Tan => Volatility::Immutable,
+            BuiltinScalarFunction::Trunc => Volatility::Immutable,
+            BuiltinScalarFunction::Array => Volatility::Immutable,
+            BuiltinScalarFunction::Ascii => Volatility::Immutable,
+            BuiltinScalarFunction::BitLength => Volatility::Immutable,
+            BuiltinScalarFunction::Btrim => Volatility::Immutable,
+            BuiltinScalarFunction::CharacterLength => Volatility::Immutable,
+            BuiltinScalarFunction::Chr => Volatility::Immutable,
+            BuiltinScalarFunction::Concat => Volatility::Immutable,
+            BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
+            BuiltinScalarFunction::DatePart => Volatility::Immutable,
+            BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
+            BuiltinScalarFunction::InitCap => Volatility::Immutable,
+            BuiltinScalarFunction::Left => Volatility::Immutable,
+            BuiltinScalarFunction::Lpad => Volatility::Immutable,
+            BuiltinScalarFunction::Lower => Volatility::Immutable,
+            BuiltinScalarFunction::Ltrim => Volatility::Immutable,
+            BuiltinScalarFunction::MD5 => Volatility::Immutable,
+            BuiltinScalarFunction::NullIf => Volatility::Immutable,
+            BuiltinScalarFunction::OctetLength => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
+            BuiltinScalarFunction::Repeat => Volatility::Immutable,
+            BuiltinScalarFunction::Replace => Volatility::Immutable,
+            BuiltinScalarFunction::Reverse => Volatility::Immutable,
+            BuiltinScalarFunction::Right => Volatility::Immutable,
+            BuiltinScalarFunction::Rpad => Volatility::Immutable,
+            BuiltinScalarFunction::Rtrim => Volatility::Immutable,
+            BuiltinScalarFunction::SHA224 => Volatility::Immutable,
+            BuiltinScalarFunction::SHA256 => Volatility::Immutable,
+            BuiltinScalarFunction::SHA384 => Volatility::Immutable,
+            BuiltinScalarFunction::SHA512 => Volatility::Immutable,
+            BuiltinScalarFunction::Digest => Volatility::Immutable,
+            BuiltinScalarFunction::SplitPart => Volatility::Immutable,
+            BuiltinScalarFunction::StartsWith => Volatility::Immutable,
+            BuiltinScalarFunction::Strpos => Volatility::Immutable,
+            BuiltinScalarFunction::Substr => Volatility::Immutable,
+            BuiltinScalarFunction::ToHex => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
+            BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
+            BuiltinScalarFunction::Translate => Volatility::Immutable,
+            BuiltinScalarFunction::Trim => Volatility::Immutable,
+            BuiltinScalarFunction::Upper => Volatility::Immutable,
+            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
+
+            //Stable builtin functions
+            BuiltinScalarFunction::Now => Volatility::Stable,
+
+            //Volatile builtin functions
+            BuiltinScalarFunction::Random => Volatility::Volatile,
+        }
+    }
+}
+
+impl fmt::Display for BuiltinScalarFunction {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // lowercase of the debug.
+        write!(f, "{}", format!("{:?}", self).to_lowercase())
+    }
+}
+
+impl FromStr for BuiltinScalarFunction {
+    type Err = DataFusionError;
+    fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
+        Ok(match name {
+            // math functions
+            "abs" => BuiltinScalarFunction::Abs,
+            "acos" => BuiltinScalarFunction::Acos,
+            "asin" => BuiltinScalarFunction::Asin,
+            "atan" => BuiltinScalarFunction::Atan,
+            "ceil" => BuiltinScalarFunction::Ceil,
+            "cos" => BuiltinScalarFunction::Cos,
+            "exp" => BuiltinScalarFunction::Exp,
+            "floor" => BuiltinScalarFunction::Floor,
+            "ln" => BuiltinScalarFunction::Ln,
+            "log" => BuiltinScalarFunction::Log,
+            "log10" => BuiltinScalarFunction::Log10,
+            "log2" => BuiltinScalarFunction::Log2,
+            "round" => BuiltinScalarFunction::Round,
+            "signum" => BuiltinScalarFunction::Signum,
+            "sin" => BuiltinScalarFunction::Sin,
+            "sqrt" => BuiltinScalarFunction::Sqrt,
+            "tan" => BuiltinScalarFunction::Tan,
+            "trunc" => BuiltinScalarFunction::Trunc,
+
+            // string functions
+            "array" => BuiltinScalarFunction::Array,
+            "ascii" => BuiltinScalarFunction::Ascii,
+            "bit_length" => BuiltinScalarFunction::BitLength,
+            "btrim" => BuiltinScalarFunction::Btrim,
+            "char_length" => BuiltinScalarFunction::CharacterLength,
+            "character_length" => BuiltinScalarFunction::CharacterLength,
+            "concat" => BuiltinScalarFunction::Concat,
+            "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
+            "chr" => BuiltinScalarFunction::Chr,
+            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
+            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
+            "initcap" => BuiltinScalarFunction::InitCap,
+            "left" => BuiltinScalarFunction::Left,
+            "length" => BuiltinScalarFunction::CharacterLength,
+            "lower" => BuiltinScalarFunction::Lower,
+            "lpad" => BuiltinScalarFunction::Lpad,
+            "ltrim" => BuiltinScalarFunction::Ltrim,
+            "md5" => BuiltinScalarFunction::MD5,
+            "nullif" => BuiltinScalarFunction::NullIf,
+            "octet_length" => BuiltinScalarFunction::OctetLength,
+            "random" => BuiltinScalarFunction::Random,
+            "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
+            "repeat" => BuiltinScalarFunction::Repeat,
+            "replace" => BuiltinScalarFunction::Replace,
+            "reverse" => BuiltinScalarFunction::Reverse,
+            "right" => BuiltinScalarFunction::Right,
+            "rpad" => BuiltinScalarFunction::Rpad,
+            "rtrim" => BuiltinScalarFunction::Rtrim,
+            "sha224" => BuiltinScalarFunction::SHA224,
+            "sha256" => BuiltinScalarFunction::SHA256,
+            "sha384" => BuiltinScalarFunction::SHA384,
+            "sha512" => BuiltinScalarFunction::SHA512,
+            "digest" => BuiltinScalarFunction::Digest,
+            "split_part" => BuiltinScalarFunction::SplitPart,
+            "starts_with" => BuiltinScalarFunction::StartsWith,
+            "strpos" => BuiltinScalarFunction::Strpos,
+            "substr" => BuiltinScalarFunction::Substr,
+            "to_hex" => BuiltinScalarFunction::ToHex,
+            "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
+            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
+            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
+            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
+            "now" => BuiltinScalarFunction::Now,
+            "translate" => BuiltinScalarFunction::Translate,
+            "trim" => BuiltinScalarFunction::Trim,
+            "upper" => BuiltinScalarFunction::Upper,
+            "regexp_match" => BuiltinScalarFunction::RegexpMatch,
+            _ => {
+                return Err(DataFusionError::Plan(format!(
+                    "There is no built-in function named {}",
+                    name
+                )))
+            }
+        })
+    }
+}
