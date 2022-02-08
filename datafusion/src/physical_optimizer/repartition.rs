@@ -19,9 +19,7 @@
 use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
-use crate::physical_plan::{
-    empty::EmptyExec, repartition::RepartitionExec, ExecutionPlan,
-};
+use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
 use crate::physical_plan::{Distribution, Partitioning::*};
 use crate::{error::Result, execution::context::ExecutionConfig};
 
@@ -159,7 +157,7 @@ fn optimize_partitions(
 
     let new_plan = if plan.children().is_empty() {
         // leaf node - don't replace children
-        plan.clone()
+        plan
     } else {
         let can_reorder_children =
             match (plan.relies_on_input_order(), plan.maintains_input_order()) {
@@ -210,11 +208,7 @@ fn optimize_partitions(
         Hash(_, _) => false,
     };
 
-    // TODO: EmptyExec causes failures with RepartitionExec
-    // But also not very useful to include
-    let is_empty_exec = plan.as_any().downcast_ref::<EmptyExec>().is_some();
-
-    if would_benefit && could_repartition && can_reorder && !is_empty_exec {
+    if would_benefit && could_repartition && can_reorder {
         Ok(Arc::new(RepartitionExec::try_new(
             new_plan,
             RoundRobinBatch(target_partitions),
