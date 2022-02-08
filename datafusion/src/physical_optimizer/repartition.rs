@@ -130,7 +130,17 @@ impl Repartition {
 
 /// Recursively visits all `plan`s puts and then optionally adds a
 /// `RepartitionExec` at the output of `plan` to match
-/// `target_partitions`
+/// `target_partitions` in an attempt to increase the overall parallelism.
+///
+/// It does so using depth first scan of the tree, and repartitions
+/// any plan that:
+///
+/// 1. Has fewer partitions than `target_partitions`
+///
+/// 2. Has a direct parent that `benefits_from_input_partitioning`
+///
+/// 3. Does not have a parent that `relies_on_input_order` unless there
+/// is an intervening node that does not `maintain_input_order`
 ///
 /// if `can_reorder` is false, means that the output of this node
 /// can not be reordered as as something upstream is relying on that order
