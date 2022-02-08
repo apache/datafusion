@@ -18,6 +18,7 @@
 //! This program demonstrates the DataFusion expression simplification API.
 
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::logical_plan::ExprSimplifiable;
 use datafusion::{
     error::Result,
     execution::context::ExecutionProps,
