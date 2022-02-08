@@ -768,21 +768,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             settings: _,
         } = request.into_inner()
         {
-            // parse config
-            // let mut config_builder = BallistaConfig::builder();
-            // for kv_pair in &settings {
-            //     config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
-            // }
-            // let config = config_builder.build().map_err(|e| {
-            //     let msg = format!("Could not parse configs: {}", e);
-            //     error!("{}", msg);
-            //     tonic::Status::internal(msg)
-            // })?;
-
             let plan = match query {
                 Query::LogicalPlan(message) => {
-                    // parse protobuf
-                    // let ctx = create_datafusion_context(&config);
                     let ctx = self.ctx.read().await;
                     T::try_decode(message.as_slice())
                         .and_then(|m| m.try_into_logical_plan(&ctx))
@@ -794,9 +781,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                         })?
                 }
                 Query::Sql(sql) => {
-                    //TODO we can't just create a new context because we need a context that has
-                    // tables registered from previous SQL statements that have been executed
-                    let mut ctx = self.ctx.write().await; //create_datafusion_context(&config);
+                    let mut ctx = self.ctx.write().await;
                     let df = ctx.sql(&sql).await.map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);

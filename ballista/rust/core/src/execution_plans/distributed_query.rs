@@ -147,12 +147,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
 
         let job_id = scheduler
             .execute_query(ExecuteQueryParams {
-                query: Some(Query::LogicalPlan(
-                    buf
-                    // (&self.plan)
-                    //     .try_into()
-                    //     .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
-                )),
+                query: Some(Query::LogicalPlan(buf)),
                 settings: self
                     .config
                     .settings()
