@@ -201,7 +201,7 @@ fn optimize_partitions(
     };
 
     // TODO: EmptyExec causes failures with RepartitionExec
-    // But also not very useful to inlude
+    // But also not very useful to include
     let is_empty_exec = plan.as_any().downcast_ref::<EmptyExec>().is_some();
 
     if would_benefit && could_repartition && can_reorder && !is_empty_exec {
