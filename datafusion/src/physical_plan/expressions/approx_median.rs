@@ -32,22 +32,6 @@ pub struct ApproxMedian {
     data_type: DataType,
 }
 
-pub(crate) fn is_approx_median_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-    )
-}
-
 impl ApproxMedian {
     /// Create a new APPROX_MEDIAN aggregate function
     pub fn new(

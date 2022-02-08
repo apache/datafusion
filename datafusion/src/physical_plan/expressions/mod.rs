@@ -66,7 +66,7 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
-pub(crate) use approx_median::{is_approx_median_support_arg_type, ApproxMedian};
+pub(crate) use approx_median::ApproxMedian;
 pub use approx_percentile_cont::{
     is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
 };
