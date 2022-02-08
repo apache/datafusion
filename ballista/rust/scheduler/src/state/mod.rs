@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::marker::PhantomData;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{any::type_name, collections::HashMap, sync::Arc, time::Duration};
 
@@ -31,7 +30,7 @@ use ballista_core::serde::protobuf::{
     TaskStatus,
 };
 use ballista_core::serde::scheduler::{ExecutorData, PartitionStats};
-use ballista_core::serde::AsExecutionPlan;
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
 use ballista_core::{error::Result, execution_plans::UnresolvedShuffleExec};
 use datafusion::prelude::ExecutionContext;
@@ -84,18 +83,31 @@ pub enum WatchEvent {
 }
 
 #[derive(Clone)]
-pub(super) struct SchedulerState<T: 'static + AsExecutionPlan> {
+pub(super) struct SchedulerState<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
+{
     config_client: Arc<dyn ConfigBackendClient>,
     namespace: String,
-    plan_repr: PhantomData<T>,
+    codec: BallistaCodec<T, U>,
 }
 
-impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T, U> {
     pub fn new(config_client: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
         Self {
             config_client,
             namespace,
-            plan_repr: PhantomData,
+            codec: BallistaCodec::default(),
+        }
+    }
+
+    pub fn with_codec(
+        config_client: Arc<dyn ConfigBackendClient>,
+        namespace: String,
+        codec: BallistaCodec<T, U>,
+    ) -> Self {
+        Self {
+            config_client,
+            namespace,
+            codec,
         }
     }
 
@@ -275,7 +287,8 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
         let key = get_stage_plan_key(&self.namespace, job_id, stage_id);
         let value = {
             let mut buf: Vec<u8> = vec![];
-            let proto = T::try_from_physical_plan(plan)?;
+            let proto =
+                U::try_from_physical_plan(plan, self.codec.physical_extension_codec())?;
             proto.try_encode(&mut buf)?;
             // let proto: PhysicalPlanNode = plan.try_into()?;
             // encode_protobuf(&proto)?
@@ -298,8 +311,9 @@ impl<T: 'static + AsExecutionPlan> SchedulerState<T> {
                 key
             )));
         }
-        let value = T::try_decode(value.as_slice())?;
-        let plan = value.try_into_physical_plan(ctx)?;
+        let value = U::try_decode(value.as_slice())?;
+        let plan =
+            value.try_into_physical_plan(ctx, self.codec.physical_extension_codec())?;
         // let value: PhysicalPlanNode = decode_protobuf(value)?;
         // Ok((&value).try_into()?)
         Ok(plan)
@@ -793,8 +807,8 @@ mod test {
     use std::sync::Arc;
 
     use ballista_core::serde::protobuf::{
-        job_status, task_status, CompletedTask, FailedTask, JobStatus, PartitionId,
-        PhysicalPlanNode, QueuedJob, RunningJob, RunningTask, TaskStatus,
+        job_status, task_status, CompletedTask, FailedTask, JobStatus, LogicalPlanNode,
+        PartitionId, PhysicalPlanNode, QueuedJob, RunningJob, RunningTask, TaskStatus,
     };
     use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
 
@@ -805,10 +819,11 @@ mod test {
 
     #[tokio::test]
     async fn executor_metadata() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let meta = ExecutorMeta {
             id: "123".to_owned(),
             host: "localhost".to_owned(),
@@ -828,10 +843,11 @@ mod test {
 
     #[tokio::test]
     async fn job_metadata() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let meta = JobStatus {
             status: Some(job_status::Status::Queued(QueuedJob {})),
         };
@@ -847,10 +863,11 @@ mod test {
 
     #[tokio::test]
     async fn job_metadata_non_existant() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let meta = JobStatus {
             status: Some(job_status::Status::Queued(QueuedJob {})),
         };
@@ -862,10 +879,11 @@ mod test {
 
     #[tokio::test]
     async fn task_status() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let meta = TaskStatus {
             status: Some(task_status::Status::Failed(FailedTask {
                 error: "error".to_owned(),
@@ -888,10 +906,11 @@ mod test {
 
     #[tokio::test]
     async fn task_status_non_existant() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let meta = TaskStatus {
             status: Some(task_status::Status::Failed(FailedTask {
                 error: "error".to_owned(),
@@ -910,10 +929,11 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_queued() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let job_id = "job";
         let job_status = JobStatus {
             status: Some(job_status::Status::Queued(QueuedJob {})),
@@ -927,10 +947,11 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_running() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let job_id = "job";
         let job_status = JobStatus {
             status: Some(job_status::Status::Running(RunningJob {})),
@@ -967,10 +988,11 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_running2() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let job_id = "job";
         let job_status = JobStatus {
             status: Some(job_status::Status::Running(RunningJob {})),
@@ -1005,10 +1027,11 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_completed() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let job_id = "job";
         let job_status = JobStatus {
             status: Some(job_status::Status::Running(RunningJob {})),
@@ -1049,10 +1072,11 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_completed2() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let job_id = "job";
         let job_status = JobStatus {
             status: Some(job_status::Status::Queued(QueuedJob {})),
@@ -1093,10 +1117,11 @@ mod test {
 
     #[tokio::test]
     async fn task_synchronize_job_status_failed() -> Result<(), BallistaError> {
-        let state: SchedulerState<PhysicalPlanNode> = SchedulerState::new(
-            Arc::new(StandaloneClient::try_new_temporary()?),
-            "test".to_string(),
-        );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(
+                Arc::new(StandaloneClient::try_new_temporary()?),
+                "test".to_string(),
+            );
         let job_id = "job";
         let job_status = JobStatus {
             status: Some(job_status::Status::Running(RunningJob {})),

@@ -30,9 +30,10 @@ use uuid::Uuid;
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::protobuf::{
     executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
-    ExecutorRegistration, PhysicalPlanNode,
+    ExecutorRegistration, LogicalPlanNode, PhysicalPlanNode,
 };
 use ballista_core::serde::scheduler::ExecutorSpecification;
+use ballista_core::serde::BallistaCodec;
 use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
@@ -103,16 +104,18 @@ async fn main() -> Result<()> {
     let executor_specification = ExecutorSpecification {
         task_slots: opt.concurrent_tasks as u32,
     };
-    let executor: Arc<Executor<PhysicalPlanNode>> =
-        Arc::new(Executor::new_with_specification(
-            &work_dir,
-            executor_specification,
-            Arc::new(ExecutionContext::new()),
-        ));
+    let executor: Arc<Executor> = Arc::new(Executor::new_with_specification(
+        &work_dir,
+        executor_specification,
+        Arc::new(ExecutionContext::new()),
+    ));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await
         .context("Could not connect to scheduler")?;
+
+    let default_codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+        BallistaCodec::default();
 
     let scheduler_policy = opt.task_scheduling_policy;
     match scheduler_policy {
@@ -121,6 +124,7 @@ async fn main() -> Result<()> {
                 scheduler,
                 executor.clone(),
                 executor_meta,
+                default_codec,
             ));
         }
         _ => {
@@ -129,6 +133,7 @@ async fn main() -> Result<()> {
                 executor.clone(),
                 executor_meta,
                 opt.concurrent_tasks,
+                default_codec,
             ));
         }
     }

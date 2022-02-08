@@ -105,7 +105,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
@@ -113,13 +113,13 @@ use tonic::transport::Channel;
 
 #[derive(Clone)]
 pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
-    pub(crate) state: Arc<SchedulerState<U>>,
+    pub(crate) state: Arc<SchedulerState<T, U>>,
     start_time: u128,
     policy: TaskSchedulingPolicy,
     scheduler_env: Option<SchedulerEnv>,
     executors_client: Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>,
     ctx: Arc<RwLock<ExecutionContext>>,
-    plan_repr: PhantomData<T>,
+    codec: BallistaCodec<T, U>,
 }
 
 #[derive(Clone)]
@@ -132,6 +132,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         config: Arc<dyn ConfigBackendClient>,
         namespace: String,
         ctx: Arc<RwLock<ExecutionContext>>,
+        codec: BallistaCodec<T, U>,
     ) -> Self {
         SchedulerServer::new_with_policy(
             config,
@@ -139,6 +140,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             TaskSchedulingPolicy::PullStaged,
             None,
             ctx,
+            codec,
         )
     }
 
@@ -148,8 +150,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         policy: TaskSchedulingPolicy,
         scheduler_env: Option<SchedulerEnv>,
         ctx: Arc<RwLock<ExecutionContext>>,
+        codec: BallistaCodec<T, U>,
     ) -> Self {
-        let state = Arc::new(SchedulerState::new(config, namespace));
+        let state =
+            Arc::new(SchedulerState::with_codec(config, namespace, codec.clone()));
         let state_clone = state.clone();
 
         // TODO: we should elect a leader in the scheduler cluster and run this only in the leader
@@ -165,7 +169,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             scheduler_env,
             executors_client: Arc::new(RwLock::new(HashMap::new())),
             ctx,
-            plan_repr: PhantomData,
+            codec,
         }
     }
 
@@ -280,14 +284,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                         };
 
                         let mut buf: Vec<u8> = vec![];
-                        U::try_from_physical_plan(plan)
-                            .and_then(|m| m.try_encode(&mut buf))
-                            .map_err(|e| {
-                                Status::internal(format!(
-                                    "error serializing execution plan: {:?}",
-                                    e
-                                ))
-                            })?;
+                        U::try_from_physical_plan(
+                            plan,
+                            self.codec.physical_extension_codec(),
+                        )
+                        .and_then(|m| m.try_encode(&mut buf))
+                        .map_err(|e| {
+                            Status::internal(format!(
+                                "error serializing execution plan: {:?}",
+                                e
+                            ))
+                        })?;
 
                         ret[idx].push(TaskDefinition {
                             plan: buf,
@@ -492,14 +499,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                             )));
                         };
                         let mut buf: Vec<u8> = vec![];
-                        U::try_from_physical_plan(plan)
-                            .and_then(|m| m.try_encode(&mut buf))
-                            .map_err(|e| {
-                                Status::internal(format!(
-                                    "error serializing execution plan: {:?}",
-                                    e
-                                ))
-                            })?;
+                        U::try_from_physical_plan(
+                            plan,
+                            self.codec.physical_extension_codec(),
+                        )
+                        .and_then(|m| m.try_encode(&mut buf))
+                        .map_err(|e| {
+                            Status::internal(format!(
+                                "error serializing execution plan: {:?}",
+                                e
+                            ))
+                        })?;
                         Ok(Some(TaskDefinition {
                             plan: buf,
                             task_id: status.partition_id,
@@ -772,7 +782,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 Query::LogicalPlan(message) => {
                     let ctx = self.ctx.read().await;
                     T::try_decode(message.as_slice())
-                        .and_then(|m| m.try_into_logical_plan(&ctx))
+                        .and_then(|m| {
+                            m.try_into_logical_plan(
+                                &ctx,
+                                self.codec.logical_extension_codec(),
+                            )
+                        })
                         .map_err(|e| {
                             let msg =
                                 format!("Could not parse logical plan protobuf: {}", e);
@@ -983,6 +998,7 @@ mod test {
         executor_registration::OptionalHost, ExecutorRegistration, LogicalPlanNode,
         PhysicalPlanNode, PollWorkParams,
     };
+    use ballista_core::serde::BallistaCodec;
     use datafusion::prelude::ExecutionContext;
 
     use super::{
@@ -999,8 +1015,9 @@ mod test {
                 state.clone(),
                 namespace.to_owned(),
                 Arc::new(RwLock::new(ExecutionContext::new())),
+                BallistaCodec::default(),
             );
-        let state: SchedulerState<PhysicalPlanNode> =
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
             SchedulerState::new(state, namespace.to_string());
         let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),

@@ -33,13 +33,16 @@ use crate::as_task_status;
 use crate::executor::Executor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
-use ballista_core::serde::AsExecutionPlan;
+use ballista_core::serde::{
+    AsExecutionPlan, AsLogicalPlan, BallistaCodec, PhysicalExtensionCodec,
+};
 
-pub async fn poll_loop<T: 'static + AsExecutionPlan>(
+pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
-    executor: Arc<Executor<T>>,
+    executor: Arc<Executor>,
     executor_meta: ExecutorRegistration,
     concurrent_tasks: usize,
+    codec: BallistaCodec<T, U>,
 ) {
     let available_tasks_slots = Arc::new(AtomicUsize::new(concurrent_tasks));
     let (task_status_sender, mut task_status_receiver) =
@@ -77,6 +80,7 @@ pub async fn poll_loop<T: 'static + AsExecutionPlan>(
                         available_tasks_slots.clone(),
                         task_status_sender,
                         task,
+                        &codec,
                     )
                     .await
                     {
@@ -102,12 +106,13 @@ pub async fn poll_loop<T: 'static + AsExecutionPlan>(
     }
 }
 
-async fn run_received_tasks<T: 'static + AsExecutionPlan>(
-    executor: Arc<Executor<T>>,
+async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
+    executor: Arc<Executor>,
     executor_id: String,
     available_tasks_slots: Arc<AtomicUsize>,
     task_status_sender: Sender<TaskStatus>,
     task: TaskDefinition,
+    codec: &BallistaCodec<T, U>,
 ) -> Result<(), BallistaError> {
     let task_id = task.task_id.unwrap();
     let task_id_log = format!(
@@ -117,8 +122,13 @@ async fn run_received_tasks<T: 'static + AsExecutionPlan>(
     info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
 
-    let plan: Arc<dyn ExecutionPlan> = T::try_decode(task.plan.as_slice())
-        .and_then(|proto| proto.try_into_physical_plan(executor.ctx.as_ref()))?;
+    let plan: Arc<dyn ExecutionPlan> =
+        U::try_decode(task.plan.as_slice()).and_then(|proto| {
+            proto.try_into_physical_plan(
+                executor.ctx.as_ref(),
+                codec.physical_extension_codec(),
+            )
+        })?;
 
     let shuffle_output_partitioning =
         parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;

@@ -23,10 +23,13 @@ use crate::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
 use crate::serde::protobuf::physical_expr_node::ExprType;
 use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
-use crate::serde::protobuf::PhysicalPlanNode;
 use crate::serde::protobuf::ShuffleReaderPartition;
+use crate::serde::protobuf::{PhysicalExtensionNode, PhysicalPlanNode};
 use crate::serde::scheduler::PartitionLocation;
-use crate::serde::{proto_error, protobuf, str_to_byte, AsExecutionPlan};
+use crate::serde::{
+    byte_to_string, proto_error, protobuf, str_to_byte, AsExecutionPlan,
+    PhysicalExtensionCodec,
+};
 use crate::{convert_box_required, convert_required, into_physical_plan, into_required};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -85,6 +88,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
     fn try_into_physical_plan(
         &self,
         ctx: &ExecutionContext,
+        extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
@@ -95,7 +99,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
         match plan {
             PhysicalPlanType::Projection(projection) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(projection.input, ctx)?;
+                    into_physical_plan!(projection.input, ctx, extension_codec)?;
                 let exprs = projection
                     .expr
                     .iter()
@@ -107,7 +111,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Filter(filter) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(filter.input, ctx)?;
+                    into_physical_plan!(filter.input, ctx, extension_codec)?;
                 let predicate = filter
                     .expr
                     .as_ref()
@@ -137,7 +141,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(coalesce_batches.input, ctx)?;
+                    into_physical_plan!(coalesce_batches.input, ctx, extension_codec)?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
                     coalesce_batches.target_batch_size as usize,
@@ -145,12 +149,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, ctx)?;
+                    into_physical_plan!(merge.input, ctx, extension_codec)?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(repart.input, ctx)?;
+                    into_physical_plan!(repart.input, ctx, extension_codec)?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
                         let expr = hash_part
@@ -190,17 +194,17 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, ctx)?;
+                    into_physical_plan!(limit.input, ctx, extension_codec)?;
                 Ok(Arc::new(GlobalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::LocalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, ctx)?;
+                    into_physical_plan!(limit.input, ctx, extension_codec)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(window_agg.input, ctx)?;
+                    into_physical_plan!(window_agg.input, ctx, extension_codec)?;
                 let input_schema = window_agg
                     .input_schema
                     .as_ref()
@@ -247,7 +251,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::HashAggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hash_agg.input, ctx)?;
+                    into_physical_plan!(hash_agg.input, ctx, extension_codec)?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(|| {
                     proto_error(format!(
                         "Received a HashAggregateNode message with unknown AggregateMode {}",
@@ -332,9 +336,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
                 let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.left, ctx)?;
+                    into_physical_plan!(hashjoin.left, ctx, extension_codec)?;
                 let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.right, ctx)?;
+                    into_physical_plan!(hashjoin.right, ctx, extension_codec)?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
                     .iter()
@@ -375,14 +379,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.left, ctx)?;
+                    into_physical_plan!(crossjoin.left, ctx, extension_codec)?;
                 let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.right, ctx)?;
+                    into_physical_plan!(crossjoin.right, ctx, extension_codec)?;
                 Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
             }
             PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(shuffle_writer.input, ctx)?;
+                    into_physical_plan!(shuffle_writer.input, ctx, extension_codec)?;
 
                 let output_partitioning = parse_protobuf_hash_partitioning(
                     shuffle_writer.output_partitioning.as_ref(),
@@ -417,7 +421,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(EmptyExec::new(empty.produce_one_row, schema)))
             }
             PhysicalPlanType::Sort(sort) => {
-                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(sort.input, ctx)?;
+                let input: Arc<dyn ExecutionPlan> =
+                    into_physical_plan!(sort.input, ctx, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -467,14 +472,404 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         as usize,
                 }))
             }
+            PhysicalPlanType::Extension(extension) => {
+                let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
+                    .inputs
+                    .iter()
+                    .map(|i| i.try_into_physical_plan(ctx, extension_codec))
+                    .collect::<Result<_, BallistaError>>()?;
+
+                let extension_node =
+                    extension_codec.try_decode(extension.node.as_slice(), &inputs)?;
+
+                Ok(extension_node)
+            }
         }
     }
 
-    fn try_from_physical_plan(plan: Arc<dyn ExecutionPlan>) -> Result<Self, BallistaError>
+    fn try_from_physical_plan(
+        plan: Arc<dyn ExecutionPlan>,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self, BallistaError>
     where
         Self: Sized,
     {
-        plan.try_into()
+        let plan_clone = plan.clone();
+        let plan = plan.as_any();
+
+        if let Some(exec) = plan.downcast_ref::<ProjectionExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            let expr = exec
+                .expr()
+                .iter()
+                .map(|expr| expr.0.clone().try_into())
+                .collect::<Result<Vec<_>, BallistaError>>()?;
+            let expr_name = exec.expr().iter().map(|expr| expr.1.clone()).collect();
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Projection(Box::new(
+                    protobuf::ProjectionExecNode {
+                        input: Some(Box::new(input)),
+                        expr,
+                        expr_name,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<FilterExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Filter(Box::new(
+                    protobuf::FilterExecNode {
+                        input: Some(Box::new(input)),
+                        expr: Some(exec.predicate().clone().try_into()?),
+                    },
+                ))),
+            })
+        } else if let Some(limit) = plan.downcast_ref::<GlobalLimitExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                limit.input().to_owned(),
+                extension_codec,
+            )?;
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::GlobalLimit(Box::new(
+                    protobuf::GlobalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        limit: limit.limit() as u32,
+                    },
+                ))),
+            })
+        } else if let Some(limit) = plan.downcast_ref::<LocalLimitExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                limit.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::LocalLimit(Box::new(
+                    protobuf::LocalLimitExecNode {
+                        input: Some(Box::new(input)),
+                        limit: limit.limit() as u32,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<HashJoinExec>() {
+            let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.left().to_owned(),
+                extension_codec,
+            )?;
+            let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.right().to_owned(),
+                extension_codec,
+            )?;
+            let on: Vec<protobuf::JoinOn> = exec
+                .on()
+                .iter()
+                .map(|tuple| protobuf::JoinOn {
+                    left: Some(protobuf::PhysicalColumn {
+                        name: tuple.0.name().to_string(),
+                        index: tuple.0.index() as u32,
+                    }),
+                    right: Some(protobuf::PhysicalColumn {
+                        name: tuple.1.name().to_string(),
+                        index: tuple.1.index() as u32,
+                    }),
+                })
+                .collect();
+            let join_type: protobuf::JoinType = exec.join_type().to_owned().into();
+
+            let partition_mode = match exec.partition_mode() {
+                PartitionMode::CollectLeft => protobuf::PartitionMode::CollectLeft,
+                PartitionMode::Partitioned => protobuf::PartitionMode::Partitioned,
+            };
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::HashJoin(Box::new(
+                    protobuf::HashJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                        on,
+                        join_type: join_type.into(),
+                        partition_mode: partition_mode.into(),
+                        null_equals_null: *exec.null_equals_null(),
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<CrossJoinExec>() {
+            let left = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.left().to_owned(),
+                extension_codec,
+            )?;
+            let right = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.right().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::CrossJoin(Box::new(
+                    protobuf::CrossJoinExecNode {
+                        left: Some(Box::new(left)),
+                        right: Some(Box::new(right)),
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<HashAggregateExec>() {
+            let groups = exec
+                .group_expr()
+                .iter()
+                .map(|expr| expr.0.to_owned().try_into())
+                .collect::<Result<Vec<_>, BallistaError>>()?;
+            let group_names = exec
+                .group_expr()
+                .iter()
+                .map(|expr| expr.1.to_owned())
+                .collect();
+            let agg = exec
+                .aggr_expr()
+                .iter()
+                .map(|expr| expr.to_owned().try_into())
+                .collect::<Result<Vec<_>, BallistaError>>()?;
+            let agg_names = exec
+                .aggr_expr()
+                .iter()
+                .map(|expr| match expr.field() {
+                    Ok(field) => Ok(field.name().clone()),
+                    Err(e) => Err(BallistaError::DataFusionError(e)),
+                })
+                .collect::<Result<_, BallistaError>>()?;
+
+            let agg_mode = match exec.mode() {
+                AggregateMode::Partial => protobuf::AggregateMode::Partial,
+                AggregateMode::Final => protobuf::AggregateMode::Final,
+                AggregateMode::FinalPartitioned => {
+                    protobuf::AggregateMode::FinalPartitioned
+                }
+            };
+            let input_schema = exec.input_schema();
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::HashAggregate(Box::new(
+                    protobuf::HashAggregateExecNode {
+                        group_expr: groups,
+                        group_expr_name: group_names,
+                        aggr_expr: agg,
+                        aggr_expr_name: agg_names,
+                        mode: agg_mode as i32,
+                        input: Some(Box::new(input)),
+                        input_schema: Some(input_schema.as_ref().into()),
+                    },
+                ))),
+            })
+        } else if let Some(empty) = plan.downcast_ref::<EmptyExec>() {
+            let schema = empty.schema().as_ref().into();
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Empty(
+                    protobuf::EmptyExecNode {
+                        produce_one_row: empty.produce_one_row(),
+                        schema: Some(schema),
+                    },
+                )),
+            })
+        } else if let Some(coalesce_batches) = plan.downcast_ref::<CoalesceBatchesExec>()
+        {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                coalesce_batches.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::CoalesceBatches(Box::new(
+                    protobuf::CoalesceBatchesExecNode {
+                        input: Some(Box::new(input)),
+                        target_batch_size: coalesce_batches.target_batch_size() as u32,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<CsvExec>() {
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::CsvScan(
+                    protobuf::CsvScanExecNode {
+                        base_conf: Some(exec.base_config().try_into()?),
+                        has_header: exec.has_header(),
+                        delimiter: byte_to_string(exec.delimiter())?,
+                    },
+                )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ParquetScan(
+                    protobuf::ParquetScanExecNode {
+                        base_conf: Some(exec.base_config().try_into()?),
+                        // TODO serialize predicates
+                    },
+                )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<AvroExec>() {
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::AvroScan(
+                    protobuf::AvroScanExecNode {
+                        base_conf: Some(exec.base_config().try_into()?),
+                    },
+                )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<ShuffleReaderExec>() {
+            let mut partition = vec![];
+            for location in &exec.partition {
+                partition.push(protobuf::ShuffleReaderPartition {
+                    location: location
+                        .iter()
+                        .map(|l| l.clone().try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                });
+            }
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ShuffleReader(
+                    protobuf::ShuffleReaderExecNode {
+                        partition,
+                        schema: Some(exec.schema().as_ref().into()),
+                    },
+                )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<CoalescePartitionsExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Merge(Box::new(
+                    protobuf::CoalescePartitionsExecNode {
+                        input: Some(Box::new(input)),
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<RepartitionExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+
+            let pb_partition_method = match exec.partitioning() {
+                Partitioning::Hash(exprs, partition_count) => {
+                    PartitionMethod::Hash(protobuf::PhysicalHashRepartition {
+                        hash_expr: exprs
+                            .iter()
+                            .map(|expr| expr.clone().try_into())
+                            .collect::<Result<Vec<_>, BallistaError>>()?,
+                        partition_count: *partition_count as u64,
+                    })
+                }
+                Partitioning::RoundRobinBatch(partition_count) => {
+                    PartitionMethod::RoundRobin(*partition_count as u64)
+                }
+                Partitioning::UnknownPartitioning(partition_count) => {
+                    PartitionMethod::Unknown(*partition_count as u64)
+                }
+            };
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Repartition(Box::new(
+                    protobuf::RepartitionExecNode {
+                        input: Some(Box::new(input)),
+                        partition_method: Some(pb_partition_method),
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<SortExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.input().to_owned(),
+                extension_codec,
+            )?;
+            let expr = exec
+                .expr()
+                .iter()
+                .map(|expr| {
+                    let sort_expr = Box::new(protobuf::PhysicalSortExprNode {
+                        expr: Some(Box::new(expr.expr.to_owned().try_into()?)),
+                        asc: !expr.options.descending,
+                        nulls_first: expr.options.nulls_first,
+                    });
+                    Ok(protobuf::PhysicalExprNode {
+                        expr_type: Some(protobuf::physical_expr_node::ExprType::Sort(
+                            sort_expr,
+                        )),
+                    })
+                })
+                .collect::<Result<Vec<_>, BallistaError>>()?;
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Sort(Box::new(
+                    protobuf::SortExecNode {
+                        input: Some(Box::new(input)),
+                        expr,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<ShuffleWriterExec>() {
+            let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec.children()[0].to_owned(),
+                extension_codec,
+            )?;
+            // note that we use shuffle_output_partitioning() rather than output_partitioning()
+            // to get the true output partitioning
+            let output_partitioning = match exec.shuffle_output_partitioning() {
+                Some(Partitioning::Hash(exprs, partition_count)) => {
+                    Some(protobuf::PhysicalHashRepartition {
+                        hash_expr: exprs
+                            .iter()
+                            .map(|expr| expr.clone().try_into())
+                            .collect::<Result<Vec<_>, BallistaError>>()?,
+                        partition_count: *partition_count as u64,
+                    })
+                }
+                None => None,
+                other => {
+                    return Err(BallistaError::General(format!(
+                        "physical_plan::to_proto() invalid partitioning for ShuffleWriterExec: {:?}",
+                        other
+                    )))
+                }
+            };
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::ShuffleWriter(Box::new(
+                    protobuf::ShuffleWriterExecNode {
+                        job_id: exec.job_id().to_string(),
+                        stage_id: exec.stage_id() as u32,
+                        input: Some(Box::new(input)),
+                        output_partitioning,
+                    },
+                ))),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<UnresolvedShuffleExec>() {
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Unresolved(
+                    protobuf::UnresolvedShuffleExecNode {
+                        stage_id: exec.stage_id as u32,
+                        schema: Some(exec.schema().as_ref().into()),
+                        input_partition_count: exec.input_partition_count as u32,
+                        output_partition_count: exec.output_partition_count as u32,
+                    },
+                )),
+            })
+        } else {
+            let mut buf: Vec<u8> = vec![];
+            extension_codec.try_encode(plan_clone.clone(), &mut buf)?;
+
+            let inputs: Vec<PhysicalPlanNode> = plan_clone
+                .children()
+                .into_iter()
+                .map(|i| PhysicalPlanNode::try_from_physical_plan(i, extension_codec))
+                .collect::<Result<_, BallistaError>>()?;
+
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Extension(
+                    PhysicalExtensionNode { node: buf, inputs },
+                )),
+            })
+        }
     }
 }
 
@@ -520,9 +915,9 @@ fn decode_scan_config(
 
 #[macro_export]
 macro_rules! into_physical_plan {
-    ($PB:expr, $CTX:expr) => {{
+    ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_physical_plan(&$CTX)
+            field.as_ref().try_into_physical_plan(&$CTX, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -533,7 +928,7 @@ macro_rules! into_physical_plan {
 mod roundtrip_tests {
     use std::{convert::TryInto, sync::Arc};
 
-    use crate::serde::AsExecutionPlan;
+    use crate::serde::{AsExecutionPlan, BallistaCodec};
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::prelude::ExecutionContext;
     use datafusion::{
@@ -559,14 +954,21 @@ mod roundtrip_tests {
     use super::super::super::error::Result;
     use super::super::protobuf;
     use crate::execution_plans::ShuffleWriterExec;
+    use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = ExecutionContext::new();
+        let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+            BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =
-            protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone())
-                .expect("to proto"); //exec_plan.clone().try_into()?;
-        let result_exec_plan: Arc<dyn ExecutionPlan> =
-            proto.try_into_physical_plan(&ctx).expect("from proto");
+            protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec_plan.clone(),
+                codec.physical_extension_codec(),
+            )
+            .expect("to proto");
+        let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+            .try_into_physical_plan(&ctx, codec.physical_extension_codec())
+            .expect("from proto");
         assert_eq!(
             format!("{:?}", exec_plan),
             format!("{:?}", result_exec_plan)

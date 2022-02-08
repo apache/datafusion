@@ -17,13 +17,12 @@
 
 //! Ballista executor logic
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
+use ballista_core::serde::protobuf;
 use ballista_core::serde::scheduler::ExecutorSpecification;
-use ballista_core::serde::{protobuf, AsExecutionPlan};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -31,7 +30,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 
 /// Ballista executor
-pub struct Executor<T: 'static + AsExecutionPlan> {
+pub struct Executor {
     /// Directory for storing partial results
     work_dir: String,
 
@@ -40,11 +39,9 @@ pub struct Executor<T: 'static + AsExecutionPlan> {
 
     /// DataFusion execution context
     pub ctx: Arc<ExecutionContext>,
-
-    exec_repr: PhantomData<T>,
 }
 
-impl<T: 'static + AsExecutionPlan> Executor<T> {
+impl Executor {
     /// Create a new executor instance
     pub fn new(work_dir: &str, ctx: Arc<ExecutionContext>) -> Self {
         Executor::new_with_specification(
@@ -63,12 +60,11 @@ impl<T: 'static + AsExecutionPlan> Executor<T> {
             work_dir: work_dir.to_owned(),
             specification,
             ctx,
-            exec_repr: PhantomData,
         }
     }
 }
 
-impl<T: 'static + AsExecutionPlan> Executor<T> {
+impl Executor {
     /// Execute one partition of a query stage and persist the result to disk in IPC format. On
     /// success, return a RecordBatch containing metadata about the results, including path
     /// and statistics.

@@ -48,23 +48,6 @@ impl TryInto<protobuf::Action> for Action {
     }
 }
 
-impl TryInto<protobuf::ExecutePartition> for ExecutePartition {
-    type Error = BallistaError;
-
-    fn try_into(self) -> Result<protobuf::ExecutePartition, Self::Error> {
-        Ok(protobuf::ExecutePartition {
-            job_id: self.job_id,
-            stage_id: self.stage_id as u32,
-            partition_id: self.partition_id.iter().map(|n| *n as u32).collect(),
-            plan: Some(self.plan.try_into()?),
-            partition_location: vec![],
-            output_partitioning: hash_partitioning_to_proto(
-                self.output_partitioning.as_ref(),
-            )?,
-        })
-    }
-}
-
 #[allow(clippy::from_over_into)]
 impl Into<protobuf::PartitionId> for PartitionId {
     fn into(self) -> protobuf::PartitionId {

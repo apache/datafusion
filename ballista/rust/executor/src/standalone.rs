@@ -18,13 +18,12 @@
 use std::sync::Arc;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
+
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use ballista_core::{
     error::Result,
     serde::protobuf::executor_registration::OptionalHost,
-    serde::protobuf::{
-        scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration,
-        PhysicalPlanNode,
-    },
+    serde::protobuf::{scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration},
     BALLISTA_VERSION,
 };
 use datafusion::prelude::ExecutionContext;
@@ -36,9 +35,13 @@ use uuid::Uuid;
 
 use crate::{execution_loop, executor::Executor, flight_service::BallistaFlightService};
 
-pub async fn new_standalone_executor(
+pub async fn new_standalone_executor<
+    T: 'static + AsLogicalPlan,
+    U: 'static + AsExecutionPlan,
+>(
     scheduler: SchedulerGrpcClient<Channel>,
     concurrent_tasks: usize,
+    codec: BallistaCodec<T, U>,
 ) -> Result<()> {
     let work_dir = TempDir::new()?
         .into_path()
@@ -46,8 +49,7 @@ pub async fn new_standalone_executor(
         .into_string()
         .unwrap();
     let ctx = Arc::new(ExecutionContext::new());
-    let executor: Arc<Executor<PhysicalPlanNode>> =
-        Arc::new(Executor::new(&work_dir, ctx));
+    let executor: Arc<Executor> = Arc::new(Executor::new(&work_dir, ctx));
 
     let service = BallistaFlightService::new(executor.clone());
 
@@ -76,6 +78,7 @@ pub async fn new_standalone_executor(
         executor,
         executor_meta,
         concurrent_tasks,
+        codec,
     ));
     Ok(())
 }

@@ -30,7 +30,7 @@ use crate::execution_plans::{
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
-use crate::serde::AsLogicalPlan;
+use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
@@ -256,6 +256,7 @@ pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
 pub struct BallistaQueryPlanner<T: AsLogicalPlan> {
     scheduler_url: String,
     config: BallistaConfig,
+    extension_codec: Arc<dyn LogicalExtensionCodec>,
     plan_repr: PhantomData<T>,
 }
 
@@ -264,6 +265,20 @@ impl<T: 'static + AsLogicalPlan> BallistaQueryPlanner<T> {
         Self {
             scheduler_url,
             config,
+            extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_extension(
+        scheduler_url: String,
+        config: BallistaConfig,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            extension_codec,
             plan_repr: PhantomData,
         }
     }
@@ -271,11 +286,13 @@ impl<T: 'static + AsLogicalPlan> BallistaQueryPlanner<T> {
     pub fn with_repr(
         scheduler_url: String,
         config: BallistaConfig,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
         plan_repr: PhantomData<T>,
     ) -> Self {
         Self {
             scheduler_url,
             config,
+            extension_codec,
             plan_repr,
         }
     }
@@ -297,6 +314,7 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
                 self.scheduler_url.clone(),
                 self.config.clone(),
                 logical_plan.clone(),
+                self.extension_codec.clone(),
                 self.plan_repr,
             ))),
         }

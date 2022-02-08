@@ -41,7 +41,7 @@ use datafusion::physical_plan::{
     SendableRecordBatchStream, Statistics,
 };
 
-use crate::serde::AsLogicalPlan;
+use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::future;
@@ -60,6 +60,8 @@ pub struct DistributedQueryExec<T: 'static + AsLogicalPlan> {
     config: BallistaConfig,
     /// Logical plan to execute
     plan: LogicalPlan,
+    /// Codec for LogicalPlan extensions
+    extension_codec: Arc<dyn LogicalExtensionCodec>,
     /// Phantom data for serializable plan message
     plan_repr: PhantomData<T>,
 }
@@ -70,6 +72,22 @@ impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
             scheduler_url,
             config,
             plan,
+            extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_extension(
+        scheduler_url: String,
+        config: BallistaConfig,
+        plan: LogicalPlan,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            plan,
+            extension_codec,
             plan_repr: PhantomData,
         }
     }
@@ -78,12 +96,14 @@ impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
         scheduler_url: String,
         config: BallistaConfig,
         plan: LogicalPlan,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
         plan_repr: PhantomData<T>,
     ) -> Self {
         Self {
             scheduler_url,
             config,
             plan,
+            extension_codec,
             plan_repr,
         }
     }
@@ -115,6 +135,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             scheduler_url: self.scheduler_url.clone(),
             config: self.config.clone(),
             plan: self.plan.clone(),
+            extension_codec: self.extension_codec.clone(),
             plan_repr: self.plan_repr,
         }))
     }
@@ -135,12 +156,15 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
         let schema: Schema = self.plan.schema().as_ref().clone().into();
 
         let mut buf: Vec<u8> = vec![];
-        let plan_message = T::try_from_logical_plan(&self.plan).map_err(|e| {
-            DataFusionError::Internal(format!(
-                "failed to serialize logical plan: {:?}",
-                e
-            ))
-        })?;
+        let plan_message =
+            T::try_from_logical_plan(&self.plan, self.extension_codec.as_ref()).map_err(
+                |e| {
+                    DataFusionError::Internal(format!(
+                        "failed to serialize logical plan: {:?}",
+                        e
+                    ))
+                },
+            )?;
         plan_message.try_encode(&mut buf).map_err(|e| {
             DataFusionError::Execution(format!("failed to encode logical plan: {:?}", e))
         })?;

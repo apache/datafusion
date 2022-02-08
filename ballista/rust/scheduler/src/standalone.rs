@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ballista_core::serde::BallistaCodec;
 use ballista_core::{
     error::Result,
     serde::protobuf::{
@@ -38,6 +39,7 @@ pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
         Arc::new(client),
         "ballista".to_string(),
         Arc::new(RwLock::new(ExecutionContext::new())),
+        BallistaCodec::default(),
     );
 
     let server = SchedulerGrpcServer::new(server);

@@ -45,6 +45,7 @@ use ballista_scheduler::{
 };
 
 use ballista_core::config::TaskSchedulingPolicy;
+use ballista_core::serde::BallistaCodec;
 use log::info;
 use tokio::sync::{mpsc, RwLock};
 
@@ -90,6 +91,7 @@ async fn start_server(
                     policy,
                     Some(SchedulerEnv { tx_job }),
                     Arc::new(RwLock::new(ExecutionContext::new())),
+                    BallistaCodec::default(),
                 );
                 let task_scheduler =
                     TaskScheduler::new(Arc::new(scheduler_server.clone()));
@@ -100,6 +102,7 @@ async fn start_server(
                 config_backend.clone(),
                 namespace.clone(),
                 Arc::new(RwLock::new(ExecutionContext::new())),
+                BallistaCodec::default(),
             ),
         };
 
