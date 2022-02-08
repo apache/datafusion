@@ -33,9 +33,7 @@ use crate::as_task_status;
 use crate::executor::Executor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
-use ballista_core::serde::{
-    AsExecutionPlan, AsLogicalPlan, BallistaCodec, PhysicalExtensionCodec,
-};
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 
 pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,

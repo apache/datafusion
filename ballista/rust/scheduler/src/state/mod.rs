@@ -91,15 +91,7 @@ pub(super) struct SchedulerState<T: 'static + AsLogicalPlan, U: 'static + AsExec
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T, U> {
-    pub fn new(config_client: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
-        Self {
-            config_client,
-            namespace,
-            codec: BallistaCodec::default(),
-        }
-    }
-
-    pub fn with_codec(
+    pub fn new(
         config_client: Arc<dyn ConfigBackendClient>,
         namespace: String,
         codec: BallistaCodec<T, U>,
@@ -810,6 +802,7 @@ mod test {
         job_status, task_status, CompletedTask, FailedTask, JobStatus, LogicalPlanNode,
         PartitionId, PhysicalPlanNode, QueuedJob, RunningJob, RunningTask, TaskStatus,
     };
+    use ballista_core::serde::BallistaCodec;
     use ballista_core::{error::BallistaError, serde::scheduler::ExecutorMeta};
 
     use super::{
@@ -823,6 +816,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let meta = ExecutorMeta {
             id: "123".to_owned(),
@@ -847,6 +841,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let meta = JobStatus {
             status: Some(job_status::Status::Queued(QueuedJob {})),
@@ -867,6 +862,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let meta = JobStatus {
             status: Some(job_status::Status::Queued(QueuedJob {})),
@@ -883,6 +879,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let meta = TaskStatus {
             status: Some(task_status::Status::Failed(FailedTask {
@@ -910,6 +907,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let meta = TaskStatus {
             status: Some(task_status::Status::Failed(FailedTask {
@@ -933,6 +931,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let job_id = "job";
         let job_status = JobStatus {
@@ -951,6 +950,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let job_id = "job";
         let job_status = JobStatus {
@@ -992,6 +992,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let job_id = "job";
         let job_status = JobStatus {
@@ -1031,6 +1032,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let job_id = "job";
         let job_status = JobStatus {
@@ -1076,6 +1078,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let job_id = "job";
         let job_status = JobStatus {
@@ -1121,6 +1124,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                BallistaCodec::default(),
             );
         let job_id = "job";
         let job_status = JobStatus {

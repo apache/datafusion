@@ -152,8 +152,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         ctx: Arc<RwLock<ExecutionContext>>,
         codec: BallistaCodec<T, U>,
     ) -> Self {
-        let state =
-            Arc::new(SchedulerState::with_codec(config, namespace, codec.clone()));
+        let state = Arc::new(SchedulerState::new(config, namespace, codec.clone()));
         let state_clone = state.clone();
 
         // TODO: we should elect a leader in the scheduler cluster and run this only in the leader
@@ -1018,7 +1017,7 @@ mod test {
                 BallistaCodec::default(),
             );
         let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
-            SchedulerState::new(state, namespace.to_string());
+            SchedulerState::new(state, namespace.to_string(), BallistaCodec::default());
         let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),
             optional_host: Some(OptionalHost::Host("".to_owned())),

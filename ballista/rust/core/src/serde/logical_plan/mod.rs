@@ -404,10 +404,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_err(|e| e.into())
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
-                let mut input_plans: Vec<LogicalPlan> = vec![];
-                for input in inputs {
-                    input_plans.push(input.try_into_logical_plan(&ctx, extension_codec)?);
-                }
+                let input_plans: Vec<LogicalPlan> = inputs
+                    .iter()
+                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
+                    .collect::<Result<_, BallistaError>>()?;
+
                 let extension_node = extension_codec.try_decode(node, &input_plans)?;
                 Ok(LogicalPlan::Extension(extension_node))
             }

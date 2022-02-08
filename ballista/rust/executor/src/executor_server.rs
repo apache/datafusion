@@ -51,7 +51,7 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     // TODO make the buffer size configurable
     let (tx_task, rx_task) = mpsc::channel::<TaskDefinition>(1000);
 
-    let executor_server = ExecutorServer::with_codec(
+    let executor_server = ExecutorServer::new(
         scheduler.clone(),
         executor.clone(),
         executor_meta.clone(),
@@ -146,25 +146,6 @@ unsafe impl Sync for ExecutorEnv {}
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T, U> {
     fn new(
-        scheduler: SchedulerGrpcClient<Channel>,
-        executor: Arc<Executor>,
-        executor_meta: ExecutorRegistration,
-        executor_env: ExecutorEnv,
-    ) -> Self {
-        Self {
-            _start_time: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_millis(),
-            executor,
-            executor_meta,
-            scheduler,
-            executor_env,
-            codec: BallistaCodec::default(),
-        }
-    }
-
-    fn with_codec(
         scheduler: SchedulerGrpcClient<Channel>,
         executor: Arc<Executor>,
         executor_meta: ExecutorRegistration,
