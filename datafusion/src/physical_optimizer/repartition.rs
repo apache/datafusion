@@ -136,7 +136,7 @@ impl Repartition {
 /// can not be reordered as as something upstream is relying on that order
 ///
 /// If 'would_benefit` is false, the upstream operator doesn't
-///  benefit from additional reordering
+///  benefit from additional repartition
 ///
 fn optimize_partitions(
     target_partitions: usize,
