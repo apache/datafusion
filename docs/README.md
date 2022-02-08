@@ -44,6 +44,8 @@ version of the docs, follow these steps:
 2. Clone the arrow-site repo
 3. Checkout to the `asf-site` branch (NOT `master`)
 4. Copy build artifacts into `arrow-site` repo's `datafusion` folder with a command such as
-  * `cp -rT ./build/html/ ../../arrow-site/datafusion/` (doesn't work on mac)
-  * `rsync -avzr ./build/html/ ../../arrow-site/datafusion/`
+
+- `cp -rT ./build/html/ ../../arrow-site/datafusion/` (doesn't work on mac)
+- `rsync -avzr ./build/html/ ../../arrow-site/datafusion/`
+
 5. Commit changes in `arrow-site` and send a PR.
