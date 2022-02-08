@@ -440,7 +440,11 @@ mod tests {
     async fn read_empty_table() -> Result<()> {
         let path = String::from("table/p1=v1/file.avro");
         let store = TestObjectStore::new_arc(&[(&path, 100)]);
-        let config = ListingTableConfig::new(store, &path).infer().await?;
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
+        let config = ListingTableConfig::new(store, &path)
+            .infer_options()?
+            .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
 
         assert_eq!(
