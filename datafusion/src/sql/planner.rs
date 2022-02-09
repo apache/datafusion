@@ -105,9 +105,9 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
 
 fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
     let key = keys.pop().ok_or_else(|| {
-        DataFusionError::SQL(ParserError(format!(
-            "Internal error: Missing index key expression",
-        )))
+        DataFusionError::SQL(ParserError(
+            "Internal error: Missing index key expression".to_string(),
+        ))
     })?;
 
     let expr = if !keys.is_empty() {
