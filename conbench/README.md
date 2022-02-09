@@ -27,7 +27,7 @@ $ cd ~/arrow-datafusion/conbench/
 $ conda create -y -n conbench python=3.9
 $ conda activate conbench
 (conbench) $ pip install -r requirements.txt
-(conbench) $ conbench datafusion --src-dir=/Users/diana/workspace/arrow-datafusion
+(conbench) $ conbench datafusion
 ```
 
 ## Example output

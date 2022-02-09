@@ -68,11 +68,10 @@ def _execute_command(command):
 
 
 class CriterionBenchmark(conbench.runner.Benchmark):
-    external, iterations = True, None
-    options = {"src_dir": {"type": str}}
+    external = True
 
     def run(self, **kwargs):
-        src_dir = kwargs["src_dir"]
+        src_dir = os.path.join(os.getcwd(), "..")
         self._cargo_bench(src_dir)
         results = _read_results(src_dir)
         for suite in results:
