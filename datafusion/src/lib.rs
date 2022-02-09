@@ -201,6 +201,9 @@
 //! cargo run --example simple_udf
 //! ```
 
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 extern crate sqlparser;
 
 pub mod avro_to_arrow;
