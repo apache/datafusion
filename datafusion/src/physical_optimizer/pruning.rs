@@ -25,7 +25,7 @@
 //! nothing in the row group can match.
 //!
 //! This code is currently specific to Parquet, but soon (TM), via
-//! https://github.com/apache/arrow-datafusion/issues/363 it will
+//! <https://github.com/apache/arrow-datafusion/issues/363> it will
 //! be genericized.
 
 use std::convert::TryFrom;
