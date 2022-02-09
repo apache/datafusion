@@ -59,11 +59,11 @@ use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::Operator;
 use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
 use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
+use datafusion_expr::Operator;
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
