@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Window frame
+//! Window frame module
 //!
 //! The frame-spec determines which output rows are read by an aggregate window function. The frame-spec consists of four parts:
 //! - A frame type - either ROWS, RANGE or GROUPS,

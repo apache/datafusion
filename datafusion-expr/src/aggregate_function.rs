@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Aggregate function module contains all built-in aggregate functions definitions
+
 use datafusion_common::{DataFusionError, Result};
 use std::{fmt, str::FromStr};
 

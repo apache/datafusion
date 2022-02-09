@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! UDF support
+//! Udf module contains foundational types that are used to represent UDFs in DataFusion.
 
 use crate::{Expr, ReturnTypeFunction, ScalarFunctionImplementation, Signature};
 use std::fmt;

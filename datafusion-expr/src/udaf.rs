@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains functions and structs supporting user-defined aggregate functions.
+//! Udaf module contains functions and structs supporting user-defined aggregate functions.
 
 use crate::Expr;
 use crate::{
