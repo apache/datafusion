@@ -23,6 +23,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::PhysicalSortExpr;
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
@@ -102,6 +103,19 @@ impl ExecutionPlan for FilterExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        // tell optimizer this operator doesn't reorder its input
+        true
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(

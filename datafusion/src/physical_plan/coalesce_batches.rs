@@ -38,6 +38,7 @@ use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, MetricsSet};
 use super::{metrics::ExecutionPlanMetricsSet, Statistics};
 
@@ -95,6 +96,14 @@ impl ExecutionPlan for CoalesceBatchesExec {
     fn output_partitioning(&self) -> Partitioning {
         // The coalesce batches operator does not make any changes to the partitioning of its input
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(
