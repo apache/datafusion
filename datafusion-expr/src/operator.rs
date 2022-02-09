@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Operator module contains foundational types that are used to represent operators in DataFusion.
+
 use crate::expr_fn::binary_expr;
 use crate::Expr;
 use std::fmt;

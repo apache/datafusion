@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Built-in functions
+//! Built-in functions module contains all the built-in functions definitions.
 
 use crate::Volatility;
 use datafusion_common::{DataFusionError, Result};

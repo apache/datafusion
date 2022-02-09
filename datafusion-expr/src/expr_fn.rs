@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Expr fn module contains the functional definitions for expressions.
+
 use crate::{aggregate_function, built_in_function, lit, Expr, Operator};
 
 /// Create a column expression based on a qualified or unqualified column name
@@ -22,7 +24,7 @@ pub fn col(ident: &str) -> Expr {
     Expr::Column(ident.into())
 }
 
-/// return a new expression l <op> r
+/// Return a new expression l <op> r
 pub fn binary_expr(l: Expr, op: Operator, r: Expr) -> Expr {
     Expr::BinaryExpr {
         left: Box::new(l),
@@ -31,7 +33,7 @@ pub fn binary_expr(l: Expr, op: Operator, r: Expr) -> Expr {
     }
 }
 
-/// return a new expression with a logical AND
+/// Return a new expression with a logical AND
 pub fn and(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr {
         left: Box::new(left),
@@ -40,7 +42,7 @@ pub fn and(left: Expr, right: Expr) -> Expr {
     }
 }
 
-/// return a new expression with a logical OR
+/// Return a new expression with a logical OR
 pub fn or(left: Expr, right: Expr) -> Expr {
     Expr::BinaryExpr {
         left: Box::new(left),
@@ -265,7 +267,7 @@ scalar_expr!(Upper, upper, string);
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
 
-/// returns an array of fixed size with each argument on it.
+/// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
         fun: built_in_function::BuiltinScalarFunction::Array,

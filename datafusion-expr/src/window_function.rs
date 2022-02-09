@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Window function module contains foundational types that are used to represent window functions
+//! in DataFusion.
+
 use crate::aggregate_function::AggregateFunction;
 use datafusion_common::{DataFusionError, Result};
 use std::{fmt, str::FromStr};

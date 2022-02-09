@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Literal module contains foundational types that are used to represent literals in DataFusion.
+
 use crate::Expr;
 use datafusion_common::ScalarValue;
 

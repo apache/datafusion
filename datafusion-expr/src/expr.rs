@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Expr module contains core type definition for `Expr`.
+
 use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
