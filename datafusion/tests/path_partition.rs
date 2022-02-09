@@ -49,8 +49,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
         ],
         &["date"],
         "mytable",
-    )
-    .await;
+    );
 
     let result = ctx
         .sql("SELECT c1, c2 FROM t WHERE date='2021-10-27' and date!=c1 LIMIT 5")
@@ -86,8 +85,7 @@ async fn csv_projection_on_partition() -> Result<()> {
         ],
         &["date"],
         "mytable",
-    )
-    .await;
+    );
 
     let result = ctx
         .sql("SELECT c1, date FROM t WHERE date='2021-10-27' LIMIT 5")
@@ -124,8 +122,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
         ],
         &["date"],
         "mytable",
-    )
-    .await;
+    );
 
     let result = ctx
         .sql("SELECT date, count(*), count(distinct(c1)) FROM t WHERE date<='2021-10-27' GROUP BY date")
@@ -274,7 +271,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
     Ok(())
 }
 
-async fn register_partitioned_aggregate_csv(
+fn register_partitioned_aggregate_csv(
     ctx: &mut ExecutionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
