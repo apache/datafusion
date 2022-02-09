@@ -392,6 +392,7 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -446,11 +447,19 @@ mod tests {
     async fn read_empty_table() -> Result<()> {
         let path = String::from("table/p1=v1/file.avro");
         let store = TestObjectStore::new_arc(&[(&path, 100)]);
+
+        let opt = ListingOptions {
+            file_extension: DEFAULT_AVRO_EXTENSION.to_owned(),
+            format: Arc::new(AvroFormat {}),
+            table_partition_cols: vec![String::from("p1")],
+            target_partitions: 4,
+            collect_stat: true,
+        };
+
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let config = ListingTableConfig::new(store, "table/")
-            .infer_options()
-            .await?
+            .with_listing_options(opt)
             .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
 
