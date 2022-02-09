@@ -15,16 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Signature module contains foundational types that are used to represent signatures, types,
+//! and return types of functions in DataFusion.
+
 use arrow::datatypes::DataType;
 
 ///A function's volatility, which defines the functions eligibility for certain optimizations
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
-    /// Immutable - An immutable function will always return the same output when given the same input. An example of this is [BuiltinScalarFunction::Cos].
+    /// Immutable - An immutable function will always return the same output when given the same
+    /// input. An example of this is [BuiltinScalarFunction::Cos].
     Immutable,
-    /// Stable - A stable function may return different values given the same input accross different queries but must return the same value for a given input within a query. An example of this is [BuiltinScalarFunction::Now].
+    /// Stable - A stable function may return different values given the same input across different
+    /// queries but must return the same value for a given input within a query. An example of
+    /// this is [BuiltinScalarFunction::Now].
     Stable,
-    /// Volatile - A volatile function may change the return value from evaluation to evaluation. Mutiple invocations of a volatile function may return different results when used in the same query. An example of this is [BuiltinScalarFunction::Random].
+    /// Volatile - A volatile function may change the return value from evaluation to evaluation.
+    /// Multiple invocations of a volatile function may return different results when used in the
+    /// same query. An example of this is [BuiltinScalarFunction::Random].
     Volatile,
 }
 
@@ -92,7 +100,7 @@ impl Signature {
             volatility,
         }
     }
-    /// exact - Creates a signture which must match the types in exact_types in order.
+    /// exact - Creates a signature which must match the types in exact_types in order.
     pub fn exact(exact_types: Vec<DataType>, volatility: Volatility) -> Self {
         Signature {
             type_signature: TypeSignature::Exact(exact_types),

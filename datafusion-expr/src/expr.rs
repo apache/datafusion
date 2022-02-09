@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Expr module contains core type definition for `Expr`.
+
 use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
@@ -694,5 +696,30 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create name does not support wildcard".to_string(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::expr_fn::col;
+    use crate::lit;
+
+    #[test]
+    fn test_not() {
+        assert_eq!(lit(1).not(), !lit(1));
+    }
+
+    #[test]
+    fn test_partial_ord() {
+        // Test validates that partial ord is defined for Expr using hashes, not
+        // intended to exhaustively test all possibilities
+        let exp1 = col("a") + lit(1);
+        let exp2 = col("a") + lit(2);
+        let exp3 = !(col("a") + lit(2));
+
+        assert!(exp1 < exp2);
+        assert!(exp2 > exp1);
+        assert!(exp2 > exp3);
+        assert!(exp3 < exp2);
     }
 }
