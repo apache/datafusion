@@ -52,6 +52,7 @@ use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -206,6 +207,14 @@ impl ExecutionPlan for HashAggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     async fn execute(
@@ -1146,6 +1155,10 @@ mod tests {
 
         fn output_partitioning(&self) -> Partitioning {
             Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            None
         }
 
         fn with_new_children(

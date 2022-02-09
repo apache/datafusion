@@ -20,6 +20,7 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use parking_lot::Mutex;
 use std::fs::File;
 use std::iter::Iterator;
@@ -332,6 +333,14 @@ impl ExecutionPlan for ShuffleWriterExec {
         // the input partitioning as the output partitioning here. The executor reports
         // output partition meta data back to the scheduler.
         self.plan.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
