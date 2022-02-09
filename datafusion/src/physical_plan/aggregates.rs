@@ -28,7 +28,7 @@
 
 use super::{
     functions::{Signature, TypeSignature, Volatility},
-    Accumulator, AggregateExpr, PhysicalExpr,
+    AggregateExpr, PhysicalExpr,
 };
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_types};
@@ -39,15 +39,6 @@ use expressions::{
     sum_return_type, variance_return_type,
 };
 use std::sync::Arc;
-
-/// the implementation of an aggregate function
-pub type AccumulatorFunctionImplementation =
-    Arc<dyn Fn() -> Result<Box<dyn Accumulator>> + Send + Sync>;
-
-/// This signature corresponds to which types an aggregator serializes
-/// its state, given its return datatype.
-pub type StateTypeFunction =
-    Arc<dyn Fn(&DataType) -> Result<Arc<Vec<DataType>>> + Send + Sync>;
 
 pub use datafusion_expr::AggregateFunction;
 

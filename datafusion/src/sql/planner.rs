@@ -2172,11 +2172,10 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use functions::ScalarFunctionImplementation;
-
     use crate::datasource::empty::EmptyTable;
     use crate::physical_plan::functions::Volatility;
     use crate::{logical_plan::create_udf, sql::parser::DFParser};
+    use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
 
