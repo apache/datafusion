@@ -37,8 +37,8 @@ pub use columnar_value::{ColumnarValue, NullColumnarValue};
 pub use expr::Expr;
 pub use expr_fn::col;
 pub use function::{
-    AccumulatorFunctionImplementation, ReturnTypeFunction, ScalarFunctionImplementation,
-    StateTypeFunction,
+  AccumulatorFunctionImplementation, ReturnTypeFunction, ScalarFunctionImplementation,
+  StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
 pub use operator::Operator;
