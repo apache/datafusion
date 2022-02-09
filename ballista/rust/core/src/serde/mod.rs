@@ -18,15 +18,24 @@
 //! This crate contains code generated from the Ballista Protocol Buffer Definition as well
 //! as convenience code for interacting with the generated code.
 
+use prost::bytes::{Buf, BufMut};
+use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::sync::Arc;
 use std::{convert::TryInto, io::Cursor};
 
 use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
-use datafusion::logical_plan::{JoinConstraint, JoinType, Operator};
+use datafusion::logical_plan::{
+    JoinConstraint, JoinType, LogicalPlan, Operator, UserDefinedLogicalNode,
+};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::logical_plan::plan::Extension;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::ExecutionContext;
 use prost::Message;
 
 // include the generated protobuf source as a submodule
@@ -49,6 +58,175 @@ pub fn decode_protobuf(bytes: &[u8]) -> Result<BallistaAction, BallistaError> {
 
 pub(crate) fn proto_error<S: Into<String>>(message: S) -> BallistaError {
     BallistaError::General(message.into())
+}
+
+pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
+    fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+
+    fn try_encode<B>(&self, buf: &mut B) -> Result<(), BallistaError>
+    where
+        B: BufMut,
+        Self: Sized;
+
+    fn try_into_logical_plan(
+        &self,
+        ctx: &ExecutionContext,
+        extension_codec: &dyn LogicalExtensionCodec,
+    ) -> Result<LogicalPlan, BallistaError>;
+
+    fn try_from_logical_plan(
+        plan: &LogicalPlan,
+        extension_codec: &dyn LogicalExtensionCodec,
+    ) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+}
+
+pub trait LogicalExtensionCodec: Debug + Send + Sync {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[LogicalPlan],
+    ) -> Result<Extension, BallistaError>;
+
+    fn try_encode(
+        &self,
+        node: &Extension,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), BallistaError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultLogicalExtensionCodec {}
+
+impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[LogicalPlan],
+    ) -> Result<Extension, BallistaError> {
+        Err(BallistaError::NotImplemented(
+            "LogicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode(
+        &self,
+        _node: &Extension,
+        _buf: &mut Vec<u8>,
+    ) -> Result<(), BallistaError> {
+        Err(BallistaError::NotImplemented(
+            "LogicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+}
+
+pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
+    fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+
+    fn try_encode<B>(&self, buf: &mut B) -> Result<(), BallistaError>
+    where
+        B: BufMut,
+        Self: Sized;
+
+    fn try_into_physical_plan(
+        &self,
+        ctx: &ExecutionContext,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
+
+    fn try_from_physical_plan(
+        plan: Arc<dyn ExecutionPlan>,
+        extension_codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<Self, BallistaError>
+    where
+        Self: Sized;
+}
+
+pub trait PhysicalExtensionCodec: Debug + Send + Sync {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+    ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), BallistaError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct DefaultPhysicalExtensionCodec {}
+
+impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[Arc<dyn ExecutionPlan>],
+    ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
+        Err(BallistaError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+
+    fn try_encode(
+        &self,
+        _node: Arc<dyn ExecutionPlan>,
+        _buf: &mut Vec<u8>,
+    ) -> Result<(), BallistaError> {
+        Err(BallistaError::NotImplemented(
+            "PhysicalExtensionCodec is not provided".to_string(),
+        ))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BallistaCodec<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    logical_extension_codec: Arc<dyn LogicalExtensionCodec>,
+    physical_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+    logical_plan_repr: PhantomData<T>,
+    physical_plan_repr: PhantomData<U>,
+}
+
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> Default
+    for BallistaCodec<T, U>
+{
+    fn default() -> Self {
+        Self {
+            logical_extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
+            physical_extension_codec: Arc::new(DefaultPhysicalExtensionCodec {}),
+            logical_plan_repr: PhantomData,
+            physical_plan_repr: PhantomData,
+        }
+    }
+}
+
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> BallistaCodec<T, U> {
+    pub fn new(
+        logical_extension_codec: Arc<dyn LogicalExtensionCodec>,
+        physical_extension_codec: Arc<dyn PhysicalExtensionCodec>,
+    ) -> Self {
+        Self {
+            logical_extension_codec,
+            physical_extension_codec,
+            logical_plan_repr: PhantomData,
+            physical_plan_repr: PhantomData,
+        }
+    }
+
+    pub fn logical_extension_codec(&self) -> &dyn LogicalExtensionCodec {
+        self.logical_extension_codec.as_ref()
+    }
+
+    pub fn physical_extension_codec(&self) -> &dyn PhysicalExtensionCodec {
+        self.physical_extension_codec.as_ref()
+    }
 }
 
 #[macro_export]
@@ -399,4 +577,403 @@ fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
     v.try_into().unwrap_or_else(|v: Vec<T>| {
         panic!("Expected a Vec of length {} but it was {}", N, v.len())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use async_trait::async_trait;
+    use datafusion::arrow::datatypes::SchemaRef;
+    use datafusion::datasource::object_store::local::LocalFileSystem;
+    use datafusion::error::DataFusionError;
+    use datafusion::execution::context::{ExecutionContextState, QueryPlanner};
+    use datafusion::execution::runtime_env::RuntimeEnv;
+    use datafusion::logical_plan::plan::Extension;
+    use datafusion::logical_plan::{
+        col, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+    };
+    use datafusion::physical_plan::planner::{DefaultPhysicalPlanner, ExtensionPlanner};
+    use datafusion::physical_plan::{
+        DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
+        SendableRecordBatchStream, Statistics,
+    };
+    use datafusion::prelude::{CsvReadOptions, ExecutionConfig, ExecutionContext};
+    use prost::Message;
+    use std::any::Any;
+    use std::collections::BTreeMap;
+    use std::convert::TryInto;
+    use std::fmt;
+    use std::fmt::{Debug, Formatter};
+    use std::sync::Arc;
+
+    pub mod proto {
+        use crate::serde::protobuf;
+        use prost::Message;
+
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct TopKPlanProto {
+            #[prost(uint64, tag = "1")]
+            pub k: u64,
+
+            #[prost(message, optional, tag = "2")]
+            pub expr: ::core::option::Option<protobuf::LogicalExprNode>,
+        }
+
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct TopKExecProto {
+            #[prost(uint64, tag = "1")]
+            pub k: u64,
+        }
+    }
+
+    use crate::error::BallistaError;
+    use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
+    use crate::serde::{
+        AsExecutionPlan, AsLogicalPlan, BallistaCodec, LogicalExtensionCodec,
+        PhysicalExtensionCodec,
+    };
+    use proto::{TopKExecProto, TopKPlanProto};
+
+    struct TopKPlanNode {
+        k: usize,
+        input: LogicalPlan,
+        /// The sort expression (this example only supports a single sort
+        /// expr)
+        expr: Expr,
+    }
+
+    impl TopKPlanNode {
+        pub fn new(k: usize, input: LogicalPlan, expr: Expr) -> Self {
+            Self { k, input, expr }
+        }
+    }
+
+    impl Debug for TopKPlanNode {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            self.fmt_for_explain(f)
+        }
+    }
+
+    impl UserDefinedLogicalNode for TopKPlanNode {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        /// Schema for TopK is the same as the input
+        fn schema(&self) -> &DFSchemaRef {
+            self.input.schema()
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![self.expr.clone()]
+        }
+
+        /// For example: `TopK: k=10`
+        fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "TopK: k={}", self.k)
+        }
+
+        fn from_template(
+            &self,
+            exprs: &[Expr],
+            inputs: &[LogicalPlan],
+        ) -> Arc<dyn UserDefinedLogicalNode + Send + Sync> {
+            assert_eq!(inputs.len(), 1, "input size inconsistent");
+            assert_eq!(exprs.len(), 1, "expression size inconsistent");
+            Arc::new(TopKPlanNode {
+                k: self.k,
+                input: inputs[0].clone(),
+                expr: exprs[0].clone(),
+            })
+        }
+    }
+
+    struct TopKExec {
+        input: Arc<dyn ExecutionPlan>,
+        /// The maxium number of values
+        k: usize,
+    }
+
+    impl TopKExec {
+        pub fn new(k: usize, input: Arc<dyn ExecutionPlan>) -> Self {
+            Self { input, k }
+        }
+    }
+
+    impl Debug for TopKExec {
+        fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+            write!(f, "TopKExec")
+        }
+    }
+
+    #[async_trait]
+    impl ExecutionPlan for TopKExec {
+        /// Return a reference to Any that can be used for downcasting
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn schema(&self) -> SchemaRef {
+            self.input.schema()
+        }
+
+        fn output_partitioning(&self) -> Partitioning {
+            Partitioning::UnknownPartitioning(1)
+        }
+
+        fn required_child_distribution(&self) -> Distribution {
+            Distribution::SinglePartition
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![self.input.clone()]
+        }
+
+        fn with_new_children(
+            &self,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+            match children.len() {
+                1 => Ok(Arc::new(TopKExec {
+                    input: children[0].clone(),
+                    k: self.k,
+                })),
+                _ => Err(DataFusionError::Internal(
+                    "TopKExec wrong number of children".to_string(),
+                )),
+            }
+        }
+
+        /// Execute one partition and return an iterator over RecordBatch
+        async fn execute(
+            &self,
+            _partition: usize,
+            _runtime: Arc<RuntimeEnv>,
+        ) -> datafusion::error::Result<SendableRecordBatchStream> {
+            Err(DataFusionError::NotImplemented(
+                "not implemented".to_string(),
+            ))
+        }
+
+        fn fmt_as(
+            &self,
+            t: DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            match t {
+                DisplayFormatType::Default => {
+                    write!(f, "TopKExec: k={}", self.k)
+                }
+            }
+        }
+
+        fn statistics(&self) -> Statistics {
+            // to improve the optimizability of this plan
+            // better statistics inference could be provided
+            Statistics::default()
+        }
+    }
+
+    struct TopKPlanner {}
+
+    impl ExtensionPlanner for TopKPlanner {
+        /// Create a physical plan for an extension node
+        fn plan_extension(
+            &self,
+            _planner: &dyn PhysicalPlanner,
+            node: &dyn UserDefinedLogicalNode,
+            logical_inputs: &[&LogicalPlan],
+            physical_inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx_state: &ExecutionContextState,
+        ) -> datafusion::error::Result<Option<Arc<dyn ExecutionPlan>>> {
+            Ok(
+                if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
+                    assert_eq!(logical_inputs.len(), 1, "Inconsistent number of inputs");
+                    assert_eq!(physical_inputs.len(), 1, "Inconsistent number of inputs");
+                    // figure out input name
+                    Some(Arc::new(TopKExec {
+                        input: physical_inputs[0].clone(),
+                        k: topk_node.k,
+                    }))
+                } else {
+                    None
+                },
+            )
+        }
+    }
+
+    struct TopKQueryPlanner {}
+
+    #[async_trait]
+    impl QueryPlanner for TopKQueryPlanner {
+        /// Given a `LogicalPlan` created from above, create an
+        /// `ExecutionPlan` suitable for execution
+        async fn create_physical_plan(
+            &self,
+            logical_plan: &LogicalPlan,
+            ctx_state: &ExecutionContextState,
+        ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+            // Teach the default physical planner how to plan TopK nodes.
+            let physical_planner =
+                DefaultPhysicalPlanner::with_extension_planners(vec![Arc::new(
+                    TopKPlanner {},
+                )]);
+            // Delegate most work of physical planning to the default physical planner
+            physical_planner
+                .create_physical_plan(logical_plan, ctx_state)
+                .await
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct TopKExtensionCodec {}
+
+    impl LogicalExtensionCodec for TopKExtensionCodec {
+        fn try_decode(
+            &self,
+            buf: &[u8],
+            inputs: &[LogicalPlan],
+        ) -> Result<Extension, BallistaError> {
+            if let Some((input, _)) = inputs.split_first() {
+                let proto = TopKPlanProto::decode(buf).map_err(|e| {
+                    BallistaError::Internal(format!(
+                        "failed to decode logical plan: {:?}",
+                        e
+                    ))
+                })?;
+
+                if let Some(expr) = proto.expr.as_ref() {
+                    let node = TopKPlanNode::new(
+                        proto.k as usize,
+                        input.clone(),
+                        expr.try_into()?,
+                    );
+
+                    Ok(Extension {
+                        node: Arc::new(node),
+                    })
+                } else {
+                    Err(BallistaError::from("invalid plan, no expr".to_string()))
+                }
+            } else {
+                Err(BallistaError::from("invalid plan, no input".to_string()))
+            }
+        }
+
+        fn try_encode(
+            &self,
+            node: &Extension,
+            buf: &mut Vec<u8>,
+        ) -> Result<(), BallistaError> {
+            if let Some(exec) = node.node.as_any().downcast_ref::<TopKPlanNode>() {
+                let proto = TopKPlanProto {
+                    k: exec.k as u64,
+                    expr: Some((&exec.expr).try_into()?),
+                };
+
+                proto.encode(buf).map_err(|e| {
+                    BallistaError::Internal(format!(
+                        "failed to encode logical plan: {:?}",
+                        e
+                    ))
+                })?;
+
+                Ok(())
+            } else {
+                Err(BallistaError::from("unsupported plan type".to_string()))
+            }
+        }
+    }
+
+    impl PhysicalExtensionCodec for TopKExtensionCodec {
+        fn try_decode(
+            &self,
+            buf: &[u8],
+            inputs: &[Arc<dyn ExecutionPlan>],
+        ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
+            if let Some((input, _)) = inputs.split_first() {
+                let proto = TopKExecProto::decode(buf).map_err(|e| {
+                    BallistaError::Internal(format!(
+                        "failed to decode execution plan: {:?}",
+                        e
+                    ))
+                })?;
+                Ok(Arc::new(TopKExec::new(proto.k as usize, input.clone())))
+            } else {
+                Err(BallistaError::from("invalid plan, no input".to_string()))
+            }
+        }
+
+        fn try_encode(
+            &self,
+            node: Arc<dyn ExecutionPlan>,
+            buf: &mut Vec<u8>,
+        ) -> Result<(), BallistaError> {
+            if let Some(exec) = node.as_any().downcast_ref::<TopKExec>() {
+                let proto = TopKExecProto { k: exec.k as u64 };
+
+                proto.encode(buf).map_err(|e| {
+                    BallistaError::Internal(format!(
+                        "failed to encode execution plan: {:?}",
+                        e
+                    ))
+                })?;
+
+                Ok(())
+            } else {
+                Err(BallistaError::from("unsupported plan type".to_string()))
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extension_plan() -> crate::error::Result<()> {
+        let store = Arc::new(LocalFileSystem {});
+        let config =
+            ExecutionConfig::new().with_query_planner(Arc::new(TopKQueryPlanner {}));
+
+        let ctx = ExecutionContext::with_config(config);
+
+        let scan = LogicalPlanBuilder::scan_csv(
+            store,
+            "../../../datafusion/tests/customer.csv",
+            CsvReadOptions::default(),
+            None,
+            1,
+        )
+        .await?
+        .build()?;
+
+        let topk_plan = LogicalPlan::Extension(Extension {
+            node: Arc::new(TopKPlanNode::new(3, scan, col("revenue"))),
+        });
+
+        let topk_exec = ctx.create_physical_plan(&topk_plan).await?;
+
+        let extension_codec = TopKExtensionCodec {};
+
+        let proto = LogicalPlanNode::try_from_logical_plan(&topk_plan, &extension_codec)?;
+        let logical_round_trip = proto.try_into_logical_plan(&ctx, &extension_codec)?;
+
+        assert_eq!(
+            format!("{:?}", topk_plan),
+            format!("{:?}", logical_round_trip)
+        );
+
+        let proto = PhysicalPlanNode::try_from_physical_plan(
+            topk_exec.clone(),
+            &extension_codec,
+        )?;
+        let physical_round_trip = proto.try_into_physical_plan(&ctx, &extension_codec)?;
+
+        assert_eq!(
+            format!("{:?}", topk_exec),
+            format!("{:?}", physical_round_trip)
+        );
+
+        Ok(())
+    }
 }

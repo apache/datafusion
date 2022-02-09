@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
+use ballista_core::serde::protobuf::LogicalPlanNode;
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
 
 use datafusion::catalog::TableReference;
@@ -144,7 +145,7 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
             let guard = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -164,7 +165,7 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
             let guard = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -188,7 +189,7 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
             let guard = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -282,7 +283,7 @@ impl BallistaContext {
     pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
             let state = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &state.scheduler_host,
                 state.scheduler_port,
                 state.config(),
