@@ -138,3 +138,32 @@ impl ops::Rem for Expr {
         binary_expr(self, Operator::Modulo, rhs)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::lit;
+
+    #[test]
+    fn test_operators() {
+        assert_eq!(
+            format!("{:?}", lit(1u32) + lit(2u32)),
+            "UInt32(1) + UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) - lit(2u32)),
+            "UInt32(1) - UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) * lit(2u32)),
+            "UInt32(1) * UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) / lit(2u32)),
+            "UInt32(1) / UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) % lit(2u32)),
+            "UInt32(1) % UInt32(2)"
+        );
+    }
+}
