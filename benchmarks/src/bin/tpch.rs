@@ -1361,15 +1361,20 @@ mod tests {
 
     mod ballista_round_trip {
         use super::*;
-        use ballista_core::serde::protobuf;
+        use ballista_core::serde::{
+            protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec,
+        };
         use datafusion::physical_plan::ExecutionPlan;
-        use std::convert::TryInto;
 
         async fn round_trip_query(n: usize) -> Result<()> {
             let config = ExecutionConfig::new()
                 .with_target_partitions(1)
                 .with_batch_size(10);
             let mut ctx = ExecutionContext::with_config(config);
+            let codec: BallistaCodec<
+                protobuf::LogicalPlanNode,
+                protobuf::PhysicalPlanNode,
+            > = BallistaCodec::default();
 
             // set tpch_data_path to dummy value and skip physical plan serde test when TPCH_DATA
             // is not set.
@@ -1395,8 +1400,15 @@ mod tests {
 
             // test logical plan round trip
             let plan = create_logical_plan(&mut ctx, n)?;
-            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
-            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            let proto: protobuf::LogicalPlanNode =
+                protobuf::LogicalPlanNode::try_from_logical_plan(
+                    &plan,
+                    codec.logical_extension_codec(),
+                )
+                .unwrap();
+            let round_trip: LogicalPlan = (&proto)
+                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
+                .unwrap();
             assert_eq!(
                 format!("{:?}", plan),
                 format!("{:?}", round_trip),
@@ -1405,8 +1417,15 @@ mod tests {
 
             // test optimized logical plan round trip
             let plan = ctx.optimize(&plan)?;
-            let proto: protobuf::LogicalPlanNode = (&plan).try_into().unwrap();
-            let round_trip: LogicalPlan = (&proto).try_into().unwrap();
+            let proto: protobuf::LogicalPlanNode =
+                protobuf::LogicalPlanNode::try_from_logical_plan(
+                    &plan,
+                    codec.logical_extension_codec(),
+                )
+                .unwrap();
+            let round_trip: LogicalPlan = (&proto)
+                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
+                .unwrap();
             assert_eq!(
                 format!("{:?}", plan),
                 format!("{:?}", round_trip),
@@ -1417,8 +1436,14 @@ mod tests {
             if env::var("TPCH_DATA").is_ok() {
                 let physical_plan = ctx.create_physical_plan(&plan).await?;
                 let proto: protobuf::PhysicalPlanNode =
-                    (physical_plan.clone()).try_into().unwrap();
-                let round_trip: Arc<dyn ExecutionPlan> = (&proto).try_into().unwrap();
+                    protobuf::PhysicalPlanNode::try_from_physical_plan(
+                        physical_plan.clone(),
+                        codec.physical_extension_codec(),
+                    )
+                    .unwrap();
+                let round_trip: Arc<dyn ExecutionPlan> = (&proto)
+                    .try_into_physical_plan(&ctx, codec.physical_extension_codec())
+                    .unwrap();
                 assert_eq!(
                     format!("{:?}", physical_plan),
                     format!("{:?}", round_trip),
