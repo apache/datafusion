@@ -203,10 +203,6 @@ impl ApproxPercentileAccumulator {
             return_type,
         }
     }
-
-    // pub(crate) fn get_digest(&self) -> &TDigest {
-    //     &self.digest
-    // }
 }
 
 impl Accumulator for ApproxPercentileAccumulator {
