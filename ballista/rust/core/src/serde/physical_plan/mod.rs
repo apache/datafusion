@@ -57,6 +57,7 @@ use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion::prelude::ExecutionContext;
+use futures::StreamExt;
 use prost::bytes::BufMut;
 use prost::Message;
 use std::convert::TryInto;
@@ -130,10 +131,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 str_to_byte(&scan.delimiter)?,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
+                let predicate = scan
+                    .pruning_predicate
+                    .as_ref()
+                    .map(|expr| expr.try_into())
+                    .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
                     decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
-                    // TODO predicate should be de-serialized
-                    None,
+                    predicate,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
@@ -701,11 +706,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
+            let pruning_expr = exec
+                .pruning_predicate()
+                .map(|pred| pred.logical_expr().try_into())
+                .transpose()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
-                        // TODO serialize predicates
+                        pruning_predicate: pruning_expr,
                     },
                 )),
             })
