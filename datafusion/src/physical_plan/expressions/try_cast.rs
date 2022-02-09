@@ -279,7 +279,7 @@ mod tests {
         // decimal to i8
         generic_decimal_to_other_test_cast!(
             decimal_array,
-            DataType::Decimal(10, 0),
+            DataType::Decimal(10, 3),
             Int8Array,
             DataType::Int8,
             vec![
