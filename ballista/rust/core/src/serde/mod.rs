@@ -132,6 +132,7 @@ impl From<protobuf::AggregateFunction> for AggregateFunction {
             protobuf::AggregateFunction::ApproxPercentileCont => {
                 AggregateFunction::ApproxPercentileCont
             }
+            protobuf::AggregateFunction::ApproxMedian => AggregateFunction::ApproxMedian,
         }
     }
 }
