@@ -25,7 +25,7 @@ use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
-use arrow::io::parquet::read::{get_schema, read_metadata};
+use arrow::io::parquet::read::{infer_schema, read_metadata};
 use futures::TryStreamExt;
 use parquet::statistics::{
     BinaryStatistics as ParquetBinaryStatistics,
@@ -265,7 +265,7 @@ fn summarize_min_max(
 pub fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
     let mut reader = object_reader.sync_reader()?;
     let meta_data = read_metadata(&mut reader)?;
-    let schema = get_schema(&meta_data)?;
+    let schema = infer_schema(&meta_data)?;
     Ok(schema)
 }
 
@@ -273,7 +273,7 @@ pub fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
 fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
     let mut reader = object_reader.sync_reader()?;
     let meta_data = read_metadata(&mut reader)?;
-    let schema = get_schema(&meta_data)?;
+    let schema = infer_schema(&meta_data)?;
 
     let num_fields = schema.fields().len();
     let fields = schema.fields().to_vec();

@@ -21,14 +21,11 @@ use std::sync::Arc;
 
 use arrow::array::PrimitiveArray;
 use arrow::datatypes::TimeUnit;
-use arrow::error::ArrowError;
+use arrow::io::parquet::write::{FileWriter, RowGroupIterator};
 use arrow::{
     array::{Array, ArrayRef, Float64Array, Int32Array, Int64Array, Utf8Array},
     datatypes::{DataType, Field, Schema},
-    io::parquet::write::{
-        array_to_pages, to_parquet_schema, write_file, Compression, Compressor, DynIter,
-        DynStreamingIterator, Encoding, FallibleStreamingIterator, Version, WriteOptions,
-    },
+    io::parquet::write::{Compression, Encoding, Version, WriteOptions},
 };
 use chrono::{Datelike, Duration};
 use datafusion::field_util::SchemaExt;
@@ -631,50 +628,34 @@ async fn make_test_file(scenario: Scenario) -> NamedTempFile {
         write_statistics: true,
         version: Version::V1,
     };
-    let parquet_schema = to_parquet_schema(schema.as_ref()).unwrap();
-    let descritors = parquet_schema.columns().to_vec().into_iter();
-
-    let row_groups = batches.iter().map(|batch| {
-        let iterator =
-            batch
-                .columns()
-                .iter()
-                .zip(descritors.clone())
-                .map(|(array, type_)| {
-                    let encoding =
-                        if let DataType::Dictionary(_, _, _) = array.data_type() {
-                            Encoding::RleDictionary
-                        } else {
-                            Encoding::Plain
-                        };
-                    array_to_pages(array.as_ref(), type_, options, encoding).map(
-                        move |pages| {
-                            let encoded_pages = DynIter::new(pages.map(|x| Ok(x?)));
-                            let compressed_pages = Compressor::new(
-                                encoded_pages,
-                                options.compression,
-                                vec![],
-                            )
-                            .map_err(ArrowError::from);
-                            DynStreamingIterator::new(compressed_pages)
-                        },
-                    )
-                });
-        let iterator = DynIter::new(iterator);
-        Ok(iterator)
-    });
-
-    let mut writer = output_file.as_file();
-
-    write_file(
-        &mut writer,
-        row_groups,
+    let encodings: Vec<Encoding> = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            if let DataType::Dictionary(_, _, _) = field.data_type() {
+                Encoding::RleDictionary
+            } else {
+                Encoding::Plain
+            }
+        })
+        .collect();
+    let row_groups = RowGroupIterator::try_new(
+        batches.iter().map(|batch| Ok(batch.into())),
         schema,
-        parquet_schema,
         options,
-        None,
-    )
-    .unwrap();
+        encodings,
+    );
+
+    let mut file = output_file.as_file();
+
+    let mut writer =
+        FileWriter::try_new(&mut file, schema.as_ref().clone(), options).unwrap();
+    writer.start().unwrap();
+    for rg in row_groups.unwrap() {
+        let (group, len) = rg.unwrap();
+        writer.write(group, len).unwrap();
+    }
+    writer.end(None).unwrap();
 
     output_file
 }

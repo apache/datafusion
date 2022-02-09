@@ -19,13 +19,14 @@
 
 use crate::error::Result;
 use crate::logical_plan::{
-    DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
+    DFSchema, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
 };
 use crate::record_batch::RecordBatch;
 use std::sync::Arc;
 
 use crate::physical_plan::SendableRecordBatchStream;
 use async_trait::async_trait;
+use datafusion_expr::Expr;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or

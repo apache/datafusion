@@ -17,8 +17,10 @@
 
 //! Fuzz Test for various corner cases sorting RecordBatches exceeds available memory and should spill
 
-use arrow::array::{ArrayRef, Int32Array};
-use arrow::compute::sort::SortOptions;
+use arrow::{
+    array::{ArrayRef, Int32Array},
+    compute::sort::SortOptions,
+};
 use datafusion::execution::memory_manager::MemoryManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};

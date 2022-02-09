@@ -50,7 +50,7 @@ arrow = { package = "arrow2", version="0.9", features = ["io_ipc", "io_flight"] 
 
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
 
-parking_lot = "0.11"
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

@@ -25,6 +25,9 @@ use datafusion::datasource::object_store::local::LocalFileSystem;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+extern crate arrow;
+extern crate datafusion;
+
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion::datasource::MemTable;

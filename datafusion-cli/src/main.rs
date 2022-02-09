@@ -15,14 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use clap::{crate_version, App, Arg};
+use clap::Parser;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionConfig;
 use datafusion_cli::{
-    context::Context,
-    exec,
-    print_format::{all_print_formats, PrintFormat},
-    print_options::PrintOptions,
+    context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
 };
 use std::env;
@@ -30,117 +27,84 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
+#[derive(Debug, Parser, PartialEq)]
+#[clap(author, version, about, long_about= None)]
+struct Args {
+    #[clap(
+        short = 'p',
+        long,
+        help = "Path to your data, default to current directory",
+        validator(is_valid_data_dir)
+    )]
+    data_path: Option<String>,
+
+    #[clap(
+        short = 'c',
+        long,
+        help = "The batch size of each query, or use DataFusion default",
+        validator(is_valid_batch_size)
+    )]
+    batch_size: Option<usize>,
+
+    #[clap(
+        short,
+        long,
+        multiple_values = true,
+        help = "Execute commands from file(s), then exit",
+        validator(is_valid_file)
+    )]
+    file: Vec<String>,
+
+    #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
+    format: PrintFormat,
+
+    #[clap(long, help = "Ballista scheduler host")]
+    host: Option<String>,
+
+    #[clap(long, help = "Ballista scheduler port")]
+    port: Option<u16>,
+
+    #[clap(
+        short,
+        long,
+        help = "Reduce printing other than the results and work quietly"
+    )]
+    quiet: bool,
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let matches = App::new("DataFusion")
-        .version(crate_version!())
-        .about(
-            "DataFusion is an in-memory query engine that uses Apache Arrow \
-             as the memory model. It supports executing SQL queries against CSV and \
-             Parquet files as well as querying directly against in-memory data.",
-        )
-        .arg(
-            Arg::new("data-path")
-                .help("Path to your data, default to current directory")
-                .short('p')
-                .long("data-path")
-                .validator(is_valid_data_dir)
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("batch-size")
-                .help("The batch size of each query, or use DataFusion default")
-                .short('c')
-                .long("batch-size")
-                .validator(is_valid_batch_size)
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("file")
-                .help("Execute commands from file(s), then exit")
-                .short('f')
-                .long("file")
-                .multiple_occurrences(true)
-                .validator(is_valid_file)
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("format")
-                .help("Output format")
-                .long("format")
-                .default_value("table")
-                .possible_values(
-                    &all_print_formats()
-                        .iter()
-                        .map(|format| format.to_string())
-                        .collect::<Vec<_>>()
-                        .iter()
-                        .map(|i| i.as_str())
-                        .collect::<Vec<_>>(),
-                )
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("host")
-                .help("Ballista scheduler host")
-                .long("host")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("port")
-                .help("Ballista scheduler port")
-                .long("port")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::new("quiet")
-                .help("Reduce printing other than the results and work quietly")
-                .short('q')
-                .long("quiet")
-                .takes_value(false),
-        )
-        .get_matches();
+    let args = Args::parse();
 
-    let quiet = matches.is_present("quiet");
-
-    if !quiet {
-        println!("DataFusion CLI v{}\n", DATAFUSION_CLI_VERSION);
+    if !args.quiet {
+        println!("DataFusion CLI v{}", DATAFUSION_CLI_VERSION);
     }
 
-    let host = matches.value_of("host");
-    let port = matches
-        .value_of("port")
-        .and_then(|port| port.parse::<u16>().ok());
-
-    if let Some(path) = matches.value_of("data-path") {
+    if let Some(ref path) = args.data_path {
         let p = Path::new(path);
         env::set_current_dir(&p).unwrap();
     };
 
     let mut execution_config = ExecutionConfig::new().with_information_schema(true);
 
-    if let Some(batch_size) = matches
-        .value_of("batch-size")
-        .and_then(|size| size.parse::<usize>().ok())
-    {
+    if let Some(batch_size) = args.batch_size {
         execution_config = execution_config.with_batch_size(batch_size);
     };
 
-    let mut ctx: Context = match (host, port) {
-        (Some(h), Some(p)) => Context::new_remote(h, p)?,
+    let mut ctx: Context = match (args.host, args.port) {
+        (Some(ref h), Some(p)) => Context::new_remote(h, p)?,
         _ => Context::new_local(&execution_config),
     };
 
-    let format = matches
-        .value_of("format")
-        .expect("No format is specified")
-        .parse::<PrintFormat>()
-        .expect("Invalid format");
+    let mut print_options = PrintOptions {
+        format: args.format,
+        quiet: args.quiet,
+    };
 
-    let mut print_options = PrintOptions { format, quiet };
-
-    if let Some(file_paths) = matches.values_of("file") {
-        let files = file_paths
+    let files = args.file;
+    if !files.is_empty() {
+        let files = files
+            .into_iter()
             .map(|file_path| File::open(file_path).unwrap())
             .collect::<Vec<_>>();
         for file in files {
