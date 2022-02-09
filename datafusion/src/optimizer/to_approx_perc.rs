@@ -151,7 +151,7 @@ mod tests {
             .aggregate(Vec::<Expr>::new(), vec![expr])?
             .build()?;
 
-        // Do nothing
+        // Rewrite to use approx_percentile
         let expected = "Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#test.b, Float64(0.5))]] [APPROXMEDIAN(test.b):UInt32;N]\
                             \n  TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
