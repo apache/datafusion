@@ -102,8 +102,14 @@ impl ListingTableConfig {
     }
 
     /// Infer `ListingOptions` based on `table_path` suffix.
-    pub fn infer_options(self) -> Result<Self> {
-        let tokens: Vec<&str> = self.table_path.split('.').collect();
+    pub async fn infer_options(self) -> Result<Self> {
+        let mut files = self.object_store.list_file(&self.table_path).await?;
+        let file = files
+            .next()
+            .await
+            .ok_or_else(|| DataFusionError::Internal("No files for table".into()))??;
+
+        let tokens: Vec<&str> = file.path().split('.').collect();
         let file_type = tokens.last().ok_or_else(|| {
             DataFusionError::Internal("Unable to infer file suffix".into())
         })?;
@@ -149,7 +155,7 @@ impl ListingTableConfig {
 
     /// Convenience wrapper for calling `infer_options` and `infer_schema`
     pub async fn infer(self) -> Result<Self> {
-        self.infer_options()?.infer_schema().await
+        self.infer_options().await?.infer_schema().await
     }
 }
 
@@ -443,7 +449,8 @@ mod tests {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Boolean, false)]));
         let config = ListingTableConfig::new(store, "table/")
-            .infer_options()?
+            .infer_options()
+            .await?
             .with_schema(file_schema);
         let table = ListingTable::try_new(config)?;
 
