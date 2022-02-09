@@ -591,6 +591,7 @@ mod tests {
     use datafusion::logical_plan::{
         col, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     };
+    use datafusion::physical_plan::expressions::PhysicalSortExpr;
     use datafusion::physical_plan::planner::{DefaultPhysicalPlanner, ExtensionPlanner};
     use datafusion::physical_plan::{
         DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
@@ -722,6 +723,10 @@ mod tests {
 
         fn output_partitioning(&self) -> Partitioning {
             Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            None
         }
 
         fn required_child_distribution(&self) -> Distribution {
