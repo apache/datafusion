@@ -124,9 +124,12 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             loop {
                 interval_time.tick().await;
-                clean_shuffle_data_loop(&work_dir, cleanup_ttl)
-                    .await
-                    .unwrap();
+                match clean_shuffle_data_loop(&work_dir, cleanup_ttl).await {
+                    Err(e) => {
+                        error!("Ballista executor fail to clean_shuffle_data {:?}", e)
+                    }
+                    _ => {}
+                }
             }
         });
     }
@@ -174,7 +177,7 @@ async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
     let mut dir = fs::read_dir(work_dir).await?;
     let mut to_deleted = Vec::new();
     let mut need_delete_dir;
-    while let Some(child) = dir.next_entry().await.unwrap() {
+    while let Some(child) = dir.next_entry().await? {
         if let Ok(metadata) = child.metadata().await {
             if metadata.is_dir() {
                 let dir = fs::read_dir(child.path()).await?;
