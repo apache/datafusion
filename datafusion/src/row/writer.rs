@@ -17,7 +17,7 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
-use crate::row::bitmap::{bytes_for, set_bit};
+use crate::row::bitmap::{align_word, null_width, set_bit, unset_bit};
 use crate::row::{estimate_row_width, fixed_size, get_offsets, supported};
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
@@ -41,7 +41,7 @@ pub fn write_batch_unchecked(
     let mut offsets = vec![];
     for cur_row in row_idx..batch.num_rows() {
         offsets.push(current_offset);
-        let row_width = write_row(&mut writer, cur_row, batch, &schema);
+        let row_width = write_row(&mut writer, cur_row, batch);
         output[current_offset..current_offset + row_width]
             .copy_from_slice(writer.get_row());
         current_offset += row_width;
@@ -72,13 +72,23 @@ macro_rules! fn_set_idx {
 
 /// Reusable row writer backed by Vec<u8>
 pub struct RowWriter {
+    /// buffer for the current tuple been written.
     data: Vec<u8>,
+    /// Total number of fields for each tuple.
     field_count: usize,
+    /// Length in bytes for the current tuple, 8-bytes word aligned.
     row_width: usize,
+    /// The number of bytes used to store null bits for each field.
     null_width: usize,
+    /// Length in bytes for `values` part of the current tuple.
     values_width: usize,
+    /// Length in bytes for `variable length data` part of the current tuple.
     varlena_width: usize,
+    /// Current offset for the next variable length field to write to.
     varlena_offset: usize,
+    /// Starting offset for each fields in the raw bytes.
+    /// For fixed length fields, it's where the actual data stores.
+    /// For variable length fields, it's a pack of (offset << 32 | length) if we use u64.
     field_offsets: Vec<usize>,
 }
 
@@ -87,7 +97,7 @@ impl RowWriter {
     pub fn new(schema: &Arc<Schema>) -> Self {
         assert!(supported(schema));
         let field_count = schema.fields().len();
-        let null_width = bytes_for(field_count);
+        let null_width = null_width(field_count);
         let (field_offsets, values_width) = get_offsets(null_width, schema);
         let mut init_capacity = estimate_row_width(null_width, schema);
         if !fixed_size(schema) {
@@ -121,12 +131,12 @@ impl RowWriter {
 
     fn set_null_at(&mut self, idx: usize) {
         let null_bits = &mut self.data[0..self.null_width];
-        set_bit(null_bits, idx, false)
+        unset_bit(null_bits, idx)
     }
 
     fn set_non_null_at(&mut self, idx: usize) {
         let null_bits = &mut self.data[0..self.null_width];
-        set_bit(null_bits, idx, true)
+        set_bit(null_bits, idx)
     }
 
     fn set_bool(&mut self, idx: usize, value: bool) {
@@ -164,8 +174,8 @@ impl RowWriter {
         set_idx!(8, self, idx, value)
     }
 
-    fn set_offset_size(&mut self, idx: usize, size: usize) {
-        let offset_and_size: u64 = (self.varlena_offset << 32 | size) as u64;
+    fn set_offset_size(&mut self, idx: usize, size: u32) {
+        let offset_and_size: u64 = (self.varlena_offset as u64) << 32 | (size as u64);
         self.set_u64(idx, offset_and_size);
     }
 
@@ -173,7 +183,7 @@ impl RowWriter {
         self.assert_index_valid(idx);
         let bytes = value.as_bytes();
         let size = bytes.len();
-        self.set_offset_size(idx, size);
+        self.set_offset_size(idx, size as u32);
         let varlena_offset = self.varlena_offset;
         self.data[varlena_offset..varlena_offset + size].copy_from_slice(bytes);
         self.varlena_offset += size;
@@ -183,7 +193,7 @@ impl RowWriter {
     fn set_binary(&mut self, idx: usize, value: &[u8]) {
         self.assert_index_valid(idx);
         let size = value.len();
-        self.set_offset_size(idx, size);
+        self.set_offset_size(idx, size as u32);
         let varlena_offset = self.varlena_offset;
         self.data[varlena_offset..varlena_offset + size].copy_from_slice(value);
         self.varlena_offset += size;
@@ -197,7 +207,7 @@ impl RowWriter {
     /// End each row at 8-byte word boundary.
     fn end_padding(&mut self) {
         let payload_width = self.current_width();
-        self.row_width = (payload_width.saturating_add(7) / 8) * 8;
+        self.row_width = align_word(payload_width);
         if self.data.capacity() < self.row_width {
             self.data.resize(self.row_width, 0);
         }
@@ -209,14 +219,10 @@ impl RowWriter {
 }
 
 /// Stitch attributes of tuple in `batch` at `row_idx` and returns the tuple width
-fn write_row(
-    row: &mut RowWriter,
-    row_idx: usize,
-    batch: &RecordBatch,
-    schema: &Arc<Schema>,
-) -> usize {
+fn write_row(row: &mut RowWriter, row_idx: usize, batch: &RecordBatch) -> usize {
     // Get the row from the batch denoted by row_idx
-    for ((i, f), col) in schema
+    for ((i, f), col) in batch
+        .schema()
         .fields()
         .iter()
         .enumerate()
@@ -299,13 +305,13 @@ fn write_field(
         }
         Utf8 => {
             let c = col.as_any().downcast_ref::<StringArray>().unwrap();
-            let str = c.value(row_idx);
-            let new_width = row.current_width() + str.as_bytes().len();
+            let s = c.value(row_idx);
+            let new_width = row.current_width() + s.as_bytes().len();
             if new_width > row.data.capacity() {
                 // double the capacity to avoid repeated resize
                 row.data.resize(max(row.data.capacity() * 2, new_width), 0);
             }
-            row.set_utf8(col_idx, str);
+            row.set_utf8(col_idx, s);
         }
         Binary => {
             let c = col.as_any().downcast_ref::<BinaryArray>().unwrap();

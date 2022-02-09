@@ -18,7 +18,7 @@
 //! Accessing row from raw bytes
 
 use crate::error::{DataFusionError, Result};
-use crate::row::bitmap::{all_valid, bytes_for, get_bit_unchecked};
+use crate::row::bitmap::{all_valid, get_bit, null_width, NullBitsFormatter};
 use crate::row::{get_offsets, supported};
 use arrow::array::{make_builder, ArrayBuilder};
 use arrow::datatypes::{DataType, Schema};
@@ -82,26 +82,39 @@ macro_rules! fn_get_idx_opt {
     };
 }
 
-struct RowReader<'a> {
+/// Read the tuple `data[base_offset..]` we are currently pointing to
+pub struct RowReader<'a> {
+    /// Raw bytes slice where the tuple stores
     data: &'a [u8],
+    /// Start position for the current tuple in the raw bytes slice.
     base_offset: usize,
+    /// Total number of fields for each tuple.
     field_count: usize,
+    /// The number of bytes used to store null bits for each field.
     null_width: usize,
+    /// Starting offset for each fields in the raw bytes.
+    /// For fixed length fields, it's where the actual data stores.
+    /// For variable length fields, it's a pack of (offset << 32 | length) if we use u64.
     field_offsets: Vec<usize>,
 }
 
 impl<'a> std::fmt::Debug for RowReader<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let null_bits = self.null_bits();
-        super::bitmap::fmt(null_bits, 0, self.null_width, f)
+        write!(
+            f,
+            "{:?}",
+            NullBitsFormatter::new(null_bits, self.field_count)
+        )
     }
 }
 
 impl<'a> RowReader<'a> {
-    fn new(schema: &Arc<Schema>, data: &'a [u8]) -> Self {
+    /// new
+    pub fn new(schema: &Arc<Schema>, data: &'a [u8]) -> Self {
         assert!(supported(schema));
         let field_count = schema.fields().len();
-        let null_width = bytes_for(field_count);
+        let null_width = null_width(field_count);
         let (field_offsets, _) = get_offsets(null_width, schema);
         Self {
             data,
@@ -113,7 +126,7 @@ impl<'a> RowReader<'a> {
     }
 
     /// Update this row to point to position `offset` in `base`
-    fn point_to(&mut self, offset: usize) {
+    pub fn point_to(&mut self, offset: usize) {
         self.base_offset = offset;
     }
 
@@ -135,7 +148,7 @@ impl<'a> RowReader<'a> {
     }
 
     fn is_valid_at(&self, idx: usize) -> bool {
-        unsafe { get_bit_unchecked(self.null_bits(), idx) }
+        get_bit(self.null_bits(), idx)
     }
 
     fn get_bool(&self, idx: usize) -> bool {

@@ -30,6 +30,7 @@
 //!       we append their actual content to the end of the var length region and
 //!       store their offset relative to row base and their length, packed into an 8-byte word.
 
+use crate::row::bitmap::align_word;
 use arrow::datatypes::{DataType, Schema};
 use std::sync::Arc;
 
@@ -81,7 +82,7 @@ fn var_length(dt: &DataType) -> bool {
 fn type_width(dt: &DataType) -> usize {
     use DataType::*;
     if var_length(dt) {
-        return 8;
+        return std::mem::size_of::<u64>();
     }
     match dt {
         Boolean | UInt8 | Int8 => 1,
@@ -102,7 +103,7 @@ fn estimate_row_width(null_width: usize, schema: &Arc<Schema>) -> usize {
             _ => {}
         }
     }
-    (width.saturating_add(7) / 8) * 8
+    align_word(width)
 }
 
 fn fixed_size(schema: &Arc<Schema>) -> bool {
