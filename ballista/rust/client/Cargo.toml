@@ -34,7 +34,7 @@ futures = "0.3"
 log = "0.4"
 tokio = "1.0"
 tempfile = "3"
-sqlparser = "0.13"
+sqlparser = "0.14"
 parking_lot = "0.12"
 
 datafusion = { path = "../../../datafusion", version = "6.0.0" }
