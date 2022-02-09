@@ -38,7 +38,7 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
-use log::debug;
+use log::{debug, trace};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -809,12 +809,14 @@ impl ExecutionContext {
         let execution_props = execution_props.start_execution();
 
         let mut new_plan = plan.clone();
-        debug!("Logical plan:\n {:?}", plan);
+        debug!("Input logical plan:\n{}\n", plan.display_indent());
+        trace!("Full input logical plan:\n{:?}", plan);
         for optimizer in optimizers {
             new_plan = optimizer.optimize(&new_plan, execution_props)?;
             observer(&new_plan, optimizer.as_ref());
         }
-        debug!("Optimized logical plan:\n {:?}", new_plan);
+        debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+        trace!("Full Optimized logical plan:\n {:?}", plan);
         Ok(new_plan)
     }
 }
