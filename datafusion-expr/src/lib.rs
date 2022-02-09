@@ -15,15 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod accumulator;
 mod aggregate_function;
 mod built_in_function;
+mod columnar_value;
 mod operator;
 mod signature;
 mod window_frame;
 mod window_function;
 
+pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
+pub use columnar_value::{ColumnarValue, NullColumnarValue};
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
