@@ -124,11 +124,8 @@ async fn main() -> Result<()> {
         tokio::spawn(async move {
             loop {
                 interval_time.tick().await;
-                match clean_shuffle_data_loop(&work_dir, cleanup_ttl).await {
-                    Err(e) => {
-                        error!("Ballista executor fail to clean_shuffle_data {:?}", e)
-                    }
-                    _ => {}
+                if let Err(e) = clean_shuffle_data_loop(&work_dir, cleanup_ttl).await {
+                    error!("Ballista executor fail to clean_shuffle_data {:?}", e)
                 }
             }
         });
@@ -226,7 +223,7 @@ async fn check_modified_time_in_dirs(
                 }
                 false => {
                     let modified_time: DateTime<Utc> =
-                        meta.modified().map(chrono::DateTime::from).unwrap();
+                        meta.modified().map(chrono::DateTime::from)?;
                     if modified_time > cutoff {
                         return Ok(false);
                     }
