@@ -86,32 +86,40 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
 }
 
-fn plan_key(key: SQLExpr) -> ScalarValue {
-    match key {
+fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
+    let scalar = match key {
         SQLExpr::Value(Value::Number(s, _)) => {
             ScalarValue::Int64(Some(s.parse().unwrap()))
         }
         SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
-        _ => unreachable!(),
-    }
+        _ => {
+            return Err(DataFusionError::SQL(ParserError(format!(
+                "Unsuported index key expression: {}",
+                key
+            ))))
+        }
+    };
+
+    Ok(scalar)
 }
 
-#[allow(clippy::branches_sharing_code)]
-fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Expr {
-    if keys.len() == 1 {
-        let key = keys.pop().unwrap();
-        Expr::GetIndexedField {
-            expr: Box::new(expr),
-            key: plan_key(key),
-        }
+fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
+    let key = keys.pop().ok_or_else(|| {
+        DataFusionError::SQL(ParserError(format!(
+            "Internal error: Missing index key expression",
+        )))
+    })?;
+
+    let expr = if !keys.is_empty() {
+        plan_indexed(expr, keys)?
     } else {
-        let key = keys.pop().unwrap();
-        let expr = Box::new(plan_indexed(expr, keys));
-        Expr::GetIndexedField {
-            expr,
-            key: plan_key(key),
-        }
-    }
+        expr
+    };
+
+    Ok(Expr::GetIndexedField {
+        expr: Box::new(expr),
+        key: plan_key(key)?,
+    })
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -1423,7 +1431,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { ref column, keys } => {
                 if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    Ok(plan_indexed(col(&id.value), keys.clone()))
+                    plan_indexed(col(&id.value), keys.clone())
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
