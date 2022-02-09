@@ -40,7 +40,12 @@ The documentation is served through the
 [arrow-site](https://github.com/apache/arrow-site/) repo. To release a new
 version of the docs, follow these steps:
 
-- Run `make html` inside `docs` folder to generate the docs website inside the `build/html` folder.
-- Clone the arrow-site repo and checkout to the `asf-site` branch
-- Copy build artifacts into `arrow-site` repo's `datafusion` folder: `'cp' -rT ./build/html/ ../arrow-site/datafusion/`
-- Commit changes in `arrow-site` and send a PR.
+1. Run `make html` inside `docs` folder to generate the docs website inside the `build/html` folder.
+2. Clone the arrow-site repo
+3. Checkout to the `asf-site` branch (NOT `master`)
+4. Copy build artifacts into `arrow-site` repo's `datafusion` folder with a command such as
+
+- `cp -rT ./build/html/ ../../arrow-site/datafusion/` (doesn't work on mac)
+- `rsync -avzr ./build/html/ ../../arrow-site/datafusion/`
+
+5. Commit changes in `arrow-site` and send a PR.
