@@ -775,6 +775,12 @@ mod tests {
             // better statistics inference could be provided
             Statistics::default()
         }
+
+        fn output_ordering(
+            &self,
+        ) -> Option<&[datafusion::physical_plan::expressions::PhysicalSortExpr]> {
+            todo!()
+        }
     }
 
     struct TopKPlanner {}
