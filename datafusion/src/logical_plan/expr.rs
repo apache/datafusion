@@ -22,8 +22,6 @@ pub use super::Operator;
 use crate::error::Result;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{DFField, DFSchema};
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::udf::ScalarUDF;
 use arrow::datatypes::DataType;
 use datafusion_common::DataFusionError;
 pub use datafusion_common::{Column, ExprSchema};
@@ -33,6 +31,7 @@ use datafusion_expr::BuiltinScalarFunction;
 pub use datafusion_expr::Expr;
 use datafusion_expr::StateTypeFunction;
 pub use datafusion_expr::{lit, lit_timestamp_nano, Literal};
+use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
 };
