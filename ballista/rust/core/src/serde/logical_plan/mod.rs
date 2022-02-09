@@ -27,7 +27,7 @@ use datafusion::datasource::file_format::avro::AvroFormat;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable};
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::logical_plan::plan::Extension;
 use datafusion::logical_plan::plan::{
@@ -241,12 +241,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     scan.path.as_str()
                 );
 
-                let provider = ListingTable::new(
-                    object_store,
-                    scan.path.clone(),
-                    Arc::new(schema),
-                    options,
-                );
+                let config = ListingTableConfig::new(object_store, scan.path.as_str())
+                    .with_listing_options(options)
+                    .with_schema(Arc::new(schema));
+
+                let provider = ListingTable::try_new(config)?;
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,
