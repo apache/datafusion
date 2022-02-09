@@ -1100,6 +1100,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }
+                    AggregateFunction::ApproxMedian => {
+                        protobuf::AggregateFunction::ApproxMedian
+                    }
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {
@@ -1340,6 +1343,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
             AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
+            AggregateFunction::ApproxMedian => Self::ApproxMedian,
         }
     }
 }
