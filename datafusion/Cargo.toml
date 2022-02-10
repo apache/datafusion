@@ -48,6 +48,8 @@ pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 force_hash_collisions = []
 # Used to enable the avro format
 avro = ["avro-rs", "num-traits", "datafusion-common/avro"]
+# Used to enable row format experiment
+row = []
 
 [dependencies]
 datafusion-common = { path = "../datafusion-common", version = "7.0.0" }

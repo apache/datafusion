@@ -226,6 +226,8 @@ pub use arrow;
 pub use parquet;
 
 pub(crate) mod field_util;
+#[cfg(feature = "row")]
+pub(crate) mod row;
 
 pub mod from_slice;
 
