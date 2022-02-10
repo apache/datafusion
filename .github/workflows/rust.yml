@@ -58,12 +58,18 @@ jobs:
           rustup toolchain install ${{ matrix.rust }}
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt
-      - name: Build Workspace
+      - name: Build workspace in debug mode
         run: |
           cargo build
         env:
           CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
+          CARGO_TARGET_DIR: "/github/home/target/debug"
+      - name: Build workspace in release mode
+        run: |
+          cargo check --release
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target/release"
       - name: Check DataFusion Build without default features
         run: |
           cargo check --no-default-features -p datafusion

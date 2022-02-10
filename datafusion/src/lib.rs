@@ -201,6 +201,9 @@
 //! cargo run --example simple_udf
 //! ```
 
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 extern crate sqlparser;
 
 pub mod avro_to_arrow;
@@ -225,9 +228,6 @@ pub use parquet;
 pub(crate) mod field_util;
 #[cfg(feature = "row")]
 pub(crate) mod row;
-
-#[cfg(feature = "pyarrow")]
-mod pyarrow;
 
 pub mod from_slice;
 

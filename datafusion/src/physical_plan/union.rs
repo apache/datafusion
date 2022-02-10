@@ -27,6 +27,7 @@ use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 
 use super::{
+    expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -83,6 +84,14 @@ impl ExecutionPlan for UnionExec {
         // TODO: this loses partitioning info in case of same partitioning scheme (for example `Partitioning::Hash`)
         // https://issues.apache.org/jira/browse/ARROW-11991
         Partitioning::UnknownPartitioning(num_partitions)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(
@@ -144,7 +153,7 @@ impl ExecutionPlan for UnionExec {
             .unwrap_or_default()
     }
 
-    fn should_repartition_children(&self) -> bool {
+    fn benefits_from_input_partitioning(&self) -> bool {
         false
     }
 }

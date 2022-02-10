@@ -37,7 +37,7 @@ tempfile = "3"
 sqlparser = "0.13"
 parking_lot = "0.12"
 
-datafusion = { path = "../../../datafusion", version = "6.0.0" }
+datafusion = { path = "../../../datafusion", version = "7.0.0" }
 
 [features]
 default = []

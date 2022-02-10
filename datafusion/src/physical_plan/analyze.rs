@@ -30,6 +30,7 @@ use crate::{
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 
+use super::expressions::PhysicalSortExpr;
 use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
@@ -80,6 +81,14 @@ impl ExecutionPlan for AnalyzeExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(

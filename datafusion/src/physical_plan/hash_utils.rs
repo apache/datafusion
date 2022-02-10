@@ -23,8 +23,8 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Date64Array, DecimalArray,
     DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
     Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type,
@@ -382,6 +382,16 @@ pub fn create_hashes<'a>(
                     Float64Array,
                     col,
                     u64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                hash_array_primitive!(
+                    TimestampSecondArray,
+                    col,
+                    i64,
                     hashes_buffer,
                     random_state,
                     multi_col

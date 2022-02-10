@@ -20,6 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -112,6 +113,18 @@ impl ExecutionPlan for WindowAggExec {
         // this would be either 1 or more than 1 depending on the presense of
         // repartitioning
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        true
     }
 
     fn required_child_distribution(&self) -> Distribution {

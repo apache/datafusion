@@ -18,7 +18,9 @@
 //! SQL Utility Functions
 
 use arrow::datatypes::DataType;
+use sqlparser::ast::Ident;
 
+use crate::logical_plan::ExprVisitable;
 use crate::logical_plan::{Expr, LogicalPlan};
 use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
 use crate::{
@@ -529,6 +531,14 @@ pub(crate) fn make_decimal_type(
                 Ok(DataType::Decimal(p as usize, s as usize))
             }
         }
+    }
+}
+
+// Normalize an identifer to a lowercase string unless the identifier is quoted.
+pub(crate) fn normalize_ident(id: &Ident) -> String {
+    match id.quote_style {
+        Some(_) => id.value.clone(),
+        None => id.value.to_ascii_lowercase(),
     }
 }
 

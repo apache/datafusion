@@ -44,6 +44,7 @@ mod lead_lag;
 mod literal;
 #[macro_use]
 mod min_max;
+mod approx_median;
 mod correlation;
 mod covariance;
 mod distinct_expressions;
@@ -65,6 +66,7 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
+pub(crate) use approx_median::ApproxMedian;
 pub use approx_percentile_cont::{
     is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
 };

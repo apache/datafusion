@@ -21,6 +21,7 @@ SQL Reference
 .. toctree::
    :maxdepth: 2
 
+   sql_status
    select
    ddl
    DataFusion Functions <datafusion-functions>
