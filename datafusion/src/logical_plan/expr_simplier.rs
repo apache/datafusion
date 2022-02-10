@@ -24,7 +24,7 @@ use crate::optimizer::simplify_expressions::{ConstEvaluator, Simplifier};
 use datafusion_common::Result;
 
 /// The information necessary to apply algebraic simplification to an
-/// [Expr]. See [SimplifyContext] for one implementation
+/// [Expr]. See [crate::optimizer::simplify_expressions::SimplifyContext] for one implementation
 pub trait SimplifyInfo {
     /// returns true if this Expr has boolean type
     fn is_boolean_type(&self, expr: &Expr) -> Result<bool>;

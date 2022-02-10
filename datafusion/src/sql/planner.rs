@@ -2084,11 +2084,11 @@ fn remove_join_expressions(
 /// Filters matching this pattern are added to `accum`
 /// Filters that don't match this pattern are added to `accum_filter`
 /// Examples:
-///
+/// ```text
 /// foo = bar => accum=[(foo, bar)] accum_filter=[]
 /// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
-///
+/// ```
 fn extract_join_keys(
     expr: &Expr,
     accum: &mut Vec<(Column, Column)>,
