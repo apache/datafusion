@@ -18,7 +18,9 @@
 //! Stream and channel implementations for window function expressions.
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::AbortOnDropSingle;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -113,6 +115,18 @@ impl ExecutionPlan for WindowAggExec {
         self.input.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
     fn required_child_distribution(&self) -> Distribution {
         if self
             .window_expr()
@@ -141,8 +155,12 @@ impl ExecutionPlan for WindowAggExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition).await?;
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
+        let input = self.input.execute(partition, runtime).await?;
         let stream = Box::pin(WindowAggStream::new(
             self.schema.clone(),
             self.window_expr.clone(),
@@ -268,9 +286,7 @@ impl WindowAggStream {
         elapsed_compute: crate::physical_plan::metrics::Time,
     ) -> ArrowResult<RecordBatch> {
         let input_schema = input.schema();
-        let batches = common::collect(input)
-            .await
-            .map_err(DataFusionError::into_arrow_external_error)?;
+        let batches = common::collect(input).await?;
 
         // record compute time on drop
         let _timer = elapsed_compute.timer();
@@ -278,8 +294,7 @@ impl WindowAggStream {
         let batch = common::combine_batches(&batches, input_schema.clone())?;
         if let Some(batch) = batch {
             // calculate window cols
-            let mut columns = compute_window_aggregates(window_expr, &batch)
-                .map_err(DataFusionError::into_arrow_external_error)?;
+            let mut columns = compute_window_aggregates(window_expr, &batch)?;
             // combine with the original cols
             // note the setup of window aggregates is that they newly calculated window
             // expressions are always prepended to the columns

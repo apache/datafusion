@@ -25,6 +25,7 @@ use self::{
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
+    execution::runtime_env::RuntimeEnv,
     scalar::ScalarValue,
 };
 use arrow::compute::kernels::partition::lexicographical_partition_ranges;
@@ -34,6 +35,8 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
+pub use datafusion_expr::Accumulator;
+pub use datafusion_expr::ColumnarValue;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use std::fmt;
@@ -58,7 +61,7 @@ pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
 pub struct EmptyRecordBatchStream {
-    /// Schema
+    /// Schema wrapped by Arc
     schema: SchemaRef,
 }
 
@@ -134,18 +137,89 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Returns the execution plan as [`Any`](std::any::Any) so that it can be
     /// downcast to a specific implementation.
     fn as_any(&self) -> &dyn Any;
+
     /// Get the schema for this execution plan
     fn schema(&self) -> SchemaRef;
+
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
-    /// Specifies the data distribution requirements of all the children for this operator
+
+    /// If the output of this operator is sorted, returns `Some(keys)`
+    /// with the description of how it was sorted.
+    ///
+    /// For example, Sort, (obviously) produces sorted output as does
+    /// SortPreservingMergeStream. Less obviously `Projection`
+    /// produces sorted output if its input was sorted as it does not
+    /// reorder the input rows,
+    ///
+    /// It is safe to return `None` here if your operator does not
+    /// have any particular output order here
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+
+    /// Specifies the data distribution requirements of all the
+    /// children for this operator
     fn required_child_distribution(&self) -> Distribution {
         Distribution::UnspecifiedDistribution
     }
+
+    /// Returns `true` if this operator relies on its inputs being
+    /// produced in a certain order (for example that they are sorted
+    /// a particular way) for correctness.
+    ///
+    /// If `true` is returned, DataFusion will not apply certain
+    /// optimizations which might reorder the inputs (such as
+    /// repartitioning to increase concurrency).
+    ///
+    /// The default implementation returns `true`
+    ///
+    /// WARNING: if you override this default and return `false`, your
+    /// operator can not rely on datafusion preserving the input order
+    /// as it will likely not.
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
+    /// Returns `false` if this operator's implementation may reorder
+    /// rows within or between partitions.
+    ///
+    /// For example, Projection, Filter, and Limit maintain the order
+    /// of inputs -- they may transform values (Projection) or not
+    /// produce the same number of rows that went in (Filter and
+    /// Limit), but the rows that are produced go in the same way.
+    ///
+    /// DataFusion uses this metadata to apply certain optimizations
+    /// such as automatically repartitioning correctly.
+    ///
+    /// The default implementation returns `false`
+    ///
+    /// WARNING: if you override this default, you *MUST* ensure that
+    /// the operator's maintains the ordering invariant or else
+    /// DataFusion may produce incorrect results.
+    fn maintains_input_order(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if this operator would benefit from
+    /// partitioning its input (and thus from more parallelism). For
+    /// operators that do very little work the overhead of extra
+    /// parallelism may outweigh any benefits
+    ///
+    /// The default implementation returns `true` unless this operator
+    /// has signalled it requiers a single child input partition.
+    fn benefits_from_input_partitioning(&self) -> bool {
+        // By default try to maximize parallelism with more CPUs if
+        // possible
+        !matches!(
+            self.required_child_distribution(),
+            Distribution::SinglePartition
+        )
+    }
+
     /// Get a list of child execution plans that provide the input for this plan. The returned list
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
+
     /// Returns a new plan where all children were replaced by new plans.
     /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
     fn with_new_children(
@@ -154,7 +228,11 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// creates an iterator
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream>;
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream>;
 
     /// Return a snapshot of the set of [`Metric`]s for this
     /// [`ExecutionPlan`].
@@ -218,7 +296,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 ///              \n  CoalesceBatchesExec: target_batch_size=4096\
 ///              \n    FilterExec: a@0 < 5\
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
-///              \n        CsvExec: files=[tests/example.csv], has_header=true, batch_size=8192, limit=None",
+///              \n        CsvExec: files=[tests/example.csv], has_header=true, limit=None",
 ///               plan_string.trim());
 /// }
 /// ```
@@ -310,24 +388,28 @@ pub fn visit_execution_plan<V: ExecutionPlanVisitor>(
 }
 
 /// Execute the [ExecutionPlan] and collect the results in memory
-pub async fn collect(plan: Arc<dyn ExecutionPlan>) -> Result<Vec<RecordBatch>> {
-    let stream = execute_stream(plan).await?;
+pub async fn collect(
+    plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
+) -> Result<Vec<RecordBatch>> {
+    let stream = execute_stream(plan, runtime).await?;
     common::collect(stream).await
 }
 
 /// Execute the [ExecutionPlan] and return a single stream of results
 pub async fn execute_stream(
     plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<SendableRecordBatchStream> {
     match plan.output_partitioning().partition_count() {
         0 => Ok(Box::pin(EmptyRecordBatchStream::new(plan.schema()))),
-        1 => plan.execute(0).await,
+        1 => plan.execute(0, runtime).await,
         _ => {
             // merge into a single partition
             let plan = CoalescePartitionsExec::new(plan.clone());
             // CoalescePartitionsExec must produce a single partition
             assert_eq!(1, plan.output_partitioning().partition_count());
-            plan.execute(0).await
+            plan.execute(0, runtime).await
         }
     }
 }
@@ -335,8 +417,9 @@ pub async fn execute_stream(
 /// Execute the [ExecutionPlan] and collect the results in memory
 pub async fn collect_partitioned(
     plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let streams = execute_stream_partitioned(plan).await?;
+    let streams = execute_stream_partitioned(plan, runtime).await?;
     let mut batches = Vec::with_capacity(streams.len());
     for stream in streams {
         batches.push(common::collect(stream).await?);
@@ -347,11 +430,12 @@ pub async fn collect_partitioned(
 /// Execute the [ExecutionPlan] and return a vec with one stream per output partition
 pub async fn execute_stream_partitioned(
     plan: Arc<dyn ExecutionPlan>,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<Vec<SendableRecordBatchStream>> {
     let num_partitions = plan.output_partitioning().partition_count();
     let mut streams = Vec::with_capacity(num_partitions);
     for i in 0..num_partitions {
-        streams.push(plan.execute(i).await?);
+        streams.push(plan.execute(i, runtime.clone()).await?);
     }
     Ok(streams)
 }
@@ -373,9 +457,7 @@ impl Partitioning {
     pub fn partition_count(&self) -> usize {
         use Partitioning::*;
         match self {
-            RoundRobinBatch(n) => *n,
-            Hash(_, n) => *n,
-            UnknownPartitioning(n) => *n,
+            RoundRobinBatch(n) | Hash(_, n) | UnknownPartitioning(n) => *n,
         }
     }
 }
@@ -390,32 +472,6 @@ pub enum Distribution {
     /// Requires children to be distributed in such a way that the same
     /// values of the keys end up in the same partition
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
-}
-
-/// Represents the result from an expression
-#[derive(Clone)]
-pub enum ColumnarValue {
-    /// Array of values
-    Array(ArrayRef),
-    /// A single value
-    Scalar(ScalarValue),
-}
-
-impl ColumnarValue {
-    fn data_type(&self) -> DataType {
-        match self {
-            ColumnarValue::Array(array_value) => array_value.data_type().clone(),
-            ColumnarValue::Scalar(scalar_value) => scalar_value.get_datatype(),
-        }
-    }
-
-    /// Convert a columnar value into an ArrayRef
-    pub fn into_array(self, num_rows: usize) -> ArrayRef {
-        match self {
-            ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
-        }
-    }
 }
 
 /// Expression that can be evaluated against a RecordBatch
@@ -551,56 +607,44 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 }
 
-/// An accumulator represents a stateful object that lives throughout the evaluation of multiple rows and
-/// generically accumulates values.
+/// Applies an optional projection to a [`SchemaRef`], returning the
+/// projected schema
 ///
-/// An accumulator knows how to:
-/// * update its state from inputs via `update`
-/// * convert its internal state to a vector of scalar values
-/// * update its state from multiple accumulators' states via `merge`
-/// * compute the final value from its internal state via `evaluate`
-pub trait Accumulator: Send + Sync + Debug {
-    /// Returns the state of the accumulator at the end of the accumulation.
-    // in the case of an average on which we track `sum` and `n`, this function should return a vector
-    // of two values, sum and n.
-    fn state(&self) -> Result<Vec<ScalarValue>>;
-
-    /// updates the accumulator's state from a vector of scalars.
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()>;
-
-    /// updates the accumulator's state from a vector of arrays.
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        if values.is_empty() {
-            return Ok(());
-        };
-        (0..values[0].len()).try_for_each(|index| {
-            let v = values
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.update(&v)
-        })
-    }
-
-    /// updates the accumulator's state from a vector of scalars.
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()>;
-
-    /// updates the accumulator's state from a vector of states.
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        };
-        (0..states[0].len()).try_for_each(|index| {
-            let v = states
-                .iter()
-                .map(|array| ScalarValue::try_from_array(array, index))
-                .collect::<Result<Vec<_>>>()?;
-            self.merge(&v)
-        })
-    }
-
-    /// returns its value based on its current state.
-    fn evaluate(&self) -> Result<ScalarValue>;
+/// Example:
+/// ```
+/// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use datafusion::physical_plan::project_schema;
+///
+/// // Schema with columns 'a', 'b', and 'c'
+/// let schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("a", DataType::Int32, true),
+///   Field::new("b", DataType::Int64, true),
+///   Field::new("c", DataType::Utf8, true),
+/// ]));
+///
+/// // Pick columns 'c' and 'b'
+/// let projection = Some(vec![2,1]);
+/// let projected_schema = project_schema(
+///    &schema,
+///    projection.as_ref()
+///  ).unwrap();
+///
+/// let expected_schema = SchemaRef::new(Schema::new(vec![
+///   Field::new("c", DataType::Utf8, true),
+///   Field::new("b", DataType::Int64, true),
+/// ]));
+///
+/// assert_eq!(projected_schema, expected_schema);
+/// ```
+pub fn project_schema(
+    schema: &SchemaRef,
+    projection: Option<&Vec<usize>>,
+) -> Result<SchemaRef> {
+    let schema = match projection {
+        Some(columns) => Arc::new(schema.project(columns)?),
+        None => Arc::clone(schema),
+    };
+    Ok(schema)
 }
 
 pub mod aggregates;
@@ -615,7 +659,6 @@ pub mod cross_join;
 pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod display;
-pub mod distinct_expressions;
 pub mod empty;
 pub mod explain;
 pub mod expressions;
@@ -636,10 +679,10 @@ pub mod projection;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
 pub mod repartition;
-pub mod sort;
-pub mod sort_preserving_merge;
+pub mod sorts;
 pub mod stream;
 pub mod string_expressions;
+pub(crate) mod tdigest;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;

@@ -23,8 +23,8 @@ use crate::logical_plan::plan::{Filter, Projection, Window};
 use crate::logical_plan::{
     col,
     plan::{Aggregate, Sort},
-    DFField, DFSchema, Expr, ExprRewriter, ExpressionVisitor, LogicalPlan, Recursion,
-    RewriteRecursion,
+    DFField, DFSchema, Expr, ExprRewritable, ExprRewriter, ExprSchemable, ExprVisitable,
+    ExpressionVisitor, LogicalPlan, Recursion, RewriteRecursion,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -66,6 +66,12 @@ impl OptimizerRule for CommonSubexprEliminate {
 
     fn name(&self) -> &str {
         "common_sub_expression_eliminate"
+    }
+}
+
+impl Default for CommonSubexprEliminate {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -25,6 +25,10 @@ pub(crate) mod builder;
 mod dfschema;
 mod display;
 mod expr;
+mod expr_rewriter;
+mod expr_schema;
+mod expr_simplier;
+mod expr_visitor;
 mod extension;
 mod operators;
 pub mod plan;
@@ -33,21 +37,28 @@ pub mod window_frames;
 pub use builder::{
     build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
 };
+pub use datafusion_expr::expr_fn::binary_expr;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use display::display_schema;
 pub use expr::{
-    abs, acos, and, approx_distinct, array, ascii, asin, atan, avg, binary_expr,
-    bit_length, btrim, case, ceil, character_length, chr, col, columnize_expr,
-    combine_filters, concat, concat_ws, cos, count, count_distinct, create_udaf,
-    create_udf, date_part, date_trunc, digest, exp, exprlist_to_fields, floor, in_list,
-    initcap, left, length, lit, lit_timestamp_nano, ln, log10, log2, lower, lpad, ltrim,
-    max, md5, min, normalize_col, normalize_cols, now, octet_length, or, random,
-    regexp_match, regexp_replace, repeat, replace, replace_col, reverse, right, round,
-    rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt,
-    starts_with, strpos, substr, sum, tan, to_hex, translate, trim, trunc, unalias,
-    unnormalize_col, unnormalize_cols, upper, when, Column, Expr, ExprRewriter,
-    ExpressionVisitor, Literal, Recursion, RewriteRecursion,
+    abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
+    avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, col,
+    columnize_expr, combine_filters, concat, concat_ws, cos, count, count_distinct,
+    create_udaf, create_udf, date_part, date_trunc, digest, exp, exprlist_to_fields,
+    floor, in_list, initcap, left, length, lit, lit_timestamp_nano, ln, log10, log2,
+    lower, lpad, ltrim, max, md5, min, now, octet_length, or, random, regexp_match,
+    regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim, sha224, sha256,
+    sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, sum, tan,
+    to_hex, translate, trim, trunc, unalias, upper, when, Column, Expr, ExprSchema,
+    Literal,
 };
+pub use expr_rewriter::{
+    normalize_col, normalize_cols, replace_col, rewrite_sort_cols_by_aggs,
+    unnormalize_col, unnormalize_cols, ExprRewritable, ExprRewriter, RewriteRecursion,
+};
+pub use expr_schema::ExprSchemable;
+pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
+pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{

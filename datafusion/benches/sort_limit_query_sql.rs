@@ -19,10 +19,11 @@
 extern crate criterion;
 use criterion::Criterion;
 use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable};
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 extern crate arrow;
 extern crate datafusion;
@@ -38,7 +39,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
+    let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
 }
 
@@ -62,14 +63,16 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
 
     let testdata = datafusion::test_util::arrow_test_data();
 
+    let path = format!("{}/csv/aggregate_test_100.csv", testdata);
+
     // create CSV data source
     let listing_options = ListingOptions::new(Arc::new(CsvFormat::default()));
-    let csv = ListingTable::new(
-        Arc::new(LocalFileSystem {}),
-        format!("{}/csv/aggregate_test_100.csv", testdata),
-        schema,
-        listing_options,
-    );
+
+    let config = ListingTableConfig::new(Arc::new(LocalFileSystem {}), &path)
+        .with_listing_options(listing_options)
+        .with_schema(schema);
+
+    let csv = async { ListingTable::try_new(config).unwrap() };
 
     let rt = Runtime::new().unwrap();
 
@@ -79,19 +82,20 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
     let partitions = 16;
 
     rt.block_on(async {
-        let mem_table = MemTable::load(Arc::new(csv), 16 * 1024, Some(partitions))
-            .await
-            .unwrap();
-
         // create local execution context
         let mut ctx = ExecutionContext::new();
-        ctx.state.lock().unwrap().config.target_partitions = 1;
+        ctx.state.lock().config.target_partitions = 1;
+        let runtime = ctx.state.lock().runtime_env.clone();
+
+        let mem_table = MemTable::load(Arc::new(csv.await), Some(partitions), runtime)
+            .await
+            .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))
             .unwrap();
-        ctx_holder.lock().unwrap().push(Arc::new(Mutex::new(ctx)))
+        ctx_holder.lock().push(Arc::new(Mutex::new(ctx)))
     });
 
-    let ctx = ctx_holder.lock().unwrap().get(0).unwrap().clone();
+    let ctx = ctx_holder.lock().get(0).unwrap().clone();
     ctx
 }
 

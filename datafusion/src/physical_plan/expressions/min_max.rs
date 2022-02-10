@@ -129,6 +129,12 @@ macro_rules! typed_min_max_batch {
         let value = compute::$OP(array);
         ScalarValue::$SCALAR(value)
     }};
+
+    ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident, $OP:ident, $TZ:expr) => {{
+        let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
+        let value = compute::$OP(array);
+        ScalarValue::$SCALAR(value, $TZ.clone())
+    }};
 }
 
 // TODO implement this in arrow-rs with simd
@@ -189,26 +195,35 @@ macro_rules! min_max_batch {
             DataType::UInt32 => typed_min_max_batch!($VALUES, UInt32Array, UInt32, $OP),
             DataType::UInt16 => typed_min_max_batch!($VALUES, UInt16Array, UInt16, $OP),
             DataType::UInt8 => typed_min_max_batch!($VALUES, UInt8Array, UInt8, $OP),
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                typed_min_max_batch!($VALUES, TimestampSecondArray, TimestampSecond, $OP)
+            DataType::Timestamp(TimeUnit::Second, tz_opt) => {
+                typed_min_max_batch!(
+                    $VALUES,
+                    TimestampSecondArray,
+                    TimestampSecond,
+                    $OP,
+                    tz_opt
+                )
             }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => typed_min_max_batch!(
+            DataType::Timestamp(TimeUnit::Millisecond, tz_opt) => typed_min_max_batch!(
                 $VALUES,
                 TimestampMillisecondArray,
                 TimestampMillisecond,
-                $OP
+                $OP,
+                tz_opt
             ),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => typed_min_max_batch!(
+            DataType::Timestamp(TimeUnit::Microsecond, tz_opt) => typed_min_max_batch!(
                 $VALUES,
                 TimestampMicrosecondArray,
                 TimestampMicrosecond,
-                $OP
+                $OP,
+                tz_opt
             ),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => typed_min_max_batch!(
+            DataType::Timestamp(TimeUnit::Nanosecond, tz_opt) => typed_min_max_batch!(
                 $VALUES,
                 TimestampNanosecondArray,
                 TimestampNanosecond,
-                $OP
+                $OP,
+                tz_opt
             ),
             DataType::Date32 => typed_min_max_batch!($VALUES, Date32Array, Date32, $OP),
             DataType::Date64 => typed_min_max_batch!($VALUES, Date64Array, Date64, $OP),
@@ -272,6 +287,18 @@ macro_rules! typed_min_max {
             (None, Some(b)) => Some(b.clone()),
             (Some(a), Some(b)) => Some((*a).$OP(*b)),
         })
+    }};
+
+    ($VALUE:expr, $DELTA:expr, $SCALAR:ident, $OP:ident, $TZ:expr) => {{
+        ScalarValue::$SCALAR(
+            match ($VALUE, $DELTA) {
+                (None, None) => None,
+                (Some(a), None) => Some(a.clone()),
+                (None, Some(b)) => Some(b.clone()),
+                (Some(a), Some(b)) => Some((*a).$OP(*b)),
+            },
+            $TZ.clone(),
+        )
     }};
 }
 
@@ -337,26 +364,26 @@ macro_rules! min_max {
             (ScalarValue::LargeUtf8(lhs), ScalarValue::LargeUtf8(rhs)) => {
                 typed_min_max_string!(lhs, rhs, LargeUtf8, $OP)
             }
-            (ScalarValue::TimestampSecond(lhs), ScalarValue::TimestampSecond(rhs)) => {
-                typed_min_max!(lhs, rhs, TimestampSecond, $OP)
+            (ScalarValue::TimestampSecond(lhs, l_tz), ScalarValue::TimestampSecond(rhs, _)) => {
+                typed_min_max!(lhs, rhs, TimestampSecond, $OP, l_tz)
             }
             (
-                ScalarValue::TimestampMillisecond(lhs),
-                ScalarValue::TimestampMillisecond(rhs),
+                ScalarValue::TimestampMillisecond(lhs, l_tz),
+                ScalarValue::TimestampMillisecond(rhs, _),
             ) => {
-                typed_min_max!(lhs, rhs, TimestampMillisecond, $OP)
+                typed_min_max!(lhs, rhs, TimestampMillisecond, $OP, l_tz)
             }
             (
-                ScalarValue::TimestampMicrosecond(lhs),
-                ScalarValue::TimestampMicrosecond(rhs),
+                ScalarValue::TimestampMicrosecond(lhs, l_tz),
+                ScalarValue::TimestampMicrosecond(rhs, _),
             ) => {
-                typed_min_max!(lhs, rhs, TimestampMicrosecond, $OP)
+                typed_min_max!(lhs, rhs, TimestampMicrosecond, $OP, l_tz)
             }
             (
-                ScalarValue::TimestampNanosecond(lhs),
-                ScalarValue::TimestampNanosecond(rhs),
+                ScalarValue::TimestampNanosecond(lhs, l_tz),
+                ScalarValue::TimestampNanosecond(rhs, _),
             ) => {
-                typed_min_max!(lhs, rhs, TimestampNanosecond, $OP)
+                typed_min_max!(lhs, rhs, TimestampNanosecond, $OP, l_tz)
             }
             (
                 ScalarValue::Date32(lhs),
@@ -411,16 +438,6 @@ impl Accumulator for MaxAccumulator {
         let delta = &max_batch(values)?;
         self.max = max(&self.max, delta)?;
         Ok(())
-    }
-
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.max = max(&self.max, value)?;
-        Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.update(states)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -516,21 +533,11 @@ impl Accumulator for MinAccumulator {
         Ok(vec![self.min.clone()])
     }
 
-    fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        let value = &values[0];
-        self.min = min(&self.min, value)?;
-        Ok(())
-    }
-
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
         let delta = &min_batch(values)?;
         self.min = min(&self.min, delta)?;
         Ok(())
-    }
-
-    fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-        self.update(states)
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
@@ -545,6 +552,7 @@ impl Accumulator for MinAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::expressions::tests::aggregate;
     use crate::scalar::ScalarValue::Decimal128;
@@ -723,7 +731,7 @@ mod tests {
 
     #[test]
     fn max_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -735,7 +743,7 @@ mod tests {
 
     #[test]
     fn min_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -747,7 +755,7 @@ mod tests {
 
     #[test]
     fn max_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -759,7 +767,7 @@ mod tests {
 
     #[test]
     fn max_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -771,7 +779,7 @@ mod tests {
 
     #[test]
     fn min_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -783,7 +791,7 @@ mod tests {
 
     #[test]
     fn min_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -855,8 +863,9 @@ mod tests {
 
     #[test]
     fn max_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -868,8 +877,9 @@ mod tests {
 
     #[test]
     fn min_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -881,8 +891,9 @@ mod tests {
 
     #[test]
     fn max_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(&[
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -894,8 +905,9 @@ mod tests {
 
     #[test]
     fn min_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(&[
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -907,8 +919,9 @@ mod tests {
 
     #[test]
     fn max_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -920,8 +933,9 @@ mod tests {
 
     #[test]
     fn min_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -933,7 +947,7 @@ mod tests {
 
     #[test]
     fn min_date32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Date32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Date32,
@@ -945,7 +959,7 @@ mod tests {
 
     #[test]
     fn min_date64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Date64Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Date64,
@@ -957,7 +971,7 @@ mod tests {
 
     #[test]
     fn max_date32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Date32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Date32,
@@ -969,7 +983,7 @@ mod tests {
 
     #[test]
     fn max_date64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Date64Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Date64Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Date64,

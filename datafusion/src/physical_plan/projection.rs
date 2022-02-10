@@ -34,9 +34,10 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::expressions::Column;
+use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
@@ -121,6 +122,19 @@ impl ExecutionPlan for ProjectionExec {
         self.input.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        // tell optimizer this operator doesn't reorder its input
+        true
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -136,11 +150,15 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(ProjectionStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
-            input: self.input.execute(partition).await?,
+            input: self.input.execute(partition, runtime).await?,
             baseline_metrics: BaselineMetrics::new(&self.metrics, partition),
         }))
     }
@@ -231,15 +249,14 @@ impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        self.expr
+        let arrays = self
+            .expr
             .iter()
             .map(|expr| expr.evaluate(batch))
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()
-            .map_or_else(
-                |e| Err(DataFusionError::into_arrow_external_error(e)),
-                |arrays| RecordBatch::try_new(self.schema.clone(), arrays),
-            )
+            .collect::<Result<Vec<_>>>()?;
+
+        RecordBatch::try_new(self.schema.clone(), arrays)
     }
 }
 
@@ -285,7 +302,7 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
-    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
@@ -293,6 +310,7 @@ mod tests {
 
     #[tokio::test]
     async fn project_first_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
@@ -300,13 +318,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -329,7 +346,7 @@ mod tests {
         let mut row_count = 0;
         for partition in 0..projection.output_partitioning().partition_count() {
             partition_count += 1;
-            let stream = projection.execute(partition).await?;
+            let stream = projection.execute(partition, runtime.clone()).await?;
 
             row_count += stream
                 .map(|batch| {

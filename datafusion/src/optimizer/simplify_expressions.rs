@@ -17,23 +17,74 @@
 
 //! Simplify expressions optimizer rule
 
+use crate::error::DataFusionError;
+use crate::execution::context::ExecutionProps;
+use crate::logical_plan::ExprSchemable;
+use crate::logical_plan::{
+    lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
+    LogicalPlan, RewriteRecursion, SimplifyInfo,
+};
+use crate::optimizer::optimizer::OptimizerRule;
+use crate::optimizer::utils;
+use crate::physical_plan::functions::Volatility;
+use crate::physical_plan::planner::create_physical_expr;
+use crate::scalar::ScalarValue;
+use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
-use crate::error::DataFusionError;
-use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::logical_plan::{lit, DFSchemaRef, Expr};
-use crate::logical_plan::{DFSchema, ExprRewriter, LogicalPlan, RewriteRecursion};
-use crate::optimizer::optimizer::OptimizerRule;
-use crate::optimizer::utils;
-use crate::physical_plan::functions::Volatility;
-use crate::physical_plan::planner::DefaultPhysicalPlanner;
-use crate::scalar::ScalarValue;
-use crate::{error::Result, logical_plan::Operator};
+/// Provides simplification information based on schema and properties
+struct SimplifyContext<'a, 'b> {
+    schemas: Vec<&'a DFSchemaRef>,
+    props: &'b ExecutionProps,
+}
 
-/// Simplifies plans by rewriting [`Expr`]`s evaluating constants
-/// and applying algebraic simplifications
+impl<'a, 'b> SimplifyContext<'a, 'b> {
+    /// Create a new SimplifyContext
+    pub fn new(schemas: Vec<&'a DFSchemaRef>, props: &'b ExecutionProps) -> Self {
+        Self { schemas, props }
+    }
+}
+
+impl<'a, 'b> SimplifyInfo for SimplifyContext<'a, 'b> {
+    /// returns true if this Expr has boolean type
+    fn is_boolean_type(&self, expr: &Expr) -> Result<bool> {
+        for schema in &self.schemas {
+            if let Ok(DataType::Boolean) = expr.get_type(schema) {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+    /// Returns true if expr is nullable
+    fn nullable(&self, expr: &Expr) -> Result<bool> {
+        self.schemas
+            .iter()
+            .find_map(|schema| {
+                // expr may be from another input, so ignore errors
+                // by converting to None to keep trying
+                expr.nullable(schema.as_ref()).ok()
+            })
+            .ok_or_else(|| {
+                // This means we weren't able to compute `Expr::nullable` with
+                // *any* input schemas, signalling a problem
+                DataFusionError::Internal(format!(
+                    "Could not find find columns in '{}' during simplify",
+                    expr
+                ))
+            })
+    }
+
+    fn execution_props(&self) -> &ExecutionProps {
+        self.props
+    }
+}
+
+/// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
+/// [`Expr`]`s evaluating constants and applying algebraic
+/// simplifications
 ///
 /// # Introduction
 /// It uses boolean algebra laws to simplify or reduce the number of terms in expressions.
@@ -43,33 +94,19 @@ use crate::{error::Result, logical_plan::Operator};
 /// is optimized to
 /// `Filter: b > 2`
 ///
-pub struct SimplifyExpressions {}
+#[derive(Default)]
+pub(crate) struct SimplifyExpressions {}
 
-fn expr_contains(expr: &Expr, needle: &Expr) -> bool {
+/// returns true if `needle` is found in a chain of search_op
+/// expressions. Such as: (A AND B) AND C
+fn expr_contains(expr: &Expr, needle: &Expr, search_op: Operator) -> bool {
     match expr {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } => expr_contains(left, needle) || expr_contains(right, needle),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } => expr_contains(left, needle) || expr_contains(right, needle),
+        Expr::BinaryExpr { left, op, right } if *op == search_op => {
+            expr_contains(left, needle, search_op)
+                || expr_contains(right, needle, search_op)
+        }
         _ => expr == needle,
     }
-}
-
-fn as_binary_expr(expr: &Expr) -> Option<&Expr> {
-    match expr {
-        Expr::BinaryExpr { .. } => Some(expr),
-        _ => None,
-    }
-}
-
-fn operator_is_boolean(op: Operator) -> bool {
-    op == Operator::And || op == Operator::Or
 }
 
 fn is_one(s: &Expr) -> bool {
@@ -95,6 +132,22 @@ fn is_true(expr: &Expr) -> bool {
     }
 }
 
+/// returns true if expr is a
+/// `Expr::Literal(ScalarValue::Boolean(v))` , false otherwise
+fn is_bool_lit(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(ScalarValue::Boolean(_)))
+}
+
+/// Return a literal NULL value
+fn lit_null() -> Expr {
+    Expr::Literal(ScalarValue::Boolean(None))
+}
+
+/// returns true if expr is a `Not(_)`, false otherwise
+fn is_not(expr: &Expr) -> bool {
+    matches!(expr, Expr::Not(_))
+}
+
 fn is_null(expr: &Expr) -> bool {
     match expr {
         Expr::Literal(v) => v.is_null(),
@@ -109,160 +162,27 @@ fn is_false(expr: &Expr) -> bool {
     }
 }
 
-fn simplify(expr: &Expr) -> Expr {
-    match expr {
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } if is_true(left) || is_true(right) => lit(true),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } if is_false(left) => simplify(right),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } if is_false(right) => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } if left == right => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } if is_false(left) || is_false(right) => lit(false),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } if is_true(right) => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } if is_true(left) => simplify(right),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } if left == right => simplify(right),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Multiply,
-            right,
-        } if is_one(left) => simplify(right),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Multiply,
-            right,
-        } if is_one(right) => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Divide,
-            right,
-        } if is_one(right) => simplify(left),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Divide,
-            right,
-        } if left == right && is_null(left) => *left.clone(),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Divide,
-            right,
-        } if left == right => lit(1),
+/// returns true if `haystack` looks like (needle OP X) or (X OP needle)
+fn is_op_with(target_op: Operator, haystack: &Expr, needle: &Expr) -> bool {
+    match haystack {
         Expr::BinaryExpr { left, op, right }
-            if left == right && operator_is_boolean(*op) =>
+            if op == &target_op
+                && (needle == left.as_ref() || needle == right.as_ref()) =>
         {
-            simplify(left)
+            true
         }
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } if expr_contains(left, right) => as_binary_expr(left)
-            .map(|x| match x {
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                } => simplify(&x.clone()),
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::And,
-                    right: _,
-                } => simplify(&*right.clone()),
-                _ => expr.clone(),
-            })
-            .unwrap_or_else(|| expr.clone()),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        } if expr_contains(right, left) => as_binary_expr(right)
-            .map(|x| match x {
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                } => simplify(&*right.clone()),
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::And,
-                    right: _,
-                } => simplify(&*left.clone()),
-                _ => expr.clone(),
-            })
-            .unwrap_or_else(|| expr.clone()),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } if expr_contains(left, right) => as_binary_expr(left)
-            .map(|x| match x {
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                } => simplify(&*right.clone()),
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::And,
-                    right: _,
-                } => simplify(&x.clone()),
-                _ => expr.clone(),
-            })
-            .unwrap_or_else(|| expr.clone()),
-        Expr::BinaryExpr {
-            left,
-            op: Operator::And,
-            right,
-        } if expr_contains(right, left) => as_binary_expr(right)
-            .map(|x| match x {
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::Or,
-                    right: _,
-                } => simplify(&*left.clone()),
-                Expr::BinaryExpr {
-                    left: _,
-                    op: Operator::And,
-                    right: _,
-                } => simplify(&x.clone()),
-                _ => expr.clone(),
-            })
-            .unwrap_or_else(|| expr.clone()),
-        Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
-            left: Box::new(simplify(left)),
-            op: *op,
-            right: Box::new(simplify(right)),
-        },
-        _ => expr.clone(),
+        _ => false,
+    }
+}
+
+/// returns the contained boolean value in `expr` as
+/// `Expr::Literal(ScalarValue::Boolean(v))`.
+///
+/// panics if expr is not a literal boolean
+fn as_bool_lit(expr: Expr) -> Option<bool> {
+    match expr {
+        Expr::Literal(ScalarValue::Boolean(v)) => v,
+        _ => panic!("Expected boolean literal, got {:?}", expr),
     }
 }
 
@@ -281,11 +201,7 @@ impl OptimizerRule for SimplifyExpressions {
         // projected columns. With just the projected schema, it's not possible to infer types for
         // expressions that references non-projected columns within the same project plan or its
         // children plans.
-        let mut simplifier =
-            super::simplify_expressions::Simplifier::new(plan.all_schemas());
-
-        let mut const_evaluator =
-            super::simplify_expressions::ConstEvaluator::new(execution_props);
+        let info = SimplifyContext::new(plan.all_schemas(), execution_props);
 
         let new_inputs = plan
             .inputs()
@@ -301,22 +217,11 @@ impl OptimizerRule for SimplifyExpressions {
                 // Constant folding should not change expression name.
                 let name = &e.name(plan.schema());
 
-                // TODO combine simplify into Simplifier
-                let e = simplify(&e);
-
-                // TODO iterate until no changes are made
-                // during rewrite (evaluating constants can
-                // enable new simplifications and
-                // simplifications can enable new constant
-                // evaluation)
-                let new_e = e
-                    // fold constants and then simplify
-                    .rewrite(&mut const_evaluator)?
-                    .rewrite(&mut simplifier)?;
+                // Apply the actual simplification logic
+                let new_e = e.simplify(&info)?;
 
                 let new_name = &new_e.name(plan.schema());
 
-                // TODO simplify this logic
                 if let (Ok(expr_name), Ok(new_expr_name)) = (name, new_name) {
                     if expr_name != new_expr_name {
                         Ok(new_e.alias(expr_name))
@@ -347,6 +252,7 @@ impl SimplifyExpressions {
 ///
 /// ```
 /// # use datafusion::prelude::*;
+/// # use datafusion::logical_plan::ExprRewritable;
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
@@ -360,7 +266,7 @@ impl SimplifyExpressions {
 /// let rewritten = expr.rewrite(&mut const_evaluator).unwrap();
 /// assert_eq!(rewritten, lit(3) + col("a"));
 /// ```
-pub struct ConstEvaluator {
+pub struct ConstEvaluator<'a> {
     /// can_evaluate is used during the depth-first-search of the
     /// Expr tree to track if any siblings (or their descendants) were
     /// non evaluatable (e.g. had a column reference or volatile
@@ -375,13 +281,12 @@ pub struct ConstEvaluator {
     /// descendants) so this Expr can be evaluated
     can_evaluate: Vec<bool>,
 
-    ctx_state: ExecutionContextState,
-    planner: DefaultPhysicalPlanner,
+    execution_props: &'a ExecutionProps,
     input_schema: DFSchema,
     input_batch: RecordBatch,
 }
 
-impl ExprRewriter for ConstEvaluator {
+impl<'a> ExprRewriter for ConstEvaluator<'a> {
     fn pre_visit(&mut self, expr: &Expr) -> Result<RewriteRecursion> {
         // Default to being able to evaluate this node
         self.can_evaluate.push(true);
@@ -419,16 +324,11 @@ impl ExprRewriter for ConstEvaluator {
     }
 }
 
-impl ConstEvaluator {
+impl<'a> ConstEvaluator<'a> {
     /// Create a new `ConstantEvaluator`. Session constants (such as
     /// the time for `now()` are taken from the passed
     /// `execution_props`.
-    pub fn new(execution_props: &ExecutionProps) -> Self {
-        let planner = DefaultPhysicalPlanner::default();
-        let ctx_state = ExecutionContextState {
-            execution_props: execution_props.clone(),
-            ..ExecutionContextState::new()
-        };
+    pub fn new(execution_props: &'a ExecutionProps) -> Self {
         let input_schema = DFSchema::empty();
 
         // The dummy column name is unused and doesn't matter as only
@@ -443,8 +343,7 @@ impl ConstEvaluator {
 
         Self {
             can_evaluate: vec![],
-            ctx_state,
-            planner,
+            execution_props,
             input_schema,
             input_batch,
         }
@@ -470,43 +369,42 @@ impl ConstEvaluator {
         // at plan time
         match expr {
             // Has no runtime cost, but needed during planning
-            Expr::Alias(..) => false,
-            Expr::AggregateFunction { .. } => false,
-            Expr::AggregateUDF { .. } => false,
-            Expr::ScalarVariable(_) => false,
-            Expr::Column(_) => false,
+            Expr::Alias(..)
+            | Expr::AggregateFunction { .. }
+            | Expr::AggregateUDF { .. }
+            | Expr::ScalarVariable(_)
+            | Expr::Column(_)
+            | Expr::WindowFunction { .. }
+            | Expr::Sort { .. }
+            | Expr::Wildcard => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
-            Expr::WindowFunction { .. } => false,
-            Expr::Sort { .. } => false,
-            Expr::Wildcard => false,
-
-            Expr::Literal(_) => true,
-            Expr::BinaryExpr { .. } => true,
-            Expr::Not(_) => true,
-            Expr::IsNotNull(_) => true,
-            Expr::IsNull(_) => true,
-            Expr::Negative(_) => true,
-            Expr::Between { .. } => true,
-            Expr::Case { .. } => true,
-            Expr::Cast { .. } => true,
-            Expr::TryCast { .. } => true,
-            Expr::InList { .. } => true,
-            Expr::GetIndexedField { .. } => true,
+            Expr::Literal(_)
+            | Expr::BinaryExpr { .. }
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::Negative(_)
+            | Expr::Between { .. }
+            | Expr::Case { .. }
+            | Expr::Cast { .. }
+            | Expr::TryCast { .. }
+            | Expr::InList { .. }
+            | Expr::GetIndexedField { .. } => true,
         }
     }
 
     /// Internal helper to evaluates an Expr
-    fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
             return Ok(s);
         }
 
-        let phys_expr = self.planner.create_physical_expr(
+        let phys_expr = create_physical_expr(
             &expr,
             &self.input_schema,
             &self.input_batch.schema(),
-            &self.ctx_state,
+            self.execution_props,
         )?;
         let col_val = phys_expr.evaluate(&self.input_batch)?;
         match col_val {
@@ -534,232 +432,291 @@ impl ConstEvaluator {
 /// * `false = true` and `true = false` to `false`
 /// * `!!expr` to `expr`
 /// * `expr = null` and `expr != null` to `null`
-pub(crate) struct Simplifier<'a> {
-    /// input schemas
-    schemas: Vec<&'a DFSchemaRef>,
+pub(crate) struct Simplifier<'a, S> {
+    info: &'a S,
 }
 
-impl<'a> Simplifier<'a> {
-    pub fn new(schemas: Vec<&'a DFSchemaRef>) -> Self {
-        Self { schemas }
-    }
-
-    fn is_boolean_type(&self, expr: &Expr) -> bool {
-        for schema in &self.schemas {
-            if let Ok(DataType::Boolean) = expr.get_type(schema) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    fn boolean_folding_for_or(
-        const_bool: &Option<bool>,
-        bool_expr: Box<Expr>,
-        left_right_order: bool,
-    ) -> Expr {
-        // See if we can fold 'const_bool OR bool_expr' to a constant boolean
-        match const_bool {
-            // TRUE or expr (including NULL) = TRUE
-            Some(true) => Expr::Literal(ScalarValue::Boolean(Some(true))),
-            // FALSE or expr (including NULL) = expr
-            Some(false) => *bool_expr,
-            None => match *bool_expr {
-                // NULL or TRUE = TRUE
-                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
-                    Expr::Literal(ScalarValue::Boolean(Some(true)))
-                }
-                // NULL or FALSE = NULL
-                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
-                    Expr::Literal(ScalarValue::Boolean(None))
-                }
-                // NULL or NULL = NULL
-                Expr::Literal(ScalarValue::Boolean(None)) => {
-                    Expr::Literal(ScalarValue::Boolean(None))
-                }
-                // NULL or expr can be either NULL or TRUE
-                // So let us not rewrite it
-                _ => {
-                    let mut left =
-                        Box::new(Expr::Literal(ScalarValue::Boolean(*const_bool)));
-                    let mut right = bool_expr;
-                    if !left_right_order {
-                        std::mem::swap(&mut left, &mut right);
-                    }
-
-                    Expr::BinaryExpr {
-                        left,
-                        op: Operator::Or,
-                        right,
-                    }
-                }
-            },
-        }
-    }
-
-    fn boolean_folding_for_and(
-        const_bool: &Option<bool>,
-        bool_expr: Box<Expr>,
-        left_right_order: bool,
-    ) -> Expr {
-        // See if we can fold 'const_bool AND bool_expr' to a constant boolean
-        match const_bool {
-            // TRUE and expr (including NULL) = expr
-            Some(true) => *bool_expr,
-            // FALSE and expr (including NULL) = FALSE
-            Some(false) => Expr::Literal(ScalarValue::Boolean(Some(false))),
-            None => match *bool_expr {
-                // NULL and TRUE = NULL
-                Expr::Literal(ScalarValue::Boolean(Some(true))) => {
-                    Expr::Literal(ScalarValue::Boolean(None))
-                }
-                // NULL and FALSE = FALSE
-                Expr::Literal(ScalarValue::Boolean(Some(false))) => {
-                    Expr::Literal(ScalarValue::Boolean(Some(false)))
-                }
-                // NULL and NULL = NULL
-                Expr::Literal(ScalarValue::Boolean(None)) => {
-                    Expr::Literal(ScalarValue::Boolean(None))
-                }
-                // NULL and expr can either be NULL or FALSE
-                // So let us not rewrite it
-                _ => {
-                    let mut left =
-                        Box::new(Expr::Literal(ScalarValue::Boolean(*const_bool)));
-                    let mut right = bool_expr;
-                    if !left_right_order {
-                        std::mem::swap(&mut left, &mut right);
-                    }
-
-                    Expr::BinaryExpr {
-                        left,
-                        op: Operator::And,
-                        right,
-                    }
-                }
-            },
-        }
+impl<'a, S> Simplifier<'a, S> {
+    pub fn new(info: &'a S) -> Self {
+        Self { info }
     }
 }
 
-impl<'a> ExprRewriter for Simplifier<'a> {
+impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
     /// rewrite the expression simplifying any constant expressions
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+        use Expr::*;
+        use Operator::{And, Divide, Eq, Multiply, NotEq, Or};
+
+        let info = self.info;
         let new_expr = match expr {
-            Expr::BinaryExpr { left, op, right } => match op {
-                Operator::Eq => match (left.as_ref(), right.as_ref()) {
-                    (
-                        Expr::Literal(ScalarValue::Boolean(l)),
-                        Expr::Literal(ScalarValue::Boolean(r)),
-                    ) => match (l, r) {
-                        (Some(l), Some(r)) => {
-                            Expr::Literal(ScalarValue::Boolean(Some(l == r)))
-                        }
-                        _ => Expr::Literal(ScalarValue::Boolean(None)),
-                    },
-                    (Expr::Literal(ScalarValue::Boolean(b)), _)
-                        if self.is_boolean_type(&right) =>
-                    {
-                        match b {
-                            Some(true) => *right,
-                            Some(false) => Expr::Not(right),
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
-                        }
-                    }
-                    (_, Expr::Literal(ScalarValue::Boolean(b)))
-                        if self.is_boolean_type(&left) =>
-                    {
-                        match b {
-                            Some(true) => *left,
-                            Some(false) => Expr::Not(left),
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
-                        }
-                    }
-                    _ => Expr::BinaryExpr {
-                        left,
-                        op: Operator::Eq,
-                        right,
-                    },
-                },
-                Operator::NotEq => match (left.as_ref(), right.as_ref()) {
-                    (
-                        Expr::Literal(ScalarValue::Boolean(l)),
-                        Expr::Literal(ScalarValue::Boolean(r)),
-                    ) => match (l, r) {
-                        (Some(l), Some(r)) => {
-                            Expr::Literal(ScalarValue::Boolean(Some(l != r)))
-                        }
-                        _ => Expr::Literal(ScalarValue::Boolean(None)),
-                    },
-                    (Expr::Literal(ScalarValue::Boolean(b)), _)
-                        if self.is_boolean_type(&right) =>
-                    {
-                        match b {
-                            Some(true) => Expr::Not(right),
-                            Some(false) => *right,
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
-                        }
-                    }
-                    (_, Expr::Literal(ScalarValue::Boolean(b)))
-                        if self.is_boolean_type(&left) =>
-                    {
-                        match b {
-                            Some(true) => Expr::Not(left),
-                            Some(false) => *left,
-                            None => Expr::Literal(ScalarValue::Boolean(None)),
-                        }
-                    }
-                    _ => Expr::BinaryExpr {
-                        left,
-                        op: Operator::NotEq,
-                        right,
-                    },
-                },
-                Operator::Or => match (left.as_ref(), right.as_ref()) {
-                    (Expr::Literal(ScalarValue::Boolean(b)), _)
-                        if self.is_boolean_type(&right) =>
-                    {
-                        Self::boolean_folding_for_or(b, right, true)
-                    }
-                    (_, Expr::Literal(ScalarValue::Boolean(b)))
-                        if self.is_boolean_type(&left) =>
-                    {
-                        Self::boolean_folding_for_or(b, left, false)
-                    }
-                    _ => Expr::BinaryExpr {
-                        left,
-                        op: Operator::Or,
-                        right,
-                    },
-                },
-                Operator::And => match (left.as_ref(), right.as_ref()) {
-                    (Expr::Literal(ScalarValue::Boolean(b)), _)
-                        if self.is_boolean_type(&right) =>
-                    {
-                        Self::boolean_folding_for_and(b, right, true)
-                    }
-                    (_, Expr::Literal(ScalarValue::Boolean(b)))
-                        if self.is_boolean_type(&left) =>
-                    {
-                        Self::boolean_folding_for_and(b, left, false)
-                    }
-                    _ => Expr::BinaryExpr {
-                        left,
-                        op: Operator::And,
-                        right,
-                    },
-                },
-                _ => Expr::BinaryExpr { left, op, right },
-            },
-            // Not(Not(expr)) --> expr
-            Expr::Not(inner) => {
-                if let Expr::Not(negated_inner) = *inner {
-                    *negated_inner
-                } else {
-                    Expr::Not(inner)
+            //
+            // Rules for Eq
+            //
+
+            // true = A  --> A
+            // false = A --> !A
+            // null = A --> null
+            BinaryExpr {
+                left,
+                op: Eq,
+                right,
+            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
+                match as_bool_lit(*left) {
+                    Some(true) => *right,
+                    Some(false) => Not(right),
+                    None => lit_null(),
                 }
             }
+            // A = true  --> A
+            // A = false --> !A
+            // A = null --> null
+            BinaryExpr {
+                left,
+                op: Eq,
+                right,
+            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
+                match as_bool_lit(*right) {
+                    Some(true) => *left,
+                    Some(false) => Not(left),
+                    None => lit_null(),
+                }
+            }
+
+            //
+            // Rules for NotEq
+            //
+
+            // true != A  --> !A
+            // false != A --> A
+            // null != A --> null
+            BinaryExpr {
+                left,
+                op: NotEq,
+                right,
+            } if is_bool_lit(&left) && info.is_boolean_type(&right)? => {
+                match as_bool_lit(*left) {
+                    Some(true) => Not(right),
+                    Some(false) => *right,
+                    None => lit_null(),
+                }
+            }
+            // A != true  --> !A
+            // A != false --> A
+            // A != null --> null,
+            BinaryExpr {
+                left,
+                op: NotEq,
+                right,
+            } if is_bool_lit(&right) && info.is_boolean_type(&left)? => {
+                match as_bool_lit(*right) {
+                    Some(true) => Not(left),
+                    Some(false) => *left,
+                    None => lit_null(),
+                }
+            }
+
+            //
+            // Rules for OR
+            //
+
+            // true OR A --> true (even if A is null)
+            BinaryExpr {
+                left,
+                op: Or,
+                right: _,
+            } if is_true(&left) => *left,
+            // false OR A --> A
+            BinaryExpr {
+                left,
+                op: Or,
+                right,
+            } if is_false(&left) => *right,
+            // A OR true --> true (even if A is null)
+            BinaryExpr {
+                left: _,
+                op: Or,
+                right,
+            } if is_true(&right) => *right,
+            // A OR false --> A
+            BinaryExpr {
+                left,
+                op: Or,
+                right,
+            } if is_false(&right) => *left,
+            // (..A..) OR A --> (..A..)
+            BinaryExpr {
+                left,
+                op: Or,
+                right,
+            } if expr_contains(&left, &right, Or) => *left,
+            // A OR (..A..) --> (..A..)
+            BinaryExpr {
+                left,
+                op: Or,
+                right,
+            } if expr_contains(&right, &left, Or) => *right,
+            // A OR (A AND B) --> A (if B not null)
+            BinaryExpr {
+                left,
+                op: Or,
+                right,
+            } if !info.nullable(&right)? && is_op_with(And, &right, &left) => *left,
+            // (A AND B) OR A --> A (if B not null)
+            BinaryExpr {
+                left,
+                op: Or,
+                right,
+            } if !info.nullable(&left)? && is_op_with(And, &left, &right) => *right,
+
+            //
+            // Rules for AND
+            //
+
+            // true AND A --> A
+            BinaryExpr {
+                left,
+                op: And,
+                right,
+            } if is_true(&left) => *right,
+            // false AND A --> false (even if A is null)
+            BinaryExpr {
+                left,
+                op: And,
+                right: _,
+            } if is_false(&left) => *left,
+            // A AND true --> A
+            BinaryExpr {
+                left,
+                op: And,
+                right,
+            } if is_true(&right) => *left,
+            // A AND false --> false (even if A is null)
+            BinaryExpr {
+                left: _,
+                op: And,
+                right,
+            } if is_false(&right) => *right,
+            // (..A..) AND A --> (..A..)
+            BinaryExpr {
+                left,
+                op: And,
+                right,
+            } if expr_contains(&left, &right, And) => *left,
+            // A AND (..A..) --> (..A..)
+            BinaryExpr {
+                left,
+                op: And,
+                right,
+            } if expr_contains(&right, &left, And) => *right,
+            // A AND (A OR B) --> A (if B not null)
+            BinaryExpr {
+                left,
+                op: And,
+                right,
+            } if !info.nullable(&right)? && is_op_with(Or, &right, &left) => *left,
+            // (A OR B) AND A --> A (if B not null)
+            BinaryExpr {
+                left,
+                op: And,
+                right,
+            } if !info.nullable(&left)? && is_op_with(Or, &left, &right) => *right,
+
+            //
+            // Rules for Multiply
+            //
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if is_one(&right) => *left,
+            BinaryExpr {
+                left,
+                op: Multiply,
+                right,
+            } if is_one(&left) => *right,
+
+            //
+            // Rules for Divide
+            //
+
+            // A / 1 --> A
+            BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            } if is_one(&right) => *left,
+            // A / null --> null
+            BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            } if left == right && is_null(&left) => *left,
+            // A / A --> 1 (if a is not nullable)
+            BinaryExpr {
+                left,
+                op: Divide,
+                right,
+            } if !info.nullable(&left)? && left == right => lit(1),
+
+            //
+            // Rules for Not
+            //
+
+            // !(!A) --> A
+            Not(inner) if is_not(&inner) => match *inner {
+                Not(negated_inner) => *negated_inner,
+                _ => unreachable!(),
+            },
+
+            //
+            // Rules for Case
+            //
+
+            // CASE
+            //   WHEN X THEN A
+            //   WHEN Y THEN B
+            //   ...
+            //   ELSE Q
+            // END
+            //
+            // ---> (X AND A) OR (Y AND B AND NOT X) OR ... (NOT (X OR Y) AND Q)
+            //
+            // Note: the rationale for this rewrite is that the expr can then be further
+            // simplified using the existing rules for AND/OR
+            Case {
+                expr: None,
+                when_then_expr,
+                else_expr,
+            } if !when_then_expr.is_empty()
+                && when_then_expr.len() < 3 // The rewrite is O(n!) so limit to small number
+                && info.is_boolean_type(&when_then_expr[0].1)? =>
+            {
+                // The disjunction of all the when predicates encountered so far
+                let mut filter_expr = lit(false);
+                // The disjunction of all the cases
+                let mut out_expr = lit(false);
+
+                for (when, then) in when_then_expr {
+                    let case_expr = when
+                        .as_ref()
+                        .clone()
+                        .and(filter_expr.clone().not())
+                        .and(*then);
+
+                    out_expr = out_expr.or(case_expr);
+                    filter_expr = filter_expr.or(*when);
+                }
+
+                if let Some(else_expr) = else_expr {
+                    let case_expr = filter_expr.not().and(*else_expr);
+                    out_expr = out_expr.or(case_expr);
+                }
+
+                // Do a first pass at simplification
+                out_expr.rewrite(self)?
+            }
+
             expr => {
                 // no additional rewrites possible
                 expr
@@ -779,8 +736,8 @@ mod tests {
     use super::*;
     use crate::assert_contains;
     use crate::logical_plan::{
-        and, binary_expr, col, create_udf, lit, lit_timestamp_nano, DFField, Expr,
-        LogicalPlanBuilder,
+        and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
+        Expr, LogicalPlanBuilder,
     };
     use crate::physical_plan::functions::{make_scalar_function, BuiltinScalarFunction};
     use crate::physical_plan::udf::ScalarUDF;
@@ -791,8 +748,8 @@ mod tests {
         let expr_b = lit(true).or(col("c2"));
         let expected = lit(true);
 
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
     }
 
     #[test]
@@ -801,8 +758,8 @@ mod tests {
         let expr_b = col("c2").or(lit(false));
         let expected = col("c2");
 
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
     }
 
     #[test]
@@ -810,7 +767,7 @@ mod tests {
         let expr = col("c2").or(col("c2"));
         let expected = col("c2");
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -819,8 +776,8 @@ mod tests {
         let expr_b = col("c2").and(lit(false));
         let expected = lit(false);
 
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
     }
 
     #[test]
@@ -828,7 +785,7 @@ mod tests {
         let expr = col("c2").and(col("c2"));
         let expected = col("c2");
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -837,8 +794,8 @@ mod tests {
         let expr_b = col("c2").and(lit(true));
         let expected = col("c2");
 
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
     }
 
     #[test]
@@ -847,8 +804,8 @@ mod tests {
         let expr_b = binary_expr(lit(1), Operator::Multiply, col("c2"));
         let expected = col("c2");
 
-        assert_eq!(simplify(&expr_a), expected);
-        assert_eq!(simplify(&expr_b), expected);
+        assert_eq!(simplify(expr_a), expected);
+        assert_eq!(simplify(expr_b), expected);
     }
 
     #[test]
@@ -856,15 +813,24 @@ mod tests {
         let expr = binary_expr(col("c2"), Operator::Divide, lit(1));
         let expected = col("c2");
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_divide_by_same() {
         let expr = binary_expr(col("c2"), Operator::Divide, col("c2"));
+        // if c2 is null, c2 / c2 = null, so can't simplify
+        let expected = expr.clone();
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_divide_by_same_non_null() {
+        let expr = binary_expr(col("c2_non_null"), Operator::Divide, col("c2_non_null"));
         let expected = lit(1);
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -873,21 +839,21 @@ mod tests {
         let expr = (col("c2").gt(lit(5))).and(col("c2").gt(lit(5)));
         let expected = col("c2").gt(lit(5));
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_composed_and() {
-        // ((c > 5) AND (d < 6)) AND (c > 5)
+        // ((c > 5) AND (c1 < 6)) AND (c > 5)
         let expr = binary_expr(
-            binary_expr(col("c2").gt(lit(5)), Operator::And, col("d").lt(lit(6))),
+            binary_expr(col("c2").gt(lit(5)), Operator::And, col("c1").lt(lit(6))),
             Operator::And,
             col("c2").gt(lit(5)),
         );
         let expected =
-            binary_expr(col("c2").gt(lit(5)), Operator::And, col("d").lt(lit(6)));
+            binary_expr(col("c2").gt(lit(5)), Operator::And, col("c1").lt(lit(6)));
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -900,20 +866,91 @@ mod tests {
         );
         let expected = expr.clone();
 
-        assert_eq!(simplify(&expr), expected);
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
     fn test_simplify_or_and() {
-        // (c > 5) OR ((d < 6) AND (c > 5) -- can remove
-        let expr = binary_expr(
-            col("c2").gt(lit(5)),
-            Operator::Or,
-            binary_expr(col("d").lt(lit(6)), Operator::And, col("c2").gt(lit(5))),
-        );
-        let expected = col("c2").gt(lit(5));
+        let l = col("c2").gt(lit(5));
+        let r = binary_expr(col("c1").lt(lit(6)), Operator::And, col("c2").gt(lit(5)));
 
-        assert_eq!(simplify(&expr), expected);
+        // (c2 > 5) OR ((c1 < 6) AND (c2 > 5))
+        let expr = binary_expr(l.clone(), Operator::Or, r.clone());
+
+        // no rewrites if c1 can be null
+        let expected = expr.clone();
+        assert_eq!(simplify(expr), expected);
+
+        // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5)
+        let expr = binary_expr(l, Operator::Or, r);
+
+        // no rewrites if c1 can be null
+        let expected = expr.clone();
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_or_and_non_null() {
+        let l = col("c2_non_null").gt(lit(5));
+        let r = binary_expr(
+            col("c1_non_null").lt(lit(6)),
+            Operator::And,
+            col("c2_non_null").gt(lit(5)),
+        );
+
+        // (c2 > 5) OR ((c1 < 6) AND (c2 > 5)) --> c2 > 5
+        let expr = binary_expr(l.clone(), Operator::Or, r.clone());
+
+        // This is only true if `c1 < 6` is not nullable / can not be null.
+        let expected = col("c2_non_null").gt(lit(5));
+
+        assert_eq!(simplify(expr), expected);
+
+        // ((c1 < 6) AND (c2 > 5)) OR (c2 > 5) --> c2 > 5
+        let expr = binary_expr(l, Operator::Or, r);
+
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_and_or() {
+        let l = col("c2").gt(lit(5));
+        let r = binary_expr(col("c1").lt(lit(6)), Operator::Or, col("c2").gt(lit(5)));
+
+        // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
+        let expr = binary_expr(l.clone(), Operator::And, r.clone());
+
+        // no rewrites if c1 can be null
+        let expected = expr.clone();
+        assert_eq!(simplify(expr), expected);
+
+        // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
+        let expr = binary_expr(l, Operator::And, r);
+        let expected = expr.clone();
+        assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_and_or_non_null() {
+        let l = col("c2_non_null").gt(lit(5));
+        let r = binary_expr(
+            col("c1_non_null").lt(lit(6)),
+            Operator::Or,
+            col("c2_non_null").gt(lit(5)),
+        );
+
+        // (c2 > 5) AND ((c1 < 6) OR (c2 > 5)) --> c2 > 5
+        let expr = binary_expr(l.clone(), Operator::And, r.clone());
+
+        // This is only true if `c1 < 6` is not nullable / can not be null.
+        let expected = col("c2_non_null").gt(lit(5));
+
+        assert_eq!(simplify(expr), expected);
+
+        // ((c1 < 6) OR (c2 > 5)) AND (c2 > 5) --> c2 > 5
+        let expr = binary_expr(l, Operator::And, r);
+
+        assert_eq!(simplify(expr), expected);
     }
 
     #[test]
@@ -921,7 +958,7 @@ mod tests {
         let expr = binary_expr(lit_null(), Operator::And, lit(false));
         let expr_eq = lit(false);
 
-        assert_eq!(simplify(&expr), expr_eq);
+        assert_eq!(simplify(expr), expr_eq);
     }
 
     #[test]
@@ -930,16 +967,16 @@ mod tests {
         let expr_plus = binary_expr(null.clone(), Operator::Divide, null.clone());
         let expr_eq = null;
 
-        assert_eq!(simplify(&expr_plus), expr_eq);
+        assert_eq!(simplify(expr_plus), expr_eq);
     }
 
     #[test]
-    fn test_simplify_do_not_simplify_arithmetic_expr() {
+    fn test_simplify_simplify_arithmetic_expr() {
         let expr_plus = binary_expr(lit(1), Operator::Plus, lit(1));
         let expr_eq = binary_expr(lit(1), Operator::Eq, lit(1));
 
-        assert_eq!(simplify(&expr_plus), expr_plus);
-        assert_eq!(simplify(&expr_eq), expr_eq);
+        assert_eq!(simplify(expr_plus), lit(2));
+        assert_eq!(simplify(expr_eq), lit(true));
     }
 
     // ------------------------------
@@ -974,46 +1011,29 @@ mod tests {
     #[test]
     fn test_const_evaluator_scalar_functions() {
         // concat("foo", "bar") --> "foobar"
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("foo"), lit("bar")],
-            fun: BuiltinScalarFunction::Concat,
-        };
+        let expr = call_fn("concat", vec![lit("foo"), lit("bar")]).unwrap();
         test_evaluate(expr, lit("foobar"));
 
         // ensure arguments are also constant folded
         // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-        let concat1 = Expr::ScalarFunction {
-            args: vec![lit("bar"), lit("baz")],
-            fun: BuiltinScalarFunction::Concat,
-        };
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("foo"), concat1],
-            fun: BuiltinScalarFunction::Concat,
-        };
+        let concat1 = call_fn("concat", vec![lit("bar"), lit("baz")]).unwrap();
+        let expr = call_fn("concat", vec![lit("foo"), concat1]).unwrap();
         test_evaluate(expr, lit("foobarbaz"));
 
         // Check non string arguments
         // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400000000000i64)
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("2020-09-08T12:00:00+00:00")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr =
+            call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
         test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = Expr::ScalarFunction {
-            args: vec![col("a")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = Expr::ScalarFunction {
-            args: vec![col("a")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
         // volatile / stable functions should not be evaluated
@@ -1054,10 +1074,7 @@ mod tests {
     }
 
     fn now_expr() -> Expr {
-        Expr::ScalarFunction {
-            args: vec![],
-            fun: BuiltinScalarFunction::Now,
-        }
+        call_fn("now", vec![]).unwrap()
     }
 
     fn cast_to_int64_expr(expr: Expr) -> Expr {
@@ -1068,10 +1085,7 @@ mod tests {
     }
 
     fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
-        Expr::ScalarFunction {
-            args: vec![lit(arg.into())],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        }
+        call_fn("to_timestamp", vec![lit(arg.into())]).unwrap()
     }
 
     #[test]
@@ -1159,6 +1173,7 @@ mod tests {
     ) {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1182,11 +1197,11 @@ mod tests {
     // ----- Simplifier tests -------
     // ------------------------------
 
-    // TODO rename to simplify
-    fn do_simplify(expr: Expr) -> Expr {
+    fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let mut rewriter = Simplifier::new(vec![&schema]);
-        expr.rewrite(&mut rewriter).expect("expected to simplify")
+        let execution_props = ExecutionProps::new();
+        let info = SimplifyContext::new(vec![&schema], &execution_props);
+        expr.simplify(&info).unwrap()
     }
 
     fn expr_test_schema() -> DFSchemaRef {
@@ -1194,6 +1209,8 @@ mod tests {
             DFSchema::new(vec![
                 DFField::new(None, "c1", DataType::Utf8, true),
                 DFField::new(None, "c2", DataType::Boolean, true),
+                DFField::new(None, "c1_non_null", DataType::Utf8, false),
+                DFField::new(None, "c2_non_null", DataType::Boolean, false),
             ])
             .unwrap(),
         )
@@ -1201,20 +1218,20 @@ mod tests {
 
     #[test]
     fn simplify_expr_not_not() {
-        assert_eq!(do_simplify(col("c2").not().not().not()), col("c2").not(),);
+        assert_eq!(simplify(col("c2").not().not().not()), col("c2").not(),);
     }
 
     #[test]
     fn simplify_expr_null_comparison() {
         // x = null is always null
         assert_eq!(
-            do_simplify(lit(true).eq(lit(ScalarValue::Boolean(None)))),
+            simplify(lit(true).eq(lit(ScalarValue::Boolean(None)))),
             lit(ScalarValue::Boolean(None)),
         );
 
         // null != null is always null
         assert_eq!(
-            do_simplify(
+            simplify(
                 lit(ScalarValue::Boolean(None)).not_eq(lit(ScalarValue::Boolean(None)))
             ),
             lit(ScalarValue::Boolean(None)),
@@ -1222,13 +1239,13 @@ mod tests {
 
         // x != null is always null
         assert_eq!(
-            do_simplify(col("c2").not_eq(lit(ScalarValue::Boolean(None)))),
+            simplify(col("c2").not_eq(lit(ScalarValue::Boolean(None)))),
             lit(ScalarValue::Boolean(None)),
         );
 
         // null = x is always null
         assert_eq!(
-            do_simplify(lit(ScalarValue::Boolean(None)).eq(col("c2"))),
+            simplify(lit(ScalarValue::Boolean(None)).eq(col("c2"))),
             lit(ScalarValue::Boolean(None)),
         );
     }
@@ -1239,16 +1256,16 @@ mod tests {
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
 
         // true = ture -> true
-        assert_eq!(do_simplify(lit(true).eq(lit(true))), lit(true));
+        assert_eq!(simplify(lit(true).eq(lit(true))), lit(true));
 
         // true = false -> false
-        assert_eq!(do_simplify(lit(true).eq(lit(false))), lit(false),);
+        assert_eq!(simplify(lit(true).eq(lit(false))), lit(false),);
 
         // c2 = true -> c2
-        assert_eq!(do_simplify(col("c2").eq(lit(true))), col("c2"));
+        assert_eq!(simplify(col("c2").eq(lit(true))), col("c2"));
 
         // c2 = false => !c2
-        assert_eq!(do_simplify(col("c2").eq(lit(false))), col("c2").not(),);
+        assert_eq!(simplify(col("c2").eq(lit(false))), col("c2").not(),);
     }
 
     #[test]
@@ -1262,25 +1279,8 @@ mod tests {
         // Make sure c1 column to be used in tests is not boolean type
         assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
 
-        // don't fold c1 = true
-        assert_eq!(
-            do_simplify(col("c1").eq(lit(true))),
-            col("c1").eq(lit(true)),
-        );
-
-        // don't fold c1 = false
-        assert_eq!(
-            do_simplify(col("c1").eq(lit(false))),
-            col("c1").eq(lit(false)),
-        );
-
-        // test constant operands
-        assert_eq!(do_simplify(lit(1).eq(lit(true))), lit(1).eq(lit(true)),);
-
-        assert_eq!(
-            do_simplify(lit("a").eq(lit(false))),
-            lit("a").eq(lit(false)),
-        );
+        // don't fold c1 = foo
+        assert_eq!(simplify(col("c1").eq(lit("foo"))), col("c1").eq(lit("foo")),);
     }
 
     #[test]
@@ -1290,15 +1290,15 @@ mod tests {
         assert_eq!(col("c2").get_type(&schema).unwrap(), DataType::Boolean);
 
         // c2 != true -> !c2
-        assert_eq!(do_simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
+        assert_eq!(simplify(col("c2").not_eq(lit(true))), col("c2").not(),);
 
         // c2 != false -> c2
-        assert_eq!(do_simplify(col("c2").not_eq(lit(false))), col("c2"),);
+        assert_eq!(simplify(col("c2").not_eq(lit(false))), col("c2"),);
 
         // test constant
-        assert_eq!(do_simplify(lit(true).not_eq(lit(true))), lit(false),);
+        assert_eq!(simplify(lit(true).not_eq(lit(true))), lit(false),);
 
-        assert_eq!(do_simplify(lit(true).not_eq(lit(false))), lit(true),);
+        assert_eq!(simplify(lit(true).not_eq(lit(false))), lit(true),);
     }
 
     #[test]
@@ -1311,46 +1311,106 @@ mod tests {
         assert_eq!(col("c1").get_type(&schema).unwrap(), DataType::Utf8);
 
         assert_eq!(
-            do_simplify(col("c1").not_eq(lit(true))),
-            col("c1").not_eq(lit(true)),
-        );
-
-        assert_eq!(
-            do_simplify(col("c1").not_eq(lit(false))),
-            col("c1").not_eq(lit(false)),
-        );
-
-        // test constants
-        assert_eq!(
-            do_simplify(lit(1).not_eq(lit(true))),
-            lit(1).not_eq(lit(true)),
-        );
-
-        assert_eq!(
-            do_simplify(lit("a").not_eq(lit(false))),
-            lit("a").not_eq(lit(false)),
+            simplify(col("c1").not_eq(lit("foo"))),
+            col("c1").not_eq(lit("foo")),
         );
     }
 
     #[test]
     fn simplify_expr_case_when_then_else() {
+        // CASE WHERE c2 != false THEN "ok" == "not_ok" ELSE c2 == true
+        // -->
+        // CASE WHERE c2 THEN false ELSE c2
+        // -->
+        // false
         assert_eq!(
-            do_simplify(Expr::Case {
+            simplify(Expr::Case {
                 expr: None,
                 when_then_expr: vec![(
                     Box::new(col("c2").not_eq(lit(false))),
-                    Box::new(lit("ok").eq(lit(true))),
+                    Box::new(lit("ok").eq(lit("not_ok"))),
                 )],
                 else_expr: Some(Box::new(col("c2").eq(lit(true)))),
             }),
-            Expr::Case {
+            col("c2").not().and(col("c2")) // #1716
+        );
+
+        // CASE WHERE c2 != false THEN "ok" == "ok" ELSE c2
+        // -->
+        // CASE WHERE c2 THEN true ELSE c2
+        // -->
+        // c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
                 expr: None,
                 when_then_expr: vec![(
-                    Box::new(col("c2")),
-                    Box::new(lit("ok").eq(lit(true)))
+                    Box::new(col("c2").not_eq(lit(false))),
+                    Box::new(lit("ok").eq(lit("ok"))),
+                )],
+                else_expr: Some(Box::new(col("c2").eq(lit(true)))),
+            })),
+            col("c2").or(col("c2").not().and(col("c2"))) // #1716
+        );
+
+        // CASE WHERE ISNULL(c2) THEN true ELSE c2
+        // -->
+        // ISNULL(c2) OR c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![(
+                    Box::new(col("c2").is_null()),
+                    Box::new(lit(true)),
                 )],
                 else_expr: Some(Box::new(col("c2"))),
-            }
+            })),
+            col("c2")
+                .is_null()
+                .or(col("c2").is_null().not().and(col("c2")))
+        );
+
+        // CASE WHERE c1 then true WHERE c2 then false ELSE true
+        // --> c1 OR (NOT(c1) AND c2 AND FALSE) OR (NOT(c1 OR c2) AND TRUE)
+        // --> c1 OR (NOT(c1 OR c2))
+        // --> NOT(c1) AND c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![
+                    (Box::new(col("c1")), Box::new(lit(true)),),
+                    (Box::new(col("c2")), Box::new(lit(false)),)
+                ],
+                else_expr: Some(Box::new(lit(true))),
+            })),
+            col("c1").or(col("c1").or(col("c2")).not())
+        );
+
+        // CASE WHERE c1 then true WHERE c2 then true ELSE false
+        // --> c1 OR (NOT(c1) AND c2 AND TRUE) OR (NOT(c1 OR c2) AND FALSE)
+        // --> c1 OR (NOT(c1) AND c2)
+        // --> c1 OR c2
+        //
+        // Need to call simplify 2x due to
+        // https://github.com/apache/arrow-datafusion/issues/1160
+        assert_eq!(
+            simplify(simplify(Expr::Case {
+                expr: None,
+                when_then_expr: vec![
+                    (Box::new(col("c1")), Box::new(lit(true)),),
+                    (Box::new(col("c2")), Box::new(lit(false)),)
+                ],
+                else_expr: Some(Box::new(lit(true))),
+            })),
+            col("c1").or(col("c1").or(col("c2")).not())
         );
     }
 
@@ -1362,22 +1422,22 @@ mod tests {
     #[test]
     fn simplify_expr_bool_or() {
         // col || true is always true
-        assert_eq!(do_simplify(col("c2").or(lit(true))), lit(true),);
+        assert_eq!(simplify(col("c2").or(lit(true))), lit(true),);
 
         // col || false is always col
-        assert_eq!(do_simplify(col("c2").or(lit(false))), col("c2"),);
+        assert_eq!(simplify(col("c2").or(lit(false))), col("c2"),);
 
         // true || null is always true
-        assert_eq!(do_simplify(lit(true).or(lit_null())), lit(true),);
+        assert_eq!(simplify(lit(true).or(lit_null())), lit(true),);
 
         // null || true is always true
-        assert_eq!(do_simplify(lit_null().or(lit(true))), lit(true),);
+        assert_eq!(simplify(lit_null().or(lit(true))), lit(true),);
 
         // false || null is always null
-        assert_eq!(do_simplify(lit(false).or(lit_null())), lit_null(),);
+        assert_eq!(simplify(lit(false).or(lit_null())), lit_null(),);
 
         // null || false is always null
-        assert_eq!(do_simplify(lit_null().or(lit(false))), lit_null(),);
+        assert_eq!(simplify(lit_null().or(lit(false))), lit_null(),);
 
         // ( c1 BETWEEN Int32(0) AND Int32(10) ) OR Boolean(NULL)
         // it can be either NULL or  TRUE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10)`
@@ -1389,28 +1449,28 @@ mod tests {
             high: Box::new(lit(10)),
         };
         let expr = expr.or(lit_null());
-        let result = do_simplify(expr.clone());
+        let result = simplify(expr.clone());
         assert_eq!(expr, result);
     }
 
     #[test]
     fn simplify_expr_bool_and() {
         // col & true is always col
-        assert_eq!(do_simplify(col("c2").and(lit(true))), col("c2"),);
+        assert_eq!(simplify(col("c2").and(lit(true))), col("c2"),);
         // col & false is always false
-        assert_eq!(do_simplify(col("c2").and(lit(false))), lit(false),);
+        assert_eq!(simplify(col("c2").and(lit(false))), lit(false),);
 
         // true && null is always null
-        assert_eq!(do_simplify(lit(true).and(lit_null())), lit_null(),);
+        assert_eq!(simplify(lit(true).and(lit_null())), lit_null(),);
 
         // null && true is always null
-        assert_eq!(do_simplify(lit_null().and(lit(true))), lit_null(),);
+        assert_eq!(simplify(lit_null().and(lit(true))), lit_null(),);
 
         // false && null is always false
-        assert_eq!(do_simplify(lit(false).and(lit_null())), lit(false),);
+        assert_eq!(simplify(lit(false).and(lit_null())), lit(false),);
 
         // null && false is always false
-        assert_eq!(do_simplify(lit_null().and(lit(false))), lit(false),);
+        assert_eq!(simplify(lit_null().and(lit(false))), lit(false),);
 
         // c1 BETWEEN Int32(0) AND Int32(10) AND Boolean(NULL)
         // it can be either NULL or FALSE depending on the value of `c1 BETWEEN Int32(0) AND Int32(10`
@@ -1422,7 +1482,7 @@ mod tests {
             high: Box::new(lit(10)),
         };
         let expr = expr.and(lit_null());
-        let result = do_simplify(expr.clone());
+        let result = simplify(expr.clone());
         assert_eq!(expr, result);
     }
 
@@ -1473,12 +1533,12 @@ mod tests {
         );
     }
 
-    // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
     #[test]
     fn test_simplify_optimized_plan_with_composed_and() {
         let table_scan = test_table_scan();
+        // ((c > 5) AND (d < 6)) AND (c > 5) --> (c > 5) AND (d < 6)
         let plan = LogicalPlanBuilder::from(table_scan)
-            .project(vec![col("a")])
+            .project(vec![col("a"), col("b")])
             .unwrap()
             .filter(and(
                 and(col("a").gt(lit(5)), col("b").lt(lit(6))),
@@ -1492,7 +1552,7 @@ mod tests {
             &plan,
             "\
             Filter: #test.a > Int32(5) AND #test.b < Int32(6) AS test.a > Int32(5) AND test.b < Int32(6) AND test.a > Int32(5)\
-            \n  Projection: #test.a\
+            \n  Projection: #test.a, #test.b\
 	        \n    TableScan: test projection=None",
         );
     }
@@ -1668,6 +1728,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let err = rule
@@ -1684,6 +1745,7 @@ mod tests {
         let rule = SimplifyExpressions::new();
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
+            var_providers: None,
         };
 
         let optimized_plan = rule
@@ -1703,7 +1765,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected = "Projection: TimestampNanosecond(1599566400000000000) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
+        let expected = "Projection: TimestampNanosecond(1599566400000000000, None) AS totimestamp(Utf8(\"2020-09-08T12:00:00+00:00\"))\
             \n  TableScan: test projection=None"
             .to_string();
         let actual = get_optimized_plan_formatted(&plan, &Utc::now());
@@ -1780,7 +1842,7 @@ mod tests {
         // expect the same timestamp appears in both exprs
         let actual = get_optimized_plan_formatted(&plan, &time);
         let expected = format!(
-            "Projection: TimestampNanosecond({}) AS now(), TimestampNanosecond({}) AS t2\
+            "Projection: TimestampNanosecond({}, Some(\"UTC\")) AS now(), TimestampNanosecond({}, Some(\"UTC\")) AS t2\
             \n  TableScan: test projection=None",
             time.timestamp_nanos(),
             time.timestamp_nanos()

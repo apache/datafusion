@@ -38,7 +38,9 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -72,7 +74,9 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS).unwrap();
+        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS)
+            .unwrap()
+            .to_string();
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();
@@ -248,6 +252,32 @@ pub fn aggr_test_schema() -> SchemaRef {
         Field::new("c11", DataType::Float32, false),
         Field::new("c12", DataType::Float64, false),
         Field::new("c13", DataType::Utf8, false),
+    ]);
+
+    Arc::new(schema)
+}
+
+/// Get the schema for the aggregate_test_* csv files with an additional filed not present in the files.
+pub fn aggr_test_schema_with_missing_col() -> SchemaRef {
+    let mut f1 = Field::new("c1", DataType::Utf8, false);
+    f1.set_metadata(Some(BTreeMap::from_iter(
+        vec![("testing".into(), "test".into())].into_iter(),
+    )));
+    let schema = Schema::new(vec![
+        f1,
+        Field::new("c2", DataType::UInt32, false),
+        Field::new("c3", DataType::Int8, false),
+        Field::new("c4", DataType::Int16, false),
+        Field::new("c5", DataType::Int32, false),
+        Field::new("c6", DataType::Int64, false),
+        Field::new("c7", DataType::UInt8, false),
+        Field::new("c8", DataType::UInt16, false),
+        Field::new("c9", DataType::UInt32, false),
+        Field::new("c10", DataType::UInt64, false),
+        Field::new("c11", DataType::Float32, false),
+        Field::new("c12", DataType::Float64, false),
+        Field::new("c13", DataType::Utf8, false),
+        Field::new("missing_col", DataType::Int64, true),
     ]);
 
     Arc::new(schema)

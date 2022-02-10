@@ -22,15 +22,17 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::PhysicalSortExpr;
 use super::{
-    common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::error::{DataFusionError, Result};
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
+use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -47,7 +49,7 @@ pub struct MemoryExec {
 }
 
 impl fmt::Debug for MemoryExec {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "partitions: [...]")?;
         write!(f, "schema: {:?}", self.projected_schema)?;
         write!(f, "projection: {:?}", self.projection)
@@ -76,6 +78,14 @@ impl ExecutionPlan for MemoryExec {
         Partitioning::UnknownPartitioning(self.partitions.len())
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         _: Vec<Arc<dyn ExecutionPlan>>,
@@ -86,7 +96,11 @@ impl ExecutionPlan for MemoryExec {
         )))
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
             self.projected_schema.clone(),
@@ -131,24 +145,7 @@ impl MemoryExec {
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
-        let projected_schema = match &projection {
-            Some(columns) => {
-                let fields: Result<Vec<Field>> = columns
-                    .iter()
-                    .map(|i| {
-                        if *i < schema.fields().len() {
-                            Ok(schema.field(*i).clone())
-                        } else {
-                            Err(DataFusionError::Internal(
-                                "Projection index out of range".to_string(),
-                            ))
-                        }
-                    })
-                    .collect();
-                Arc::new(Schema::new(fields?))
-            }
-            None => Arc::clone(&schema),
-        };
+        let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
             partitions: partitions.to_vec(),
             schema,
@@ -159,7 +156,7 @@ impl MemoryExec {
 }
 
 /// Iterator over batches
-pub(crate) struct MemoryStream {
+pub struct MemoryStream {
     /// Vector of record batches
     data: Vec<RecordBatch>,
     /// Schema representing the data
@@ -196,14 +193,14 @@ impl Stream for MemoryStream {
         Poll::Ready(if self.index < self.data.len() {
             self.index += 1;
             let batch = &self.data[self.index - 1];
-            // apply projection
-            match &self.projection {
-                Some(columns) => Some(RecordBatch::try_new(
-                    self.schema.clone(),
-                    columns.iter().map(|i| batch.column(*i).clone()).collect(),
-                )),
-                None => Some(Ok(batch.clone())),
-            }
+
+            // return just the columns requested
+            let batch = match self.projection.as_ref() {
+                Some(columns) => batch.project(columns)?,
+                None => batch.clone(),
+            };
+
+            Some(Ok(batch))
         } else {
             None
         })
@@ -224,6 +221,7 @@ impl RecordBatchStream for MemoryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::ColumnStatistics;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
@@ -240,10 +238,10 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 2, 3])),
-                Arc::new(Int32Array::from(vec![4, 5, 6])),
+                Arc::new(Int32Array::from_slice(&[1, 2, 3])),
+                Arc::new(Int32Array::from_slice(&[4, 5, 6])),
                 Arc::new(Int32Array::from(vec![None, None, Some(9)])),
-                Arc::new(Int32Array::from(vec![7, 8, 9])),
+                Arc::new(Int32Array::from_slice(&[7, 8, 9])),
             ],
         )?;
 
@@ -252,6 +250,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&[vec![batch]], schema, Some(vec![2, 1]))?;
@@ -277,7 +276,7 @@ mod tests {
         );
 
         // scan with projection
-        let mut it = executor.execute(0).await?;
+        let mut it = executor.execute(0, runtime).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -289,6 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_without_projection() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&[vec![batch]], schema, None)?;
@@ -325,7 +325,7 @@ mod tests {
             ])
         );
 
-        let mut it = executor.execute(0).await?;
+        let mut it = executor.execute(0, runtime).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(4, batch1.schema().fields().len());
         assert_eq!(4, batch1.num_columns());

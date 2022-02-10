@@ -20,8 +20,9 @@ use arrow::compute::kernels::aggregate;
 use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-
+use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
@@ -34,7 +35,7 @@ use datafusion::logical_plan::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
+    project_schema, ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
 
@@ -45,6 +46,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Projection;
 
 //// Custom source dataframe tests ////
@@ -71,8 +73,8 @@ macro_rules! TEST_CUSTOM_RECORD_BATCH {
         RecordBatch::try_new(
             TEST_CUSTOM_SCHEMA_REF!(),
             vec![
-                Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
-                Arc::new(Int32Array::from(vec![2, 12, 12, 120])),
+                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
             ],
         )
     };
@@ -107,15 +109,13 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
     fn schema(&self) -> SchemaRef {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
-        match &self.projection {
-            None => schema,
-            Some(p) => Arc::new(Schema::new(
-                p.iter().map(|i| schema.field(*i).clone()).collect(),
-            )),
-        }
+        project_schema(&schema, self.projection.as_ref()).expect("projected schema")
     }
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
@@ -132,7 +132,11 @@ impl ExecutionPlan for CustomExecutionPlan {
             ))
         }
     }
-    async fn execute(&self, _partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        _partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
 
@@ -196,7 +200,6 @@ impl TableProvider for CustomTableProvider {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        _batch_size: usize,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -243,7 +246,8 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let batches = collect(physical_plan).await?;
+    let runtime = ctx.state.lock().runtime_env.clone();
+    let batches = collect(physical_plan, runtime).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
     assert_eq!(1, batches[0].num_columns());
@@ -282,14 +286,15 @@ async fn optimizers_catch_all_statistics() {
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(UInt64Array::from(vec![4])),
-            Arc::new(Int32Array::from(vec![1])),
-            Arc::new(Int32Array::from(vec![100])),
+            Arc::new(UInt64Array::from_slice(&[4])),
+            Arc::new(Int32Array::from_slice(&[1])),
+            Arc::new(Int32Array::from_slice(&[100])),
         ],
     )
     .unwrap();
 
-    let actual = collect(physical_plan).await.unwrap();
+    let runtime = ctx.state.lock().runtime_env.clone();
+    let actual = collect(physical_plan, runtime).await.unwrap();
 
     assert_eq!(actual.len(), 1);
     assert_eq!(format!("{:?}", actual[0]), format!("{:?}", expected));

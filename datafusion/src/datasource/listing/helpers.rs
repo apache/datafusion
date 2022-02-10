@@ -37,7 +37,7 @@ use log::debug;
 use crate::{
     error::Result,
     execution::context::ExecutionContext,
-    logical_plan::{self, Expr, ExpressionVisitor, Recursion},
+    logical_plan::{self, Expr, ExprVisitable, ExpressionVisitor, Recursion},
     physical_plan::functions::Volatility,
     scalar::ScalarValue,
 };

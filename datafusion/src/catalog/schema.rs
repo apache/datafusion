@@ -18,9 +18,10 @@
 //! Describes the interface and built-in implementations of schemas,
 //! representing collections of named tables.
 
+use parking_lot::RwLock;
 use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -79,18 +80,24 @@ impl MemorySchemaProvider {
     }
 }
 
+impl Default for MemorySchemaProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SchemaProvider for MemorySchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn table_names(&self) -> Vec<String> {
-        let tables = self.tables.read().unwrap();
+        let tables = self.tables.read();
         tables.keys().cloned().collect()
     }
 
     fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
-        let tables = self.tables.read().unwrap();
+        let tables = self.tables.read();
         tables.get(name).cloned()
     }
 
@@ -105,17 +112,17 @@ impl SchemaProvider for MemorySchemaProvider {
                 name
             )));
         }
-        let mut tables = self.tables.write().unwrap();
+        let mut tables = self.tables.write();
         Ok(tables.insert(name, table))
     }
 
     fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        let mut tables = self.tables.write().unwrap();
+        let mut tables = self.tables.write();
         Ok(tables.remove(name))
     }
 
     fn table_exist(&self, name: &str) -> bool {
-        let tables = self.tables.read().unwrap();
+        let tables = self.tables.read();
         tables.contains_key(name)
     }
 }

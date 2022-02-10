@@ -37,12 +37,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::execution::context::ExecutionProps;
+use crate::physical_plan::planner::create_physical_expr;
+use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
-    execution::context::ExecutionContextState,
     logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
-    physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
+    physical_plan::{ColumnarValue, PhysicalExpr},
 };
 
 /// Interface to pass statistics information to [`PruningPredicates`]
@@ -75,6 +77,12 @@ pub trait PruningStatistics {
     /// return the number of containers (e.g. row groups) being
     /// pruned with these statistics
     fn num_containers(&self) -> usize;
+
+    /// return the number of null values for the named column as an
+    /// `Option<UInt64Array>`.
+    ///
+    /// Note: the returned array must contain `num_containers()` rows.
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef>;
 }
 
 /// Evaluates filter expressions on statistics in order to
@@ -122,12 +130,14 @@ impl PruningPredicate {
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
         let stat_dfschema = DFSchema::try_from(stat_schema.clone())?;
-        let execution_context_state = ExecutionContextState::new();
-        let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
+
+        // TODO allow these properties to be passed in
+        let execution_props = ExecutionProps::new();
+        let predicate_expr = create_physical_expr(
             &logical_predicate_expr,
             &stat_dfschema,
             &stat_schema,
-            &execution_context_state,
+            &execution_props,
         )?;
         Ok(Self {
             schema,
@@ -200,7 +210,7 @@ impl PruningPredicate {
 struct RequiredStatColumns {
     /// The statistics required to evaluate this predicate:
     /// * The unqualified column in the input schema
-    /// * Statistics type (e.g. Min or Max)
+    /// * Statistics type (e.g. Min or Max or Null_Count)
     /// * The field the statistics value should be placed in for
     ///   pruning predicate evaluation
     columns: Vec<(Column, StatisticsType, Field)>,
@@ -281,6 +291,22 @@ impl RequiredStatColumns {
     ) -> Result<Expr> {
         self.stat_column_expr(column, column_expr, field, StatisticsType::Max, "max")
     }
+
+    /// rewrite col --> col_null_count
+    fn null_count_column_expr(
+        &mut self,
+        column: &Column,
+        column_expr: &Expr,
+        field: &Field,
+    ) -> Result<Expr> {
+        self.stat_column_expr(
+            column,
+            column_expr,
+            field,
+            StatisticsType::NullCount,
+            "null_count",
+        )
+    }
 }
 
 impl From<Vec<(Column, StatisticsType, Field)>> for RequiredStatColumns {
@@ -329,6 +355,7 @@ fn build_statistics_record_batch<S: PruningStatistics>(
         let array = match statistics_type {
             StatisticsType::Min => statistics.min_values(column),
             StatisticsType::Max => statistics.max_values(column),
+            StatisticsType::NullCount => statistics.null_counts(column),
         };
         let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
 
@@ -582,6 +609,32 @@ fn build_single_column_expr(
     }
 }
 
+/// Given an expression reference to `expr`, if `expr` is a column expression,
+/// returns a pruning expression in terms of IsNull that will evaluate to true
+/// if the column may contain null, and false if definitely does not
+/// contain null.
+fn build_is_null_column_expr(
+    expr: &Expr,
+    schema: &Schema,
+    required_columns: &mut RequiredStatColumns,
+) -> Option<Expr> {
+    match expr {
+        Expr::Column(ref col) => {
+            let field = schema.field_with_name(&col.name).ok()?;
+
+            let null_count_field = &Field::new(field.name(), DataType::UInt64, false);
+            required_columns
+                .null_count_column_expr(col, expr, null_count_field)
+                .map(|null_count_column_expr| {
+                    // IsNull(column) => null_count > 0
+                    null_count_column_expr.gt(lit::<u64>(0))
+                })
+                .ok()
+        }
+        _ => None,
+    }
+}
+
 /// Translate logical filter expression into pruning predicate
 /// expression that will evaluate to FALSE if it can be determined no
 /// rows between the min/max values could pass the predicates.
@@ -602,6 +655,11 @@ fn build_predicate_expression(
     // predicate expression can only be a binary expression
     let (left, op, right) = match expr {
         Expr::BinaryExpr { left, op, right } => (left, *op, right),
+        Expr::IsNull(expr) => {
+            let expr = build_is_null_column_expr(expr, schema, required_columns)
+                .unwrap_or(unhandled);
+            return Ok(expr);
+        }
         Expr::Column(col) => {
             let expr = build_single_column_expr(col, schema, required_columns, false)
                 .unwrap_or(unhandled);
@@ -702,19 +760,20 @@ fn build_statistics_expr(expr_builder: &mut PruningExpressionBuilder) -> Result<
 enum StatisticsType {
     Min,
     Max,
+    NullCount,
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::{
         array::{BinaryArray, Int32Array, Int64Array, StringArray},
         datatypes::{DataType, TimeUnit},
     };
+    use std::collections::HashMap;
 
     #[derive(Debug)]
     /// Test for container stats
@@ -812,6 +871,10 @@ mod tests {
                 .map(|container_stats| container_stats.len())
                 .unwrap_or(0)
         }
+
+        fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+            None
+        }
     }
 
     /// Returns the specified min/max container values
@@ -832,6 +895,10 @@ mod tests {
 
         fn num_containers(&self) -> usize {
             self.num_containers
+        }
+
+        fn null_counts(&self, _column: &Column) -> Option<ArrayRef> {
+            None
         }
     }
 
@@ -972,7 +1039,7 @@ mod tests {
 
         // Note the statistics return binary (which can't be cast to string)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from(vec![&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::from_slice(&[&[255u8] as &[u8]]))),
             max_values: None,
             num_containers: 1,
         };

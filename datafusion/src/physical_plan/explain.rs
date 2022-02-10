@@ -30,7 +30,9 @@ use crate::{
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
 
-use super::SendableRecordBatchStream;
+use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
+use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
@@ -87,6 +89,14 @@ impl ExecutionPlan for ExplainExec {
         Partitioning::UnknownPartitioning(1)
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -101,7 +111,11 @@ impl ExecutionPlan for ExplainExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "ExplainExec invalid partition {}",
@@ -141,9 +155,13 @@ impl ExecutionPlan for ExplainExec {
             ],
         )?;
 
+        let metrics = ExecutionPlanMetricsSet::new();
+        let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
+
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema.clone(),
             vec![Arc::new(record_batch)],
+            tracking_metrics,
         )))
     }
 

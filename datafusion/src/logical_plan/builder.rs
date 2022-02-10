@@ -20,11 +20,12 @@
 use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-    listing::{ListingOptions, ListingTable},
+    listing::{ListingOptions, ListingTable, ListingTableConfig},
     object_store::ObjectStore,
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
+use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
     TableScan, ToStringifiedPlan, Union, Window,
@@ -46,8 +47,8 @@ use std::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, Column, CrossJoin, DFField, DFSchema,
-    DFSchemaRef, Limit, Partitioning, Repartition, Values,
+    columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column,
+    CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -242,8 +243,10 @@ impl LogicalPlanBuilder {
                     .await?
             }
         };
-        let provider =
-            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
 
         Self::scan(table_name, Arc::new(provider), projection)
     }
@@ -292,8 +295,11 @@ impl LogicalPlanBuilder {
             .infer_schema(Arc::clone(&object_store), &path)
             .await?;
 
-        let provider =
-            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        let provider = ListingTable::try_new(config)?;
         Self::scan(table_name, Arc::new(provider), projection)
     }
 
@@ -338,8 +344,10 @@ impl LogicalPlanBuilder {
                     .await?
             }
         };
-        let provider =
-            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
 
         Self::scan(table_name, Arc::new(provider), projection)
     }
@@ -521,6 +529,8 @@ impl LogicalPlanBuilder {
         &self,
         exprs: impl IntoIterator<Item = impl Into<Expr>> + Clone,
     ) -> Result<Self> {
+        let exprs = rewrite_sort_cols_by_aggs(exprs, &self.plan)?;
+
         let schema = self.plan.schema();
 
         // Collect sort columns that are missing in the input plan's schema
@@ -530,7 +540,7 @@ impl LogicalPlanBuilder {
             .into_iter()
             .try_for_each::<_, Result<()>>(|expr| {
                 let mut columns: HashSet<Column> = HashSet::new();
-                utils::expr_to_columns(&expr.into(), &mut columns)?;
+                utils::expr_to_columns(&expr, &mut columns)?;
 
                 columns.into_iter().for_each(|c| {
                     if schema.field_from_column(&c).is_err() {
@@ -593,6 +603,17 @@ impl LogicalPlanBuilder {
         self.join_detailed(right, join_type, join_keys, false)
     }
 
+    fn normalize(
+        plan: &LogicalPlan,
+        column: impl Into<Column> + Clone,
+    ) -> Result<Column> {
+        let schemas = plan.all_schemas();
+        let using_columns = plan.using_columns()?;
+        column
+            .into()
+            .normalize_with_schemas(&schemas, &using_columns)
+    }
+
     /// Apply a join with on constraint and specified null equality
     /// If null_equals_null is true then null == null, else null != null
     pub fn join_detailed(
@@ -631,7 +652,10 @@ impl LogicalPlanBuilder {
                             match (l_is_left, l_is_right, r_is_left, r_is_right) {
                                 (_, Ok(_), Ok(_), _) => (Ok(r), Ok(l)),
                                 (Ok(_), _, _, Ok(_)) => (Ok(l), Ok(r)),
-                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                                _ => (
+                                    Self::normalize(&self.plan, l),
+                                    Self::normalize(right, r),
+                                ),
                             }
                         }
                         (Some(lr), None) => {
@@ -641,9 +665,12 @@ impl LogicalPlanBuilder {
                                 right.schema().field_with_qualified_name(lr, &l.name);
 
                             match (l_is_left, l_is_right) {
-                                (Ok(_), _) => (Ok(l), r.normalize(right)),
-                                (_, Ok(_)) => (r.normalize(&self.plan), Ok(l)),
-                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                                (Ok(_), _) => (Ok(l), Self::normalize(right, r)),
+                                (_, Ok(_)) => (Self::normalize(&self.plan, r), Ok(l)),
+                                _ => (
+                                    Self::normalize(&self.plan, l),
+                                    Self::normalize(right, r),
+                                ),
                             }
                         }
                         (None, Some(rr)) => {
@@ -653,22 +680,25 @@ impl LogicalPlanBuilder {
                                 right.schema().field_with_qualified_name(rr, &r.name);
 
                             match (r_is_left, r_is_right) {
-                                (Ok(_), _) => (Ok(r), l.normalize(right)),
-                                (_, Ok(_)) => (l.normalize(&self.plan), Ok(r)),
-                                _ => (l.normalize(&self.plan), r.normalize(right)),
+                                (Ok(_), _) => (Ok(r), Self::normalize(right, l)),
+                                (_, Ok(_)) => (Self::normalize(&self.plan, l), Ok(r)),
+                                _ => (
+                                    Self::normalize(&self.plan, l),
+                                    Self::normalize(right, r),
+                                ),
                             }
                         }
                         (None, None) => {
                             let mut swap = false;
-                            let left_key =
-                                l.clone().normalize(&self.plan).or_else(|_| {
+                            let left_key = Self::normalize(&self.plan, l.clone())
+                                .or_else(|_| {
                                     swap = true;
-                                    l.normalize(right)
+                                    Self::normalize(right, l)
                                 });
                             if swap {
-                                (r.normalize(&self.plan), left_key)
+                                (Self::normalize(&self.plan, r), left_key)
                             } else {
-                                (left_key, r.normalize(right))
+                                (left_key, Self::normalize(right, r))
                             }
                         }
                     }
@@ -703,11 +733,11 @@ impl LogicalPlanBuilder {
         let left_keys: Vec<Column> = using_keys
             .clone()
             .into_iter()
-            .map(|c| c.into().normalize(&self.plan))
+            .map(|c| Self::normalize(&self.plan, c))
             .collect::<Result<_>>()?;
         let right_keys: Vec<Column> = using_keys
             .into_iter()
-            .map(|c| c.into().normalize(right))
+            .map(|c| Self::normalize(right, c))
             .collect::<Result<_>>()?;
 
         let on: Vec<(_, _)> = left_keys.into_iter().zip(right_keys.into_iter()).collect();
@@ -1148,7 +1178,7 @@ mod tests {
 
         // id column should only show up once in projection
         let expected = "Projection: #t1.id, #t1.first_name, #t1.last_name, #t1.state, #t1.salary, #t2.first_name, #t2.last_name, #t2.state, #t2.salary\
-        \n  Join: Using #t1.id = #t2.id\
+        \n  Inner Join: Using #t1.id = #t2.id\
         \n    TableScan: t1 projection=None\
         \n    TableScan: t2 projection=None";
 

@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
 use crate::client::BallistaClient;
-use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 
 use crate::utils::WrappedStream;
@@ -28,11 +27,14 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, Statistics,
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, SendableRecordBatchStream,
+    Statistics,
 };
 use datafusion::{
     error::{DataFusionError, Result},
@@ -84,6 +86,14 @@ impl ExecutionPlan for ShuffleReaderExec {
         Partitioning::UnknownPartitioning(self.partition.len())
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }
@@ -100,7 +110,8 @@ impl ExecutionPlan for ShuffleReaderExec {
     async fn execute(
         &self,
         partition: usize,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+        _runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         info!("ShuffleReaderExec::execute({})", partition);
 
         let fetch_time =

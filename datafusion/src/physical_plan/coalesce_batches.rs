@@ -29,6 +29,7 @@ use crate::physical_plan::{
     SendableRecordBatchStream,
 };
 
+use crate::execution::runtime_env::RuntimeEnv;
 use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
@@ -37,6 +38,7 @@ use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, MetricsSet};
 use super::{metrics::ExecutionPlanMetricsSet, Statistics};
 
@@ -96,6 +98,14 @@ impl ExecutionPlan for CoalesceBatchesExec {
         self.input.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -111,9 +121,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream {
-            input: self.input.execute(partition).await?,
+            input: self.input.execute(partition, runtime).await?,
             schema: self.input.schema(),
             target_batch_size: self.target_batch_size,
             buffer: Vec::new(),
@@ -291,7 +305,7 @@ pub fn concat_batches(
 mod tests {
     use super::*;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
-    use arrow::array::UInt32Array;
+    use crate::test::create_vec_batches;
     use arrow::datatypes::{DataType, Field, Schema};
 
     #[tokio::test(flavor = "multi_thread")]
@@ -319,23 +333,6 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
     }
 
-    fn create_vec_batches(schema: &Arc<Schema>, num_batches: usize) -> Vec<RecordBatch> {
-        let batch = create_batch(schema);
-        let mut vec = Vec::with_capacity(num_batches);
-        for _ in 0..num_batches {
-            vec.push(batch.clone());
-        }
-        vec
-    }
-
-    fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(UInt32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]))],
-        )
-        .unwrap()
-    }
-
     async fn coalesce_batches(
         schema: &SchemaRef,
         input_partitions: Vec<Vec<RecordBatch>>,
@@ -351,9 +348,10 @@ mod tests {
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();
         let mut output_partitions = Vec::with_capacity(output_partition_count);
+        let runtime = Arc::new(RuntimeEnv::default());
         for i in 0..output_partition_count {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i).await?;
+            let mut stream = exec.execute(i, runtime.clone()).await?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);

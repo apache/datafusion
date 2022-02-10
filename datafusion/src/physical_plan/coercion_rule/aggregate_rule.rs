@@ -17,14 +17,19 @@
 
 //! Support the coercion rule for aggregate function.
 
-use crate::arrow::datatypes::Schema;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::aggregates::AggregateFunction;
 use crate::physical_plan::expressions::{
-    is_avg_support_arg_type, is_sum_support_arg_type, try_cast,
+    is_avg_support_arg_type, is_correlation_support_arg_type,
+    is_covariance_support_arg_type, is_stddev_support_arg_type, is_sum_support_arg_type,
+    is_variance_support_arg_type, try_cast,
 };
 use crate::physical_plan::functions::{Signature, TypeSignature};
 use crate::physical_plan::PhysicalExpr;
+use crate::{
+    arrow::datatypes::Schema,
+    physical_plan::expressions::is_approx_percentile_cont_supported_arg_type,
+};
 use arrow::datatypes::DataType;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -36,24 +41,9 @@ pub(crate) fn coerce_types(
     input_types: &[DataType],
     signature: &Signature,
 ) -> Result<Vec<DataType>> {
-    match signature.type_signature {
-        TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
-            if input_types.len() != agg_count {
-                return Err(DataFusionError::Plan(format!(
-                    "The function {:?} expects {:?} arguments, but {:?} were provided",
-                    agg_fun,
-                    agg_count,
-                    input_types.len()
-                )));
-            }
-        }
-        _ => {
-            return Err(DataFusionError::Internal(format!(
-                "Aggregate functions do not support this {:?}",
-                signature
-            )));
-        }
-    };
+    // Validate input_types matches (at least one of) the func signature.
+    check_arg_count(agg_fun, input_types, &signature.type_signature)?;
+
     match agg_fun {
         AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
             Ok(input_types.to_vec())
@@ -86,7 +76,147 @@ pub(crate) fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
+        AggregateFunction::Variance => {
+            if !is_variance_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::VariancePop => {
+            if !is_variance_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::Covariance => {
+            if !is_covariance_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::CovariancePop => {
+            if !is_covariance_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::Stddev => {
+            if !is_stddev_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::StddevPop => {
+            if !is_stddev_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::Correlation => {
+            if !is_correlation_support_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::ApproxPercentileCont => {
+            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            if !matches!(input_types[1], DataType::Float64) {
+                return Err(DataFusionError::Plan(format!(
+                    "The percentile argument for {:?} must be Float64, not {:?}.",
+                    agg_fun, input_types[1]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::ApproxMedian => {
+            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
     }
+}
+
+/// Validate the length of `input_types` matches the `signature` for `agg_fun`.
+///
+/// This method DOES NOT validate the argument types - only that (at least one,
+/// in the case of [`TypeSignature::OneOf`]) signature matches the desired
+/// number of input types.
+fn check_arg_count(
+    agg_fun: &AggregateFunction,
+    input_types: &[DataType],
+    signature: &TypeSignature,
+) -> Result<()> {
+    match signature {
+        TypeSignature::Uniform(agg_count, _) | TypeSignature::Any(agg_count) => {
+            if input_types.len() != *agg_count {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} expects {:?} arguments, but {:?} were provided",
+                    agg_fun,
+                    agg_count,
+                    input_types.len()
+                )));
+            }
+        }
+        TypeSignature::Exact(types) => {
+            if types.len() != input_types.len() {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} expects {:?} arguments, but {:?} were provided",
+                    agg_fun,
+                    types.len(),
+                    input_types.len()
+                )));
+            }
+        }
+        TypeSignature::OneOf(variants) => {
+            let ok = variants
+                .iter()
+                .any(|v| check_arg_count(agg_fun, input_types, v).is_ok());
+            if !ok {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not accept {:?} function arguments.",
+                    agg_fun,
+                    input_types.len()
+                )));
+            }
+        }
+        _ => {
+            return Err(DataFusionError::Internal(format!(
+                "Aggregate functions do not support this {:?}",
+                signature
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -193,8 +323,7 @@ mod tests {
         let input_types = vec![
             vec![DataType::Int32],
             vec![DataType::Float32],
-            // support the decimal data type
-            // vec![DataType::Decimal(20, 3)],
+            vec![DataType::Decimal(20, 3)],
         ];
         for fun in funs {
             for input_type in &input_types {
@@ -202,6 +331,30 @@ mod tests {
                 let result = coerce_types(&fun, input_type, &signature);
                 assert_eq!(*input_type, result.unwrap());
             }
+        }
+
+        // ApproxPercentileCont input types
+        let input_types = vec![
+            vec![DataType::Int8, DataType::Float64],
+            vec![DataType::Int16, DataType::Float64],
+            vec![DataType::Int32, DataType::Float64],
+            vec![DataType::Int64, DataType::Float64],
+            vec![DataType::UInt8, DataType::Float64],
+            vec![DataType::UInt16, DataType::Float64],
+            vec![DataType::UInt32, DataType::Float64],
+            vec![DataType::UInt64, DataType::Float64],
+            vec![DataType::Float32, DataType::Float64],
+            vec![DataType::Float64, DataType::Float64],
+        ];
+        for input_type in &input_types {
+            let signature =
+                aggregates::signature(&AggregateFunction::ApproxPercentileCont);
+            let result = coerce_types(
+                &AggregateFunction::ApproxPercentileCont,
+                input_type,
+                &signature,
+            );
+            assert_eq!(*input_type, result.unwrap());
         }
     }
 }

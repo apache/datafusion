@@ -20,15 +20,16 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use parking_lot::Mutex;
 use std::fs::File;
 use std::iter::Iterator;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{any::Any, pin::Pin};
 
 use crate::error::BallistaError;
-use crate::memory_stream::MemoryStream;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
@@ -44,14 +45,18 @@ use datafusion::arrow::ipc::reader::FileReader;
 use datafusion::arrow::ipc::writer::FileWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
+use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::Partitioning::RoundRobinBatch;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream, Statistics,
+    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 use futures::StreamExt;
 use hashbrown::HashMap;
@@ -139,10 +144,11 @@ impl ShuffleWriterExec {
     pub async fn execute_shuffle_write(
         &self,
         input_partition: usize,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<Vec<ShuffleWritePartition>> {
         let now = Instant::now();
 
-        let mut stream = self.plan.execute(input_partition).await?;
+        let mut stream = self.plan.execute(input_partition, runtime).await?;
 
         let mut path = PathBuf::from(&self.work_dir);
         path.push(&self.job_id);
@@ -197,7 +203,7 @@ impl ShuffleWriterExec {
 
                 // we won't necessary produce output for every possible partition, so we
                 // create writers on demand
-                let mut writers: Vec<Option<ShuffleWriter>> = vec![];
+                let mut writers: Vec<Option<IPCWriter>> = vec![];
                 for _ in 0..num_output_partitions {
                     writers.push(None);
                 }
@@ -261,11 +267,10 @@ impl ShuffleWriterExec {
                                 std::fs::create_dir_all(&path)?;
 
                                 path.push(format!("data-{}.arrow", input_partition));
-                                let path = path.to_str().unwrap();
-                                info!("Writing results to {}", path);
+                                info!("Writing results to {:?}", path);
 
                                 let mut writer =
-                                    ShuffleWriter::new(path, stream.schema().as_ref())?;
+                                    IPCWriter::new(&path, stream.schema().as_ref())?;
 
                                 writer.write(&output_batch)?;
                                 writers[output_partition] = Some(writer);
@@ -283,7 +288,7 @@ impl ShuffleWriterExec {
                         Some(w) => {
                             w.finish()?;
                             info!(
-                                "Finished writing shuffle partition {} at {}. Batches: {}. Rows: {}. Bytes: {}.",
+                                "Finished writing shuffle partition {} at {:?}. Batches: {}. Rows: {}. Bytes: {}.",
                                 i,
                                 w.path(),
                                 w.num_batches,
@@ -293,7 +298,7 @@ impl ShuffleWriterExec {
 
                             part_locs.push(ShuffleWritePartition {
                                 partition_id: i as u64,
-                                path: w.path().to_owned(),
+                                path: w.path().to_string_lossy().to_string(),
                                 num_batches: w.num_batches,
                                 num_rows: w.num_rows,
                                 num_bytes: w.num_bytes,
@@ -330,6 +335,14 @@ impl ExecutionPlan for ShuffleWriterExec {
         self.plan.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.plan.clone()]
     }
@@ -350,9 +363,10 @@ impl ExecutionPlan for ShuffleWriterExec {
 
     async fn execute(
         &self,
-        input_partition: usize,
-    ) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
-        let part_loc = self.execute_shuffle_write(input_partition).await?;
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
+        let part_loc = self.execute_shuffle_write(partition, runtime).await?;
 
         // build metadata result batch
         let num_writers = part_loc.len();
@@ -432,55 +446,6 @@ fn result_schema() -> SchemaRef {
     ]))
 }
 
-struct ShuffleWriter {
-    path: String,
-    writer: FileWriter<File>,
-    num_batches: u64,
-    num_rows: u64,
-    num_bytes: u64,
-}
-
-impl ShuffleWriter {
-    fn new(path: &str, schema: &Schema) -> Result<Self> {
-        let file = File::create(path)
-            .map_err(|e| {
-                BallistaError::General(format!(
-                    "Failed to create partition file at {}: {:?}",
-                    path, e
-                ))
-            })
-            .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-        Ok(Self {
-            num_batches: 0,
-            num_rows: 0,
-            num_bytes: 0,
-            path: path.to_owned(),
-            writer: FileWriter::try_new(file, schema)?,
-        })
-    }
-
-    fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
-        self.num_batches += 1;
-        self.num_rows += batch.num_rows() as u64;
-        let num_bytes: usize = batch
-            .columns()
-            .iter()
-            .map(|array| array.get_array_memory_size())
-            .sum();
-        self.num_bytes += num_bytes as u64;
-        Ok(())
-    }
-
-    fn finish(&mut self) -> Result<()> {
-        self.writer.finish().map_err(DataFusionError::ArrowError)
-    }
-
-    fn path(&self) -> &str {
-        &self.path
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,6 +458,8 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+
         let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?));
         let work_dir = TempDir::new()?;
         let query_stage = ShuffleWriterExec::try_new(
@@ -502,7 +469,7 @@ mod tests {
             work_dir.into_path().to_str().unwrap().to_owned(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
-        let mut stream = query_stage.execute(0).await?;
+        let mut stream = query_stage.execute(0, runtime).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
@@ -545,6 +512,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_partitioned() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
         let query_stage = ShuffleWriterExec::try_new(
@@ -554,7 +523,7 @@ mod tests {
             work_dir.into_path().to_str().unwrap().to_owned(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
-        let mut stream = query_stage.execute(0).await?;
+        let mut stream = query_stage.execute(0, runtime).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;

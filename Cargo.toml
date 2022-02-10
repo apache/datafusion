@@ -18,6 +18,8 @@
 [workspace]
 members = [
     "datafusion",
+    "datafusion-common",
+    "datafusion-expr",
     "datafusion-cli",
     "datafusion-examples",
     "benchmarks",
@@ -27,8 +29,6 @@ members = [
     "ballista/rust/scheduler",
     "ballista-examples",
 ]
-
-exclude = ["python"]
 
 [profile.release]
 lto = true

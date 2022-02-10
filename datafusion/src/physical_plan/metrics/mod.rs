@@ -19,12 +19,15 @@
 
 mod baseline;
 mod builder;
+mod composite;
+mod tracker;
 mod value;
 
+use parking_lot::Mutex;
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use hashbrown::HashMap;
@@ -32,7 +35,9 @@ use hashbrown::HashMap;
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use composite::CompositeMetricsSet;
+pub use tracker::MemTrackingMetrics;
+pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
 /// [`ExecutionPlan`] execution.
@@ -76,7 +81,7 @@ pub struct Metric {
 }
 
 impl Display for Metric {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.value.name())?;
 
         let mut iter = self
@@ -191,6 +196,20 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
+    /// convenience: return the count of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spill_count(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpillCount(_)))
+            .map(|v| v.as_usize())
+    }
+
+    /// convenience: return the total byte size of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spilled_bytes(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpilledBytes(_)))
+            .map(|v| v.as_usize())
+    }
+
     /// convenience: return the amount of elapsed CPU time spent,
     /// aggregated across partitions or None if no metric is present
     pub fn elapsed_compute(&self) -> Option<usize> {
@@ -282,7 +301,7 @@ impl MetricsSet {
 
 impl Display for MetricsSet {
     /// format the MetricsSet as a single string
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let mut is_first = true;
         for i in self.metrics.iter() {
             if !is_first {
@@ -321,12 +340,12 @@ impl ExecutionPlanMetricsSet {
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().expect("not poisoned").push(metric)
+        self.inner.lock().push(metric)
     }
 
     /// Return a clone of the inner MetricsSet
     pub fn clone_inner(&self) -> MetricsSet {
-        let guard = self.inner.lock().expect("not poisoned");
+        let guard = self.inner.lock();
         (*guard).clone()
     }
 }
@@ -363,7 +382,7 @@ impl Label {
 }
 
 impl Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}={}", self.name, self.value)
     }
 }

@@ -24,7 +24,7 @@ use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
-        listing::{ListingOptions, ListingTable},
+        listing::{ListingOptions, ListingTable, ListingTableConfig},
         object_store::{
             local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
             ObjectReader, ObjectStore, SizedFile,
@@ -285,8 +285,10 @@ fn register_partitioned_aggregate_csv(
     let mut options = ListingOptions::new(Arc::new(CsvFormat::default()));
     options.table_partition_cols = partition_cols.iter().map(|&s| s.to_owned()).collect();
 
-    let table =
-        ListingTable::new(object_store, table_path.to_owned(), file_schema, options);
+    let config = ListingTableConfig::new(object_store, table_path)
+        .with_listing_options(options)
+        .with_schema(file_schema);
+    let table = ListingTable::try_new(config).unwrap();
 
     ctx.register_table("t", Arc::new(table))
         .expect("registering listing table failed");
@@ -313,8 +315,11 @@ async fn register_partitioned_alltypes_parquet(
         .await
         .expect("Parquet schema inference failed");
 
-    let table =
-        ListingTable::new(object_store, table_path.to_owned(), file_schema, options);
+    let config = ListingTableConfig::new(object_store, table_path)
+        .with_listing_options(options)
+        .with_schema(file_schema);
+
+    let table = ListingTable::try_new(config).unwrap();
 
     ctx.register_table("t", Arc::new(table))
         .expect("registering listing table failed");

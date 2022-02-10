@@ -31,12 +31,14 @@ use arrow::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
 use super::common::AbortOnDropMany;
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 
 use super::SendableRecordBatchStream;
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::common::spawn_execution;
 use pin_project_lite::pin_project;
 
@@ -85,6 +87,14 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Partitioning::UnknownPartitioning(1)
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -97,7 +107,11 @@ impl ExecutionPlan for CoalescePartitionsExec {
         }
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // CoalescePartitionsExec produces a single partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
@@ -113,7 +127,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
             )),
             1 => {
                 // bypass any threading / metrics if there is a single partition
-                self.input.execute(0).await
+                self.input.execute(0, runtime).await
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -136,6 +150,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
                         self.input.clone(),
                         sender.clone(),
                         part_i,
+                        runtime.clone(),
                     ));
                 }
 
@@ -207,7 +222,7 @@ mod tests {
 
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{collect, common};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
@@ -215,19 +230,19 @@ mod tests {
 
     #[tokio::test]
     async fn merge() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", num_partitions)?;
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: schema,
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -244,7 +259,7 @@ mod tests {
         assert_eq!(merge.output_partitioning().partition_count(), 1);
 
         // the result should contain 4 batches (one per input partition)
-        let iter = merge.execute(0).await?;
+        let iter = merge.execute(0, runtime).await?;
         let batches = common::collect(iter).await?;
         assert_eq!(batches.len(), num_partitions);
 
@@ -257,6 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -265,7 +281,7 @@ mod tests {
         let coaelesce_partitions_exec =
             Arc::new(CoalescePartitionsExec::new(blocking_exec));
 
-        let fut = collect(coaelesce_partitions_exec);
+        let fut = collect(coaelesce_partitions_exec, runtime);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

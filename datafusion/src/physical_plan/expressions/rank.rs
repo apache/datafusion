@@ -39,16 +39,16 @@ pub struct Rank {
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum RankType {
-    Rank,
-    DenseRank,
-    PercentRank,
+    Basic,
+    Dense,
+    Percent,
 }
 
 /// Create a rank window function
 pub fn rank(name: String) -> Rank {
     Rank {
         name,
-        rank_type: RankType::Rank,
+        rank_type: RankType::Basic,
     }
 }
 
@@ -56,7 +56,7 @@ pub fn rank(name: String) -> Rank {
 pub fn dense_rank(name: String) -> Rank {
     Rank {
         name,
-        rank_type: RankType::DenseRank,
+        rank_type: RankType::Dense,
     }
 }
 
@@ -64,7 +64,7 @@ pub fn dense_rank(name: String) -> Rank {
 pub fn percent_rank(name: String) -> Rank {
     Rank {
         name,
-        rank_type: RankType::PercentRank,
+        rank_type: RankType::Percent,
     }
 }
 
@@ -77,8 +77,8 @@ impl BuiltInWindowFunctionExpr for Rank {
     fn field(&self) -> Result<Field> {
         let nullable = false;
         let data_type = match self.rank_type {
-            RankType::Rank | RankType::DenseRank => DataType::UInt64,
-            RankType::PercentRank => DataType::Float64,
+            RankType::Basic | RankType::Dense => DataType::UInt64,
+            RankType::Percent => DataType::Float64,
         };
         Ok(Field::new(self.name(), data_type, nullable))
     }
@@ -121,7 +121,7 @@ impl PartitionEvaluator for RankEvaluator {
     ) -> Result<ArrayRef> {
         // see https://www.postgresql.org/docs/current/functions-window.html
         let result: ArrayRef = match self.rank_type {
-            RankType::DenseRank => Arc::new(UInt64Array::from_iter_values(
+            RankType::Dense => Arc::new(UInt64Array::from_iter_values(
                 ranks_in_partition
                     .iter()
                     .zip(1u64..)
@@ -130,7 +130,7 @@ impl PartitionEvaluator for RankEvaluator {
                         iter::repeat(rank).take(len)
                     }),
             )),
-            RankType::PercentRank => {
+            RankType::Percent => {
                 // Returns the relative rank of the current row, that is (rank - 1) / (total partition rows - 1). The value thus ranges from 0 to 1 inclusive.
                 let denominator = (partition.end - partition.start) as f64;
                 Arc::new(Float64Array::from_iter_values(
@@ -146,7 +146,7 @@ impl PartitionEvaluator for RankEvaluator {
                         .flatten(),
                 ))
             }
-            RankType::Rank => Arc::new(UInt64Array::from_iter_values(
+            RankType::Basic => Arc::new(UInt64Array::from_iter_values(
                 ranks_in_partition
                     .iter()
                     .scan(1_u64, |acc, range| {

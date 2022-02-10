@@ -27,6 +27,7 @@ use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
+use super::expressions::PhysicalSortExpr;
 use super::{
     coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
@@ -42,6 +43,7 @@ use super::{
     coalesce_batches::concat_batches, memory::MemoryStream, DisplayFormatType,
     ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
 };
+use crate::execution::runtime_env::RuntimeEnv;
 use log::debug;
 
 /// Data of the left side
@@ -136,7 +138,19 @@ impl ExecutionPlan for CrossJoinExec {
         self.right.output_partitioning()
     }
 
-    async fn execute(&self, partition: usize) -> Result<SendableRecordBatchStream> {
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
+    async fn execute(
+        &self,
+        partition: usize,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Result<SendableRecordBatchStream> {
         // we only want to compute the build side once
         let left_data = {
             let mut build_side = self.build_side.lock().await;
@@ -148,7 +162,7 @@ impl ExecutionPlan for CrossJoinExec {
 
                     // merge all left parts into a single stream
                     let merge = CoalescePartitionsExec::new(self.left.clone());
-                    let stream = merge.execute(0).await?;
+                    let stream = merge.execute(0, runtime.clone()).await?;
 
                     // Load all batches and count the rows
                     let (batches, num_rows) = stream
@@ -173,7 +187,7 @@ impl ExecutionPlan for CrossJoinExec {
             }
         };
 
-        let stream = self.right.execute(partition).await?;
+        let stream = self.right.execute(partition, runtime.clone()).await?;
 
         if left_data.num_rows() == 0 {
             return Ok(Box::pin(MemoryStream::try_new(
@@ -187,7 +201,7 @@ impl ExecutionPlan for CrossJoinExec {
             schema: self.schema.clone(),
             left_data,
             right: stream,
-            right_batch: Arc::new(std::sync::Mutex::new(None)),
+            right_batch: Arc::new(parking_lot::Mutex::new(None)),
             left_index: 0,
             num_input_batches: 0,
             num_input_rows: 0,
@@ -294,7 +308,7 @@ struct CrossJoinStream {
     /// Current value on the left
     left_index: usize,
     /// Current batch being processed from the right side
-    right_batch: Arc<std::sync::Mutex<Option<RecordBatch>>>,
+    right_batch: Arc<parking_lot::Mutex<Option<RecordBatch>>>,
     /// number of input batches
     num_input_batches: usize,
     /// number of input rows
@@ -326,8 +340,7 @@ fn build_batch(
             let scalar = ScalarValue::try_from_array(arr, left_index)?;
             Ok(scalar.to_array_of_size(batch.num_rows()))
         })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|x| x.into_arrow_external_error())?;
+        .collect::<Result<Vec<_>>>()?;
 
     RecordBatch::try_new(
         Arc::new(schema.clone()),
@@ -350,7 +363,7 @@ impl Stream for CrossJoinStream {
         if self.left_index > 0 && self.left_index < self.left_data.num_rows() {
             let start = Instant::now();
             let right_batch = {
-                let right_batch = self.right_batch.lock().unwrap();
+                let right_batch = self.right_batch.lock();
                 right_batch.clone().unwrap()
             };
             let result =
@@ -385,7 +398,7 @@ impl Stream for CrossJoinStream {
                     }
                     self.left_index = 1;
 
-                    let mut right_batch = self.right_batch.lock().unwrap();
+                    let mut right_batch = self.right_batch.lock();
                     *right_batch = Some(batch);
 
                     Some(result)

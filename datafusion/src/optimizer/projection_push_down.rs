@@ -39,6 +39,7 @@ use std::{
 
 /// Optimizer that removes unused projections and aggregations from plans
 /// This reduces both scans and
+#[derive(Default)]
 pub struct ProjectionPushDown {}
 
 impl OptimizerRule for ProjectionPushDown {
@@ -592,7 +593,7 @@ mod tests {
 
         // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b, #test2.c1\
-        \n  Join: #test.a = #test2.c1\
+        \n  Left Join: #test.a = #test2.c1\
         \n    TableScan: test projection=Some([0, 1])\
         \n    TableScan: test2 projection=Some([0])";
 
@@ -633,7 +634,7 @@ mod tests {
 
         // make sure projections are pushed down to both table scans
         let expected = "Projection: #test.a, #test.b\
-        \n  Join: #test.a = #test2.c1\
+        \n  Left Join: #test.a = #test2.c1\
         \n    TableScan: test projection=Some([0, 1])\
         \n    TableScan: test2 projection=Some([0])";
 
@@ -672,7 +673,7 @@ mod tests {
 
         // make sure projections are pushed down to table scan
         let expected = "Projection: #test.a, #test.b\
-        \n  Join: Using #test.a = #test2.a\
+        \n  Left Join: Using #test.a = #test2.a\
         \n    TableScan: test projection=Some([0, 1])\
         \n    TableScan: test2 projection=Some([0])";
 

@@ -217,23 +217,6 @@ impl<T: Hash> TryFrom<&ScalarValue> for HyperLogLog<T> {
 
 macro_rules! default_accumulator_impl {
     () => {
-        fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-            self.update_batch(
-                values
-                    .iter()
-                    .map(|s| s.to_array() as ArrayRef)
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-            )
-        }
-
-        fn merge(&mut self, states: &[ScalarValue]) -> Result<()> {
-            assert_eq!(1, states.len(), "expect only 1 element in the states");
-            let other = HyperLogLog::try_from(&states[0])?;
-            self.hll.merge(&other);
-            Ok(())
-        }
-
         fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
             assert_eq!(1, states.len(), "expect only 1 element in the states");
             let binary_array = states[0].as_any().downcast_ref::<BinaryArray>().unwrap();
