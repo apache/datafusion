@@ -40,7 +40,6 @@ Testing setup:
 - `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
 - `export ARROW_TEST_DATA=$(pwd)/testing/data/`
 
-
 ## Test Organization
 
 DataFusion has several levels of tests in its [Test
@@ -52,7 +51,6 @@ This section highlights the most important test modules that exist
 ### Unit tests
 
 Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention
-
 
 ### Rust Integration Tests
 
@@ -66,20 +64,21 @@ cargo test -p datafusion --tests sql_integration
 
 One very important test is the [sql_integraton](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setsups.
 
-
 ### SQL / Postgres Integration Tests
 
 The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests] directory contains a harness that runs certain queries against both postgres and datafusion and compares results
 
-
 #### setup environment
+
 ```shell
 export POSTGRES_DB=postgres
 export POSTGRES_USER=postgres
 export POSTGRES_HOST=localhost
 export POSTGRES_PORT=5432
 ```
+
 #### Install dependencies
+
 ```shell
 # Install dependencies
 python -m pip install --upgrade pip setuptools wheel
@@ -109,10 +108,10 @@ psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USE
 ```
 
 #### Invoke the test runner
+
 ```shell
 python -m pytest -v integration-tests/test_psql_parity.py
 ```
-
 
 ## How to add a new scalar function
 
