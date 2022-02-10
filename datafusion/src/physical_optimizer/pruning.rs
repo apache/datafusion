@@ -47,7 +47,7 @@ use crate::{
     physical_plan::{ColumnarValue, PhysicalExpr},
 };
 
-/// Interface to pass statistics information to [`PruningPredicates`]
+/// Interface to pass statistics information to [`PruningPredicate`]
 ///
 /// Returns statistics for containers / files of data in Arrays.
 ///
@@ -88,7 +88,7 @@ pub trait PruningStatistics {
 /// Evaluates filter expressions on statistics in order to
 /// prune data containers (e.g. parquet row group)
 ///
-/// See [`try_new`] for more information.
+/// See [`PruningPredicate::try_new`] for more information.
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
     /// The input schema against which the predicate will be evaluated

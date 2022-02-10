@@ -319,7 +319,7 @@ impl Display for MetricsSet {
 /// A set of [`Metric`] for an individual "operator" (e.g. `&dyn
 /// ExecutionPlan`).
 ///
-/// This structure is intended as a convenience for [`ExecutionPlan`]
+/// This structure is intended as a convenience for [`super::ExecutionPlan`]
 /// implementations so they can generate different streams for multiple
 /// partitions but easily report them together.
 ///

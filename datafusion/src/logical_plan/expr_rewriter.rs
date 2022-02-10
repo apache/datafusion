@@ -32,7 +32,7 @@ use std::sync::Arc;
 pub enum RewriteRecursion {
     /// Continue rewrite / visit this expression.
     Continue,
-    /// Call [mutate()] immediately and return.
+    /// Call [ExprRewriter::mutate()] immediately and return.
     Mutate,
     /// Do not rewrite / visit the children of this expression.
     Stop,
