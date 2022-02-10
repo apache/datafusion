@@ -18,12 +18,12 @@
 //! Accessing row from raw bytes
 
 use crate::error::{DataFusionError, Result};
-use crate::row::bitmap::{all_valid, get_bit, null_width, NullBitsFormatter};
-use crate::row::{get_offsets, supported};
-use arrow::array::{make_builder, ArrayBuilder};
+use crate::row::{all_valid, get_offsets, supported, NullBitsFormatter};
+use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+use arrow::util::bit_util::{ceil, get_bit_raw};
 use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
@@ -38,7 +38,7 @@ pub fn read_as_batch(
 
     for offset in offsets.iter().take(row_num) {
         row.point_to(*offset);
-        read_row(&row, &mut output, &schema)?
+        read_row(&row, &mut output, &schema);
     }
 
     output.output().map_err(DataFusionError::ArrowError)
@@ -114,7 +114,7 @@ impl<'a> RowReader<'a> {
     pub fn new(schema: &Arc<Schema>, data: &'a [u8]) -> Self {
         assert!(supported(schema));
         let field_count = schema.fields().len();
-        let null_width = null_width(field_count);
+        let null_width = ceil(field_count, 8);
         let (field_offsets, _) = get_offsets(null_width, schema);
         Self {
             data,
@@ -148,7 +148,7 @@ impl<'a> RowReader<'a> {
     }
 
     fn is_valid_at(&self, idx: usize) -> bool {
-        get_bit(self.null_bits(), idx)
+        unsafe { get_bit_raw(self.null_bits().as_ptr(), idx) }
     }
 
     fn get_bool(&self, idx: usize) -> bool {
@@ -238,11 +238,7 @@ impl<'a> RowReader<'a> {
     }
 }
 
-fn read_row(
-    row: &RowReader,
-    batch: &mut MutableRecordBatch,
-    schema: &Arc<Schema>,
-) -> Result<()> {
+fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
     if row.all_valid() {
         for ((col_idx, to), field) in batch
             .arrays
@@ -250,7 +246,7 @@ fn read_row(
             .enumerate()
             .zip(schema.fields().iter())
         {
-            read_field_null_free(to, field.data_type(), col_idx, row)?
+            read_field_null_free(to, field.data_type(), col_idx, row)
         }
     } else {
         for ((col_idx, to), field) in batch
@@ -259,10 +255,66 @@ fn read_row(
             .enumerate()
             .zip(schema.fields().iter())
         {
-            read_field(to, field.data_type(), col_idx, row)?
+            read_field(to, field.data_type(), col_idx, row)
         }
     }
-    Ok(())
+}
+
+macro_rules! fn_read_field {
+    ($NATIVE: ident, $ARRAY: ident) => {
+        paste::item! {
+            fn [<read_field_ $NATIVE>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+                let to = to
+                    .as_any_mut()
+                    .downcast_mut::<$ARRAY>()
+                    .unwrap();
+                to.append_option(row.[<get_ $NATIVE _opt>](col_idx))
+                    .map_err(DataFusionError::ArrowError)
+                    .unwrap();
+            }
+
+            fn [<read_field_ $NATIVE _nf>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+                let to = to
+                    .as_any_mut()
+                    .downcast_mut::<$ARRAY>()
+                    .unwrap();
+                to.append_value(row.[<get_ $NATIVE>](col_idx))
+                    .map_err(DataFusionError::ArrowError)
+                    .unwrap();
+            }
+        }
+    };
+}
+
+fn_read_field!(bool, BooleanBuilder);
+fn_read_field!(u8, UInt8Builder);
+fn_read_field!(u16, UInt16Builder);
+fn_read_field!(u32, UInt32Builder);
+fn_read_field!(u64, UInt64Builder);
+fn_read_field!(i8, Int8Builder);
+fn_read_field!(i16, Int16Builder);
+fn_read_field!(i32, Int32Builder);
+fn_read_field!(i64, Int64Builder);
+fn_read_field!(f32, Float32Builder);
+fn_read_field!(f64, Float64Builder);
+fn_read_field!(date32, Date32Builder);
+fn_read_field!(date64, Date64Builder);
+fn_read_field!(utf8, StringBuilder);
+
+fn read_field_binary(to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
+    if row.is_valid_at(col_idx) {
+        to.append_value(row.get_binary(col_idx)).unwrap();
+    } else {
+        to.append_null().unwrap();
+    }
+}
+
+fn read_field_binary_nf(to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+    let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
+    to.append_value(row.get_binary(col_idx))
+        .map_err(DataFusionError::ArrowError)
+        .unwrap();
 }
 
 fn read_field(
@@ -270,77 +322,26 @@ fn read_field(
     dt: &DataType,
     col_idx: usize,
     row: &RowReader,
-) -> Result<()> {
-    use arrow::array::*;
+) {
     use DataType::*;
     match dt {
-        Boolean => {
-            let to = to.as_any_mut().downcast_mut::<BooleanBuilder>().unwrap();
-            to.append_option(row.get_bool_opt(col_idx))?;
-        }
-        UInt8 => {
-            let to = to.as_any_mut().downcast_mut::<UInt8Builder>().unwrap();
-            to.append_option(row.get_u8_opt(col_idx))?;
-        }
-        UInt16 => {
-            let to = to.as_any_mut().downcast_mut::<UInt16Builder>().unwrap();
-            to.append_option(row.get_u16_opt(col_idx))?;
-        }
-        UInt32 => {
-            let to = to.as_any_mut().downcast_mut::<UInt32Builder>().unwrap();
-            to.append_option(row.get_u32_opt(col_idx))?;
-        }
-        UInt64 => {
-            let to = to.as_any_mut().downcast_mut::<UInt64Builder>().unwrap();
-            to.append_option(row.get_u64_opt(col_idx))?;
-        }
-        Int8 => {
-            let to = to.as_any_mut().downcast_mut::<Int8Builder>().unwrap();
-            to.append_option(row.get_i8_opt(col_idx))?;
-        }
-        Int16 => {
-            let to = to.as_any_mut().downcast_mut::<Int16Builder>().unwrap();
-            to.append_option(row.get_i16_opt(col_idx))?;
-        }
-        Int32 => {
-            let to = to.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
-            to.append_option(row.get_i32_opt(col_idx))?;
-        }
-        Int64 => {
-            let to = to.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
-            to.append_option(row.get_i64_opt(col_idx))?;
-        }
-        Float32 => {
-            let to = to.as_any_mut().downcast_mut::<Float32Builder>().unwrap();
-            to.append_option(row.get_f32_opt(col_idx))?;
-        }
-        Float64 => {
-            let to = to.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
-            to.append_option(row.get_f64_opt(col_idx))?;
-        }
-        Date32 => {
-            let to = to.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
-            to.append_option(row.get_date32_opt(col_idx))?;
-        }
-        Date64 => {
-            let to = to.as_any_mut().downcast_mut::<Date64Builder>().unwrap();
-            to.append_option(row.get_date64_opt(col_idx))?;
-        }
-        Utf8 => {
-            let to = to.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
-            to.append_option(row.get_utf8_opt(col_idx))?;
-        }
-        Binary => {
-            let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
-            if row.is_valid_at(col_idx) {
-                to.append_value(row.get_binary(col_idx))?;
-            } else {
-                to.append_null()?;
-            }
-        }
+        Boolean => read_field_bool(to, col_idx, row),
+        UInt8 => read_field_u8(to, col_idx, row),
+        UInt16 => read_field_u16(to, col_idx, row),
+        UInt32 => read_field_u32(to, col_idx, row),
+        UInt64 => read_field_u64(to, col_idx, row),
+        Int8 => read_field_i8(to, col_idx, row),
+        Int16 => read_field_i16(to, col_idx, row),
+        Int32 => read_field_i32(to, col_idx, row),
+        Int64 => read_field_i64(to, col_idx, row),
+        Float32 => read_field_f32(to, col_idx, row),
+        Float64 => read_field_f64(to, col_idx, row),
+        Date32 => read_field_date32(to, col_idx, row),
+        Date64 => read_field_date64(to, col_idx, row),
+        Utf8 => read_field_utf8(to, col_idx, row),
+        Binary => read_field_binary(to, col_idx, row),
         _ => unimplemented!(),
     }
-    Ok(())
 }
 
 fn read_field_null_free(
@@ -348,73 +349,26 @@ fn read_field_null_free(
     dt: &DataType,
     col_idx: usize,
     row: &RowReader,
-) -> Result<()> {
-    use arrow::array::*;
+) {
     use DataType::*;
     match dt {
-        Boolean => {
-            let to = to.as_any_mut().downcast_mut::<BooleanBuilder>().unwrap();
-            to.append_value(row.get_bool(col_idx))?;
-        }
-        UInt8 => {
-            let to = to.as_any_mut().downcast_mut::<UInt8Builder>().unwrap();
-            to.append_value(row.get_u8(col_idx))?;
-        }
-        UInt16 => {
-            let to = to.as_any_mut().downcast_mut::<UInt16Builder>().unwrap();
-            to.append_value(row.get_u16(col_idx))?;
-        }
-        UInt32 => {
-            let to = to.as_any_mut().downcast_mut::<UInt32Builder>().unwrap();
-            to.append_value(row.get_u32(col_idx))?;
-        }
-        UInt64 => {
-            let to = to.as_any_mut().downcast_mut::<UInt64Builder>().unwrap();
-            to.append_value(row.get_u64(col_idx))?;
-        }
-        Int8 => {
-            let to = to.as_any_mut().downcast_mut::<Int8Builder>().unwrap();
-            to.append_value(row.get_i8(col_idx))?;
-        }
-        Int16 => {
-            let to = to.as_any_mut().downcast_mut::<Int16Builder>().unwrap();
-            to.append_value(row.get_i16(col_idx))?;
-        }
-        Int32 => {
-            let to = to.as_any_mut().downcast_mut::<Int32Builder>().unwrap();
-            to.append_value(row.get_i32(col_idx))?;
-        }
-        Int64 => {
-            let to = to.as_any_mut().downcast_mut::<Int64Builder>().unwrap();
-            to.append_value(row.get_i64(col_idx))?;
-        }
-        Float32 => {
-            let to = to.as_any_mut().downcast_mut::<Float32Builder>().unwrap();
-            to.append_value(row.get_f32(col_idx))?;
-        }
-        Float64 => {
-            let to = to.as_any_mut().downcast_mut::<Float64Builder>().unwrap();
-            to.append_value(row.get_f64(col_idx))?;
-        }
-        Date32 => {
-            let to = to.as_any_mut().downcast_mut::<Date32Builder>().unwrap();
-            to.append_value(row.get_date32(col_idx))?;
-        }
-        Date64 => {
-            let to = to.as_any_mut().downcast_mut::<Date64Builder>().unwrap();
-            to.append_value(row.get_date64(col_idx))?;
-        }
-        Utf8 => {
-            let to = to.as_any_mut().downcast_mut::<StringBuilder>().unwrap();
-            to.append_value(row.get_utf8(col_idx))?;
-        }
-        Binary => {
-            let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
-            to.append_value(row.get_binary(col_idx))?;
-        }
+        Boolean => read_field_bool_nf(to, col_idx, row),
+        UInt8 => read_field_u8_nf(to, col_idx, row),
+        UInt16 => read_field_u16_nf(to, col_idx, row),
+        UInt32 => read_field_u32_nf(to, col_idx, row),
+        UInt64 => read_field_u64_nf(to, col_idx, row),
+        Int8 => read_field_i8_nf(to, col_idx, row),
+        Int16 => read_field_i16_nf(to, col_idx, row),
+        Int32 => read_field_i32_nf(to, col_idx, row),
+        Int64 => read_field_i64_nf(to, col_idx, row),
+        Float32 => read_field_f32_nf(to, col_idx, row),
+        Float64 => read_field_f64_nf(to, col_idx, row),
+        Date32 => read_field_date32_nf(to, col_idx, row),
+        Date64 => read_field_date64_nf(to, col_idx, row),
+        Utf8 => read_field_utf8_nf(to, col_idx, row),
+        Binary => read_field_binary_nf(to, col_idx, row),
         _ => unimplemented!(),
     }
-    Ok(())
 }
 
 struct MutableRecordBatch {

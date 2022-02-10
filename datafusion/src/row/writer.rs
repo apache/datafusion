@@ -17,11 +17,11 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
-use crate::row::bitmap::{align_word, null_width, set_bit, unset_bit};
 use crate::row::{estimate_row_width, fixed_size, get_offsets, supported};
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow::util::bit_util::{ceil, round_upto_power_of_2, set_bit_raw, unset_bit_raw};
 use std::cmp::max;
 use std::sync::Arc;
 
@@ -97,7 +97,7 @@ impl RowWriter {
     pub fn new(schema: &Arc<Schema>) -> Self {
         assert!(supported(schema));
         let field_count = schema.fields().len();
-        let null_width = null_width(field_count);
+        let null_width = ceil(field_count, 8);
         let (field_offsets, values_width) = get_offsets(null_width, schema);
         let mut init_capacity = estimate_row_width(null_width, schema);
         if !fixed_size(schema) {
@@ -131,12 +131,16 @@ impl RowWriter {
 
     fn set_null_at(&mut self, idx: usize) {
         let null_bits = &mut self.data[0..self.null_width];
-        unset_bit(null_bits, idx)
+        unsafe {
+            unset_bit_raw(null_bits.as_mut_ptr(), idx);
+        }
     }
 
     fn set_non_null_at(&mut self, idx: usize) {
         let null_bits = &mut self.data[0..self.null_width];
-        set_bit(null_bits, idx)
+        unsafe {
+            set_bit_raw(null_bits.as_mut_ptr(), idx);
+        }
     }
 
     fn set_bool(&mut self, idx: usize, value: bool) {
@@ -207,7 +211,7 @@ impl RowWriter {
     /// End each row at 8-byte word boundary.
     fn end_padding(&mut self) {
         let payload_width = self.current_width();
-        self.row_width = align_word(payload_width);
+        self.row_width = round_upto_power_of_2(payload_width, 8);
         if self.data.capacity() < self.row_width {
             self.data.resize(self.row_width, 0);
         }

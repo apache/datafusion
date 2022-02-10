@@ -29,17 +29,89 @@
 //! - For fields of non-primitive or variable-length types,
 //!       we append their actual content to the end of the var length region and
 //!       store their offset relative to row base and their length, packed into an 8-byte word.
+//!
+//! ┌────────────────┬──────────────────────────┬───────────────────────┐        ┌───────────────────────┬────────────┐
+//! │Validity Bitmask│    Fixed Width Field     │ Variable Width Field  │   ...  │     vardata area      │  padding   │
+//! │ (byte aligned) │   (native type width)    │(vardata offset + len) │        │   (variable length)   │   bytes    │
+//! └────────────────┴──────────────────────────┴───────────────────────┘        └───────────────────────┴────────────┘
+//!
+//!  For example, given the schema (Int8, Utf8, Float32, Utf8)
+//!
+//!  Encoding the tuple (1, "FooBar", NULL, "baz")
+//!
+//!  Requires 32 bytes (31 bytes payload and 1 byte padding to make each tuple 8-bytes aligned):
+//!
+//! ┌──────────┬──────────┬──────────────────────┬──────────────┬──────────────────────┬───────────────────────┬──────────┐
+//! │0b00001011│   0x01   │0x00000016  0x00000006│  0x00000000  │0x0000001C  0x00000003│       FooBarbaz       │   0x00   │
+//! └──────────┴──────────┴──────────────────────┴──────────────┴──────────────────────┴───────────────────────┴──────────┘
+//! 0          1          2                     10              14                     22                     31         32
+//!
 
-use crate::row::bitmap::align_word;
 use arrow::datatypes::{DataType, Schema};
+use arrow::util::bit_util::{get_bit_raw, round_upto_power_of_2};
+use std::fmt::Write;
 use std::sync::Arc;
 
-mod bitmap;
 mod reader;
 mod writer;
 
+const ALL_VALID_MASK: [u8; 8] = [1, 3, 7, 15, 31, 63, 127, 255];
+
 const UTF8_DEFAULT_SIZE: usize = 20;
 const BINARY_DEFAULT_SIZE: usize = 100;
+
+/// Returns if all fields are valid
+pub fn all_valid(data: &[u8], n: usize) -> bool {
+    for item in data.iter().take(n / 8) {
+        if *item != ALL_VALID_MASK[7] {
+            return false;
+        }
+    }
+    if n % 8 == 0 {
+        true
+    } else {
+        data[n / 8] == ALL_VALID_MASK[n % 8 - 1]
+    }
+}
+
+/// Show null bit for each field in a tuple, 1 for valid and 0 for null.
+/// For a tuple with nine total fields, valid at field 0, 6, 7, 8 shows as `[10000011, 1]`.
+pub struct NullBitsFormatter<'a> {
+    null_bits: &'a [u8],
+    field_count: usize,
+}
+
+impl<'a> NullBitsFormatter<'a> {
+    /// new
+    pub fn new(null_bits: &'a [u8], field_count: usize) -> Self {
+        Self {
+            null_bits,
+            field_count,
+        }
+    }
+}
+
+impl<'a> std::fmt::Debug for NullBitsFormatter<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut is_first = true;
+        let data = self.null_bits;
+        for i in 0..self.field_count {
+            if is_first {
+                f.write_char('[')?;
+                is_first = false;
+            } else if i % 8 == 0 {
+                f.write_str(", ")?;
+            }
+            if unsafe { get_bit_raw(data.as_ptr(), i) } {
+                f.write_char('1')?;
+            } else {
+                f.write_char('0')?;
+            }
+        }
+        f.write_char(']')?;
+        Ok(())
+    }
+}
 
 /// Get relative offsets for each field and total width for values
 fn get_offsets(null_width: usize, schema: &Arc<Schema>) -> (Vec<usize>, usize) {
@@ -103,7 +175,7 @@ fn estimate_row_width(null_width: usize, schema: &Arc<Schema>) -> usize {
             _ => {}
         }
     }
-    align_word(width)
+    round_upto_power_of_2(width, 8)
 }
 
 fn fixed_size(schema: &Arc<Schema>) -> bool {
@@ -133,8 +205,88 @@ mod tests {
     use crate::row::reader::read_as_batch;
     use crate::row::writer::write_batch_unchecked;
     use arrow::record_batch::RecordBatch;
+    use arrow::util::bit_util::{ceil, set_bit_raw, unset_bit_raw};
     use arrow::{array::*, datatypes::*};
+    use rand::Rng;
     use DataType::*;
+
+    fn test_validity(bs: &[bool]) {
+        let n = bs.len();
+        let mut data = vec![0; ceil(n, 8)];
+        for (i, b) in bs.iter().enumerate() {
+            if *b {
+                let data_argument = &mut data;
+                unsafe {
+                    set_bit_raw(data_argument.as_mut_ptr(), i);
+                };
+            } else {
+                let data_argument = &mut data;
+                unsafe {
+                    unset_bit_raw(data_argument.as_mut_ptr(), i);
+                };
+            }
+        }
+        let expected = bs.iter().all(|f| *f);
+        assert_eq!(all_valid(&data, bs.len()), expected);
+    }
+
+    #[test]
+    fn test_all_valid() {
+        let sizes = [4, 8, 12, 16, 19, 23, 32, 44];
+        for i in sizes {
+            {
+                // contains false
+                let input = {
+                    let mut rng = rand::thread_rng();
+                    let mut input: Vec<bool> = vec![false; i];
+                    rng.fill(&mut input[..]);
+                    input
+                };
+                test_validity(&input);
+            }
+
+            {
+                // all true
+                let input = vec![true; i];
+                test_validity(&input);
+            }
+        }
+    }
+
+    #[test]
+    fn test_formatter() -> std::fmt::Result {
+        assert_eq!(
+            format!("{:?}", NullBitsFormatter::new(&[0b11000001], 8)),
+            "[10000011]"
+        );
+        assert_eq!(
+            format!("{:?}", NullBitsFormatter::new(&[0b11000001, 1], 9)),
+            "[10000011, 1]"
+        );
+        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 2)), "[10]");
+        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 3)), "[100]");
+        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 4)), "[1000]");
+        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 5)), "[10000]");
+        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 6)), "[100000]");
+        assert_eq!(
+            format!("{:?}", NullBitsFormatter::new(&[1], 7)),
+            "[1000000]"
+        );
+        assert_eq!(
+            format!("{:?}", NullBitsFormatter::new(&[1], 8)),
+            "[10000000]"
+        );
+        // extra bytes are ignored
+        assert_eq!(
+            format!("{:?}", NullBitsFormatter::new(&[0b11000001, 1, 1, 1], 9)),
+            "[10000011, 1]"
+        );
+        assert_eq!(
+            format!("{:?}", NullBitsFormatter::new(&[0b11000001, 1, 1], 16)),
+            "[10000011, 10000000]"
+        );
+        Ok(())
+    }
 
     macro_rules! fn_test_single_type {
         ($ARRAY: ident, $TYPE: expr, $VEC: expr) => {
