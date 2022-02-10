@@ -562,8 +562,21 @@ async fn register_tables(path: &str, file_format: &str, ctx: &BallistaContext) {
 
 fn get_query_sql(query: usize) -> Result<String> {
     if query > 0 && query < 23 {
-        let filename = format!("queries/q{}.sql", query);
-        Ok(fs::read_to_string(&filename).expect("failed to read query"))
+        let possibilities = vec![
+            format!("queries/q{}.sql", query),
+            format!("benchmarks/queries/q{}.sql", query),
+        ];
+        let mut errors = vec![];
+        for filename in possibilities {
+            match fs::read_to_string(&filename) {
+                Ok(contents) => return Ok(contents),
+                Err(e) => errors.push(format!("{}: {}", filename, e)),
+            };
+        }
+        Err(DataFusionError::Plan(format!(
+            "invalid query. Could not find query: {:?}",
+            errors
+        )))
     } else {
         Err(DataFusionError::Plan(
             "invalid query. Expected value between 1 and 22".to_owned(),
