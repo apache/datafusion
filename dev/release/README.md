@@ -21,7 +21,7 @@
 
 ## Sub-projects
 
-The Datafusion repo contains 3 different releasable sub-projects: Datafusion, Ballista and Datafusion python binding.
+The Datafusion repo contains 2 different releasable sub-projects: Datafusion, Ballista
 
 We use Datafusion release to drive the release for the other sub-projects. As a
 result, Datafusion version bump is required for every release while version
@@ -64,7 +64,7 @@ The CHANGELOG is managed automatically using
 This script creates a changelog using github PRs and issues based on the labels
 associated with them.
 
-## Prepare release comimts and PR
+## Prepare release commits and PR
 
 Prepare a PR to update `CHANGELOG.md` and versions to reflect the planned
 release.
