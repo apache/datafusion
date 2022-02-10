@@ -56,6 +56,7 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
     ResolvedTableReference, TableReference,
 };
+use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -455,8 +456,10 @@ impl ExecutionContext {
             }
             Some(s) => s,
         };
-        let table =
-            ListingTable::new(object_store, path.to_owned(), resolved_schema, options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(options)
+            .with_schema(resolved_schema);
+        let table = ListingTable::try_new(config)?;
         self.register_table(name, Arc::new(table))?;
         Ok(())
     }
