@@ -24,15 +24,15 @@ use arrow::datatypes::DataType;
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub enum Volatility {
     /// Immutable - An immutable function will always return the same output when given the same
-    /// input. An example of this is [BuiltinScalarFunction::Cos].
+    /// input. An example of this is [super::BuiltinScalarFunction::Cos].
     Immutable,
     /// Stable - A stable function may return different values given the same input across different
     /// queries but must return the same value for a given input within a query. An example of
-    /// this is [BuiltinScalarFunction::Now].
+    /// this is [super::BuiltinScalarFunction::Now].
     Stable,
     /// Volatile - A volatile function may change the return value from evaluation to evaluation.
     /// Multiple invocations of a volatile function may return different results when used in the
-    /// same query. An example of this is [BuiltinScalarFunction::Random].
+    /// same query. An example of this is [super::BuiltinScalarFunction::Random].
     Volatile,
 }
 
