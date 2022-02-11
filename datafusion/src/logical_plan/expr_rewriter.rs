@@ -32,7 +32,7 @@ use std::sync::Arc;
 pub enum RewriteRecursion {
     /// Continue rewrite / visit this expression.
     Continue,
-    /// Call [mutate()] immediately and return.
+    /// Call [ExprRewriter::mutate()] immediately and return.
     Mutate,
     /// Do not rewrite / visit the children of this expression.
     Stop,
@@ -339,13 +339,13 @@ fn rewrite_sort_col_by_aggs(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     }
 }
 
-/// Recursively call [`Column::normalize`] on all Column expressions
+/// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
 /// in the `expr` expression tree.
 pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
     normalize_col_with_schemas(expr, &plan.all_schemas(), &plan.using_columns()?)
 }
 
-/// Recursively call [`Column::normalize`] on all Column expressions
+/// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
 /// in the `expr` expression tree.
 fn normalize_col_with_schemas(
     expr: Expr,

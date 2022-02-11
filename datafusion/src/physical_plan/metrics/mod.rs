@@ -40,7 +40,7 @@ pub use tracker::MemTrackingMetrics;
 pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
-/// [`ExecutionPlan`] execution.
+/// [`super::ExecutionPlan`] execution.
 ///
 /// Typically [`Metric`]s are not created directly, but instead
 /// are created using [`MetricBuilder`] or methods on
@@ -319,7 +319,7 @@ impl Display for MetricsSet {
 /// A set of [`Metric`] for an individual "operator" (e.g. `&dyn
 /// ExecutionPlan`).
 ///
-/// This structure is intended as a convenience for [`ExecutionPlan`]
+/// This structure is intended as a convenience for [`super::ExecutionPlan`]
 /// implementations so they can generate different streams for multiple
 /// partitions but easily report them together.
 ///
@@ -358,7 +358,7 @@ impl ExecutionPlanMetricsSet {
 /// "tags" in
 /// [InfluxDB](https://docs.influxdata.com/influxdb/v1.8/write_protocols/line_protocol_tutorial/)
 /// , "attributes" in [open
-/// telemetry](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md],
+/// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md>,
 /// etc.
 ///
 /// As the name and value are expected to mostly be constant strings,
