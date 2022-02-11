@@ -494,6 +494,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     AggregateFunction::ApproxMedian => {
                         protobuf::AggregateFunction::ApproxMedian
                     }
+                    AggregateFunction::BitMapCountDistinct => {
+                        protobuf::AggregateFunction::BitmapDistinct
+                    }
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {
@@ -772,8 +775,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                                 scalar, datatype,
                                             ))
                                         }
-                                    }
-                                    (
+            AggregateFunction::BitMapCountDistinct => Self::BitmapDistinct,
+        }
+    (
                                         scalar::ScalarValue::Boolean(_),
                                         DataType::Boolean,
                                     ) => scalar.try_into(),

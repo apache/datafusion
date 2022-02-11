@@ -21,6 +21,7 @@ mod approx_distinct;
 mod approx_percentile_cont;
 mod array_agg;
 mod average;
+mod bitmap_distinct;
 #[macro_use]
 mod binary;
 mod case;
@@ -66,6 +67,7 @@ pub use array_agg::ArrayAgg;
 pub use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
+pub use bitmap_distinct::{is_bitmap_count_distinct_supported_arg_type, BitMapDistinct};
 pub use case::{case, CaseExpr};
 pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
