@@ -144,14 +144,14 @@ pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
 ///
 /// For example, it rewrites:
 ///
-/// ```ignore
+/// ```text
 /// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
 /// .project(vec![col("c1"), sum(col("c2"))?
 /// ```
 ///
 /// Into:
 ///
-/// ```ignore
+/// ```text
 /// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
 /// .project(vec![col("c1"), col("SUM(#c2)")?
 /// ```

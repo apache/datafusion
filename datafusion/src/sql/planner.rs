@@ -698,7 +698,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logic plan from selection clause, the function contain optimization for cross join to inner join
-    /// Related PR: https://github.com/apache/arrow-datafusion/pull/1566
+    /// Related PR: <https://github.com/apache/arrow-datafusion/pull/1566>
     fn plan_selection(
         &self,
         select: &Select,
@@ -2084,11 +2084,11 @@ fn remove_join_expressions(
 /// Filters matching this pattern are added to `accum`
 /// Filters that don't match this pattern are added to `accum_filter`
 /// Examples:
-///
+/// ```text
 /// foo = bar => accum=[(foo, bar)] accum_filter=[]
 /// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
-///
+/// ```
 fn extract_join_keys(
     expr: &Expr,
     accum: &mut Vec<(Column, Column)>,

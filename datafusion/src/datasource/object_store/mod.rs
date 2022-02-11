@@ -90,7 +90,7 @@ pub struct FileMeta {
     /// The last modification time of the file according to the
     /// object store metadata. This information might be used by
     /// catalog systems like Delta Lake for time travel (see
-    /// https://github.com/delta-io/delta/issues/192)
+    /// <https://github.com/delta-io/delta/issues/192>)
     pub last_modified: Option<DateTime<Utc>>,
 }
 
