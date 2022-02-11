@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Operator module contains foundational types that are used to represent operators in DataFusion.
+
 use crate::expr_fn::binary_expr;
 use crate::Expr;
 use std::fmt;
@@ -136,5 +138,34 @@ impl ops::Rem for Expr {
 
     fn rem(self, rhs: Self) -> Self {
         binary_expr(self, Operator::Modulo, rhs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lit;
+
+    #[test]
+    fn test_operators() {
+        assert_eq!(
+            format!("{:?}", lit(1u32) + lit(2u32)),
+            "UInt32(1) + UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) - lit(2u32)),
+            "UInt32(1) - UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) * lit(2u32)),
+            "UInt32(1) * UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) / lit(2u32)),
+            "UInt32(1) / UInt32(2)"
+        );
+        assert_eq!(
+            format!("{:?}", lit(1u32) % lit(2u32)),
+            "UInt32(1) % UInt32(2)"
+        );
     }
 }

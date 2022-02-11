@@ -64,7 +64,7 @@ use async_trait::async_trait;
 use expressions::col;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, trace};
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -1398,7 +1398,11 @@ impl DefaultPhysicalPlanner {
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
         let optimizers = &ctx_state.config.physical_optimizers;
-        debug!("Physical plan:\n{:?}", plan);
+        debug!(
+            "Input physical plan:\n{}\n",
+            displayable(plan.as_ref()).indent()
+        );
+        trace!("Detailed input physical plan:\n{:?}", plan);
 
         let mut new_plan = plan;
         for optimizer in optimizers {
@@ -1406,10 +1410,10 @@ impl DefaultPhysicalPlanner {
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
-            "Optimized physical plan short version:\n{}\n",
+            "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent()
         );
-        debug!("Optimized physical plan:\n{:?}", new_plan);
+        trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
     }
 }
@@ -1875,6 +1879,14 @@ mod tests {
 
         fn output_partitioning(&self) -> Partitioning {
             Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            None
+        }
+
+        fn relies_on_input_order(&self) -> bool {
+            false
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

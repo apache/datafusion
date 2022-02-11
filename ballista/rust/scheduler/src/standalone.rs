@@ -15,13 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ballista_core::serde::BallistaCodec;
 use ballista_core::{
-    error::Result, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
+    error::Result,
+    serde::protobuf::{
+        scheduler_grpc_server::SchedulerGrpcServer, LogicalPlanNode, PhysicalPlanNode,
+    },
     BALLISTA_VERSION,
 };
+use datafusion::prelude::ExecutionContext;
 use log::info;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
 use tonic::transport::Server;
 
 use crate::{state::StandaloneClient, SchedulerServer};
@@ -29,10 +35,14 @@ use crate::{state::StandaloneClient, SchedulerServer};
 pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
-    let server = SchedulerGrpcServer::new(SchedulerServer::new(
+    let server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> = SchedulerServer::new(
         Arc::new(client),
         "ballista".to_string(),
-    ));
+        Arc::new(RwLock::new(ExecutionContext::new())),
+        BallistaCodec::default(),
+    );
+
+    let server = SchedulerGrpcServer::new(server);
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;

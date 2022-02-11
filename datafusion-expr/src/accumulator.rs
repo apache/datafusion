@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Accumulator module contains the trait definition for aggregation function's accumulators.
+
 use arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};
 use std::fmt::Debug;

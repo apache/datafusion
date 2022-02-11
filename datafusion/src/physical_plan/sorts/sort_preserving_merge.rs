@@ -128,6 +128,14 @@ impl ExecutionPlan for SortPreservingMergeExec {
         Distribution::UnspecifiedDistribution
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        Some(&self.expr)
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.input.clone()]
     }

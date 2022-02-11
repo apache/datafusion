@@ -74,6 +74,7 @@ use datafusion::{
     logical_plan::{Expr, LogicalPlan, UserDefinedLogicalNode},
     optimizer::{optimizer::OptimizerRule, utils::optimize_children},
     physical_plan::{
+        expressions::PhysicalSortExpr,
         planner::{DefaultPhysicalPlanner, ExtensionPlanner},
         DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
         RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -430,6 +431,14 @@ impl ExecutionPlan for TopKExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn required_child_distribution(&self) -> Distribution {

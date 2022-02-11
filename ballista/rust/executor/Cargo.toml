@@ -35,7 +35,7 @@ anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }
 configure_me = "0.4.0"
-datafusion = { path = "../../../datafusion", version = "6.0.0" }
+datafusion = { path = "../../../datafusion", version = "7.0.0" }
 env_logger = "0.9"
 futures = "0.3"
 log = "0.4"

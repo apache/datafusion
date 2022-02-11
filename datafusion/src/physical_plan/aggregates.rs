@@ -80,6 +80,7 @@ pub fn return_type(
             true,
         )))),
         AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
+        AggregateFunction::ApproxMedian => Ok(coerced_data_types[0].clone()),
     }
 }
 
@@ -268,6 +269,18 @@ pub fn create_aggregate_expr(
                     .to_string(),
             ));
         }
+        (AggregateFunction::ApproxMedian, false) => {
+            Arc::new(expressions::ApproxMedian::new(
+                coerced_phy_exprs[0].clone(),
+                name,
+                return_type,
+            ))
+        }
+        (AggregateFunction::ApproxMedian, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "MEDIAN(DISTINCT) aggregations are not available".to_string(),
+            ));
+        }
     })
 }
 
@@ -317,7 +330,8 @@ pub(super) fn signature(fun: &AggregateFunction) -> Signature {
         | AggregateFunction::Variance
         | AggregateFunction::VariancePop
         | AggregateFunction::Stddev
-        | AggregateFunction::StddevPop => {
+        | AggregateFunction::StddevPop
+        | AggregateFunction::ApproxMedian => {
             Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
         }
         AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
@@ -341,8 +355,9 @@ pub(super) fn signature(fun: &AggregateFunction) -> Signature {
 mod tests {
     use super::*;
     use crate::physical_plan::expressions::{
-        ApproxDistinct, ApproxPercentileCont, ArrayAgg, Avg, Correlation, Count,
-        Covariance, DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum, Variance,
+        ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg, Correlation,
+        Count, Covariance, DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum,
+        Variance,
     };
     use crate::{error::Result, scalar::ScalarValue};
 
@@ -912,6 +927,62 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_median_expr() -> Result<()> {
+        let funcs = vec![AggregateFunction::ApproxMedian];
+        let data_types = vec![
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::Float32,
+            DataType::Float64,
+        ];
+        for fun in funcs {
+            for data_type in &data_types {
+                let input_schema =
+                    Schema::new(vec![Field::new("c1", data_type.clone(), true)]);
+                let input_phy_exprs: Vec<Arc<dyn PhysicalExpr>> = vec![Arc::new(
+                    expressions::Column::new_with_schema("c1", &input_schema).unwrap(),
+                )];
+                let result_agg_phy_exprs = create_aggregate_expr(
+                    &fun,
+                    false,
+                    &input_phy_exprs[0..1],
+                    &input_schema,
+                    "c1",
+                )?;
+
+                if fun == AggregateFunction::ApproxMedian {
+                    assert!(result_agg_phy_exprs.as_any().is::<ApproxMedian>());
+                    assert_eq!("c1", result_agg_phy_exprs.name());
+                    assert_eq!(
+                        Field::new("c1", data_type.clone(), true),
+                        result_agg_phy_exprs.field().unwrap()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_median() -> Result<()> {
+        let observed = return_type(&AggregateFunction::ApproxMedian, &[DataType::Utf8]);
+        assert!(observed.is_err());
+
+        let observed = return_type(&AggregateFunction::ApproxMedian, &[DataType::Int32])?;
+        assert_eq!(DataType::Int32, observed);
+
+        let observed = return_type(
+            &AggregateFunction::ApproxMedian,
+            &[DataType::Decimal(10, 6)],
+        );
+        assert!(observed.is_err());
+
         Ok(())
     }
 
