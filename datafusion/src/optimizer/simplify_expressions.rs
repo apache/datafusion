@@ -35,7 +35,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 
 /// Provides simplification information based on schema and properties
-struct SimplifyContext<'a, 'b> {
+pub(crate) struct SimplifyContext<'a, 'b> {
     schemas: Vec<&'a DFSchemaRef>,
     props: &'b ExecutionProps,
 }
@@ -245,6 +245,7 @@ impl SimplifyExpressions {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`

@@ -118,6 +118,7 @@ impl AggregateExpr for ApproxPercentileCont {
         Ok(Field::new(&self.name, self.input_data_type.clone(), false))
     }
 
+    #[allow(rustdoc::private_intra_doc_links)]
     /// See [`TDigest::to_scalar_state()`] for a description of the serialised
     /// state.
     fn state_fields(&self) -> Result<Vec<Field>> {

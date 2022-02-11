@@ -257,7 +257,7 @@ pub(crate) struct SortPreservingMergeStream {
     /// The sorted input streams to merge together
     streams: MergingStreams,
 
-    /// Drop helper for tasks feeding the [`receivers`](Self::receivers)
+    /// Drop helper for tasks feeding the input [`streams`](Self::streams)
     _drop_helper: AbortOnDropMany<()>,
 
     /// For each input stream maintain a dequeue of RecordBatches
