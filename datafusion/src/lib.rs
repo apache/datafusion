@@ -159,7 +159,7 @@
 //! * Projection: [`ProjectionExec`](physical_plan::projection::ProjectionExec)
 //! * Filter: [`FilterExec`](physical_plan::filter::FilterExec)
 //! * Hash and Grouped aggregations: [`HashAggregateExec`](physical_plan::hash_aggregate::HashAggregateExec)
-//! * Sort: [`SortExec`](physical_plan::sort::SortExec)
+//! * Sort: [`SortExec`](physical_plan::sorts::sort::SortExec)
 //! * Coalesce partitions: [`CoalescePartitionsExec`](physical_plan::coalesce_partitions::CoalescePartitionsExec)
 //! * Limit: [`LocalLimitExec`](physical_plan::limit::LocalLimitExec) and [`GlobalLimitExec`](physical_plan::limit::GlobalLimitExec)
 //! * Scan a CSV: [`CsvExec`](physical_plan::file_format::CsvExec)
@@ -201,6 +201,9 @@
 //! cargo run --example simple_udf
 //! ```
 
+/// DataFusion crate version
+pub const DATAFUSION_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 extern crate sqlparser;
 
 pub mod avro_to_arrow;
@@ -223,6 +226,8 @@ pub use arrow;
 pub use parquet;
 
 pub(crate) mod field_util;
+#[cfg(feature = "row")]
+pub(crate) mod row;
 
 pub mod from_slice;
 

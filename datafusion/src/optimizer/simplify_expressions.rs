@@ -17,15 +17,12 @@
 
 //! Simplify expressions optimizer rule
 
-use arrow::array::new_null_array;
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
-
 use crate::error::DataFusionError;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{
-    lit, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan, RewriteRecursion,
-    SimplifyInfo,
+    lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
+    LogicalPlan, RewriteRecursion, SimplifyInfo,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -33,6 +30,9 @@ use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
+use arrow::array::new_null_array;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 
 /// Provides simplification information based on schema and properties
 struct SimplifyContext<'a, 'b> {
@@ -252,6 +252,7 @@ impl SimplifyExpressions {
 ///
 /// ```
 /// # use datafusion::prelude::*;
+/// # use datafusion::logical_plan::ExprRewritable;
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
@@ -271,7 +272,7 @@ pub struct ConstEvaluator<'a> {
     /// non evaluatable (e.g. had a column reference or volatile
     /// function)
     ///
-    /// Specifically, can_evaluate[N] represents the state of
+    /// Specifically, `can_evaluate[N]` represents the state of
     /// traversal when we are N levels deep in the tree, one entry for
     /// this Expr and each of its parents.
     ///

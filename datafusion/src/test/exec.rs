@@ -33,7 +33,6 @@ use arrow::{
 };
 use futures::Stream;
 
-use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -41,6 +40,9 @@ use crate::physical_plan::{
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::stream::RecordBatchReceiverStream,
+};
+use crate::{
+    execution::runtime_env::RuntimeEnv, physical_plan::expressions::PhysicalSortExpr,
 };
 
 /// Index into the data that has been returned so far
@@ -149,6 +151,10 @@ impl ExecutionPlan for MockExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -286,6 +292,10 @@ impl ExecutionPlan for BarrierExec {
         Partitioning::UnknownPartitioning(self.data.len())
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -383,6 +393,10 @@ impl ExecutionPlan for ErrorExec {
         Partitioning::UnknownPartitioning(1)
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -457,6 +471,10 @@ impl ExecutionPlan for StatisticsExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(2)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -558,6 +576,10 @@ impl ExecutionPlan for BlockingExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.n_partitions)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn with_new_children(

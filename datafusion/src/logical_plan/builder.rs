@@ -20,11 +20,12 @@
 use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-    listing::{ListingOptions, ListingTable},
+    listing::{ListingOptions, ListingTable, ListingTableConfig},
     object_store::ObjectStore,
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
+use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
     TableScan, ToStringifiedPlan, Union, Window,
@@ -242,8 +243,10 @@ impl LogicalPlanBuilder {
                     .await?
             }
         };
-        let provider =
-            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
 
         Self::scan(table_name, Arc::new(provider), projection)
     }
@@ -292,8 +295,11 @@ impl LogicalPlanBuilder {
             .infer_schema(Arc::clone(&object_store), &path)
             .await?;
 
-        let provider =
-            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+
+        let provider = ListingTable::try_new(config)?;
         Self::scan(table_name, Arc::new(provider), projection)
     }
 
@@ -338,8 +344,10 @@ impl LogicalPlanBuilder {
                     .await?
             }
         };
-        let provider =
-            ListingTable::new(object_store, path, resolved_schema, listing_options);
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
 
         Self::scan(table_name, Arc::new(provider), projection)
     }

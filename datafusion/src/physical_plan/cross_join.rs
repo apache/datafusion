@@ -27,6 +27,7 @@ use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
+use super::expressions::PhysicalSortExpr;
 use super::{
     coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
@@ -135,6 +136,14 @@ impl ExecutionPlan for CrossJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         self.right.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     async fn execute(

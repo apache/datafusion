@@ -18,7 +18,7 @@
 //! Window functions provide the ability to perform calculations across
 //! sets of rows that are related to the current query row.
 //!
-//! see also https://www.postgresql.org/docs/current/functions-window.html
+//! see also <https://www.postgresql.org/docs/current/functions-window.html>
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::functions::{TypeSignature, Volatility};

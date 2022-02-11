@@ -27,7 +27,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion::prelude::ExecutionConfig;
+use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 
 /// Ballista executor
 pub struct Executor {
@@ -36,24 +36,30 @@ pub struct Executor {
 
     /// Specification like total task slots
     pub specification: ExecutorSpecification,
+
+    /// DataFusion execution context
+    pub ctx: Arc<ExecutionContext>,
 }
 
 impl Executor {
     /// Create a new executor instance
-    pub fn new(work_dir: &str) -> Self {
+    pub fn new(work_dir: &str, ctx: Arc<ExecutionContext>) -> Self {
         Executor::new_with_specification(
             work_dir,
             ExecutorSpecification { task_slots: 4 },
+            ctx,
         )
     }
 
     pub fn new_with_specification(
         work_dir: &str,
         specification: ExecutorSpecification,
+        ctx: Arc<ExecutionContext>,
     ) -> Self {
         Self {
             work_dir: work_dir.to_owned(),
             specification,
+            ctx,
         }
     }
 }

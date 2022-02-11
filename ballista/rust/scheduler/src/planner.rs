@@ -250,7 +250,7 @@ mod test {
     use crate::test_utils::datafusion_test_context;
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
-    use ballista_core::serde::protobuf;
+    use ballista_core::serde::{protobuf, AsExecutionPlan, BallistaCodec};
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::hash_join::HashJoinExec;
@@ -259,7 +259,9 @@ mod test {
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use std::convert::TryInto;
+    use datafusion::prelude::ExecutionContext;
+
+    use ballista_core::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -572,8 +574,16 @@ order by
     fn roundtrip_operator(
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
-        let proto: protobuf::PhysicalPlanNode = plan.clone().try_into()?;
-        let result_exec_plan: Arc<dyn ExecutionPlan> = (&proto).try_into()?;
+        let ctx = ExecutionContext::new();
+        let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+            BallistaCodec::default();
+        let proto: protobuf::PhysicalPlanNode =
+            protobuf::PhysicalPlanNode::try_from_physical_plan(
+                plan.clone(),
+                codec.physical_extension_codec(),
+            )?;
+        let result_exec_plan: Arc<dyn ExecutionPlan> =
+            (&proto).try_into_physical_plan(&ctx, codec.physical_extension_codec())?;
         Ok(result_exec_plan)
     }
 }

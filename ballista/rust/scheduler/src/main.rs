@@ -29,7 +29,10 @@ use tower::Service;
 
 use ballista_core::BALLISTA_VERSION;
 use ballista_core::{
-    print_version, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
+    print_version,
+    serde::protobuf::{
+        scheduler_grpc_server::SchedulerGrpcServer, LogicalPlanNode, PhysicalPlanNode,
+    },
 };
 use ballista_scheduler::api::{get_routes, EitherBody, Error};
 #[cfg(feature = "etcd")]
@@ -42,8 +45,9 @@ use ballista_scheduler::{
 };
 
 use ballista_core::config::TaskSchedulingPolicy;
+use ballista_core::serde::BallistaCodec;
 use log::info;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, RwLock};
 
 #[macro_use]
 extern crate configure_me;
@@ -59,6 +63,7 @@ mod config {
 }
 
 use config::prelude::*;
+use datafusion::prelude::ExecutionContext;
 
 async fn start_server(
     config_backend: Arc<dyn ConfigBackendClient>,
@@ -75,22 +80,31 @@ async fn start_server(
         "Starting Scheduler grpc server with task scheduling policy of {:?}",
         policy
     );
-    let scheduler_server = match policy {
-        TaskSchedulingPolicy::PushStaged => {
-            // TODO make the buffer size configurable
-            let (tx_job, rx_job) = mpsc::channel::<String>(10000);
-            let scheduler_server = SchedulerServer::new_with_policy(
+    let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+        match policy {
+            TaskSchedulingPolicy::PushStaged => {
+                // TODO make the buffer size configurable
+                let (tx_job, rx_job) = mpsc::channel::<String>(10000);
+                let scheduler_server = SchedulerServer::new_with_policy(
+                    config_backend.clone(),
+                    namespace.clone(),
+                    policy,
+                    Some(SchedulerEnv { tx_job }),
+                    Arc::new(RwLock::new(ExecutionContext::new())),
+                    BallistaCodec::default(),
+                );
+                let task_scheduler =
+                    TaskScheduler::new(Arc::new(scheduler_server.clone()));
+                task_scheduler.start(rx_job);
+                scheduler_server
+            }
+            _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
-                policy,
-                Some(SchedulerEnv { tx_job }),
-            );
-            let task_scheduler = TaskScheduler::new(Arc::new(scheduler_server.clone()));
-            task_scheduler.start(rx_job);
-            scheduler_server
-        }
-        _ => SchedulerServer::new(config_backend.clone(), namespace.clone()),
-    };
+                Arc::new(RwLock::new(ExecutionContext::new())),
+                BallistaCodec::default(),
+            ),
+        };
 
     Ok(Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {

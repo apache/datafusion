@@ -35,6 +35,8 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use async_trait::async_trait;
+pub use datafusion_expr::Accumulator;
+pub use datafusion_expr::ColumnarValue;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use std::fmt;
@@ -142,19 +144,71 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
-    /// Specifies the data distribution requirements of all the children for this operator
+    /// If the output of this operator is sorted, returns `Some(keys)`
+    /// with the description of how it was sorted.
+    ///
+    /// For example, Sort, (obviously) produces sorted output as does
+    /// SortPreservingMergeStream. Less obviously `Projection`
+    /// produces sorted output if its input was sorted as it does not
+    /// reorder the input rows,
+    ///
+    /// It is safe to return `None` here if your operator does not
+    /// have any particular output order here
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+
+    /// Specifies the data distribution requirements of all the
+    /// children for this operator
     fn required_child_distribution(&self) -> Distribution {
         Distribution::UnspecifiedDistribution
     }
 
-    /// Returns `true` if the direct children of this `ExecutionPlan` should be repartitioned
-    /// to introduce greater concurrency to the plan
+    /// Returns `true` if this operator relies on its inputs being
+    /// produced in a certain order (for example that they are sorted
+    /// a particular way) for correctness.
     ///
-    /// The default implementation returns `true` unless `Self::required_child_distribution`
-    /// returns `Distribution::SinglePartition`
+    /// If `true` is returned, DataFusion will not apply certain
+    /// optimizations which might reorder the inputs (such as
+    /// repartitioning to increase concurrency).
     ///
-    /// Operators that do not benefit from additional partitioning may want to return `false`
-    fn should_repartition_children(&self) -> bool {
+    /// The default implementation returns `true`
+    ///
+    /// WARNING: if you override this default and return `false`, your
+    /// operator can not rely on datafusion preserving the input order
+    /// as it will likely not.
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
+    /// Returns `false` if this operator's implementation may reorder
+    /// rows within or between partitions.
+    ///
+    /// For example, Projection, Filter, and Limit maintain the order
+    /// of inputs -- they may transform values (Projection) or not
+    /// produce the same number of rows that went in (Filter and
+    /// Limit), but the rows that are produced go in the same way.
+    ///
+    /// DataFusion uses this metadata to apply certain optimizations
+    /// such as automatically repartitioning correctly.
+    ///
+    /// The default implementation returns `false`
+    ///
+    /// WARNING: if you override this default, you *MUST* ensure that
+    /// the operator's maintains the ordering invariant or else
+    /// DataFusion may produce incorrect results.
+    fn maintains_input_order(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if this operator would benefit from
+    /// partitioning its input (and thus from more parallelism). For
+    /// operators that do very little work the overhead of extra
+    /// parallelism may outweigh any benefits
+    ///
+    /// The default implementation returns `true` unless this operator
+    /// has signalled it requiers a single child input partition.
+    fn benefits_from_input_partitioning(&self) -> bool {
+        // By default try to maximize parallelism with more CPUs if
+        // possible
         !matches!(
             self.required_child_distribution(),
             Distribution::SinglePartition
@@ -165,6 +219,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
+
     /// Returns a new plan where all children were replaced by new plans.
     /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
     fn with_new_children(
@@ -419,32 +474,6 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-/// Represents the result from an expression
-#[derive(Clone)]
-pub enum ColumnarValue {
-    /// Array of values
-    Array(ArrayRef),
-    /// A single value
-    Scalar(ScalarValue),
-}
-
-impl ColumnarValue {
-    fn data_type(&self) -> DataType {
-        match self {
-            ColumnarValue::Array(array_value) => array_value.data_type().clone(),
-            ColumnarValue::Scalar(scalar_value) => scalar_value.get_datatype(),
-        }
-    }
-
-    /// Convert a columnar value into an ArrayRef
-    pub fn into_array(self, num_rows: usize) -> ArrayRef {
-        match self {
-            ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
-        }
-    }
-}
-
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
 pub trait PhysicalExpr: Send + Sync + Display + Debug {
@@ -509,7 +538,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 
     /// expressions that are passed to the WindowAccumulator.
-    /// Functions which take a single input argument, such as `sum`, return a single [`Expr`],
+    /// Functions which take a single input argument, such as `sum`, return a single [`datafusion_expr::expr::Expr`],
     /// others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 
@@ -576,30 +605,6 @@ pub trait WindowExpr: Send + Sync + Debug {
         sort_columns.extend(order_by_columns);
         Ok(sort_columns)
     }
-}
-
-/// An accumulator represents a stateful object that lives throughout the evaluation of multiple rows and
-/// generically accumulates values.
-///
-/// An accumulator knows how to:
-/// * update its state from inputs via `update_batch`
-/// * convert its internal state to a vector of scalar values
-/// * update its state from multiple accumulators' states via `merge_batch`
-/// * compute the final value from its internal state via `evaluate`
-pub trait Accumulator: Send + Sync + Debug {
-    /// Returns the state of the accumulator at the end of the accumulation.
-    // in the case of an average on which we track `sum` and `n`, this function should return a vector
-    // of two values, sum and n.
-    fn state(&self) -> Result<Vec<ScalarValue>>;
-
-    /// updates the accumulator's state from a vector of arrays.
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()>;
-
-    /// updates the accumulator's state from a vector of states.
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()>;
-
-    /// returns its value based on its current state.
-    fn evaluate(&self) -> Result<ScalarValue>;
 }
 
 /// Applies an optional projection to a [`SchemaRef`], returning the

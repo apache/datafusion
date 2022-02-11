@@ -25,6 +25,7 @@ use datafusion::execution::context::ExecutionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -67,6 +68,10 @@ impl ExecutionPlan for CustomPlan {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
