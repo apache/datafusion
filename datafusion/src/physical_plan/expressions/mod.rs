@@ -29,6 +29,7 @@ mod approx_distinct;
 mod approx_percentile_cont;
 mod array_agg;
 mod average;
+mod bitmap_distinct;
 #[macro_use]
 mod binary;
 mod case;
@@ -111,6 +112,9 @@ pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
 pub(crate) use variance::{
     is_variance_support_arg_type, variance_return_type, Variance, VariancePop,
+};
+pub(crate) use bitmap_distinct::{
+    is_bitmap_count_distinct_supported_arg_type, BitMapDistinct
 };
 
 /// returns the name of the state

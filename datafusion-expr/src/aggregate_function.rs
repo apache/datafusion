@@ -55,6 +55,8 @@ pub enum AggregateFunction {
     ApproxPercentileCont,
     /// ApproxMedian
     ApproxMedian,
+    /// BitMap count distinct function
+    BitMapCountDistinct,
 }
 
 impl fmt::Display for AggregateFunction {

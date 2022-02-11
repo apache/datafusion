@@ -55,9 +55,9 @@ pub fn return_type(
 
     match fun {
         // TODO If the datafusion is compatible with PostgreSQL, the returned data type should be INT64.
-        AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-            Ok(DataType::UInt64)
-        }
+        AggregateFunction::Count
+        | AggregateFunction::ApproxDistinct
+        | AggregateFunction::BitMapCountDistinct => Ok(DataType::UInt64),
         AggregateFunction::Max | AggregateFunction::Min => {
             // For min and max agg function, the returned type is same as input type.
             // The coerced_data_types is same with input_types.
@@ -280,6 +280,13 @@ pub fn create_aggregate_expr(
             return Err(DataFusionError::NotImplemented(
                 "MEDIAN(DISTINCT) aggregations are not available".to_string(),
             ));
+        }
+        (AggregateFunction::BitMapCountDistinct, _) => {
+            Arc::new(expressions::BitMapDistinct::new(
+                coerced_phy_exprs[0].clone(),
+                name,
+                coerced_exprs_types[0].clone(),
+            ))
         }
     })
 }

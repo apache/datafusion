@@ -754,6 +754,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::ApproxMedian => {
                         protobuf::AggregateFunction::ApproxMedian
                     }
+                    AggregateFunction::BitMapCountDistinct=> {
+                        protobuf::AggregateFunction:
+                    }
                 };
 
                 let aggregate_expr = protobuf::AggregateExprNode {
