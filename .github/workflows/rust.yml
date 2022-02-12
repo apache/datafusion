@@ -70,9 +70,17 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target/release"
-      - name: Check DataFusion Build without default features
+      - name: Check DataFusion builds without default features
         run: |
           cargo check --no-default-features -p datafusion
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
+      - name: Check DataFusion CLI builds with ballista
+        run: |
+          cargo check -p datafusion-cli
+          cargo check --no-default-features -p datafusion-cli
+          cargo check --features=ballista -p datafusion-cli
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
