@@ -108,22 +108,16 @@ impl ReaderBuilder {
 
         // check if schema should be inferred
         source.seek(SeekFrom::Start(0))?;
-        let (mut avro_schemas, mut schema, codec, file_marker) =
+        let (avro_schemas, schema, codec, file_marker) =
             read::read_metadata(&mut source)?;
-        if let Some(proj) = self.projection {
-            let mut indices: Vec<usize> = schema
+
+        let projection = self.projection.map(|proj| {
+            schema
                 .fields
                 .iter()
-                .filter(|f| !proj.contains(&f.name))
-                .enumerate()
-                .map(|(i, _)| i)
-                .collect();
-            indices.sort_by(|i1, i2| i2.cmp(i1));
-            for i in indices {
-                avro_schemas.remove(i);
-                schema.fields.remove(i);
-            }
-        }
+                .map(|f| proj.contains(&f.name))
+                .collect::<Vec<bool>>()
+        });
 
         Reader::try_new(
             source,
@@ -132,6 +126,7 @@ impl ReaderBuilder {
             avro_schemas,
             codec,
             file_marker,
+            projection,
         )
     }
 }
@@ -155,6 +150,7 @@ impl<'a, R: Read> Reader<R> {
         avro_schemas: Vec<avro_schema::Schema>,
         codec: Option<Compression>,
         file_marker: [u8; 16],
+        projection: Option<Vec<bool>>,
     ) -> Result<Self> {
         Ok(Self {
             array_reader: AvroBatchReader::try_new(
@@ -163,6 +159,7 @@ impl<'a, R: Read> Reader<R> {
                 avro_schemas,
                 codec,
                 file_marker,
+                projection,
             )?,
             schema,
             batch_size,

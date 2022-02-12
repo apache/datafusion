@@ -38,6 +38,7 @@ impl<'a, R: Read> AvroBatchReader<R> {
         avro_schemas: Vec<avro_schema::Schema>,
         codec: Option<Compression>,
         file_marker: [u8; 16],
+        projection: Option<Vec<bool>>,
     ) -> Result<Self> {
         let reader = AvroReader::new(
             read::Decompressor::new(
@@ -46,6 +47,7 @@ impl<'a, R: Read> AvroBatchReader<R> {
             ),
             avro_schemas,
             schema.fields.clone(),
+            projection,
         );
         Ok(Self { reader, schema })
     }
