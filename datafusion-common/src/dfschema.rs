@@ -402,8 +402,8 @@ impl Display for DFSchema {
     }
 }
 
-/// Provides schema information needed by [Expr] methods such as
-/// [Expr::nullable] and [Expr::data_type].
+/// Provides schema information needed by certain methods of `Expr`
+/// (defined in the datafusion-common crate).
 ///
 /// Note that this trait is implemented for &[DFSchema] which is
 /// widely used in the DataFusion codebase.
