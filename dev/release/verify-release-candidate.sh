@@ -72,7 +72,7 @@ fetch_archive() {
 
 verify_dir_artifact_signatures() {
   # verify the signature and the checksums of each artifact
-  find $1 -name '*.asc' | while read sigfile; do
+  find . -name '*.asc' | while read sigfile; do
     artifact=${sigfile/.asc/}
     gpg --verify $sigfile $artifact || exit 1
 
