@@ -37,7 +37,7 @@ avro = ["avro-rs"]
 pyarrow = ["pyo3"]
 
 [dependencies]
-arrow = { version = "8.0.0", features = ["prettyprint"] }
+arrow = { version = "9.0.2", features = ["prettyprint"] }
 parquet = { version = "8.0.0", features = ["arrow"] }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 pyo3 = { version = "0.15", optional = true }

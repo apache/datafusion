@@ -29,7 +29,7 @@ edition = "2018"
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = { version = "8.0.0"  }
+arrow = { version = "9.0.2"  }
 arrow-flight = { version = "8.0.0"  }
 anyhow = "1"
 async-trait = "0.1.36"

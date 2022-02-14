@@ -32,6 +32,6 @@ clap = { version = "3", features = ["derive", "cargo"] }
 rustyline = "9.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 datafusion = { path = "../datafusion", version = "7.0.0" }
-arrow = { version = "8.0.0" }
+arrow = { version = "9.0.2" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0" }
 env_logger = "0.9"
