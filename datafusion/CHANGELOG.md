@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [7.0.0](https://github.com/apache/arrow-datafusion/tree/7.0.0) (2022-02-10)
+## [7.0.0](https://github.com/apache/arrow-datafusion/tree/7.0.0) (2022-02-14)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/6.0.0...7.0.0)
 
@@ -166,15 +166,20 @@
 
 **Merged pull requests:**
 
+- Fixup some doc warnings [\#1811](https://github.com/apache/arrow-datafusion/pull/1811) ([alamb](https://github.com/alamb))
+- Ensure most of links in docs are correct [\#1808](https://github.com/apache/arrow-datafusion/pull/1808) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([HaoYang670](https://github.com/HaoYang670))
+- Update CHANGELOG.md, update release scripts [\#1807](https://github.com/apache/arrow-datafusion/pull/1807) ([alamb](https://github.com/alamb))
 - Update versions for split crates [\#1803](https://github.com/apache/arrow-datafusion/pull/1803) ([matthewmturner](https://github.com/matthewmturner))
 - Improve the error message and UX of tpch benchmark program [\#1800](https://github.com/apache/arrow-datafusion/pull/1800) ([alamb](https://github.com/alamb))
 - rename references of expr in logical plan module after datafusion-expr split [\#1797](https://github.com/apache/arrow-datafusion/pull/1797) ([Jimexist](https://github.com/Jimexist))
+- Update to sqlparser 0.14 [\#1796](https://github.com/apache/arrow-datafusion/pull/1796) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
 - \[split/13\] move rest of expr to expr\_fn in datafusion-expr module [\#1794](https://github.com/apache/arrow-datafusion/pull/1794) ([Jimexist](https://github.com/Jimexist))
 - Update datafusion versions [\#1793](https://github.com/apache/arrow-datafusion/pull/1793) ([matthewmturner](https://github.com/matthewmturner))
 - Less verbose plans in debug logging [\#1787](https://github.com/apache/arrow-datafusion/pull/1787) ([alamb](https://github.com/alamb))
 - \[split/11\] split expr type and null info to be expr-schemable [\#1784](https://github.com/apache/arrow-datafusion/pull/1784) ([Jimexist](https://github.com/Jimexist))
 - Introduce `Row` format backed by raw bytes [\#1782](https://github.com/apache/arrow-datafusion/pull/1782) ([yjshen](https://github.com/yjshen))
 - rewrite predicates before pushing to union inputs [\#1781](https://github.com/apache/arrow-datafusion/pull/1781) ([korowa](https://github.com/korowa))
+- Update datafusion to use arrow 9.0.0 [\#1775](https://github.com/apache/arrow-datafusion/pull/1775) ([alamb](https://github.com/alamb))
 - \[split/10\] split up expr for rewriting, visiting, and simplification traits [\#1774](https://github.com/apache/arrow-datafusion/pull/1774) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jimexist](https://github.com/Jimexist))
 - \#1768 Support TimeUnit::Second in hasher [\#1769](https://github.com/apache/arrow-datafusion/pull/1769) ([jychen7](https://github.com/jychen7))
 - TPC-H benchmark can optionally write JSON output file with benchmark summary [\#1766](https://github.com/apache/arrow-datafusion/pull/1766) ([andygrove](https://github.com/andygrove))
