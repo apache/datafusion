@@ -36,6 +36,7 @@ futures = "0.3"
 hashbrown = "0.12"
 log = "0.4"
 prost = "0.9"
+prost-types = "0.9"
 serde = {version = "1", features = ["derive"]}
 sqlparser = "0.14"
 tokio = "1.0"
@@ -47,6 +48,7 @@ parse_arg = "0.1.3"
 
 arrow-flight = { version = "9.1"  }
 datafusion = { path = "../../../datafusion", version = "7.0.0" }
+datafusion-proto = { path = "../../../datafusion-proto", version = "7.0.0" }
 
 parking_lot = "0.12"
 

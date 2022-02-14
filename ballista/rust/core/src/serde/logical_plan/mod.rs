@@ -47,7 +47,6 @@ use std::convert::TryInto;
 use std::sync::Arc;
 
 pub mod from_proto;
-pub mod to_proto;
 
 impl AsLogicalPlan for LogicalPlanNode {
     fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
@@ -96,11 +95,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .values_list
                         .chunks_exact(n_cols)
                         .map(|r| {
-                            r.iter()
-                                .map(|v| v.try_into())
-                                .collect::<Result<Vec<_>, _>>()
+                            r.iter().map(|v| v.try_into()).collect::<Result<
+                                Vec<_>,
+                                datafusion_proto::from_proto::Error,
+                            >>()
                         })
                         .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| e.into())
                 }?;
                 LogicalPlanBuilder::values(values)?
                     .build()
@@ -458,9 +459,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
-                let schema: protobuf::Schema = schema.as_ref().into();
+                let schema: datafusion_proto::protobuf::Schema = schema.as_ref().into();
 
-                let filters: Vec<protobuf::LogicalExprNode> = filters
+                let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> = filters
                     .iter()
                     .map(|filter| filter.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
@@ -531,7 +532,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                         expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
                             Vec<_>,
-                            BallistaError,
+                            datafusion_proto::to_proto::Error,
                         >>(
                         )?,
                         optional_alias: alias
@@ -661,10 +662,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input.as_ref(),
                         extension_codec,
                     )?;
-                let selection_expr: Vec<protobuf::LogicalExprNode> = expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, BallistaError>>()?;
+                let selection_expr: Vec<datafusion_proto::protobuf::LogicalExprNode> =
+                    expr.iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, datafusion_proto::to_proto::Error>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
                         protobuf::SortNode {
@@ -689,20 +690,24 @@ impl AsLogicalPlan for LogicalPlanNode {
                 //Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
-                let pb_partition_method = match partitioning_scheme {
-                    Partitioning::Hash(exprs, partition_count) => {
-                        PartitionMethod::Hash(protobuf::HashRepartition {
-                            hash_expr: exprs
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
-                            partition_count: *partition_count as u64,
-                        })
-                    }
-                    Partitioning::RoundRobinBatch(partition_count) => {
-                        PartitionMethod::RoundRobin(*partition_count as u64)
-                    }
-                };
+                let pb_partition_method =
+                    match partitioning_scheme {
+                        Partitioning::Hash(exprs, partition_count) => {
+                            PartitionMethod::Hash(protobuf::HashRepartition {
+                                hash_expr: exprs
+                                    .iter()
+                                    .map(|expr| expr.try_into())
+                                    .collect::<Result<
+                                    Vec<_>,
+                                    datafusion_proto::to_proto::Error,
+                                >>()?,
+                                partition_count: *partition_count as u64,
+                            })
+                        }
+                        Partitioning::RoundRobinBatch(partition_count) => {
+                            PartitionMethod::RoundRobin(*partition_count as u64)
+                        }
+                    };
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Repartition(Box::new(
@@ -865,7 +870,6 @@ mod roundtrip_tests {
         scalar::ScalarValue,
         sql::parser::FileType,
     };
-
     use std::{convert::TryInto, sync::Arc};
 
     #[derive(Debug)]
@@ -1084,7 +1088,10 @@ mod roundtrip_tests {
         ];
 
         for test_case in should_fail_on_seralize.into_iter() {
-            let res: Result<protobuf::ScalarValue> = (&test_case).try_into();
+            let res: std::result::Result<
+                datafusion_proto::protobuf::ScalarValue,
+                datafusion_proto::to_proto::Error,
+            > = (&test_case).try_into();
             if let Ok(val) = res {
                 return Err(BallistaError::General(format!(
                     "The value {:?} should not have been able to serialize. Serialized to :{:?}",
@@ -1206,7 +1213,8 @@ mod roundtrip_tests {
         ];
 
         for test_case in should_pass.into_iter() {
-            let proto: protobuf::ScalarValue = (&test_case).try_into()?;
+            let proto: datafusion_proto::protobuf::ScalarValue =
+                (&test_case).try_into()?;
             let _roundtrip: ScalarValue = (&proto).try_into()?;
         }
 
@@ -1353,14 +1361,18 @@ mod roundtrip_tests {
         ];
 
         for test_case in should_pass.into_iter() {
-            let proto: protobuf::ScalarType = (&test_case).try_into()?;
+            let proto: datafusion_proto::protobuf::ScalarType =
+                (&test_case).try_into()?;
             let roundtrip: DataType = (&proto).try_into()?;
             assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
         }
 
         let mut success: Vec<DataType> = Vec::new();
         for test_case in should_fail.into_iter() {
-            let proto: Result<protobuf::ScalarType> = (&test_case).try_into();
+            let proto: std::result::Result<
+                datafusion_proto::protobuf::ScalarType,
+                datafusion_proto::to_proto::Error,
+            > = (&test_case).try_into();
             if proto.is_ok() {
                 success.push(test_case)
             }
@@ -1504,7 +1516,7 @@ mod roundtrip_tests {
         ];
 
         for test_case in test_cases.into_iter() {
-            let proto: protobuf::ArrowType = (&test_case).into();
+            let proto: datafusion_proto::protobuf::ArrowType = (&test_case).into();
             let roundtrip: DataType = (&proto).try_into()?;
             assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
         }
@@ -1534,7 +1546,8 @@ mod roundtrip_tests {
         ];
 
         for test_case in test_types.into_iter() {
-            let proto_scalar: protobuf::ScalarValue = (&test_case).try_into()?;
+            let proto_scalar: datafusion_proto::protobuf::ScalarValue =
+                (&test_case).try_into()?;
             let returned_scalar: datafusion::scalar::ScalarValue =
                 (&proto_scalar).try_into()?;
             assert_eq!(
@@ -1838,7 +1851,7 @@ mod roundtrip_tests {
     fn roundtrip_not() -> Result<()> {
         let test_expr = Expr::Not(Box::new(Expr::Literal((1.0).into())));
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1847,7 +1860,7 @@ mod roundtrip_tests {
     fn roundtrip_is_null() -> Result<()> {
         let test_expr = Expr::IsNull(Box::new(col("id")));
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1856,7 +1869,7 @@ mod roundtrip_tests {
     fn roundtrip_is_not_null() -> Result<()> {
         let test_expr = Expr::IsNotNull(Box::new(col("id")));
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1870,7 +1883,7 @@ mod roundtrip_tests {
             high: Box::new(Expr::Literal((3.0).into())),
         };
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1886,7 +1899,7 @@ mod roundtrip_tests {
             else_expr: Some(Box::new(Expr::Literal((4.0).into()))),
         };
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1898,7 +1911,7 @@ mod roundtrip_tests {
             data_type: DataType::Boolean,
         };
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1911,7 +1924,7 @@ mod roundtrip_tests {
             nulls_first: true,
         };
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1920,7 +1933,7 @@ mod roundtrip_tests {
     fn roundtrip_negative() -> Result<()> {
         let test_expr = Expr::Negative(Box::new(Expr::Literal((1.0).into())));
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1933,7 +1946,7 @@ mod roundtrip_tests {
             negated: true,
         };
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1942,7 +1955,7 @@ mod roundtrip_tests {
     fn roundtrip_wildcard() -> Result<()> {
         let test_expr = Expr::Wildcard;
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1953,7 +1966,7 @@ mod roundtrip_tests {
             fun: Sqrt,
             args: vec![col("col")],
         };
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
@@ -1966,7 +1979,7 @@ mod roundtrip_tests {
             distinct: false,
         };
 
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
+        roundtrip_test!(test_expr, datafusion_proto::protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }

@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// include the generated protobuf source as a submodule
-#[allow(clippy::all)]
-pub mod protobuf {
-    include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
-}
+fn main() -> Result<(), String> {
+    // for use in docker build where file changes can be wonky
+    println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
 
-pub mod from_proto;
-pub mod to_proto;
+    println!("cargo:rerun-if-changed=proto/datafusion.proto");
+    tonic_build::configure()
+        .compile(&["proto/datafusion.proto"], &["proto"])
+        .map_err(|e| format!("protobuf compilation failed: {}", e))
+}

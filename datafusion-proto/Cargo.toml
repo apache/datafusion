@@ -35,3 +35,8 @@ path = "src/lib.rs"
 [features]
 
 [dependencies]
+datafusion = { path = "../datafusion", version = "7.0.0" }
+prost = "0.9"
+
+[build-dependencies]
+tonic-build = { version = "0.6" }
