@@ -39,6 +39,11 @@ pub struct LocalFileSystem;
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+        let prefix = if let Some((_scheme, path)) = prefix.split_once("://") {
+            path
+        } else {
+            prefix
+        };
         list_all(prefix.to_owned()).await
     }
 
