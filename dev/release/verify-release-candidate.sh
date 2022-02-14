@@ -135,7 +135,10 @@ test_source_distribution() {
     exit 1
   fi
 
-  pushd datafusion
+
+  # Note can't verify datafusion or datafusion-expr as they depend
+  # on datafusion-common which isn't published yet
+  pushd datafusion-common
     cargo publish --dry-run
   popd
 }
