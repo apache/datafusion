@@ -343,7 +343,7 @@
 -   Add SQL support for referencing fields in structs [\#119](https://github.com/apache/arrow-datafusion/issues/119)
 - add filename completer for create table statement [\#1278](https://github.com/apache/arrow-datafusion/pull/1278) ([Jimexist](https://github.com/Jimexist))
 - Add drop table support [\#1266](https://github.com/apache/arrow-datafusion/pull/1266) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([viirya](https://github.com/viirya))
-
+- Dataframe supports except and update readme [\#1261](https://github.com/apache/arrow-datafusion/pull/1261) ([xudong963](https://github.com/xudong963))
 - Implement EXCEPT & EXCEPT DISTINCT [\#1259](https://github.com/apache/arrow-datafusion/pull/1259) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([xudong963](https://github.com/xudong963))
 - Add DataFrame support for `INTERSECT` and update readme [\#1258](https://github.com/apache/arrow-datafusion/pull/1258) ([xudong963](https://github.com/xudong963))
 - use arrow 6.1.0 [\#1255](https://github.com/apache/arrow-datafusion/pull/1255) ([Jimexist](https://github.com/Jimexist))
