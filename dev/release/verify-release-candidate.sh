@@ -157,13 +157,6 @@ pushd ${dist_name}
     test_source_distribution
 popd
 
-echo "Verifying python artifacts..."
-svn co $ARROW_DIST_URL/apache-arrow-datafusion-${VERSION}-rc${RC_NUMBER}/python python-artifacts
-pushd python-artifacts
-    verify_dir_artifact_signatures
-    twine check *.{whl,tar.gz}
-popd
-
 TEST_SUCCESS=yes
 echo 'Release candidate looks good!'
 exit 0
