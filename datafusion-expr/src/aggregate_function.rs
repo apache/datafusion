@@ -89,6 +89,7 @@ impl FromStr for AggregateFunction {
             "corr" => AggregateFunction::Correlation,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
             "approx_median" => AggregateFunction::ApproxMedian,
+            "bitmap_distinct" => AggregateFunction::BitMapCountDistinct,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",

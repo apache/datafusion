@@ -321,7 +321,8 @@ pub(super) fn signature(fun: &AggregateFunction) -> Signature {
     match fun {
         AggregateFunction::Count
         | AggregateFunction::ApproxDistinct
-        | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
+        | AggregateFunction::ArrayAgg
+        | AggregateFunction::BitMapCountDistinct=> Signature::any(1, Volatility::Immutable),
         AggregateFunction::Min | AggregateFunction::Max => {
             let valid = STRINGS
                 .iter()

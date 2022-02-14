@@ -18,15 +18,17 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
-use std::convert::TryFrom;
-use std::convert::TryInto;
+
 use std::fmt::Debug;
 use std::ops::BitOrAssign;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, UInt32Array};
+use arrow::array::{
+    Array, ArrayRef, BinaryArray, Int16Array, Int32Array, Int8Array, UInt16Array,
+    UInt32Array, UInt8Array,
+};
 use arrow::datatypes::{DataType, Field};
-use arrow::ipc::LargeBinary;
+use log::info;
 use roaring::RoaringBitmap;
 
 use crate::error::{DataFusionError, Result};
@@ -92,7 +94,7 @@ impl AggregateExpr for BitMapDistinct {
     fn state_fields(&self) -> Result<Vec<Field>> {
         Ok(vec![Field::new(
             &format_state_name(&self.name, "bitmap_registers"),
-            DataType::LargeBinary,
+            DataType::Binary,
             false,
         )])
     }
@@ -124,27 +126,76 @@ impl Accumulator for BitmapDistinctCountAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         let mut bytes = vec![];
         self.bitmap.serialize_into(&mut bytes).unwrap();
-        Ok(vec![ScalarValue::LargeBinary(Option::from(bytes))])
+        Ok(vec![ScalarValue::Binary(Some(bytes))])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         //implement this in arrow-rs with simd
-        let values = &values[0];
-        let array = values
-            .as_any()
-            .downcast_ref::<UInt32Array>()
-            .expect("can not cast in BitmapDistinctCountAccumulator");
-        for i in 0..array.len() {
-            self.bitmap.insert(array.value(i));
+        let value = &values[0];
+        if value.is_empty() {
+            info!("BitmapDistinctCountAccumulator update_batch in empty batch");
+            return Ok(());
+        }
+        match value.data_type() {
+            DataType::Int8 => {
+                let array = value.as_any().downcast_ref::<Int8Array>().unwrap();
+                for i in 0..array.len() {
+                    self.bitmap.insert(array.value(i) as u32);
+                }
+            }
+            DataType::Int16 => {
+                let array = value.as_any().downcast_ref::<Int16Array>().unwrap();
+                for i in 0..array.len() {
+                    self.bitmap.insert(array.value(i) as u32);
+                }
+            }
+            DataType::Int32 => {
+                let array = value.as_any().downcast_ref::<Int32Array>().unwrap();
+                for i in 0..array.len() {
+                    self.bitmap.insert(array.value(i) as u32);
+                }
+            }
+            DataType::UInt8 => {
+                let array = value.as_any().downcast_ref::<UInt8Array>().unwrap();
+                for i in 0..array.len() {
+                    self.bitmap.insert(array.value(i) as u32);
+                }
+            }
+            DataType::UInt16 => {
+                let array = value.as_any().downcast_ref::<UInt16Array>().unwrap();
+                for i in 0..array.len() {
+                    self.bitmap.insert(array.value(i) as u32);
+                }
+            }
+            DataType::UInt32 => {
+                let array = value.as_any().downcast_ref::<UInt32Array>().unwrap();
+                for i in 0..array.len() {
+                    self.bitmap.insert(array.value(i));
+                }
+            }
+            e => {
+                return Err(DataFusionError::Internal(format!(
+                    "BITMAP_COUNT_DISTINCT is not expected to receive the type {:?}",
+                    e
+                )));
+            }
         }
         Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        let bytes = states[0].as_any().downcast_ref::<LargeBinary>().unwrap();
-        let bytes_vec: Vec<u8> = bytes.try_into().unwrap();
-        let bitmap = RoaringBitmap::deserialize_from(&bytes_vec).unwrap();
-        self.bitmap.bitor_assign(bitmap);
+        assert_eq!(1, states.len(), "expect only 1 element in the states");
+        let binary_array = states[0].as_any().downcast_ref::<BinaryArray>().unwrap();
+
+        for b in binary_array.iter() {
+            let v = b.ok_or_else(|| {
+                DataFusionError::Internal(
+                    "Impossibly got empty binary array from states".into(),
+                )
+            })?;
+            let bitmap = RoaringBitmap::deserialize_from(&v.to_vec()[..]).unwrap();
+            self.bitmap.bitor_assign(bitmap);
+        }
         Ok(())
     }
 
