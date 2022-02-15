@@ -40,6 +40,79 @@ Testing setup:
 - `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
 - `export ARROW_TEST_DATA=$(pwd)/testing/data/`
 
+## Test Organization
+
+DataFusion has several levels of tests in its [Test
+Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
+and tries to follow [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+
+This section highlights the most important test modules that exist
+
+### Unit tests
+
+Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention
+
+### Rust Integration Tests
+
+There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests) directory.
+
+You can run these tests individually using a command such as
+
+```shell
+cargo test -p datafusion --tests sql_integration
+```
+
+One very important test is the [sql_integraton](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setsups.
+
+### SQL / Postgres Integration Tests
+
+The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests] directory contains a harness that runs certain queries against both postgres and datafusion and compares results
+
+#### setup environment
+
+```shell
+export POSTGRES_DB=postgres
+export POSTGRES_USER=postgres
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+```
+
+#### Install dependencies
+
+```shell
+# Install dependencies
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r integration-tests/requirements.txt
+
+# setup environment
+POSTGRES_DB=postgres POSTGRES_USER=postgres POSTGRES_HOST=localhost POSTGRES_PORT=5432 python -m pytest -v integration-tests/test_psql_parity.py
+
+# Create
+psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c 'CREATE TABLE IF NOT EXISTS test (
+  c1 character varying NOT NULL,
+  c2 integer NOT NULL,
+  c3 smallint NOT NULL,
+  c4 smallint NOT NULL,
+  c5 integer NOT NULL,
+  c6 bigint NOT NULL,
+  c7 smallint NOT NULL,
+  c8 integer NOT NULL,
+  c9 bigint NOT NULL,
+  c10 character varying NOT NULL,
+  c11 double precision NOT NULL,
+  c12 double precision NOT NULL,
+  c13 character varying NOT NULL
+);'
+
+psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c "\copy test FROM '$(pwd)/testing/data/csv/aggregate_test_100.csv' WITH (FORMAT csv, HEADER true);"
+```
+
+#### Invoke the test runner
+
+```shell
+python -m pytest -v integration-tests/test_psql_parity.py
+```
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
