@@ -470,6 +470,7 @@ mod tests {
     #[tokio::test]
     #[cfg(feature = "standalone")]
     #[ignore]
+    // Tracking: https://github.com/apache/arrow-datafusion/issues/1840
     async fn test_task_stuck_when_referenced_task_failed() {
         use super::*;
         use datafusion::arrow::datatypes::Schema;
