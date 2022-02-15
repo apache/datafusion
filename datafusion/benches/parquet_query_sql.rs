@@ -229,7 +229,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
     }
 
-    // Clean up temporary file if any
+    // Temporary file must outlive the benchmarks, it is deleted when dropped
     std::mem::drop(temp_file);
 }
 
