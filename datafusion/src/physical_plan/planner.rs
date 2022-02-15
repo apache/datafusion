@@ -1434,17 +1434,18 @@ mod tests {
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
-    use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
     use crate::scalar::ScalarValue;
     use crate::{
-        logical_plan::{col, lit, sum, LogicalPlanBuilder},
-        physical_plan::SendableRecordBatchStream,
+        logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use async_trait::async_trait;
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_expr::sum;
+    use datafusion_expr::{col, lit};
     use fmt::Debug;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};

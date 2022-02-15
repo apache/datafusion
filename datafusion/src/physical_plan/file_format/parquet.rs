@@ -27,7 +27,6 @@ use crate::datasource::PartitionedFile;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
         file_format::FileScanConfig,
@@ -38,6 +37,8 @@ use crate::{
     },
     scalar::ScalarValue,
 };
+use datafusion_common::Column;
+use datafusion_expr::Expr;
 
 use arrow::{
     array::ArrayRef,
@@ -928,7 +929,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_simple_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
@@ -961,7 +962,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_missing_stats() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
@@ -996,7 +997,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_partial_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // test row group predicate with partially supported expression
         // int > 1 and int % 2 => c1_max > 1 and true
         let expr = col("c1").gt(lit(15)).and(col("c2").modulus(lit(2)));
@@ -1082,7 +1083,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_null_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
         let expr = col("c1").gt(lit(15)).and(col("c2").is_null());
         let schema = Arc::new(Schema::new(vec![
@@ -1110,7 +1111,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_eq_null_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // test row group predicate with an unknown (Null) expr
         //
         // int > 1 and bool = NULL => c1_max > 1 and null

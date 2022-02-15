@@ -18,7 +18,6 @@
 //! Physical expressions for window functions
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
     aggregates,
     expressions::{
@@ -34,6 +33,7 @@ use crate::physical_plan::{
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
+use datafusion_expr::WindowFrame;
 use std::convert::TryInto;
 use std::ops::Range;
 use std::sync::Arc;
