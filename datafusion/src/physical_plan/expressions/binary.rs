@@ -30,9 +30,6 @@ use arrow::compute::kernels::comparison::{
     neq_bool_scalar,
 };
 use arrow::compute::kernels::comparison::{
-    gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn,
-};
-use arrow::compute::kernels::comparison::{
     eq_dyn_bool_scalar, gt_dyn_bool_scalar, gt_eq_dyn_bool_scalar, lt_dyn_bool_scalar,
     lt_eq_dyn_bool_scalar, neq_dyn_bool_scalar,
 };
@@ -64,7 +61,6 @@ use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
-
 // TODO move to arrow_rs
 // TODO TICKET
 fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
@@ -73,20 +69,38 @@ fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
         .expect("Unable to downcast to typed array to DecimalArray")
 }
 
-/// Wrapper for arrow `eq_dyn` that maps Error types and patches missing support in arrow
-fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
-    match (left.data_type(), right.data_type()) {
-        (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
-            eq_decimal(as_decimal_array(left), as_decimal_array(right))
-        },
-        _ => {
-            arrow::compute::kernels::comparison::eq_dyn(left, right)
-                .map_err(|e| e.into())
+/// The binary_bitwise_array_op macro only evaluates for integer types
+/// like int64, int32.
+/// It is used to do bitwise operation.
+macro_rules! make_dyn_op {
+    ($OP:tt) => {
+        paste::paste! {
+            /// wrapper over arrow compute kernel that maps Error types and
+            /// patches missing support in arrow
+            fn [<$OP _dyn>] (left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+                match (left.data_type(), right.data_type()) {
+                    // Call `op_decimal` (e.g. `eq_decimal) until arrow adds native support TODO FIND TICKET
+                    (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
+                        [<$OP _decimal>](as_decimal_array(left), as_decimal_array(right))
+                    },
+                    _ => {
+                    arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
+                            .map_err(|e| e.into())
+                    }
+                }
+                .map(|a| Arc::new(a) as ArrayRef)
+            }
         }
-    }
-    .map(|a| Arc::new(a) as ArrayRef)
+    };
 }
 
+// create eq_dyn, gt_dyn, wrappers etc
+make_dyn_op!(eq);
+make_dyn_op!(gt);
+make_dyn_op!(gt_eq);
+make_dyn_op!(lt);
+make_dyn_op!(lt_eq);
+make_dyn_op!(neq);
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
@@ -114,8 +128,10 @@ fn is_not_distinct_from_bool(
         .collect())
 }
 
-// TODO add iter for decimal array
-// TODO move this to arrow-rs
+// TODO move decimal kernels to to arrow-rs
+// https://github.com/apache/arrow-rs/issues/1200
+
+// TODO use iter added for for decimal array in
 // https://github.com/apache/arrow-rs/issues/1083
 pub(super) fn eq_decimal_scalar(
     left: &DecimalArray,
@@ -824,17 +840,6 @@ macro_rules! binary_array_op_scalar {
     }};
 }
 
-/// Calls a dynamic comparison operation from Arrow and converts the
-/// error and return type appropriately
-fn call_dyn_cmp<F>(left: Arc<dyn Array>, right: Arc<dyn Array>, f: F) -> Result<ArrayRef>
-where
-    F: Fn(&dyn Array, &dyn Array) -> arrow::error::Result<BooleanArray>,
-{
-    f(left.as_ref(), right.as_ref())
-        .map(|a| Arc::new(a) as ArrayRef)
-        .map_err(|e| e.into())
-}
-
 /// The binary_array_op macro includes types that extend beyond the primitive,
 /// such as Utf8 strings.
 #[macro_export]
@@ -1228,12 +1233,12 @@ impl BinaryExpr {
         match &self.op {
             Operator::Like => binary_string_array_op!(left, right, like),
             Operator::NotLike => binary_string_array_op!(left, right, nlike),
-            Operator::Lt => call_dyn_cmp(left, right, lt_dyn),
-            Operator::LtEq => call_dyn_cmp(left, right, lt_eq_dyn),
-            Operator::Gt => call_dyn_cmp(left, right, gt_dyn),
-            Operator::GtEq => call_dyn_cmp(left, right, gt_eq_dyn),
+            Operator::Lt => lt_dyn(&left, &right),
+            Operator::LtEq => lt_eq_dyn(&left, &right),
+            Operator::Gt => gt_dyn(&left, &right),
+            Operator::GtEq => gt_eq_dyn(&left, &right),
             Operator::Eq => eq_dyn(&left, &right),
-            Operator::NotEq => call_dyn_cmp(left, right, neq_dyn),
+            Operator::NotEq => neq_dyn(&left, &right),
             Operator::IsDistinctFrom => binary_array_op!(left, right, is_distinct_from),
             Operator::IsNotDistinctFrom => {
                 binary_array_op!(left, right, is_not_distinct_from)
