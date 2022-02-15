@@ -55,6 +55,7 @@ Table of content
    specification/roadmap
    specification/invariants
    specification/output-field-name-semantic
+   specification/quarterly_roadmap
 
 .. _toc.readme:
 

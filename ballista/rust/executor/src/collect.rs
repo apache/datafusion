@@ -28,6 +28,7 @@ use datafusion::arrow::{
 };
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -60,6 +61,10 @@ impl ExecutionPlan for CollectExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

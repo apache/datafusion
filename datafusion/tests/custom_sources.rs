@@ -22,6 +22,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
@@ -112,6 +113,9 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]

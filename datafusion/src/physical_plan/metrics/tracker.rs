@@ -102,7 +102,7 @@ impl MemTrackingMetrics {
 
     /// Record that some number of rows have been produced as output
     ///
-    /// See the [`RecordOutput`] for conveniently recording record
+    /// See the [`super::RecordOutput`] for conveniently recording record
     /// batch output for other thing
     pub fn record_output(&self, num_rows: usize) {
         self.metrics.record_output(num_rows)

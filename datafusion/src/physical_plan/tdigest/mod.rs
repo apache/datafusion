@@ -17,7 +17,7 @@
 //! quantile calculations.
 //!
 //! The TDigest code in this module is modified from
-//! https://github.com/MnO2/t-digest, itself a rust reimplementation of
+//! <https://github.com/MnO2/t-digest>, itself a rust reimplementation of
 //! [Facebook's Folly TDigest] implementation.
 //!
 //! Alterations include reduction of runtime heap allocations, broader type

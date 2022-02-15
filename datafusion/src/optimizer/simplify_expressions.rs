@@ -17,15 +17,12 @@
 
 //! Simplify expressions optimizer rule
 
-use arrow::array::new_null_array;
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
-
 use crate::error::DataFusionError;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{
-    lit, DFSchema, DFSchemaRef, Expr, ExprRewriter, LogicalPlan, RewriteRecursion,
-    SimplifyInfo,
+    lit, DFSchema, DFSchemaRef, Expr, ExprRewritable, ExprRewriter, ExprSimplifiable,
+    LogicalPlan, RewriteRecursion, SimplifyInfo,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
@@ -33,9 +30,12 @@ use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
+use arrow::array::new_null_array;
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 
 /// Provides simplification information based on schema and properties
-struct SimplifyContext<'a, 'b> {
+pub(crate) struct SimplifyContext<'a, 'b> {
     schemas: Vec<&'a DFSchemaRef>,
     props: &'b ExecutionProps,
 }
@@ -245,6 +245,7 @@ impl SimplifyExpressions {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
@@ -252,6 +253,7 @@ impl SimplifyExpressions {
 ///
 /// ```
 /// # use datafusion::prelude::*;
+/// # use datafusion::logical_plan::ExprRewritable;
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
@@ -271,7 +273,7 @@ pub struct ConstEvaluator<'a> {
     /// non evaluatable (e.g. had a column reference or volatile
     /// function)
     ///
-    /// Specifically, can_evaluate[N] represents the state of
+    /// Specifically, `can_evaluate[N]` represents the state of
     /// traversal when we are N levels deep in the tree, one entry for
     /// this Expr and each of its parents.
     ///
@@ -735,8 +737,8 @@ mod tests {
     use super::*;
     use crate::assert_contains;
     use crate::logical_plan::{
-        and, binary_expr, col, create_udf, lit, lit_timestamp_nano, DFField, Expr,
-        LogicalPlanBuilder,
+        and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
+        Expr, LogicalPlanBuilder,
     };
     use crate::physical_plan::functions::{make_scalar_function, BuiltinScalarFunction};
     use crate::physical_plan::udf::ScalarUDF;
@@ -1010,46 +1012,29 @@ mod tests {
     #[test]
     fn test_const_evaluator_scalar_functions() {
         // concat("foo", "bar") --> "foobar"
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("foo"), lit("bar")],
-            fun: BuiltinScalarFunction::Concat,
-        };
+        let expr = call_fn("concat", vec![lit("foo"), lit("bar")]).unwrap();
         test_evaluate(expr, lit("foobar"));
 
         // ensure arguments are also constant folded
         // concat("foo", concat("bar", "baz")) --> "foobarbaz"
-        let concat1 = Expr::ScalarFunction {
-            args: vec![lit("bar"), lit("baz")],
-            fun: BuiltinScalarFunction::Concat,
-        };
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("foo"), concat1],
-            fun: BuiltinScalarFunction::Concat,
-        };
+        let concat1 = call_fn("concat", vec![lit("bar"), lit("baz")]).unwrap();
+        let expr = call_fn("concat", vec![lit("foo"), concat1]).unwrap();
         test_evaluate(expr, lit("foobarbaz"));
 
         // Check non string arguments
         // to_timestamp("2020-09-08T12:00:00+00:00") --> timestamp(1599566400000000000i64)
-        let expr = Expr::ScalarFunction {
-            args: vec![lit("2020-09-08T12:00:00+00:00")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr =
+            call_fn("to_timestamp", vec![lit("2020-09-08T12:00:00+00:00")]).unwrap();
         test_evaluate(expr, lit_timestamp_nano(1599566400000000000i64));
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = Expr::ScalarFunction {
-            args: vec![col("a")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
         // check that non foldable arguments are folded
         // to_timestamp(a) --> to_timestamp(a) [no rewrite possible]
-        let expr = Expr::ScalarFunction {
-            args: vec![col("a")],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        };
+        let expr = call_fn("to_timestamp", vec![col("a")]).unwrap();
         test_evaluate(expr.clone(), expr);
 
         // volatile / stable functions should not be evaluated
@@ -1090,10 +1075,7 @@ mod tests {
     }
 
     fn now_expr() -> Expr {
-        Expr::ScalarFunction {
-            args: vec![],
-            fun: BuiltinScalarFunction::Now,
-        }
+        call_fn("now", vec![]).unwrap()
     }
 
     fn cast_to_int64_expr(expr: Expr) -> Expr {
@@ -1104,10 +1086,7 @@ mod tests {
     }
 
     fn to_timestamp_expr(arg: impl Into<String>) -> Expr {
-        Expr::ScalarFunction {
-            args: vec![lit(arg.into())],
-            fun: BuiltinScalarFunction::ToTimestamp,
-        }
+        call_fn("to_timestamp", vec![lit(arg.into())]).unwrap()
     }
 
     #[test]

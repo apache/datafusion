@@ -18,6 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -86,6 +87,14 @@ impl ExecutionPlan for CsvExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
