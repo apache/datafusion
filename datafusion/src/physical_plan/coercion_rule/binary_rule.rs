@@ -19,8 +19,8 @@
 
 use crate::arrow::datatypes::DataType;
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::Operator;
 use crate::scalar::{MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};
+use datafusion_expr::Operator;
 
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
@@ -494,7 +494,7 @@ mod tests {
     use super::*;
     use crate::arrow::datatypes::DataType;
     use crate::error::{DataFusionError, Result};
-    use crate::logical_plan::Operator;
+    use datafusion_expr::Operator;
 
     #[test]
 
