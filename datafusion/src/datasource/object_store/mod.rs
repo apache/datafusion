@@ -220,13 +220,12 @@ impl ObjectStoreRegistry {
     /// Get a suitable store for the URI based on it's scheme. For example:
     /// - URI with scheme `file://` or no schema will return the default LocalFS store
     /// - URI with scheme `s3://` will return the S3 store if it's registered
-    /// Returns a tuple with the store and the path of the file in that store
-    /// (URI=scheme://path).
+    /// Returns a tuple with the store and the self-described uri of the file in that store
     pub fn get_by_uri<'a>(
         &self,
         uri: &'a str,
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
-        if let Some((scheme, path)) = uri.split_once("://") {
+        if let Some((scheme, _path)) = uri.split_once("://") {
             let stores = self.object_stores.read();
             let store = stores
                 .get(&*scheme.to_lowercase())
@@ -237,7 +236,7 @@ impl ObjectStoreRegistry {
                         scheme
                     ))
                 })?;
-            Ok((store, path))
+            Ok((store, uri))
         } else {
             Ok((Arc::new(LocalFileSystem), uri))
         }
