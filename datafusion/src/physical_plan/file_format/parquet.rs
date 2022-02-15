@@ -520,7 +520,7 @@ fn read_partition(
 #[cfg(test)]
 mod tests {
     use crate::{
-        assert_batches_sorted_eq,
+        assert_batches_sorted_eq, assert_contains,
         datasource::{
             file_format::{parquet::ParquetFormat, FileFormat},
             object_store::{
@@ -530,7 +530,7 @@ mod tests {
                 FileMeta, SizedFile,
             },
         },
-        physical_plan::collect, assert_contains,
+        physical_plan::collect,
     };
 
     use super::*;
@@ -965,8 +965,10 @@ mod tests {
         let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
-        assert_contains!(batch.unwrap_err().to_string(),
-                         "External error: Parquet error: Arrow: IO error: No such file or directory");
+        assert_contains!(
+            batch.unwrap_err().to_string(),
+            "External error: Parquet error: Arrow: IO error: No such file or directory"
+        );
         assert!(results.next().await.is_none());
 
         Ok(())
