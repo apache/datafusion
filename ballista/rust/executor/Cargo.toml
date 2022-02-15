@@ -29,22 +29,24 @@ edition = "2018"
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = { version = "7.0.0"  }
-arrow-flight = { version = "7.0.0"  }
+arrow = { version = "9.0.0"  }
+arrow-flight = { version = "9.0.0"  }
 anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }
 configure_me = "0.4.0"
-datafusion = { path = "../../../datafusion", version = "6.0.0" }
+datafusion = { path = "../../../datafusion", version = "7.0.0" }
 env_logger = "0.9"
 futures = "0.3"
 log = "0.4"
 snmalloc-rs = {version = "0.2", features= ["cache-friendly"], optional = true}
 tempfile = "3"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
+hyper = "0.14.4"
+parking_lot = "0.12"
 
 [dev-dependencies]
 

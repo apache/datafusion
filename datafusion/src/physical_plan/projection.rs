@@ -34,7 +34,7 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use super::expressions::Column;
+use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::runtime_env::RuntimeEnv;
@@ -120,6 +120,19 @@ impl ExecutionPlan for ProjectionExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        // tell optimizer this operator doesn't reorder its input
+        true
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(
@@ -236,15 +249,14 @@ impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // records time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
-        self.expr
+        let arrays = self
+            .expr
             .iter()
             .map(|expr| expr.evaluate(batch))
             .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()
-            .map_or_else(
-                |e| Err(DataFusionError::into_arrow_external_error(e)),
-                |arrays| RecordBatch::try_new(self.schema.clone(), arrays),
-            )
+            .collect::<Result<Vec<_>>>()?;
+
+        RecordBatch::try_new(self.schema.clone(), arrays)
     }
 }
 
@@ -290,7 +302,7 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
-    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
@@ -306,13 +318,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },

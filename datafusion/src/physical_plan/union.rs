@@ -27,6 +27,7 @@ use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 
 use super::{
+    expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -83,6 +84,14 @@ impl ExecutionPlan for UnionExec {
         // TODO: this loses partitioning info in case of same partitioning scheme (for example `Partitioning::Hash`)
         // https://issues.apache.org/jira/browse/ARROW-11991
         Partitioning::UnknownPartitioning(num_partitions)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(
@@ -142,6 +151,10 @@ impl ExecutionPlan for UnionExec {
             .map(|ep| ep.statistics())
             .reduce(stats_union)
             .unwrap_or_default()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
     }
 }
 
@@ -229,7 +242,7 @@ mod tests {
     use crate::{
         physical_plan::{
             collect,
-            file_format::{CsvExec, PhysicalPlanConfig},
+            file_format::{CsvExec, FileScanConfig},
         },
         scalar::ScalarValue,
     };
@@ -246,13 +259,12 @@ mod tests {
         let (_, files2) = test::create_partitioned_csv("aggregate_test_100.csv", 5)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::clone(&fs),
                 file_schema: Arc::clone(&schema),
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },
@@ -261,13 +273,12 @@ mod tests {
         );
 
         let csv2 = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::clone(&fs),
                 file_schema: Arc::clone(&schema),
                 file_groups: files2,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },

@@ -19,12 +19,15 @@
 
 mod baseline;
 mod builder;
+mod composite;
+mod tracker;
 mod value;
 
+use parking_lot::Mutex;
 use std::{
     borrow::Cow,
     fmt::{Debug, Display},
-    sync::{Arc, Mutex},
+    sync::Arc,
 };
 
 use hashbrown::HashMap;
@@ -32,10 +35,12 @@ use hashbrown::HashMap;
 // public exports
 pub use baseline::{BaselineMetrics, RecordOutput};
 pub use builder::MetricBuilder;
-pub use value::{Count, MetricValue, ScopedTimerGuard, Time, Timestamp};
+pub use composite::CompositeMetricsSet;
+pub use tracker::MemTrackingMetrics;
+pub use value::{Count, Gauge, MetricValue, ScopedTimerGuard, Time, Timestamp};
 
 /// Something that tracks a value of interest (metric) of a DataFusion
-/// [`ExecutionPlan`] execution.
+/// [`super::ExecutionPlan`] execution.
 ///
 /// Typically [`Metric`]s are not created directly, but instead
 /// are created using [`MetricBuilder`] or methods on
@@ -191,6 +196,20 @@ impl MetricsSet {
             .map(|v| v.as_usize())
     }
 
+    /// convenience: return the count of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spill_count(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpillCount(_)))
+            .map(|v| v.as_usize())
+    }
+
+    /// convenience: return the total byte size of spills, aggregated
+    /// across partitions or None if no metric is present
+    pub fn spilled_bytes(&self) -> Option<usize> {
+        self.sum(|metric| matches!(metric.value(), MetricValue::SpilledBytes(_)))
+            .map(|v| v.as_usize())
+    }
+
     /// convenience: return the amount of elapsed CPU time spent,
     /// aggregated across partitions or None if no metric is present
     pub fn elapsed_compute(&self) -> Option<usize> {
@@ -300,7 +319,7 @@ impl Display for MetricsSet {
 /// A set of [`Metric`] for an individual "operator" (e.g. `&dyn
 /// ExecutionPlan`).
 ///
-/// This structure is intended as a convenience for [`ExecutionPlan`]
+/// This structure is intended as a convenience for [`super::ExecutionPlan`]
 /// implementations so they can generate different streams for multiple
 /// partitions but easily report them together.
 ///
@@ -321,12 +340,12 @@ impl ExecutionPlanMetricsSet {
 
     /// Add the specified metric to the underlying metric set
     pub fn register(&self, metric: Arc<Metric>) {
-        self.inner.lock().expect("not poisoned").push(metric)
+        self.inner.lock().push(metric)
     }
 
     /// Return a clone of the inner MetricsSet
     pub fn clone_inner(&self) -> MetricsSet {
-        let guard = self.inner.lock().expect("not poisoned");
+        let guard = self.inner.lock();
         (*guard).clone()
     }
 }
@@ -339,7 +358,7 @@ impl ExecutionPlanMetricsSet {
 /// "tags" in
 /// [InfluxDB](https://docs.influxdata.com/influxdb/v1.8/write_protocols/line_protocol_tutorial/)
 /// , "attributes" in [open
-/// telemetry](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md],
+/// telemetry]<https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/metrics/datamodel.md>,
 /// etc.
 ///
 /// As the name and value are expected to mostly be constant strings,

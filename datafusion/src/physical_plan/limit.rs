@@ -35,6 +35,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
+use super::expressions::PhysicalSortExpr;
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -97,6 +98,22 @@ impl ExecutionPlan for GlobalLimitExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        self.input.output_ordering().is_some()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
+    }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
     }
 
     fn with_new_children(
@@ -230,6 +247,24 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        self.input.output_ordering().is_some()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
+    // Local limit does not make any attempt to maintain the input
+    // sortedness (if there is more than one partition)
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.output_partitioning().partition_count() == 1 {
+            self.input.output_ordering()
+        } else {
+            None
+        }
     }
 
     fn with_new_children(
@@ -396,7 +431,7 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
-    use crate::physical_plan::file_format::{CsvExec, PhysicalPlanConfig};
+    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::{test, test_util};
 
     #[tokio::test]
@@ -409,13 +444,12 @@ mod tests {
             test::create_partitioned_csv("aggregate_test_100.csv", num_partitions)?;
 
         let csv = CsvExec::new(
-            PhysicalPlanConfig {
+            FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
                 file_schema: schema,
                 file_groups: files,
                 statistics: Statistics::default(),
                 projection: None,
-                batch_size: 1024,
                 limit: None,
                 table_partition_cols: vec![],
             },

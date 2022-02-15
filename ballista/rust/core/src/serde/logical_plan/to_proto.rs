@@ -563,6 +563,51 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
                     Value::TimeNanosecondValue(*s)
                 })
             }
+            datafusion::scalar::ScalarValue::Decimal128(val, p, s) => {
+                match *val {
+                    Some(v) => {
+                        let array = v.to_be_bytes();
+                        let vec_val: Vec<u8> = array.to_vec();
+                        protobuf::ScalarValue {
+                            value: Some(Value::Decimal128Value(protobuf::Decimal128 {
+                                value: vec_val,
+                                p: *p as i64,
+                                s: *s as i64,
+                            })),
+                        }
+                    }
+                    None => {
+                        protobuf::ScalarValue {
+                            value: Some(protobuf::scalar_value::Value::NullValue(PrimitiveScalarType::Decimal128 as i32))
+                        }
+                    }
+                }
+            }
+            datafusion::scalar::ScalarValue::Date64(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::Date64, |s| {
+                    Value::Date64Value(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::TimestampSecond(val, _) => {
+                create_proto_scalar(val, PrimitiveScalarType::TimeSecond, |s| {
+                    Value::TimeSecondValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::TimestampMillisecond(val, _) => {
+                create_proto_scalar(val, PrimitiveScalarType::TimeMillisecond, |s| {
+                    Value::TimeMillisecondValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::IntervalYearMonth(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::IntervalYearmonth, |s| {
+                    Value::IntervalYearmonthValue(*s)
+                })
+            }
+            datafusion::scalar::ScalarValue::IntervalDayTime(val) => {
+                create_proto_scalar(val, PrimitiveScalarType::IntervalDaytime, |s| {
+                    Value::IntervalDaytimeValue(*s)
+                })
+            }
             _ => {
                 return Err(proto_error(format!(
                     "Error converting to Datatype to scalar type, {:?} is invalid as a datafusion scalar.",
@@ -571,355 +616,6 @@ impl TryFrom<&datafusion::scalar::ScalarValue> for protobuf::ScalarValue {
             }
         };
         Ok(scalar_val)
-    }
-}
-
-impl TryInto<protobuf::LogicalPlanNode> for &LogicalPlan {
-    type Error = BallistaError;
-
-    fn try_into(self) -> Result<protobuf::LogicalPlanNode, Self::Error> {
-        use protobuf::logical_plan_node::LogicalPlanType;
-        match self {
-            LogicalPlan::Values(Values { values, .. }) => {
-                let n_cols = if values.is_empty() {
-                    0
-                } else {
-                    values[0].len()
-                } as u64;
-                let values_list = values
-                    .iter()
-                    .flatten()
-                    .map(|v| v.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Values(
-                        protobuf::ValuesNode {
-                            n_cols,
-                            values_list,
-                        },
-                    )),
-                })
-            }
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                source,
-                filters,
-                projection,
-                ..
-            }) => {
-                let schema = source.schema();
-                let source = source.as_any();
-
-                let projection = match projection {
-                    None => None,
-                    Some(columns) => {
-                        let column_names = columns
-                            .iter()
-                            .map(|i| schema.field(*i).name().to_owned())
-                            .collect();
-                        Some(protobuf::ProjectionColumns {
-                            columns: column_names,
-                        })
-                    }
-                };
-                let schema: protobuf::Schema = schema.as_ref().into();
-
-                let filters: Vec<protobuf::LogicalExprNode> = filters
-                    .iter()
-                    .map(|filter| filter.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                    let any = listing_table.options().format.as_any();
-                    let file_format_type = if let Some(parquet) =
-                        any.downcast_ref::<ParquetFormat>()
-                    {
-                        FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning: parquet.enable_pruning(),
-                        })
-                    } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                        FileFormatType::Csv(protobuf::CsvFormat {
-                            delimiter: byte_to_string(csv.delimiter())?,
-                            has_header: csv.has_header(),
-                        })
-                    } else if any.is::<AvroFormat>() {
-                        FileFormatType::Avro(protobuf::AvroFormat {})
-                    } else {
-                        return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion foramt.",
-                            listing_table.options().format
-                        )));
-                    };
-                    Ok(protobuf::LogicalPlanNode {
-                        logical_plan_type: Some(LogicalPlanType::ListingScan(
-                            protobuf::ListingTableScanNode {
-                                file_format_type: Some(file_format_type),
-                                table_name: table_name.to_owned(),
-                                collect_stat: listing_table.options().collect_stat,
-                                file_extension: listing_table
-                                    .options()
-                                    .file_extension
-                                    .clone(),
-                                table_partition_cols: listing_table
-                                    .options()
-                                    .table_partition_cols
-                                    .clone(),
-                                path: listing_table.table_path().to_owned(),
-                                schema: Some(schema),
-                                projection,
-                                filters,
-                                target_partitions: listing_table
-                                    .options()
-                                    .target_partitions
-                                    as u32,
-                            },
-                        )),
-                    })
-                } else {
-                    Err(BallistaError::General(format!(
-                        "logical plan to_proto unsupported table provider {:?}",
-                        source
-                    )))
-                }
-            }
-            LogicalPlan::Projection(Projection {
-                expr, input, alias, ..
-            }) => Ok(protobuf::LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::Projection(Box::new(
-                    protobuf::ProjectionNode {
-                        input: Some(Box::new(input.as_ref().try_into()?)),
-                        expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
-                            Vec<_>,
-                            BallistaError,
-                        >>(
-                        )?,
-                        optional_alias: alias
-                            .clone()
-                            .map(protobuf::projection_node::OptionalAlias::Alias),
-                    },
-                ))),
-            }),
-            LogicalPlan::Filter(Filter { predicate, input }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Selection(Box::new(
-                        protobuf::SelectionNode {
-                            input: Some(Box::new(input)),
-                            expr: Some(predicate.try_into()?),
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Window(Window {
-                input, window_expr, ..
-            }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Window(Box::new(
-                        protobuf::WindowNode {
-                            input: Some(Box::new(input)),
-                            window_expr: window_expr
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                input,
-                ..
-            }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
-                        protobuf::AggregateNode {
-                            input: Some(Box::new(input)),
-                            group_expr: group_expr
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
-                            aggr_expr: aggr_expr
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, _>>()?,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                on,
-                join_type,
-                join_constraint,
-                null_equals_null,
-                ..
-            }) => {
-                let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
-                let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
-                let (left_join_column, right_join_column) =
-                    on.iter().map(|(l, r)| (l.into(), r.into())).unzip();
-                let join_type: protobuf::JoinType = join_type.to_owned().into();
-                let join_constraint: protobuf::JoinConstraint =
-                    join_constraint.to_owned().into();
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Join(Box::new(
-                        protobuf::JoinNode {
-                            left: Some(Box::new(left)),
-                            right: Some(Box::new(right)),
-                            join_type: join_type.into(),
-                            join_constraint: join_constraint.into(),
-                            left_join_column,
-                            right_join_column,
-                            null_equals_null: *null_equals_null,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Limit(Limit { input, n }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Limit(Box::new(
-                        protobuf::LimitNode {
-                            input: Some(Box::new(input)),
-                            limit: *n as u32,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Sort(Sort { input, expr }) => {
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-                let selection_expr: Vec<protobuf::LogicalExprNode> = expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, BallistaError>>()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
-                        protobuf::SortNode {
-                            input: Some(Box::new(input)),
-                            expr: selection_expr,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Repartition(Repartition {
-                input,
-                partitioning_scheme,
-            }) => {
-                use datafusion::logical_plan::Partitioning;
-                let input: protobuf::LogicalPlanNode = input.as_ref().try_into()?;
-
-                //Assumed common usize field was batch size
-                //Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
-                use protobuf::repartition_node::PartitionMethod;
-
-                let pb_partition_method = match partitioning_scheme {
-                    Partitioning::Hash(exprs, partition_count) => {
-                        PartitionMethod::Hash(protobuf::HashRepartition {
-                            hash_expr: exprs
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
-                            partition_count: *partition_count as u64,
-                        })
-                    }
-                    Partitioning::RoundRobinBatch(batch_size) => {
-                        PartitionMethod::RoundRobin(*batch_size as u64)
-                    }
-                };
-
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Repartition(Box::new(
-                        protobuf::RepartitionNode {
-                            input: Some(Box::new(input)),
-                            partition_method: Some(pb_partition_method),
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row, ..
-            }) => Ok(protobuf::LogicalPlanNode {
-                logical_plan_type: Some(LogicalPlanType::EmptyRelation(
-                    protobuf::EmptyRelationNode {
-                        produce_one_row: *produce_one_row,
-                    },
-                )),
-            }),
-            LogicalPlan::CreateExternalTable(CreateExternalTable {
-                name,
-                location,
-                file_type,
-                has_header,
-                schema: df_schema,
-            }) => {
-                use datafusion::sql::parser::FileType;
-
-                let pb_file_type: protobuf::FileType = match file_type {
-                    FileType::NdJson => protobuf::FileType::NdJson,
-                    FileType::Parquet => protobuf::FileType::Parquet,
-                    FileType::CSV => protobuf::FileType::Csv,
-                    FileType::Avro => protobuf::FileType::Avro,
-                };
-
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::CreateExternalTable(
-                        protobuf::CreateExternalTableNode {
-                            name: name.clone(),
-                            location: location.clone(),
-                            file_type: pb_file_type as i32,
-                            has_header: *has_header,
-                            schema: Some(df_schema.into()),
-                        },
-                    )),
-                })
-            }
-            LogicalPlan::Analyze(a) => {
-                let input: protobuf::LogicalPlanNode = a.input.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Analyze(Box::new(
-                        protobuf::AnalyzeNode {
-                            input: Some(Box::new(input)),
-                            verbose: a.verbose,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Explain(a) => {
-                let input: protobuf::LogicalPlanNode = a.plan.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::Explain(Box::new(
-                        protobuf::ExplainNode {
-                            input: Some(Box::new(input)),
-                            verbose: a.verbose,
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::Extension { .. } => unimplemented!(),
-            LogicalPlan::Union(_) => unimplemented!(),
-            LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-                let left: protobuf::LogicalPlanNode = left.as_ref().try_into()?;
-                let right: protobuf::LogicalPlanNode = right.as_ref().try_into()?;
-                Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::CrossJoin(Box::new(
-                        protobuf::CrossJoinNode {
-                            left: Some(Box::new(left)),
-                            right: Some(Box::new(right)),
-                        },
-                    ))),
-                })
-            }
-            LogicalPlan::CreateMemoryTable(_) => Err(proto_error(
-                "Error converting CreateMemoryTable. Not yet supported in Ballista",
-            )),
-            LogicalPlan::DropTable(_) => Err(proto_error(
-                "Error converting DropTable. Not yet supported in Ballista",
-            )),
-        }
     }
 }
 
@@ -1029,6 +725,9 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::ApproxDistinct => {
                         protobuf::AggregateFunction::ApproxDistinct
                     }
+                    AggregateFunction::ApproxPercentileCont => {
+                        protobuf::AggregateFunction::ApproxPercentileCont
+                    }
                     AggregateFunction::ArrayAgg => protobuf::AggregateFunction::ArrayAgg,
                     AggregateFunction::Min => protobuf::AggregateFunction::Min,
                     AggregateFunction::Max => protobuf::AggregateFunction::Max,
@@ -1052,13 +751,18 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
                     AggregateFunction::Correlation => {
                         protobuf::AggregateFunction::Correlation
                     }
+                    AggregateFunction::ApproxMedian => {
+                        protobuf::AggregateFunction::ApproxMedian
+                    }
                 };
 
-                let arg = &args[0];
-                let aggregate_expr = Box::new(protobuf::AggregateExprNode {
+                let aggregate_expr = protobuf::AggregateExprNode {
                     aggr_function: aggr_function.into(),
-                    expr: Some(Box::new(arg.try_into()?)),
-                });
+                    expr: args
+                        .iter()
+                        .map(|v| v.try_into())
+                        .collect::<Result<Vec<_>, _>>()?,
+                };
                 Ok(protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
                 })
@@ -1289,6 +993,8 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Stddev => Self::Stddev,
             AggregateFunction::StddevPop => Self::StddevPop,
             AggregateFunction::Correlation => Self::Correlation,
+            AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
+            AggregateFunction::ApproxMedian => Self::ApproxMedian,
         }
     }
 }

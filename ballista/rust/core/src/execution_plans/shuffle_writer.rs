@@ -20,15 +20,16 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use parking_lot::Mutex;
 use std::fs::File;
 use std::iter::Iterator;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 use std::{any::Any, pin::Pin};
 
 use crate::error::BallistaError;
-use crate::memory_stream::MemoryStream;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
@@ -47,6 +48,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
+use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
@@ -265,11 +267,10 @@ impl ShuffleWriterExec {
                                 std::fs::create_dir_all(&path)?;
 
                                 path.push(format!("data-{}.arrow", input_partition));
-                                let path = path.to_str().unwrap();
-                                info!("Writing results to {}", path);
+                                info!("Writing results to {:?}", path);
 
                                 let mut writer =
-                                    IPCWriter::new(path, stream.schema().as_ref())?;
+                                    IPCWriter::new(&path, stream.schema().as_ref())?;
 
                                 writer.write(&output_batch)?;
                                 writers[output_partition] = Some(writer);
@@ -287,7 +288,7 @@ impl ShuffleWriterExec {
                         Some(w) => {
                             w.finish()?;
                             info!(
-                                "Finished writing shuffle partition {} at {}. Batches: {}. Rows: {}. Bytes: {}.",
+                                "Finished writing shuffle partition {} at {:?}. Batches: {}. Rows: {}. Bytes: {}.",
                                 i,
                                 w.path(),
                                 w.num_batches,
@@ -297,7 +298,7 @@ impl ShuffleWriterExec {
 
                             part_locs.push(ShuffleWritePartition {
                                 partition_id: i as u64,
-                                path: w.path().to_owned(),
+                                path: w.path().to_string_lossy().to_string(),
                                 num_batches: w.num_batches,
                                 num_rows: w.num_rows,
                                 num_bytes: w.num_bytes,
@@ -332,6 +333,14 @@ impl ExecutionPlan for ShuffleWriterExec {
         // the input partitioning as the output partitioning here. The executor reports
         // output partition meta data back to the scheduler.
         self.plan.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

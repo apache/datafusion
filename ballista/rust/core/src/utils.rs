@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::io::{BufWriter, Write};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -26,10 +27,10 @@ use crate::error::{BallistaError, Result};
 use crate::execution_plans::{
     DistributedQueryExec, ShuffleWriterExec, UnresolvedShuffleExec,
 };
-use crate::memory_stream::MemoryStream;
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
@@ -46,7 +47,7 @@ use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
-use datafusion::logical_plan::{LogicalPlan, Operator};
+use datafusion::logical_plan::{LogicalPlan, Operator, TableScan};
 use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
 use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
@@ -237,37 +238,68 @@ fn build_exec_plan_diagram(
 
 /// Create a DataFusion context that uses the BallistaQueryPlanner to send logical plans
 /// to a Ballista scheduler
-pub fn create_df_ctx_with_ballista_query_planner(
+pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
     scheduler_host: &str,
     scheduler_port: u16,
     config: &BallistaConfig,
 ) -> ExecutionContext {
     let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
+    let planner: Arc<BallistaQueryPlanner<T>> =
+        Arc::new(BallistaQueryPlanner::new(scheduler_url, config.clone()));
     let config = ExecutionConfig::new()
-        .with_query_planner(Arc::new(BallistaQueryPlanner::new(
-            scheduler_url,
-            config.clone(),
-        )))
-        .with_target_partitions(config.default_shuffle_partitions());
+        .with_query_planner(planner)
+        .with_target_partitions(config.default_shuffle_partitions())
+        .with_information_schema(true);
     ExecutionContext::with_config(config)
 }
 
-pub struct BallistaQueryPlanner {
+pub struct BallistaQueryPlanner<T: AsLogicalPlan> {
     scheduler_url: String,
     config: BallistaConfig,
+    extension_codec: Arc<dyn LogicalExtensionCodec>,
+    plan_repr: PhantomData<T>,
 }
 
-impl BallistaQueryPlanner {
+impl<T: 'static + AsLogicalPlan> BallistaQueryPlanner<T> {
     pub fn new(scheduler_url: String, config: BallistaConfig) -> Self {
         Self {
             scheduler_url,
             config,
+            extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_extension(
+        scheduler_url: String,
+        config: BallistaConfig,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            extension_codec,
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_repr(
+        scheduler_url: String,
+        config: BallistaConfig,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+        plan_repr: PhantomData<T>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            extension_codec,
+            plan_repr,
         }
     }
 }
 
 #[async_trait]
-impl QueryPlanner for BallistaQueryPlanner {
+impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -278,10 +310,12 @@ impl QueryPlanner for BallistaQueryPlanner {
                 // table state is managed locally in the BallistaContext, not in the scheduler
                 Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
             }
-            _ => Ok(Arc::new(DistributedQueryExec::new(
+            _ => Ok(Arc::new(DistributedQueryExec::with_repr(
                 self.scheduler_url.clone(),
                 self.config.clone(),
                 logical_plan.clone(),
+                self.extension_codec.clone(),
+                self.plan_repr,
             ))),
         }
     }

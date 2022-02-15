@@ -33,6 +33,6 @@ datafusion = { path = "../datafusion" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0"}
 prost = "0.9"
 tonic = "0.6"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync"] }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 futures = "0.3"
 num_cpus = "1.13.0"

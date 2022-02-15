@@ -17,16 +17,95 @@
 
 //! Manages all available memory during query execution
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
-use hashbrown::HashMap;
-use log::info;
+use hashbrown::HashSet;
+use log::debug;
+use parking_lot::{Condvar, Mutex};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Weak};
+use std::sync::Arc;
 
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone)]
+/// Configuration information for memory management
+pub enum MemoryManagerConfig {
+    /// Use the existing [MemoryManager]
+    Existing(Arc<MemoryManager>),
+
+    /// Create a new [MemoryManager] that will use up to some
+    /// fraction of total system memory.
+    New {
+        /// Max execution memory allowed for DataFusion.  Defaults to
+        /// `usize::MAX`, which will not attempt to limit the memory
+        /// used during plan execution.
+        max_memory: usize,
+
+        /// The fraction of `max_memory` that the memory manager will
+        /// use for execution.
+        ///
+        /// The purpose of this config is to set aside memory for
+        /// untracked data structures, and imprecise size estimation
+        /// during memory acquisition.  Defaults to 0.7
+        memory_fraction: f64,
+    },
+}
+
+impl Default for MemoryManagerConfig {
+    fn default() -> Self {
+        Self::New {
+            max_memory: usize::MAX,
+            memory_fraction: 0.7,
+        }
+    }
+}
+
+impl MemoryManagerConfig {
+    /// Create a new memory [MemoryManager] with no limit on the
+    /// memory used
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    /// Create a configuration based on an existing [MemoryManager]
+    pub fn new_existing(existing: Arc<MemoryManager>) -> Self {
+        Self::Existing(existing)
+    }
+
+    /// Create a new [MemoryManager] with a `max_memory` and `fraction`
+    pub fn try_new_limit(max_memory: usize, memory_fraction: f64) -> Result<Self> {
+        if max_memory == 0 {
+            return Err(DataFusionError::Plan(format!(
+                "invalid max_memory. Expected greater than 0, got {}",
+                max_memory
+            )));
+        }
+        if !(memory_fraction > 0f64 && memory_fraction <= 1f64) {
+            return Err(DataFusionError::Plan(format!(
+                "invalid fraction. Expected greater than 0 and less than 1.0, got {}",
+                memory_fraction
+            )));
+        }
+
+        Ok(Self::New {
+            max_memory,
+            memory_fraction,
+        })
+    }
+
+    /// return the maximum size of the memory, in bytes, this config will allow
+    fn pool_size(&self) -> usize {
+        match self {
+            MemoryManagerConfig::Existing(existing) => existing.pool_size,
+            MemoryManagerConfig::New {
+                max_memory,
+                memory_fraction,
+            } => (*max_memory as f64 * *memory_fraction) as usize,
+        }
+    }
+}
 
 fn next_id() -> usize {
     CONSUMER_ID.fetch_add(1, Ordering::SeqCst)
@@ -91,7 +170,7 @@ pub trait MemoryConsumer: Send + Sync {
     /// reached for this consumer.
     async fn try_grow(&self, required: usize) -> Result<()> {
         let current = self.mem_used();
-        info!(
+        debug!(
             "trying to acquire {} whiling holding {} from consumer {}",
             human_readable_size(required),
             human_readable_size(current),
@@ -103,7 +182,7 @@ pub trait MemoryConsumer: Send + Sync {
             .can_grow_directly(required, current)
             .await;
         if !can_grow_directly {
-            info!(
+            debug!(
                 "Failed to grow memory of {} directly from consumer {}, spilling first ...",
                 human_readable_size(required),
                 self.id()
@@ -165,56 +244,71 @@ The memory management architecture is the following:
 */
 
 /// Manage memory usage during physical plan execution
+#[derive(Debug)]
 pub struct MemoryManager {
-    requesters: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
-    trackers: Arc<Mutex<HashMap<MemoryConsumerId, Weak<dyn MemoryConsumer>>>>,
+    requesters: Arc<Mutex<HashSet<MemoryConsumerId>>>,
     pool_size: usize,
     requesters_total: Arc<Mutex<usize>>,
+    trackers_total: AtomicUsize,
     cv: Condvar,
 }
 
 impl MemoryManager {
-    /// Create new memory manager based on max available pool_size
+    /// Create new memory manager based on the configuration
     #[allow(clippy::mutex_atomic)]
-    pub fn new(pool_size: usize) -> Self {
-        info!(
-            "Creating memory manager with initial size {}",
-            human_readable_size(pool_size)
-        );
-        Self {
-            requesters: Arc::new(Mutex::new(HashMap::new())),
-            trackers: Arc::new(Mutex::new(HashMap::new())),
-            pool_size,
-            requesters_total: Arc::new(Mutex::new(0)),
-            cv: Condvar::new(),
+    pub fn new(config: MemoryManagerConfig) -> Arc<Self> {
+        let pool_size = config.pool_size();
+
+        match config {
+            MemoryManagerConfig::Existing(manager) => manager,
+            MemoryManagerConfig::New { .. } => {
+                debug!(
+                    "Creating memory manager with initial size {}",
+                    human_readable_size(pool_size)
+                );
+
+                Arc::new(Self {
+                    requesters: Arc::new(Mutex::new(HashSet::new())),
+                    pool_size,
+                    requesters_total: Arc::new(Mutex::new(0)),
+                    trackers_total: AtomicUsize::new(0),
+                    cv: Condvar::new(),
+                })
+            }
         }
     }
 
     fn get_tracker_total(&self) -> usize {
-        let trackers = self.trackers.lock().unwrap();
-        if trackers.len() > 0 {
-            trackers.values().fold(0usize, |acc, y| match y.upgrade() {
-                None => acc,
-                Some(t) => acc + t.mem_used(),
-            })
-        } else {
-            0
-        }
+        self.trackers_total.load(Ordering::SeqCst)
     }
 
-    /// Register a new memory consumer for memory usage tracking
-    pub(crate) fn register_consumer(&self, consumer: &Arc<dyn MemoryConsumer>) {
-        let id = consumer.id().clone();
-        match consumer.type_() {
-            ConsumerType::Requesting => {
-                let mut requesters = self.requesters.lock().unwrap();
-                requesters.insert(id, Arc::downgrade(consumer));
-            }
-            ConsumerType::Tracking => {
-                let mut trackers = self.trackers.lock().unwrap();
-                trackers.insert(id, Arc::downgrade(consumer));
-            }
-        }
+    pub(crate) fn grow_tracker_usage(&self, delta: usize) {
+        self.trackers_total.fetch_add(delta, Ordering::SeqCst);
+    }
+
+    pub(crate) fn shrink_tracker_usage(&self, delta: usize) {
+        let update =
+            self.trackers_total
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                    if x >= delta {
+                        Some(x - delta)
+                    } else {
+                        None
+                    }
+                });
+        update.expect(&*format!(
+            "Tracker total memory shrink by {} underflow, current value is ",
+            delta
+        ));
+    }
+
+    fn get_requester_total(&self) -> usize {
+        *self.requesters_total.lock()
+    }
+
+    /// Register a new memory requester
+    pub(crate) fn register_requester(&self, requester_id: &MemoryConsumerId) {
+        self.requesters.lock().insert(requester_id.clone());
     }
 
     fn max_mem_for_requesters(&self) -> usize {
@@ -224,13 +318,12 @@ impl MemoryManager {
 
     /// Grow memory attempt from a consumer, return if we could grant that much to it
     async fn can_grow_directly(&self, required: usize, current: usize) -> bool {
-        let num_rqt = self.requesters.lock().unwrap().len();
-        let mut rqt_current_used = self.requesters_total.lock().unwrap();
+        let num_rqt = self.requesters.lock().len();
+        let mut rqt_current_used = self.requesters_total.lock();
         let mut rqt_max = self.max_mem_for_requesters();
 
         let granted;
         loop {
-            let remaining = rqt_max - *rqt_current_used;
             let max_per_rqt = rqt_max / num_rqt;
             let min_per_rqt = max_per_rqt / 2;
 
@@ -239,6 +332,7 @@ impl MemoryManager {
                 break;
             }
 
+            let remaining = rqt_max.checked_sub(*rqt_current_used).unwrap_or_default();
             if remaining >= required {
                 granted = true;
                 *rqt_current_used += required;
@@ -246,7 +340,7 @@ impl MemoryManager {
             } else if current < min_per_rqt {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
                 // to spill instead spill self frequently with limited total mem
-                rqt_current_used = self.cv.wait(rqt_current_used).unwrap();
+                self.cv.wait(&mut rqt_current_used);
             } else {
                 granted = false;
                 break;
@@ -258,48 +352,39 @@ impl MemoryManager {
         granted
     }
 
-    fn record_free_then_acquire(&self, freed: usize, acquired: usize) {
-        let mut requesters_total = self.requesters_total.lock().unwrap();
+    fn record_free_then_acquire(&self, freed: usize, acquired: usize) -> usize {
+        let mut requesters_total = self.requesters_total.lock();
+        assert!(*requesters_total >= freed);
         *requesters_total -= freed;
         *requesters_total += acquired;
         self.cv.notify_all()
     }
 
-    /// Drop a memory consumer from memory usage tracking
-    pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId) {
+    /// Drop a memory consumer and reclaim the memory
+    pub(crate) fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
         // find in requesters first
         {
-            let mut requesters = self.requesters.lock().unwrap();
-            if requesters.remove(id).is_some() {
-                return;
+            let mut requesters = self.requesters.lock();
+            if requesters.remove(id) {
+                let mut total = self.requesters_total.lock();
+                assert!(*total >= mem_used);
+                *total -= mem_used;
             }
         }
-        let mut trackers = self.trackers.lock().unwrap();
-        trackers.remove(id);
+        self.shrink_tracker_usage(mem_used);
+        self.cv.notify_all();
     }
 }
 
 impl Display for MemoryManager {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let requesters =
-            self.requesters
-                .lock()
-                .unwrap()
-                .values()
-                .fold(vec![], |mut acc, consumer| match consumer.upgrade() {
-                    None => acc,
-                    Some(c) => {
-                        acc.push(format!("{}", c));
-                        acc
-                    }
-                });
-        let tracker_mem = self.get_tracker_total();
         write!(f,
-               "MemoryManager usage statistics: total {}, tracker used {}, total {} requesters detail: \n {},",
-                human_readable_size(self.pool_size),
-                human_readable_size(tracker_mem),
-                &requesters.len(),
-               requesters.join("\n"))
+               "MemoryManager usage statistics: total {}, trackers used {}, total {} requesters used: {}",
+               human_readable_size(self.pool_size),
+               human_readable_size(self.get_tracker_total()),
+               self.requesters.lock().len(),
+               human_readable_size(self.get_requester_total()),
+        )
     }
 }
 
@@ -308,7 +393,8 @@ const GB: u64 = 1 << 30;
 const MB: u64 = 1 << 20;
 const KB: u64 = 1 << 10;
 
-fn human_readable_size(size: usize) -> String {
+/// Present size in human readable form
+pub fn human_readable_size(size: usize) -> String {
     let size = size as u64;
     let (value, unit) = {
         if size >= 2 * TB {
@@ -328,11 +414,11 @@ fn human_readable_size(size: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::error::Result;
-    use crate::execution::memory_manager::{
-        ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
-    };
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::execution::MemoryConsumer;
+    use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
     use async_trait::async_trait;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -402,6 +488,7 @@ mod tests {
 
     impl DummyTracker {
         fn new(partition: usize, runtime: Arc<RuntimeEnv>, mem_used: usize) -> Self {
+            runtime.grow_tracker_usage(mem_used);
             Self {
                 id: MemoryConsumerId::new(partition),
                 runtime,
@@ -438,51 +525,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn basic_functionalities() -> Result<()> {
+    async fn basic_functionalities() {
         let config = RuntimeConfig::new()
-            .with_memory_fraction(1.0)
-            .with_max_execution_memory(100);
-        let runtime = Arc::new(RuntimeEnv::new(config)?);
+            .with_memory_manager(MemoryManagerConfig::try_new_limit(100, 1.0).unwrap());
+        let runtime = Arc::new(RuntimeEnv::new(config).unwrap());
 
-        let tracker1 = Arc::new(DummyTracker::new(0, runtime.clone(), 5));
-        runtime.register_consumer(&(tracker1.clone() as Arc<dyn MemoryConsumer>));
+        DummyTracker::new(0, runtime.clone(), 5);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 5);
 
-        let tracker2 = Arc::new(DummyTracker::new(0, runtime.clone(), 10));
-        runtime.register_consumer(&(tracker2.clone() as Arc<dyn MemoryConsumer>));
+        let tracker1 = DummyTracker::new(0, runtime.clone(), 10);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 15);
 
-        let tracker3 = Arc::new(DummyTracker::new(0, runtime.clone(), 15));
-        runtime.register_consumer(&(tracker3.clone() as Arc<dyn MemoryConsumer>));
+        DummyTracker::new(0, runtime.clone(), 15);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 30);
 
-        runtime.drop_consumer(tracker2.id());
+        runtime.drop_consumer(tracker1.id(), tracker1.mem_used);
         assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
 
-        let requester1 = Arc::new(DummyRequester::new(0, runtime.clone()));
-        runtime.register_consumer(&(requester1.clone() as Arc<dyn MemoryConsumer>));
+        // MemTrackingMetrics as an easy way to track memory
+        let ms = ExecutionPlanMetricsSet::new();
+        let tracking_metric = MemTrackingMetrics::new_with_rt(&ms, 0, runtime.clone());
+        tracking_metric.init_mem_used(15);
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 35);
+
+        drop(tracking_metric);
+        assert_eq!(runtime.memory_manager.get_tracker_total(), 20);
+
+        let requester1 = DummyRequester::new(0, runtime.clone());
+        runtime.register_requester(requester1.id());
 
         // first requester entered, should be able to use any of the remaining 80
-        requester1.do_with_mem(40).await?;
-        requester1.do_with_mem(10).await?;
+        requester1.do_with_mem(40).await.unwrap();
+        requester1.do_with_mem(10).await.unwrap();
         assert_eq!(requester1.get_spills(), 0);
         assert_eq!(requester1.mem_used(), 50);
-        assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 50);
+        assert_eq!(*runtime.memory_manager.requesters_total.lock(), 50);
 
-        let requester2 = Arc::new(DummyRequester::new(0, runtime.clone()));
-        runtime.register_consumer(&(requester2.clone() as Arc<dyn MemoryConsumer>));
+        let requester2 = DummyRequester::new(0, runtime.clone());
+        runtime.register_requester(requester2.id());
 
-        requester2.do_with_mem(20).await?;
-        requester2.do_with_mem(30).await?;
+        requester2.do_with_mem(20).await.unwrap();
+        requester2.do_with_mem(30).await.unwrap();
         assert_eq!(requester2.get_spills(), 1);
         assert_eq!(requester2.mem_used(), 30);
 
-        requester1.do_with_mem(10).await?;
+        requester1.do_with_mem(10).await.unwrap();
         assert_eq!(requester1.get_spills(), 1);
         assert_eq!(requester1.mem_used(), 10);
 
-        assert_eq!(*runtime.memory_manager.requesters_total.lock().unwrap(), 40);
+        assert_eq!(*runtime.memory_manager.requesters_total.lock(), 40);
+    }
 
-        Ok(())
+    #[tokio::test]
+    #[should_panic(expected = "invalid max_memory. Expected greater than 0, got 0")]
+    async fn test_try_new_with_limit_0() {
+        MemoryManagerConfig::try_new_limit(0, 1.0).unwrap();
+    }
+
+    #[tokio::test]
+    #[should_panic(
+        expected = "invalid fraction. Expected greater than 0 and less than 1.0, got -9.6"
+    )]
+    async fn test_try_new_with_limit_neg_fraction() {
+        MemoryManagerConfig::try_new_limit(100, -9.6).unwrap();
+    }
+
+    #[tokio::test]
+    #[should_panic(
+        expected = "invalid fraction. Expected greater than 0 and less than 1.0, got 9.6"
+    )]
+    async fn test_try_new_with_limit_too_large() {
+        MemoryManagerConfig::try_new_limit(100, 9.6).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_try_new_with_limit_pool_size() {
+        let config = MemoryManagerConfig::try_new_limit(100, 0.5).unwrap();
+        assert_eq!(config.pool_size(), 50);
+
+        let config = MemoryManagerConfig::try_new_limit(100000, 0.1).unwrap();
+        assert_eq!(config.pool_size(), 10000);
     }
 }

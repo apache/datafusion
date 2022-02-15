@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryInto;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::{sync::Arc, time::Duration};
@@ -26,21 +25,22 @@ use tonic::transport::Channel;
 
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use ballista_core::serde::protobuf::{
-    self, scheduler_grpc_client::SchedulerGrpcClient, task_status, FailedTask,
-    PartitionId, PollWorkParams, PollWorkResult, ShuffleWritePartition, TaskDefinition,
-    TaskStatus,
+    scheduler_grpc_client::SchedulerGrpcClient, PollWorkParams, PollWorkResult,
+    TaskDefinition, TaskStatus,
 };
-use protobuf::CompletedTask;
 
+use crate::as_task_status;
 use crate::executor::Executor;
 use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 
-pub async fn poll_loop(
+pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
     executor: Arc<Executor>,
     executor_meta: ExecutorRegistration,
     concurrent_tasks: usize,
+    codec: BallistaCodec<T, U>,
 ) {
     let available_tasks_slots = Arc::new(AtomicUsize::new(concurrent_tasks));
     let (task_status_sender, mut task_status_receiver) =
@@ -78,6 +78,7 @@ pub async fn poll_loop(
                         available_tasks_slots.clone(),
                         task_status_sender,
                         task,
+                        &codec,
                     )
                     .await
                     {
@@ -103,12 +104,13 @@ pub async fn poll_loop(
     }
 }
 
-async fn run_received_tasks(
+async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     executor: Arc<Executor>,
     executor_id: String,
     available_tasks_slots: Arc<AtomicUsize>,
     task_status_sender: Sender<TaskStatus>,
     task: TaskDefinition,
+    codec: &BallistaCodec<T, U>,
 ) -> Result<(), BallistaError> {
     let task_id = task.task_id.unwrap();
     let task_id_log = format!(
@@ -117,7 +119,15 @@ async fn run_received_tasks(
     );
     info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
-    let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
+
+    let plan: Arc<dyn ExecutionPlan> =
+        U::try_decode(task.plan.as_slice()).and_then(|proto| {
+            proto.try_into_physical_plan(
+                executor.ctx.as_ref(),
+                codec.physical_extension_codec(),
+            )
+        })?;
+
     let shuffle_output_partitioning =
         parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
 
@@ -142,37 +152,6 @@ async fn run_received_tasks(
     });
 
     Ok(())
-}
-
-fn as_task_status(
-    execution_result: ballista_core::error::Result<Vec<ShuffleWritePartition>>,
-    executor_id: String,
-    task_id: PartitionId,
-) -> TaskStatus {
-    match execution_result {
-        Ok(partitions) => {
-            info!("Task {:?} finished", task_id);
-
-            TaskStatus {
-                partition_id: Some(task_id),
-                status: Some(task_status::Status::Completed(CompletedTask {
-                    executor_id,
-                    partitions,
-                })),
-            }
-        }
-        Err(e) => {
-            let error_msg = e.to_string();
-            info!("Task {:?} failed: {}", task_id, error_msg);
-
-            TaskStatus {
-                partition_id: Some(task_id),
-                status: Some(task_status::Status::Failed(FailedTask {
-                    error: format!("Task failed due to Tokio error: {}", error_msg),
-                })),
-            }
-        }
-    }
 }
 
 async fn sample_tasks_status(

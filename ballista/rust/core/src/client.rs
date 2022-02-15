@@ -17,7 +17,8 @@
 
 //! Client API for sending requests to executors.
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::{collections::HashMap, pin::Pin};
 use std::{
     convert::{TryFrom, TryInto},
@@ -25,7 +26,6 @@ use std::{
 };
 
 use crate::error::{ballista_error, BallistaError, Result};
-use crate::memory_stream::MemoryStream;
 use crate::serde::protobuf::{self};
 use crate::serde::scheduler::{
     Action, ExecutePartition, ExecutePartitionResult, PartitionId, PartitionStats,
@@ -155,7 +155,7 @@ impl Stream for FlightDataStream {
         self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let mut stream = self.stream.lock().expect("mutex is bad");
+        let mut stream = self.stream.lock();
         stream.poll_next_unpin(cx).map(|x| match x {
             Some(flight_data_chunk_result) => {
                 let converted_chunk = flight_data_chunk_result

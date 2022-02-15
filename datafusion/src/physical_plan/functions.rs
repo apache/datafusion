@@ -33,7 +33,7 @@ use super::{
     type_coercion::{coerce, data_types},
     ColumnarValue, PhysicalExpr,
 };
-use crate::execution::context::ExecutionContextState;
+use crate::execution::context::ExecutionProps;
 use crate::physical_plan::array_expressions;
 use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::{
@@ -46,113 +46,16 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::{
-    array::{ArrayRef, NullArray},
+    array::ArrayRef,
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
     record_batch::RecordBatch,
 };
+pub use datafusion_expr::NullColumnarValue;
+pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
 use fmt::{Debug, Formatter};
-use std::convert::From;
-use std::{any::Any, fmt, str::FromStr, sync::Arc};
-
-/// A function's type signature, which defines the function's supported argument types.
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub enum TypeSignature {
-    /// arbitrary number of arguments of an common type out of a list of valid types
-    // A function such as `concat` is `Variadic(vec![DataType::Utf8, DataType::LargeUtf8])`
-    Variadic(Vec<DataType>),
-    /// arbitrary number of arguments of an arbitrary but equal type
-    // A function such as `array` is `VariadicEqual`
-    // The first argument decides the type used for coercion
-    VariadicEqual,
-    /// fixed number of arguments of an arbitrary but equal type out of a list of valid types
-    // A function of one argument of f64 is `Uniform(1, vec![DataType::Float64])`
-    // A function of one argument of f64 or f32 is `Uniform(1, vec![DataType::Float32, DataType::Float64])`
-    Uniform(usize, Vec<DataType>),
-    /// exact number of arguments of an exact type
-    Exact(Vec<DataType>),
-    /// fixed number of arguments of arbitrary types
-    Any(usize),
-    /// One of a list of signatures
-    OneOf(Vec<TypeSignature>),
-}
-
-///The Signature of a function defines its supported input types as well as its volatility.
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
-pub struct Signature {
-    /// type_signature - The types that the function accepts. See [TypeSignature] for more information.
-    pub type_signature: TypeSignature,
-    /// volatility - The volatility of the function. See [Volatility] for more information.
-    pub volatility: Volatility,
-}
-
-impl Signature {
-    /// new - Creates a new Signature from any type signature and the volatility.
-    pub fn new(type_signature: TypeSignature, volatility: Volatility) -> Self {
-        Signature {
-            type_signature,
-            volatility,
-        }
-    }
-    /// variadic - Creates a variadic signature that represents an arbitrary number of arguments all from a type in common_types.
-    pub fn variadic(common_types: Vec<DataType>, volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::Variadic(common_types),
-            volatility,
-        }
-    }
-    /// variadic_equal - Creates a variadic signature that represents an arbitrary number of arguments of the same type.
-    pub fn variadic_equal(volatility: Volatility) -> Self {
-        Self {
-            type_signature: TypeSignature::VariadicEqual,
-            volatility,
-        }
-    }
-    /// uniform - Creates a function with a fixed number of arguments of the same type, which must be from valid_types.
-    pub fn uniform(
-        arg_count: usize,
-        valid_types: Vec<DataType>,
-        volatility: Volatility,
-    ) -> Self {
-        Self {
-            type_signature: TypeSignature::Uniform(arg_count, valid_types),
-            volatility,
-        }
-    }
-    /// exact - Creates a signture which must match the types in exact_types in order.
-    pub fn exact(exact_types: Vec<DataType>, volatility: Volatility) -> Self {
-        Signature {
-            type_signature: TypeSignature::Exact(exact_types),
-            volatility,
-        }
-    }
-    /// any - Creates a signature which can a be made of any type but of a specified number
-    pub fn any(arg_count: usize, volatility: Volatility) -> Self {
-        Signature {
-            type_signature: TypeSignature::Any(arg_count),
-            volatility,
-        }
-    }
-    /// one_of Creates a signature which can match any of the [TypeSignature]s which are passed in.
-    pub fn one_of(type_signatures: Vec<TypeSignature>, volatility: Volatility) -> Self {
-        Signature {
-            type_signature: TypeSignature::OneOf(type_signatures),
-            volatility,
-        }
-    }
-}
-
-///A function's volatility, which defines the functions eligibility for certain optimizations
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub enum Volatility {
-    /// Immutable - An immutable function will always return the same output when given the same input. An example of this is [BuiltinScalarFunction::Cos].
-    Immutable,
-    /// Stable - A stable function may return different values given the same input accross different queries but must return the same value for a given input within a query. An example of this is [BuiltinScalarFunction::Now].
-    Stable,
-    /// Volatile - A volatile function may change the return value from evaluation to evaluation. Mutiple invocations of a volatile function may return different results when used in the same query. An example of this is [BuiltinScalarFunction::Random].
-    Volatile,
-}
+use std::{any::Any, fmt, sync::Arc};
 
 /// Scalar function
 ///
@@ -168,313 +71,6 @@ pub type ScalarFunctionImplementation =
 /// A function's return type
 pub type ReturnTypeFunction =
     Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
-
-/// Enum of all built-in scalar functions
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd)]
-pub enum BuiltinScalarFunction {
-    // math functions
-    /// abs
-    Abs,
-    /// acos
-    Acos,
-    /// asin
-    Asin,
-    /// atan
-    Atan,
-    /// ceil
-    Ceil,
-    /// cos
-    Cos,
-    /// Digest
-    Digest,
-    /// exp
-    Exp,
-    /// floor
-    Floor,
-    /// ln, Natural logarithm
-    Ln,
-    /// log, same as log10
-    Log,
-    /// log10
-    Log10,
-    /// log2
-    Log2,
-    /// round
-    Round,
-    /// signum
-    Signum,
-    /// sin
-    Sin,
-    /// sqrt
-    Sqrt,
-    /// tan
-    Tan,
-    /// trunc
-    Trunc,
-
-    // string functions
-    /// construct an array from columns
-    Array,
-    /// ascii
-    Ascii,
-    /// bit_length
-    BitLength,
-    /// btrim
-    Btrim,
-    /// character_length
-    CharacterLength,
-    /// chr
-    Chr,
-    /// concat
-    Concat,
-    /// concat_ws
-    ConcatWithSeparator,
-    /// date_part
-    DatePart,
-    /// date_trunc
-    DateTrunc,
-    /// initcap
-    InitCap,
-    /// left
-    Left,
-    /// lpad
-    Lpad,
-    /// lower
-    Lower,
-    /// ltrim
-    Ltrim,
-    /// md5
-    MD5,
-    /// nullif
-    NullIf,
-    /// octet_length
-    OctetLength,
-    /// random
-    Random,
-    /// regexp_replace
-    RegexpReplace,
-    /// repeat
-    Repeat,
-    /// replace
-    Replace,
-    /// reverse
-    Reverse,
-    /// right
-    Right,
-    /// rpad
-    Rpad,
-    /// rtrim
-    Rtrim,
-    /// sha224
-    SHA224,
-    /// sha256
-    SHA256,
-    /// sha384
-    SHA384,
-    /// Sha512
-    SHA512,
-    /// split_part
-    SplitPart,
-    /// starts_with
-    StartsWith,
-    /// strpos
-    Strpos,
-    /// substr
-    Substr,
-    /// to_hex
-    ToHex,
-    /// to_timestamp
-    ToTimestamp,
-    /// to_timestamp_millis
-    ToTimestampMillis,
-    /// to_timestamp_micros
-    ToTimestampMicros,
-    /// to_timestamp_seconds
-    ToTimestampSeconds,
-    ///now
-    Now,
-    /// translate
-    Translate,
-    /// trim
-    Trim,
-    /// upper
-    Upper,
-    /// regexp_match
-    RegexpMatch,
-}
-
-impl BuiltinScalarFunction {
-    /// an allowlist of functions to take zero arguments, so that they will get special treatment
-    /// while executing.
-    fn supports_zero_argument(&self) -> bool {
-        matches!(
-            self,
-            BuiltinScalarFunction::Random | BuiltinScalarFunction::Now
-        )
-    }
-    /// Returns the [Volatility] of the builtin function.
-    pub fn volatility(&self) -> Volatility {
-        match self {
-            //Immutable scalar builtins
-            BuiltinScalarFunction::Abs => Volatility::Immutable,
-            BuiltinScalarFunction::Acos => Volatility::Immutable,
-            BuiltinScalarFunction::Asin => Volatility::Immutable,
-            BuiltinScalarFunction::Atan => Volatility::Immutable,
-            BuiltinScalarFunction::Ceil => Volatility::Immutable,
-            BuiltinScalarFunction::Cos => Volatility::Immutable,
-            BuiltinScalarFunction::Exp => Volatility::Immutable,
-            BuiltinScalarFunction::Floor => Volatility::Immutable,
-            BuiltinScalarFunction::Ln => Volatility::Immutable,
-            BuiltinScalarFunction::Log => Volatility::Immutable,
-            BuiltinScalarFunction::Log10 => Volatility::Immutable,
-            BuiltinScalarFunction::Log2 => Volatility::Immutable,
-            BuiltinScalarFunction::Round => Volatility::Immutable,
-            BuiltinScalarFunction::Signum => Volatility::Immutable,
-            BuiltinScalarFunction::Sin => Volatility::Immutable,
-            BuiltinScalarFunction::Sqrt => Volatility::Immutable,
-            BuiltinScalarFunction::Tan => Volatility::Immutable,
-            BuiltinScalarFunction::Trunc => Volatility::Immutable,
-            BuiltinScalarFunction::Array => Volatility::Immutable,
-            BuiltinScalarFunction::Ascii => Volatility::Immutable,
-            BuiltinScalarFunction::BitLength => Volatility::Immutable,
-            BuiltinScalarFunction::Btrim => Volatility::Immutable,
-            BuiltinScalarFunction::CharacterLength => Volatility::Immutable,
-            BuiltinScalarFunction::Chr => Volatility::Immutable,
-            BuiltinScalarFunction::Concat => Volatility::Immutable,
-            BuiltinScalarFunction::ConcatWithSeparator => Volatility::Immutable,
-            BuiltinScalarFunction::DatePart => Volatility::Immutable,
-            BuiltinScalarFunction::DateTrunc => Volatility::Immutable,
-            BuiltinScalarFunction::InitCap => Volatility::Immutable,
-            BuiltinScalarFunction::Left => Volatility::Immutable,
-            BuiltinScalarFunction::Lpad => Volatility::Immutable,
-            BuiltinScalarFunction::Lower => Volatility::Immutable,
-            BuiltinScalarFunction::Ltrim => Volatility::Immutable,
-            BuiltinScalarFunction::MD5 => Volatility::Immutable,
-            BuiltinScalarFunction::NullIf => Volatility::Immutable,
-            BuiltinScalarFunction::OctetLength => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpReplace => Volatility::Immutable,
-            BuiltinScalarFunction::Repeat => Volatility::Immutable,
-            BuiltinScalarFunction::Replace => Volatility::Immutable,
-            BuiltinScalarFunction::Reverse => Volatility::Immutable,
-            BuiltinScalarFunction::Right => Volatility::Immutable,
-            BuiltinScalarFunction::Rpad => Volatility::Immutable,
-            BuiltinScalarFunction::Rtrim => Volatility::Immutable,
-            BuiltinScalarFunction::SHA224 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA256 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA384 => Volatility::Immutable,
-            BuiltinScalarFunction::SHA512 => Volatility::Immutable,
-            BuiltinScalarFunction::Digest => Volatility::Immutable,
-            BuiltinScalarFunction::SplitPart => Volatility::Immutable,
-            BuiltinScalarFunction::StartsWith => Volatility::Immutable,
-            BuiltinScalarFunction::Strpos => Volatility::Immutable,
-            BuiltinScalarFunction::Substr => Volatility::Immutable,
-            BuiltinScalarFunction::ToHex => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestamp => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampMillis => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampMicros => Volatility::Immutable,
-            BuiltinScalarFunction::ToTimestampSeconds => Volatility::Immutable,
-            BuiltinScalarFunction::Translate => Volatility::Immutable,
-            BuiltinScalarFunction::Trim => Volatility::Immutable,
-            BuiltinScalarFunction::Upper => Volatility::Immutable,
-            BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
-
-            //Stable builtin functions
-            BuiltinScalarFunction::Now => Volatility::Stable,
-
-            //Volatile builtin functions
-            BuiltinScalarFunction::Random => Volatility::Volatile,
-        }
-    }
-}
-
-impl fmt::Display for BuiltinScalarFunction {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // lowercase of the debug.
-        write!(f, "{}", format!("{:?}", self).to_lowercase())
-    }
-}
-
-impl FromStr for BuiltinScalarFunction {
-    type Err = DataFusionError;
-    fn from_str(name: &str) -> Result<BuiltinScalarFunction> {
-        Ok(match name {
-            // math functions
-            "abs" => BuiltinScalarFunction::Abs,
-            "acos" => BuiltinScalarFunction::Acos,
-            "asin" => BuiltinScalarFunction::Asin,
-            "atan" => BuiltinScalarFunction::Atan,
-            "ceil" => BuiltinScalarFunction::Ceil,
-            "cos" => BuiltinScalarFunction::Cos,
-            "exp" => BuiltinScalarFunction::Exp,
-            "floor" => BuiltinScalarFunction::Floor,
-            "ln" => BuiltinScalarFunction::Ln,
-            "log" => BuiltinScalarFunction::Log,
-            "log10" => BuiltinScalarFunction::Log10,
-            "log2" => BuiltinScalarFunction::Log2,
-            "round" => BuiltinScalarFunction::Round,
-            "signum" => BuiltinScalarFunction::Signum,
-            "sin" => BuiltinScalarFunction::Sin,
-            "sqrt" => BuiltinScalarFunction::Sqrt,
-            "tan" => BuiltinScalarFunction::Tan,
-            "trunc" => BuiltinScalarFunction::Trunc,
-
-            // string functions
-            "array" => BuiltinScalarFunction::Array,
-            "ascii" => BuiltinScalarFunction::Ascii,
-            "bit_length" => BuiltinScalarFunction::BitLength,
-            "btrim" => BuiltinScalarFunction::Btrim,
-            "char_length" => BuiltinScalarFunction::CharacterLength,
-            "character_length" => BuiltinScalarFunction::CharacterLength,
-            "concat" => BuiltinScalarFunction::Concat,
-            "concat_ws" => BuiltinScalarFunction::ConcatWithSeparator,
-            "chr" => BuiltinScalarFunction::Chr,
-            "date_part" | "datepart" => BuiltinScalarFunction::DatePart,
-            "date_trunc" | "datetrunc" => BuiltinScalarFunction::DateTrunc,
-            "initcap" => BuiltinScalarFunction::InitCap,
-            "left" => BuiltinScalarFunction::Left,
-            "length" => BuiltinScalarFunction::CharacterLength,
-            "lower" => BuiltinScalarFunction::Lower,
-            "lpad" => BuiltinScalarFunction::Lpad,
-            "ltrim" => BuiltinScalarFunction::Ltrim,
-            "md5" => BuiltinScalarFunction::MD5,
-            "nullif" => BuiltinScalarFunction::NullIf,
-            "octet_length" => BuiltinScalarFunction::OctetLength,
-            "random" => BuiltinScalarFunction::Random,
-            "regexp_replace" => BuiltinScalarFunction::RegexpReplace,
-            "repeat" => BuiltinScalarFunction::Repeat,
-            "replace" => BuiltinScalarFunction::Replace,
-            "reverse" => BuiltinScalarFunction::Reverse,
-            "right" => BuiltinScalarFunction::Right,
-            "rpad" => BuiltinScalarFunction::Rpad,
-            "rtrim" => BuiltinScalarFunction::Rtrim,
-            "sha224" => BuiltinScalarFunction::SHA224,
-            "sha256" => BuiltinScalarFunction::SHA256,
-            "sha384" => BuiltinScalarFunction::SHA384,
-            "sha512" => BuiltinScalarFunction::SHA512,
-            "digest" => BuiltinScalarFunction::Digest,
-            "split_part" => BuiltinScalarFunction::SplitPart,
-            "starts_with" => BuiltinScalarFunction::StartsWith,
-            "strpos" => BuiltinScalarFunction::Strpos,
-            "substr" => BuiltinScalarFunction::Substr,
-            "to_hex" => BuiltinScalarFunction::ToHex,
-            "to_timestamp" => BuiltinScalarFunction::ToTimestamp,
-            "to_timestamp_millis" => BuiltinScalarFunction::ToTimestampMillis,
-            "to_timestamp_micros" => BuiltinScalarFunction::ToTimestampMicros,
-            "to_timestamp_seconds" => BuiltinScalarFunction::ToTimestampSeconds,
-            "now" => BuiltinScalarFunction::Now,
-            "translate" => BuiltinScalarFunction::Translate,
-            "trim" => BuiltinScalarFunction::Trim,
-            "upper" => BuiltinScalarFunction::Upper,
-            "regexp_match" => BuiltinScalarFunction::RegexpMatch,
-            _ => {
-                return Err(DataFusionError::Plan(format!(
-                    "There is no built-in function named {}",
-                    name
-                )))
-            }
-        })
-    }
-}
 
 macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
@@ -723,7 +319,7 @@ macro_rules! invoke_if_unicode_expressions_feature_flag {
 /// Create a physical scalar function.
 pub fn create_physical_fun(
     fun: &BuiltinScalarFunction,
-    ctx_state: &ExecutionContextState,
+    execution_props: &ExecutionProps,
 ) -> Result<ScalarFunctionImplementation> {
     Ok(match fun {
         // math functions
@@ -820,7 +416,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Now => {
             // bind value for now at plan time
             Arc::new(datetime_expressions::make_now(
-                ctx_state.execution_props.query_execution_start_time,
+                execution_props.query_execution_start_time,
             ))
         }
         BuiltinScalarFunction::InitCap => Arc::new(|args| match args[0].data_type() {
@@ -1157,7 +753,7 @@ pub fn create_physical_expr(
     fun: &BuiltinScalarFunction,
     input_phy_exprs: &[Arc<dyn PhysicalExpr>],
     input_schema: &Schema,
-    ctx_state: &ExecutionContextState,
+    execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
 
@@ -1254,7 +850,7 @@ pub fn create_physical_expr(
             }
         }),
         // These don't need args and input schema
-        _ => create_physical_fun(fun, ctx_state)?,
+        _ => create_physical_fun(fun, execution_props)?,
     };
 
     Ok(Arc::new(ScalarFunctionExpr::new(
@@ -1609,17 +1205,6 @@ impl fmt::Display for ScalarFunctionExpr {
     }
 }
 
-/// null columnar values are implemented as a null array in order to pass batch
-/// num_rows
-type NullColumnarValue = ColumnarValue;
-
-impl From<&RecordBatch> for NullColumnarValue {
-    fn from(batch: &RecordBatch) -> Self {
-        let num_rows = batch.num_rows();
-        ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
-    }
-}
-
 impl PhysicalExpr for ScalarFunctionExpr {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -1695,6 +1280,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::{
         error::Result,
         physical_plan::expressions::{col, lit},
@@ -1719,14 +1305,14 @@ mod tests {
         ($FUNC:ident, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
             // used to provide type annotation
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
-            let ctx_state = ExecutionContextState::new();
+            let execution_props = ExecutionProps::new();
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+            let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
 
             let expr =
-                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &ctx_state)?;
+                create_physical_expr(&BuiltinScalarFunction::$FUNC, $ARGS, &schema, &execution_props)?;
 
             // type is correct
             assert_eq!(expr.data_type(&schema)?, DataType::$DATA_TYPE);
@@ -3584,6 +3170,18 @@ mod tests {
         test_function!(
             Substr,
             &[
+                lit(ScalarValue::Utf8(Some("joséésoj".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+            ],
+            Ok(Some("joséésoj")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(Some(1))),
             ],
@@ -3683,6 +3281,61 @@ mod tests {
             Substr,
             &[
                 lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(0))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Ok(Some("alph")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from 5 (10 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(10))),
+            ],
+            Ok(Some("alph")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from -1 (4 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(4))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        // starting from 0 (5 + -5)
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
+                lit(ScalarValue::Int64(Some(-5))),
+                lit(ScalarValue::Int64(Some(5))),
+            ],
+            Ok(Some("")),
+            &str,
+            Utf8,
+            StringArray
+        );
+        #[cfg(feature = "unicode_expressions")]
+        test_function!(
+            Substr,
+            &[
+                lit(ScalarValue::Utf8(Some("alphabet".to_string()))),
                 lit(ScalarValue::Int64(None)),
                 lit(ScalarValue::Int64(Some(20))),
             ],
@@ -3713,7 +3366,7 @@ mod tests {
                 lit(ScalarValue::Int64(Some(-1))),
             ],
             Err(DataFusionError::Execution(
-                "negative substring length not allowed".to_string(),
+                "negative substring length not allowed: substr(<str>, 1, -1)".to_string(),
             )),
             &str,
             Utf8,
@@ -3887,7 +3540,7 @@ mod tests {
 
     #[test]
     fn test_empty_arguments_error() -> Result<()> {
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // pick some arbitrary functions to test
@@ -3899,7 +3552,7 @@ mod tests {
         ];
 
         for fun in funs.iter() {
-            let expr = create_physical_expr(fun, &[], &schema, &ctx_state);
+            let expr = create_physical_expr(fun, &[], &schema, &execution_props);
 
             match expr {
                 Ok(..) => {
@@ -3930,13 +3583,13 @@ mod tests {
 
     #[test]
     fn test_empty_arguments() -> Result<()> {
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
 
         for fun in funs.iter() {
-            create_physical_expr(fun, &[], &schema, &ctx_state)?;
+            create_physical_expr(fun, &[], &schema, &execution_props)?;
         }
         Ok(())
     }
@@ -3953,13 +3606,13 @@ mod tests {
             Field::new("b", value2.data_type().clone(), false),
         ]);
         let columns: Vec<ArrayRef> = vec![value1, value2];
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
 
         let expr = create_physical_expr(
             &BuiltinScalarFunction::Array,
             &[col("a", &schema)?, col("b", &schema)?],
             &schema,
-            &ctx_state,
+            &execution_props,
         )?;
 
         // type is correct
@@ -3988,24 +3641,24 @@ mod tests {
     #[test]
     fn test_array() -> Result<()> {
         generic_test_array(
-            Arc::new(StringArray::from(vec!["aa"])),
-            Arc::new(StringArray::from(vec!["bb"])),
+            Arc::new(StringArray::from_slice(&["aa"])),
+            Arc::new(StringArray::from_slice(&["bb"])),
             DataType::Utf8,
             "StringArray\n[\n  \"aa\",\n  \"bb\",\n]",
         )?;
 
         // different types, to validate that casting happens
         generic_test_array(
-            Arc::new(UInt32Array::from(vec![1u32])),
-            Arc::new(UInt64Array::from(vec![1u64])),
+            Arc::new(UInt32Array::from_slice(&[1u32])),
+            Arc::new(UInt64Array::from_slice(&[1u64])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )?;
 
         // different types (another order), to validate that casting happens
         generic_test_array(
-            Arc::new(UInt64Array::from(vec![1u64])),
-            Arc::new(UInt32Array::from(vec![1u32])),
+            Arc::new(UInt64Array::from_slice(&[1u64])),
+            Arc::new(UInt32Array::from_slice(&[1u32])),
             DataType::UInt64,
             "PrimitiveArray<UInt64>\n[\n  1,\n  1,\n]",
         )
@@ -4016,16 +3669,16 @@ mod tests {
     fn test_regexp_match() -> Result<()> {
         use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
 
-        let col_value: ArrayRef = Arc::new(StringArray::from(vec!["aaa-555"]));
+        let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
         let columns: Vec<ArrayRef> = vec![col_value];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
             &[col("a", &schema)?, pattern],
             &schema,
-            &ctx_state,
+            &execution_props,
         )?;
 
         // type is correct
@@ -4055,16 +3708,16 @@ mod tests {
     fn test_regexp_match_all_literals() -> Result<()> {
         use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let ctx_state = ExecutionContextState::new();
+        let execution_props = ExecutionProps::new();
 
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
-        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from(vec![1]))];
+        let columns: Vec<ArrayRef> = vec![Arc::new(Int32Array::from_slice(&[1]))];
         let expr = create_physical_expr(
             &BuiltinScalarFunction::RegexpMatch,
             &[col_value, pattern],
             &schema,
-            &ctx_state,
+            &execution_props,
         )?;
 
         // type is correct

@@ -1,5 +1,3 @@
-#!/bin/bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,17 +14,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
-# Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-python.sh
+[package]
+name = "datafusion-expr"
+description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
+version = "7.0.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+readme = "../README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = [ "arrow", "query", "sql" ]
+edition = "2021"
+rust-version = "1.58"
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
+[lib]
+name = "datafusion_expr"
+path = "src/lib.rs"
 
-CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/python/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
-${SOURCE_DIR}/update_change_log.sh \
-    python \
-    python-0.3.0 \
-    --exclude-tags-regex "ballista-.+" \
-    --future-release "python-${CURRENT_VER}"
+[features]
+
+[dependencies]
+datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
+arrow = { version = "9.0.0", features = ["prettyprint"] }
+sqlparser = "0.14"
+ahash = { version = "0.7", default-features = false }

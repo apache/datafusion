@@ -19,7 +19,8 @@
 extern crate criterion;
 use criterion::Criterion;
 
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 use tokio::runtime::Runtime;
 
@@ -31,16 +32,16 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
-use datafusion::error::Result;
-
 use datafusion::datasource::MemTable;
+use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
+use datafusion::from_slice::FromSlice;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
-    let df = rt.block_on(ctx.lock().unwrap().sql(sql)).unwrap();
+    let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     rt.block_on(df.collect()).unwrap();
 }
 
@@ -60,8 +61,8 @@ fn create_context(
             RecordBatch::try_new(
                 schema.clone(),
                 vec![
-                    Arc::new(Float32Array::from(vec![i as f32; batch_size])),
-                    Arc::new(Float64Array::from(vec![i as f64; batch_size])),
+                    Arc::new(Float32Array::from_slice(&vec![i as f32; batch_size])),
+                    Arc::new(Float64Array::from_slice(&vec![i as f64; batch_size])),
                 ],
             )
             .unwrap()

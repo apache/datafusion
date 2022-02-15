@@ -19,11 +19,12 @@
 
 pub mod local;
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::Read;
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -89,7 +90,7 @@ pub struct FileMeta {
     /// The last modification time of the file according to the
     /// object store metadata. This information might be used by
     /// catalog systems like Delta Lake for time travel (see
-    /// https://github.com/delta-io/delta/issues/192)
+    /// <https://github.com/delta-io/delta/issues/192>)
     pub last_modified: Option<DateTime<Utc>>,
 }
 
@@ -122,7 +123,7 @@ pub type ListEntryStream =
 
 /// Stream readers opened on a given object store
 pub type ObjectReaderStream =
-    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync + 'static>>;
+    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -175,12 +176,7 @@ impl fmt::Debug for ObjectStoreRegistry {
         f.debug_struct("ObjectStoreRegistry")
             .field(
                 "schemes",
-                &self
-                    .object_stores
-                    .read()
-                    .unwrap()
-                    .keys()
-                    .collect::<Vec<_>>(),
+                &self.object_stores.read().keys().collect::<Vec<_>>(),
             )
             .finish()
     }
@@ -211,27 +207,26 @@ impl ObjectStoreRegistry {
         scheme: String,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let mut stores = self.object_stores.write().unwrap();
+        let mut stores = self.object_stores.write();
         stores.insert(scheme, store)
     }
 
     /// Get the store registered for scheme
     pub fn get(&self, scheme: &str) -> Option<Arc<dyn ObjectStore>> {
-        let stores = self.object_stores.read().unwrap();
+        let stores = self.object_stores.read();
         stores.get(scheme).cloned()
     }
 
     /// Get a suitable store for the URI based on it's scheme. For example:
     /// - URI with scheme `file://` or no schema will return the default LocalFS store
     /// - URI with scheme `s3://` will return the S3 store if it's registered
-    /// Returns a tuple with the store and the path of the file in that store
-    /// (URI=scheme://path).
+    /// Returns a tuple with the store and the self-described uri of the file in that store
     pub fn get_by_uri<'a>(
         &self,
         uri: &'a str,
     ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
-        if let Some((scheme, path)) = uri.split_once("://") {
-            let stores = self.object_stores.read().unwrap();
+        if let Some((scheme, _path)) = uri.split_once("://") {
+            let stores = self.object_stores.read();
             let store = stores
                 .get(&*scheme.to_lowercase())
                 .map(Clone::clone)
@@ -241,7 +236,7 @@ impl ObjectStoreRegistry {
                         scheme
                     ))
                 })?;
-            Ok((store, path))
+            Ok((store, uri))
         } else {
             Ok((Arc::new(LocalFileSystem), uri))
         }

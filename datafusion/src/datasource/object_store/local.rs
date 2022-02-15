@@ -28,8 +28,7 @@ use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
 };
 use crate::datasource::PartitionedFile;
-use crate::error::DataFusionError;
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 
 use super::{ObjectReaderStream, SizedFile};
 
@@ -40,6 +39,11 @@ pub struct LocalFileSystem;
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+        let prefix = if let Some((_scheme, path)) = prefix.split_once("://") {
+            path
+        } else {
+            prefix
+        };
         list_all(prefix.to_owned()).await
     }
 

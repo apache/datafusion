@@ -52,6 +52,7 @@ use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -206,6 +207,14 @@ impl ExecutionPlan for HashAggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     async fn execute(
@@ -403,8 +412,7 @@ fn group_aggregate_batch(
             }
             //  1.2 Need to create new entry
             None => {
-                let accumulator_set = create_accumulators(aggr_expr)
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                let accumulator_set = create_accumulators(aggr_expr)?;
 
                 // Copy group values out of arrays into `ScalarValue`s
                 let group_by_values = group_values
@@ -516,8 +524,7 @@ async fn compute_grouped_hash_aggregate(
     // Assume create_schema() always put group columns in front of aggr columns, we set
     // col_idx_base to group expression count.
     let aggregate_expressions =
-        aggregate_expressions(&aggr_expr, &mode, group_expr.len())
-            .map_err(DataFusionError::into_arrow_external_error)?;
+        aggregate_expressions(&aggr_expr, &mode, group_expr.len())?;
 
     let random_state = RandomState::new();
 
@@ -535,8 +542,7 @@ async fn compute_grouped_hash_aggregate(
             batch,
             accumulators,
             &aggregate_expressions,
-        )
-        .map_err(DataFusionError::into_arrow_external_error)?;
+        )?;
         timer.done();
     }
 
@@ -754,10 +760,8 @@ async fn compute_hash_aggregate(
     elapsed_compute: metrics::Time,
 ) -> ArrowResult<RecordBatch> {
     let timer = elapsed_compute.timer();
-    let mut accumulators = create_accumulators(&aggr_expr)
-        .map_err(DataFusionError::into_arrow_external_error)?;
-    let expressions = aggregate_expressions(&aggr_expr, &mode, 0)
-        .map_err(DataFusionError::into_arrow_external_error)?;
+    let mut accumulators = create_accumulators(&aggr_expr)?;
+    let expressions = aggregate_expressions(&aggr_expr, &mode, 0)?;
     let expressions = Arc::new(expressions);
     timer.done();
 
@@ -766,16 +770,14 @@ async fn compute_hash_aggregate(
     while let Some(batch) = input.next().await {
         let batch = batch?;
         let timer = elapsed_compute.timer();
-        aggregate_batch(&mode, &batch, &mut accumulators, &expressions)
-            .map_err(DataFusionError::into_arrow_external_error)?;
+        aggregate_batch(&mode, &batch, &mut accumulators, &expressions)?;
         timer.done();
     }
 
     // 2. convert values to a record batch
     let timer = elapsed_compute.timer();
     let batch = finalize_aggregation(&accumulators, &mode)
-        .map(|columns| RecordBatch::try_new(schema.clone(), columns))
-        .map_err(DataFusionError::into_arrow_external_error)?;
+        .map(|columns| RecordBatch::try_new(schema.clone(), columns))?;
     timer.done();
     batch
 }
@@ -904,9 +906,7 @@ fn create_batch_from_map(
     match mode {
         AggregateMode::Partial => {
             for acc in accs.iter() {
-                let state = acc
-                    .state()
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                let state = acc.state()?;
                 acc_data_types.push(state.len());
             }
         }
@@ -924,8 +924,7 @@ fn create_batch_from_map(
                     .map(|group_state| group_state.group_by_values[i].clone()),
             )
         })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|x| x.into_arrow_external_error())?;
+        .collect::<Result<Vec<_>>>()?;
 
     // add state / evaluated arrays
     for (x, &state_len) in acc_data_types.iter().enumerate() {
@@ -937,8 +936,7 @@ fn create_batch_from_map(
                             let x = group_state.accumulator_set[x].state().unwrap();
                             x[y].clone()
                         }),
-                    )
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                    )?;
 
                     columns.push(res);
                 }
@@ -947,8 +945,7 @@ fn create_batch_from_map(
                         accumulators.group_states.iter().map(|group_state| {
                             group_state.accumulator_set[x].evaluate().unwrap()
                         }),
-                    )
-                    .map_err(DataFusionError::into_arrow_external_error)?;
+                    )?;
                     columns.push(res);
                 }
             }
@@ -1009,15 +1006,15 @@ fn finalize_aggregation(
 #[cfg(test)]
 mod tests {
 
-    use arrow::array::{Float64Array, UInt32Array};
-    use arrow::datatypes::DataType;
-    use futures::FutureExt;
-
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::{assert_batches_sorted_eq, physical_plan::common};
+    use arrow::array::{Float64Array, UInt32Array};
+    use arrow::datatypes::DataType;
+    use futures::FutureExt;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 
@@ -1036,16 +1033,16 @@ mod tests {
                 RecordBatch::try_new(
                     schema.clone(),
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 4, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 4, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
                 RecordBatch::try_new(
                     schema,
                     vec![
-                        Arc::new(UInt32Array::from(vec![2, 3, 3, 4])),
-                        Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0])),
+                        Arc::new(UInt32Array::from_slice(&[2, 3, 3, 4])),
+                        Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
                     ],
                 )
                 .unwrap(),
@@ -1158,6 +1155,10 @@ mod tests {
 
         fn output_partitioning(&self) -> Partitioning {
             Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            None
         }
 
         fn with_new_children(

@@ -112,14 +112,6 @@ impl Accumulator for CountAccumulator {
         Ok(())
     }
 
-    fn update(&mut self, _values: &[ScalarValue]) -> Result<()> {
-        unimplemented!("update_batch is implemented instead");
-    }
-
-    fn merge(&mut self, _states: &[ScalarValue]) -> Result<()> {
-        unimplemented!("merge_batch is implemented instead");
-    }
-
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let delta = &compute::sum(counts);
@@ -141,6 +133,7 @@ impl Accumulator for CountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::from_slice::FromSlice;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::expressions::tests::aggregate;
     use crate::{error::Result, generic_test_op};
@@ -149,7 +142,7 @@ mod tests {
 
     #[test]
     fn count_elements() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -208,7 +201,7 @@ mod tests {
     #[test]
     fn count_utf8() -> Result<()> {
         let a: ArrayRef =
-            Arc::new(StringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
+            Arc::new(StringArray::from_slice(&["a", "bb", "ccc", "dddd", "ad"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -220,8 +213,9 @@ mod tests {
 
     #[test]
     fn count_large_utf8() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(LargeStringArray::from(vec!["a", "bb", "ccc", "dddd", "ad"]));
+        let a: ArrayRef = Arc::new(LargeStringArray::from_slice(&[
+            "a", "bb", "ccc", "dddd", "ad",
+        ]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,

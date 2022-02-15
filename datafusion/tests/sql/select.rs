@@ -16,6 +16,8 @@
 // under the License.
 
 use super::*;
+use datafusion::{from_slice::FromSlice, physical_plan::collect_partitioned};
+use tempfile::TempDir;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
@@ -473,7 +475,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
-    let input = Int64Array::from(vec![1, 2, 3, 4]);
+    let input = Int64Array::from_slice(&[1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     ctx.register_table("test", Arc::new(table))?;
@@ -654,19 +656,28 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
 async fn query_on_string_dictionary() -> Result<()> {
     // Test to ensure DataFusion can operate on dictionary types
     // Use StringDictionary (32 bit indexes = keys)
-    let array = vec![Some("one"), None, Some("three")]
-        .into_iter()
-        .collect::<DictionaryArray<Int32Type>>();
+    let d1: DictionaryArray<Int32Type> =
+        vec![Some("one"), None, Some("three")].into_iter().collect();
 
-    let batch =
-        RecordBatch::try_from_iter(vec![("d1", Arc::new(array) as ArrayRef)]).unwrap();
+    let d2: DictionaryArray<Int32Type> = vec![Some("blarg"), None, Some("three")]
+        .into_iter()
+        .collect();
+
+    let d3: StringArray = vec![Some("XYZ"), None, Some("three")].into_iter().collect();
+
+    let batch = RecordBatch::try_from_iter(vec![
+        ("d1", Arc::new(d1) as ArrayRef),
+        ("d2", Arc::new(d2) as ArrayRef),
+        ("d3", Arc::new(d3) as ArrayRef),
+    ])
+    .unwrap();
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
     // Basic SELECT
-    let sql = "SELECT * FROM test";
+    let sql = "SELECT d1 FROM test";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -680,7 +691,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     // basic filtering
-    let sql = "SELECT * FROM test WHERE d1 IS NOT NULL";
+    let sql = "SELECT d1 FROM test WHERE d1 IS NOT NULL";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -692,8 +703,56 @@ async fn query_on_string_dictionary() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
 
+    // comparison with constant
+    let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // comparison with another dictionary column
+    let sql = "SELECT d1 FROM test WHERE d1 = d2";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // order comparison with another dictionary column
+    let sql = "SELECT d1 FROM test WHERE d1 <= d2";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // comparison with a non dictionary column
+    let sql = "SELECT d1 FROM test WHERE d1 = d3";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------+",
+        "| d1    |",
+        "+-------+",
+        "| three |",
+        "+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     // filtering with constant
-    let sql = "SELECT * FROM test WHERE d1 = 'three'";
+    let sql = "SELECT d1 FROM test WHERE d1 = 'three'";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
         "+-------+",
@@ -715,6 +774,20 @@ async fn query_on_string_dictionary() -> Result<()> {
         "| -foo                         |",
         "| three-foo                    |",
         "+------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // Expression evaluation with two dictionaries
+    let sql = "SELECT concat(d1, d2) FROM test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+",
+        "| concat(test.d1,test.d2) |",
+        "+-------------------------+",
+        "| oneblarg                |",
+        "|                         |",
+        "| threethree              |",
+        "+-------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
 
@@ -854,5 +927,61 @@ async fn csv_select_nested() -> Result<()> {
         "+----+----+------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn parallel_query_with_filter() -> Result<()> {
+    let tmp_dir = TempDir::new()?;
+    let partition_count = 4;
+    let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
+
+    let logical_plan =
+        ctx.create_logical_plan("SELECT c1, c2 FROM test WHERE c1 > 0 AND c1 < 3")?;
+    let logical_plan = ctx.optimize(&logical_plan)?;
+
+    let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
+
+    let runtime = ctx.state.lock().runtime_env.clone();
+    let results = collect_partitioned(physical_plan, runtime).await?;
+
+    // note that the order of partitions is not deterministic
+    let mut num_rows = 0;
+    for partition in &results {
+        for batch in partition {
+            num_rows += batch.num_rows();
+        }
+    }
+    assert_eq!(20, num_rows);
+
+    let results: Vec<RecordBatch> = results.into_iter().flatten().collect();
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 1  | 1  |",
+        "| 1  | 10 |",
+        "| 1  | 2  |",
+        "| 1  | 3  |",
+        "| 1  | 4  |",
+        "| 1  | 5  |",
+        "| 1  | 6  |",
+        "| 1  | 7  |",
+        "| 1  | 8  |",
+        "| 1  | 9  |",
+        "| 2  | 1  |",
+        "| 2  | 10 |",
+        "| 2  | 2  |",
+        "| 2  | 3  |",
+        "| 2  | 4  |",
+        "| 2  | 5  |",
+        "| 2  | 6  |",
+        "| 2  | 7  |",
+        "| 2  | 8  |",
+        "| 2  | 9  |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
     Ok(())
 }

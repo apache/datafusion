@@ -72,7 +72,7 @@ fetch_archive() {
 
 verify_dir_artifact_signatures() {
   # verify the signature and the checksums of each artifact
-  find $1 -name '*.asc' | while read sigfile; do
+  find . -name '*.asc' | while read sigfile; do
     artifact=${sigfile/.asc/}
     gpg --verify $sigfile $artifact || exit 1
 
@@ -135,7 +135,10 @@ test_source_distribution() {
     exit 1
   fi
 
-  pushd datafusion
+
+  # Note can't verify datafusion or datafusion-expr as they depend
+  # on datafusion-common which isn't published yet
+  pushd datafusion-common
     cargo publish --dry-run
   popd
 }
@@ -152,13 +155,6 @@ fetch_archive ${dist_name}
 tar xf ${dist_name}.tar.gz
 pushd ${dist_name}
     test_source_distribution
-popd
-
-echo "Verifying python artifacts..."
-svn co $ARROW_DIST_URL/apache-arrow-datafusion-${VERSION}-rc${RC_NUMBER}/python python-artifacts
-pushd python-artifacts
-    verify_dir_artifact_signatures
-    twine check *.{whl,tar.gz}
 popd
 
 TEST_SUCCESS=yes

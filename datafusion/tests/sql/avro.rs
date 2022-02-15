@@ -124,7 +124,7 @@ async fn avro_single_nan_schema() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
@@ -154,7 +154,7 @@ async fn avro_explain() {
             \n    CoalescePartitionsExec\
             \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], batch_size=8192, limit=None\
+            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], limit=None\
             \n",
         ],
     ];

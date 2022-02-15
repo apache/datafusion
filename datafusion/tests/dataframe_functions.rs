@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::{
     array::{Int32Array, StringArray},
     record_batch::RecordBatch,
 };
+use datafusion::from_slice::FromSlice;
+use std::sync::Arc;
 
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
@@ -45,13 +45,13 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(&[
                 "abcDEF",
                 "abc123",
                 "CBAdef",
                 "123AbcDef",
             ])),
-            Arc::new(Int32Array::from(vec![1, 10, 10, 100])),
+            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
 
@@ -149,6 +149,26 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
     ];
 
     assert_fn_batches!(expr, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_fn_approx_percentile_cont() -> Result<()> {
+    let expr = approx_percentile_cont(col("b"), lit(0.5));
+
+    let expected = vec![
+        "+-------------------------------------------+",
+        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
+        "+-------------------------------------------+",
+        "| 10                                        |",
+        "+-------------------------------------------+",
+    ];
+
+    let df = create_test_table()?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_batches_eq!(expected, &batches);
 
     Ok(())
 }

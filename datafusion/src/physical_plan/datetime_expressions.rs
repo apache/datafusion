@@ -186,6 +186,10 @@ pub fn make_now(
     }
 }
 
+fn quarter_month(date: &NaiveDateTime) -> u32 {
+    1 + 3 * ((date.month() - 1) / 3)
+}
+
 fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
     let value = timestamp_ns_to_datetime(value).with_nanosecond(0);
     let value = match granularity {
@@ -208,6 +212,12 @@ fn date_trunc_single(granularity: &str, value: i64) -> Result<i64> {
             .and_then(|d| d.with_minute(0))
             .and_then(|d| d.with_hour(0))
             .and_then(|d| d.with_day0(0)),
+        "quarter" => value
+            .and_then(|d| d.with_second(0))
+            .and_then(|d| d.with_minute(0))
+            .and_then(|d| d.with_hour(0))
+            .and_then(|d| d.with_day0(0))
+            .and_then(|d| d.with_month(quarter_month(&d))),
         "year" => value
             .and_then(|d| d.with_second(0))
             .and_then(|d| d.with_minute(0))
@@ -432,6 +442,7 @@ mod tests {
                 "year",
                 "2020-01-01T00:00:00.000000Z",
             ),
+            // week
             (
                 "2021-01-01T13:42:29.190855Z",
                 "week",
@@ -442,13 +453,49 @@ mod tests {
                 "week",
                 "2019-12-30T00:00:00.000000Z",
             ),
+            // quarter
+            (
+                "2020-01-01T13:42:29.190855Z",
+                "quarter",
+                "2020-01-01T00:00:00.000000Z",
+            ),
+            (
+                "2020-02-01T13:42:29.190855Z",
+                "quarter",
+                "2020-01-01T00:00:00.000000Z",
+            ),
+            (
+                "2020-03-01T13:42:29.190855Z",
+                "quarter",
+                "2020-01-01T00:00:00.000000Z",
+            ),
+            (
+                "2020-04-01T13:42:29.190855Z",
+                "quarter",
+                "2020-04-01T00:00:00.000000Z",
+            ),
+            (
+                "2020-08-01T13:42:29.190855Z",
+                "quarter",
+                "2020-07-01T00:00:00.000000Z",
+            ),
+            (
+                "2020-11-01T13:42:29.190855Z",
+                "quarter",
+                "2020-10-01T00:00:00.000000Z",
+            ),
+            (
+                "2020-12-01T13:42:29.190855Z",
+                "quarter",
+                "2020-10-01T00:00:00.000000Z",
+            ),
         ];
 
         cases.iter().for_each(|(original, granularity, expected)| {
-            let original = string_to_timestamp_nanos(original).unwrap();
-            let expected = string_to_timestamp_nanos(expected).unwrap();
-            let result = date_trunc_single(granularity, original).unwrap();
-            assert_eq!(result, expected);
+            let left = string_to_timestamp_nanos(original).unwrap();
+            let right = string_to_timestamp_nanos(expected).unwrap();
+            let result = date_trunc_single(granularity, left).unwrap();
+            assert_eq!(result, right, "{} = {}", original, expected);
         });
     }
 
