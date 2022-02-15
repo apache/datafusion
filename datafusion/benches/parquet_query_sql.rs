@@ -27,6 +27,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::ExecutionContext;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
+use rand::distributions::uniform::SampleUniform;
 use rand::distributions::Alphanumeric;
 use rand::prelude::*;
 use std::fs::File;
@@ -81,10 +82,10 @@ fn generate_batch() -> RecordBatch {
             generate_string_dictionary("prefix", 1000, len, 0.5),
             generate_strings(0..100, len, 1.0),
             generate_strings(0..100, len, 0.5),
-            generate_primitive::<Int64Type>(len, 1.0),
-            generate_primitive::<Int64Type>(len, 0.5),
-            generate_primitive::<Float64Type>(len, 1.0),
-            generate_primitive::<Float64Type>(len, 0.5),
+            generate_primitive::<Int64Type>(len, 1.0, -2000..2000),
+            generate_primitive::<Int64Type>(len, 0.5, -2000..2000),
+            generate_primitive::<Float64Type>(len, 1.0, -1000.0..1000.0),
+            generate_primitive::<Float64Type>(len, 0.5, -1000.0..1000.0),
         ],
     )
     .unwrap()
@@ -125,14 +126,19 @@ fn generate_strings(
     })))
 }
 
-fn generate_primitive<T>(len: usize, valid_percent: f64) -> ArrayRef
+fn generate_primitive<T>(
+    len: usize,
+    valid_percent: f64,
+    range: Range<T::Native>,
+) -> ArrayRef
 where
     T: ArrowPrimitiveType,
-    rand::distributions::Standard: Distribution<T::Native>,
+    T::Native: SampleUniform,
 {
     let mut rng = thread_rng();
     Arc::new(PrimitiveArray::<T>::from_iter((0..len).map(|_| {
-        rng.gen_bool(valid_percent).then(|| rng.gen::<T::Native>())
+        rng.gen_bool(valid_percent)
+            .then(|| rng.gen_range(range.clone()))
     })))
 }
 
