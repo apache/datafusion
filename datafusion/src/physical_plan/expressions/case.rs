@@ -456,12 +456,12 @@ mod tests {
     use super::*;
     use crate::{
         error::Result,
-        logical_plan::Operator,
         physical_plan::expressions::{binary, col, lit},
         scalar::ScalarValue,
     };
     use arrow::array::StringArray;
     use arrow::datatypes::*;
+    use datafusion_expr::Operator;
 
     #[test]
     fn case_with_expr() -> Result<()> {

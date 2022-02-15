@@ -242,13 +242,14 @@ mod tests {
 
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::physical_plan::collect;
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
     use crate::scalar::ScalarValue;
     use crate::test;
     use crate::test_util;
-    use crate::{logical_plan::Operator, physical_plan::collect};
+    use datafusion_expr::Operator;
     use std::iter::Iterator;
 
     #[tokio::test]
