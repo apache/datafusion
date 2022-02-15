@@ -166,7 +166,6 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
-    use futures::StreamExt;
     use std::collections::BTreeMap;
 
     #[tokio::test]

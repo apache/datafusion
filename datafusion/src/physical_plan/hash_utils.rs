@@ -381,6 +381,16 @@ mod noforce_hash_collisions {
                         multi_col
                     );
                 }
+                DataType::Timestamp(TimeUnit::Second, None) => {
+                    hash_array_primitive!(
+                        Int64Array,
+                        col,
+                        i64,
+                        hashes_buffer,
+                        random_state,
+                        multi_col
+                    );
+                }
                 DataType::Timestamp(TimeUnit::Millisecond, None) => {
                     hash_array_primitive!(
                         Int64Array,

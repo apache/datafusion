@@ -19,6 +19,8 @@
 
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::field_util::SchemaExt;
+use datafusion::logical_plan::ExprSchemable;
+use datafusion::logical_plan::ExprSimplifiable;
 use datafusion::{
     error::Result,
     execution::context::ExecutionProps,
