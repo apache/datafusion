@@ -176,6 +176,7 @@ async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
     let mut need_delete_dir;
     while let Some(child) = dir.next_entry().await? {
         if let Ok(metadata) = child.metadata().await {
+            // only delete the job dir
             if metadata.is_dir() {
                 let dir = fs::read_dir(child.path()).await?;
                 match check_modified_time_in_dirs(vec![dir], seconds).await {
@@ -208,9 +209,9 @@ async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
 /// Determines if a directory all files are older than cutoff seconds.
 async fn check_modified_time_in_dirs(
     mut vec: Vec<ReadDir>,
-    seconds: i64,
+    ttl_seconds: i64,
 ) -> Result<bool> {
-    let cutoff = Utc::now() - Duration::seconds(seconds);
+    let cutoff = Utc::now() - Duration::seconds(ttl_seconds);
 
     while !vec.is_empty() {
         let mut dir = vec.pop().unwrap();
@@ -219,12 +220,14 @@ async fn check_modified_time_in_dirs(
             match meta.is_dir() {
                 true => {
                     let dir = fs::read_dir(child.path()).await?;
+                    // check in next loop
                     vec.push(dir);
                 }
                 false => {
                     let modified_time: DateTime<Utc> =
                         meta.modified().map(chrono::DateTime::from)?;
                     if modified_time > cutoff {
+                        // if one file has been modified in ttl we won't delete the whole dir
                         return Ok(false);
                     }
                 }
