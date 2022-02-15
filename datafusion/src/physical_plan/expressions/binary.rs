@@ -30,7 +30,7 @@ use arrow::compute::kernels::comparison::{
     neq_bool_scalar,
 };
 use arrow::compute::kernels::comparison::{
-    eq_dyn, gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn,
+    gt_dyn, gt_eq_dyn, lt_dyn, lt_eq_dyn, neq_dyn,
 };
 use arrow::compute::kernels::comparison::{
     eq_dyn_bool_scalar, gt_dyn_bool_scalar, gt_eq_dyn_bool_scalar, lt_dyn_bool_scalar,
@@ -63,6 +63,30 @@ use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
 use crate::physical_plan::expressions::try_cast;
 use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
+
+
+// TODO move to arrow_rs
+// TODO TICKET
+fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
+    arr.as_any()
+        .downcast_ref::<DecimalArray>()
+        .expect("Unable to downcast to typed array to DecimalArray")
+}
+
+/// Wrapper for arrow `eq_dyn` that maps Error types and patches missing support in arrow
+fn eq_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match (left.data_type(), right.data_type()) {
+        (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
+            eq_decimal(as_decimal_array(left), as_decimal_array(right))
+        },
+        _ => {
+            arrow::compute::kernels::comparison::eq_dyn(left, right)
+                .map_err(|e| e.into())
+        }
+    }
+    .map(|a| Arc::new(a) as ArrayRef)
+}
+
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
@@ -1208,7 +1232,7 @@ impl BinaryExpr {
             Operator::LtEq => call_dyn_cmp(left, right, lt_eq_dyn),
             Operator::Gt => call_dyn_cmp(left, right, gt_dyn),
             Operator::GtEq => call_dyn_cmp(left, right, gt_eq_dyn),
-            Operator::Eq => call_dyn_cmp(left, right, eq_dyn),
+            Operator::Eq => eq_dyn(&left, &right),
             Operator::NotEq => call_dyn_cmp(left, right, neq_dyn),
             Operator::IsDistinctFrom => binary_array_op!(left, right, is_distinct_from),
             Operator::IsNotDistinctFrom => {
