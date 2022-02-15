@@ -556,7 +556,7 @@ mod tests {
         batches: Vec<RecordBatch>,
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
-    ) -> Vec<RecordBatch> {
+    ) -> Result<Vec<RecordBatch>> {
         // When vec is dropped, temp files are deleted
         let files: Vec<_> = batches
             .into_iter()
@@ -611,9 +611,7 @@ mod tests {
         );
 
         let runtime = Arc::new(RuntimeEnv::default());
-        collect(Arc::new(parquet_exec), runtime)
-            .await
-            .expect("reading parquet data")
+        collect(Arc::new(parquet_exec), runtime).await
     }
 
     // Add a new column with the specified field name to the RecordBatch
@@ -658,7 +656,9 @@ mod tests {
         let batch3 = add_to_batch(&batch1, "c3", c3);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
@@ -697,7 +697,9 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
@@ -729,7 +731,9 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
@@ -768,8 +772,9 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1), ("c4", c4)]);
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+-----+",
             "| c1  | c4  |",
@@ -817,18 +822,8 @@ mod tests {
         let read =
             round_trip_to_parquet(vec![batch1, batch2], None, Some(Arc::new(schema)))
                 .await;
-
-        // expect only the first batch to be read
-        let expected = vec![
-            "+-----+----+----+",
-            "| c1  | c2 | c3 |",
-            "+-----+----+----+",
-            "| Foo | 1  | 10 |",
-            "|     | 2  | 20 |",
-            "| bar |    |    |",
-            "+-----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+        assert_contains!(read.unwrap_err().to_string(),
+                         "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
     }
 
     #[tokio::test]
