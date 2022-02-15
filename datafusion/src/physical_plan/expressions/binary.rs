@@ -69,20 +69,23 @@ fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
         .expect("Unable to downcast to typed array to DecimalArray")
 }
 
-/// The binary_bitwise_array_op macro only evaluates for integer types
-/// like int64, int32.
-/// It is used to do bitwise operation.
-macro_rules! make_dyn_op {
+/// create a `dyn_op` wrapper function for the specified operation
+/// that call the underlying dyn_op arrow kernel if the type is
+/// supported, and translates ArrowError to DataFusionError
+macro_rules! make_dyn_comp_op {
     ($OP:tt) => {
         paste::paste! {
             /// wrapper over arrow compute kernel that maps Error types and
             /// patches missing support in arrow
             fn [<$OP _dyn>] (left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
                 match (left.data_type(), right.data_type()) {
-                    // Call `op_decimal` (e.g. `eq_decimal) until arrow adds native support TODO FIND TICKET
+                    // Call `op_decimal` (e.g. `eq_decimal) until
+                    // arrow has native support
+                    // https://github.com/apache/arrow-rs/issues/1200
                     (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
                         [<$OP _decimal>](as_decimal_array(left), as_decimal_array(right))
                     },
+                    // By default call the arrow kernel
                     _ => {
                     arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
                             .map_err(|e| e.into())
@@ -95,12 +98,12 @@ macro_rules! make_dyn_op {
 }
 
 // create eq_dyn, gt_dyn, wrappers etc
-make_dyn_op!(eq);
-make_dyn_op!(gt);
-make_dyn_op!(gt_eq);
-make_dyn_op!(lt);
-make_dyn_op!(lt_eq);
-make_dyn_op!(neq);
+make_dyn_comp_op!(eq);
+make_dyn_comp_op!(gt);
+make_dyn_comp_op!(gt_eq);
+make_dyn_comp_op!(lt);
+make_dyn_comp_op!(lt_eq);
+make_dyn_comp_op!(neq);
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
