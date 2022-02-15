@@ -469,6 +469,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "standalone")]
+    #[ignore]
     async fn test_task_stuck_when_referenced_task_failed() {
         use super::*;
         use datafusion::arrow::datatypes::Schema;
