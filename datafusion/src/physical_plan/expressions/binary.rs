@@ -62,7 +62,7 @@ use crate::physical_plan::{ColumnarValue, PhysicalExpr};
 use crate::scalar::ScalarValue;
 
 // TODO move to arrow_rs
-// TODO TICKET
+// https://github.com/apache/arrow-rs/issues/1312
 fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
     arr.as_any()
         .downcast_ref::<DecimalArray>()
