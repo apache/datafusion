@@ -58,7 +58,7 @@ fn schema() -> SchemaRef {
         Field::new("dict_100_required", string_dictionary_type.clone(), false),
         Field::new("dict_100_optional", string_dictionary_type.clone(), true),
         Field::new("dict_1000_required", string_dictionary_type.clone(), false),
-        Field::new("dict_1000_optional", string_dictionary_type.clone(), true),
+        Field::new("dict_1000_optional", string_dictionary_type, true),
         Field::new("string_required", DataType::Utf8, false),
         Field::new("string_optional", DataType::Utf8, true),
         Field::new("i64_required", DataType::Int64, false),
@@ -223,7 +223,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 rt.block_on(async move {
                     let query = context.sql(query).await.unwrap();
                     let mut stream = query.execute_stream().await.unwrap();
-                    while let Some(_) = criterion::black_box(stream.next().await) {}
+                    while criterion::black_box(stream.next().await).is_some() {}
                 })
             });
         });
