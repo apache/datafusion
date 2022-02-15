@@ -237,7 +237,7 @@ impl ExecutionPlan for ParquetExec {
                 &projection,
                 &pruning_predicate,
                 batch_size,
-                response_tx,
+                response_tx.clone(),
                 limit,
                 partition_col_proj,
             ) {
@@ -245,6 +245,12 @@ impl ExecutionPlan for ParquetExec {
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
                 );
+                // Send the error back to the main thread.
+                //
+                // Ignore error sending (via `.ok()`) because that
+                // means the receiver has been torn down (and nothing
+                // cares about the errors anymore)
+                send_result(&response_tx, Err(e.into())).ok();
             }
         });
 
