@@ -116,6 +116,7 @@ ci/*
 **/*.svg
 **/*.csv
 **/*.json
+**/*.sql
 venv/*
 testing/*
 target/*
