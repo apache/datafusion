@@ -523,11 +523,14 @@ mod tests {
         assert_batches_sorted_eq,
         datasource::{
             file_format::{parquet::ParquetFormat, FileFormat},
-            object_store::local::{
-                local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
+            object_store::{
+                local::{
+                    local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
+                },
+                FileMeta, SizedFile,
             },
         },
-        physical_plan::collect,
+        physical_plan::collect, assert_contains,
     };
 
     use super::*;
@@ -924,6 +927,47 @@ mod tests {
 
         let batch = results.next().await;
         assert!(batch.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_exec_with_error() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let partitioned_file = PartitionedFile {
+            file_meta: FileMeta {
+                sized_file: SizedFile {
+                    size: 1337,
+                    path: "invalid".into(),
+                },
+                last_modified: None,
+            },
+            partition_values: vec![],
+        };
+
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![partitioned_file]],
+                file_schema: ParquetFormat::default()
+                    .infer_schema(local_object_reader_stream(vec![filename]))
+                    .await?,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            None,
+        );
+
+        let mut results = parquet_exec.execute(0, runtime).await?;
+        let batch = results.next().await.unwrap();
+        // invalid file should produce an error to that effect
+        assert_contains!(batch.unwrap_err().to_string(),
+                         "External error: Parquet error: Arrow: IO error: No such file or directory");
+        assert!(results.next().await.is_none());
 
         Ok(())
     }
