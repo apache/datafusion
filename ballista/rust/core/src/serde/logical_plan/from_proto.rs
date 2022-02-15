@@ -880,7 +880,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                         Ok(signum((&args[0]).try_into()?))
                     }
                     protobuf::ScalarFunction::Octetlength => {
-                        Ok(length((&args[0]).try_into()?))
+                        Ok(octet_length((&args[0]).try_into()?))
                     }
                     // // protobuf::ScalarFunction::Concat => Ok(concat((&args[0]).try_into()?)),
                     protobuf::ScalarFunction::Lower => Ok(lower((&args[0]).try_into()?)),
