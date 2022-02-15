@@ -24,7 +24,7 @@
 Add the following to your `Cargo.toml` file:
 
 ```yaml
-datafusion = "7.0.0-alpha"
+datafusion = "7.0.0"
 tokio = "1.0"
 ```
 
