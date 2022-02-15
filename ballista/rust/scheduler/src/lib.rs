@@ -43,6 +43,7 @@ pub mod externalscaler {
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::marker::PhantomData;
 use std::{convert::TryInto, sync::Arc};
 
 use ballista_core::serde::protobuf::{
@@ -104,18 +105,21 @@ use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
 use tonic::transport::Channel;
 
 #[derive(Clone)]
-pub struct SchedulerServer {
-    pub(crate) state: Arc<SchedulerState>,
+pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    pub(crate) state: Arc<SchedulerState<T, U>>,
     start_time: u128,
     policy: TaskSchedulingPolicy,
     scheduler_env: Option<SchedulerEnv>,
     executors_client: Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>,
+    ctx: Arc<RwLock<ExecutionContext>>,
+    codec: BallistaCodec<T, U>,
 }
 
 #[derive(Clone)]
@@ -123,13 +127,20 @@ pub struct SchedulerEnv {
     pub tx_job: mpsc::Sender<String>,
 }
 
-impl SchedulerServer {
-    pub fn new(config: Arc<dyn ConfigBackendClient>, namespace: String) -> Self {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T, U> {
+    pub fn new(
+        config: Arc<dyn ConfigBackendClient>,
+        namespace: String,
+        ctx: Arc<RwLock<ExecutionContext>>,
+        codec: BallistaCodec<T, U>,
+    ) -> Self {
         SchedulerServer::new_with_policy(
             config,
             namespace,
             TaskSchedulingPolicy::PullStaged,
             None,
+            ctx,
+            codec,
         )
     }
 
@@ -138,8 +149,10 @@ impl SchedulerServer {
         namespace: String,
         policy: TaskSchedulingPolicy,
         scheduler_env: Option<SchedulerEnv>,
+        ctx: Arc<RwLock<ExecutionContext>>,
+        codec: BallistaCodec<T, U>,
     ) -> Self {
-        let state = Arc::new(SchedulerState::new(config, namespace));
+        let state = Arc::new(SchedulerState::new(config, namespace, codec.clone()));
         let state_clone = state.clone();
 
         // TODO: we should elect a leader in the scheduler cluster and run this only in the leader
@@ -154,6 +167,8 @@ impl SchedulerServer {
             policy,
             scheduler_env,
             executors_client: Arc::new(RwLock::new(HashMap::new())),
+            ctx,
+            codec,
         }
     }
 
@@ -226,6 +241,7 @@ impl SchedulerServer {
             ret.push(Vec::new());
         }
         let mut num_tasks = 0;
+        let ctx = self.ctx.read().await;
         loop {
             info!("Go inside fetching task loop");
             let mut has_tasks = true;
@@ -235,7 +251,7 @@ impl SchedulerServer {
                 }
                 let plan = self
                     .state
-                    .assign_next_schedulable_job_task(&executor.executor_id, job_id)
+                    .assign_next_schedulable_job_task(&executor.executor_id, job_id, &ctx)
                     .await
                     .map_err(|e| {
                         let msg = format!("Error finding next assignable task: {}", e);
@@ -266,8 +282,21 @@ impl SchedulerServer {
                             )));
                         };
 
+                        let mut buf: Vec<u8> = vec![];
+                        U::try_from_physical_plan(
+                            plan,
+                            self.codec.physical_extension_codec(),
+                        )
+                        .and_then(|m| m.try_encode(&mut buf))
+                        .map_err(|e| {
+                            Status::internal(format!(
+                                "error serializing execution plan: {:?}",
+                                e
+                            ))
+                        })?;
+
                         ret[idx].push(TaskDefinition {
-                            plan: Some(plan.try_into().unwrap()),
+                            plan: buf,
                             task_id: status.partition_id,
                             output_partitioning: hash_partitioning_to_proto(
                                 output_partitioning,
@@ -297,13 +326,19 @@ impl SchedulerServer {
     }
 }
 
-pub struct TaskScheduler {
-    scheduler_server: Arc<SchedulerServer>,
+pub struct TaskScheduler<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    scheduler_server: Arc<SchedulerServer<T, U>>,
+    plan_repr: PhantomData<T>,
+    exec_repr: PhantomData<U>,
 }
 
-impl TaskScheduler {
-    pub fn new(scheduler_server: Arc<SchedulerServer>) -> Self {
-        Self { scheduler_server }
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler<T, U> {
+    pub fn new(scheduler_server: Arc<SchedulerServer<T, U>>) -> Self {
+        Self {
+            scheduler_server,
+            plan_repr: PhantomData,
+            exec_repr: PhantomData,
+        }
     }
 
     pub fn start(&self, mut rx_job: mpsc::Receiver<String>) {
@@ -324,7 +359,9 @@ impl TaskScheduler {
 const INFLIGHT_TASKS_METRIC_NAME: &str = "inflight_tasks";
 
 #[tonic::async_trait]
-impl ExternalScaler for SchedulerServer {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExternalScaler
+    for SchedulerServer<T, U>
+{
     async fn is_active(
         &self,
         _request: Request<ScaledObjectRef>,
@@ -371,7 +408,9 @@ impl ExternalScaler for SchedulerServer {
 }
 
 #[tonic::async_trait]
-impl SchedulerGrpc for SchedulerServer {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
+    for SchedulerServer<T, U>
+{
     async fn poll_work(
         &self,
         request: Request<PollWorkParams>,
@@ -425,9 +464,10 @@ impl SchedulerGrpc for SchedulerServer {
                     })?;
             }
             let task: Result<Option<_>, Status> = if can_accept_task {
+                let ctx = self.ctx.read().await;
                 let plan = self
                     .state
-                    .assign_next_schedulable_task(&metadata.id)
+                    .assign_next_schedulable_task(&metadata.id, &ctx)
                     .await
                     .map_err(|e| {
                         let msg = format!("Error finding next assignable task: {}", e);
@@ -457,8 +497,20 @@ impl SchedulerGrpc for SchedulerServer {
                                 plan_clone
                             )));
                         };
+                        let mut buf: Vec<u8> = vec![];
+                        U::try_from_physical_plan(
+                            plan,
+                            self.codec.physical_extension_codec(),
+                        )
+                        .and_then(|m| m.try_encode(&mut buf))
+                        .map_err(|e| {
+                            Status::internal(format!(
+                                "error serializing execution plan: {:?}",
+                                e
+                            ))
+                        })?;
                         Ok(Some(TaskDefinition {
-                            plan: Some(plan.try_into().unwrap()),
+                            plan: buf,
                             task_id: status.partition_id,
                             output_partitioning: hash_partitioning_to_proto(
                                 output_partitioning,
@@ -722,33 +774,28 @@ impl SchedulerGrpc for SchedulerServer {
     ) -> std::result::Result<Response<ExecuteQueryResult>, tonic::Status> {
         if let ExecuteQueryParams {
             query: Some(query),
-            settings,
+            settings: _,
         } = request.into_inner()
         {
-            // parse config
-            let mut config_builder = BallistaConfig::builder();
-            for kv_pair in &settings {
-                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
-            }
-            let config = config_builder.build().map_err(|e| {
-                let msg = format!("Could not parse configs: {}", e);
-                error!("{}", msg);
-                tonic::Status::internal(msg)
-            })?;
-
             let plan = match query {
-                Query::LogicalPlan(logical_plan) => {
-                    // parse protobuf
-                    (&logical_plan).try_into().map_err(|e| {
-                        let msg = format!("Could not parse logical plan protobuf: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    })?
+                Query::LogicalPlan(message) => {
+                    let ctx = self.ctx.read().await;
+                    T::try_decode(message.as_slice())
+                        .and_then(|m| {
+                            m.try_into_logical_plan(
+                                &ctx,
+                                self.codec.logical_extension_codec(),
+                            )
+                        })
+                        .map_err(|e| {
+                            let msg =
+                                format!("Could not parse logical plan protobuf: {}", e);
+                            error!("{}", msg);
+                            tonic::Status::internal(msg)
+                        })?
                 }
                 Query::Sql(sql) => {
-                    //TODO we can't just create a new context because we need a context that has
-                    // tables registered from previous SQL statements that have been executed
-                    let mut ctx = create_datafusion_context(&config);
+                    let mut ctx = self.ctx.write().await;
                     let df = ctx.sql(&sql).await.map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
@@ -788,9 +835,9 @@ impl SchedulerGrpc for SchedulerServer {
                     Some(self.scheduler_env.as_ref().unwrap().tx_job.clone())
                 }
             };
+            let datafusion_ctx = self.ctx.read().await.clone();
             tokio::spawn(async move {
                 // create physical plan using DataFusion
-                let datafusion_ctx = create_datafusion_context(&config);
                 macro_rules! fail_job {
                     ($code :expr) => {{
                         match $code {
@@ -941,13 +988,17 @@ pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
 #[cfg(all(test, feature = "sled"))]
 mod test {
     use std::sync::Arc;
+    use tokio::sync::RwLock;
 
     use tonic::Request;
 
     use ballista_core::error::BallistaError;
     use ballista_core::serde::protobuf::{
-        executor_registration::OptionalHost, ExecutorRegistration, PollWorkParams,
+        executor_registration::OptionalHost, ExecutorRegistration, LogicalPlanNode,
+        PhysicalPlanNode, PollWorkParams,
     };
+    use ballista_core::serde::BallistaCodec;
+    use datafusion::prelude::ExecutionContext;
 
     use super::{
         state::{SchedulerState, StandaloneClient},
@@ -958,8 +1009,15 @@ mod test {
     async fn test_poll_work() -> Result<(), BallistaError> {
         let state = Arc::new(StandaloneClient::try_new_temporary()?);
         let namespace = "default";
-        let scheduler = SchedulerServer::new(state.clone(), namespace.to_owned());
-        let state = SchedulerState::new(state, namespace.to_string());
+        let scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerServer::new(
+                state.clone(),
+                namespace.to_owned(),
+                Arc::new(RwLock::new(ExecutionContext::new())),
+                BallistaCodec::default(),
+            );
+        let state: SchedulerState<LogicalPlanNode, PhysicalPlanNode> =
+            SchedulerState::new(state, namespace.to_string(), BallistaCodec::default());
         let exec_meta = ExecutorRegistration {
             id: "abc".to_owned(),
             optional_host: Some(OptionalHost::Host("".to_owned())),

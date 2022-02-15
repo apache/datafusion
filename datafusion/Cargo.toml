@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "6.0.0"
+version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../README.md"
@@ -48,15 +48,17 @@ pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 force_hash_collisions = []
 # Used to enable the avro format
 avro = ["avro-rs", "num-traits", "datafusion-common/avro"]
+# Used to enable row format experiment
+row = []
 
 [dependencies]
-datafusion-common = { path = "../datafusion-common", version = "6.0.0" }
-datafusion-expr = { path = "../datafusion-expr", version = "6.0.0" }
+datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
+datafusion-expr = { path = "../datafusion-expr", version = "7.0.0" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
-arrow = { version = "8.0.0", features = ["prettyprint"] }
-parquet = { version = "8.0.0", features = ["arrow"] }
-sqlparser = "0.13"
+arrow = { version = "9.0.0", features = ["prettyprint"] }
+parquet = { version = "9.0.0", features = ["arrow"] }
+sqlparser = "0.14"
 paste = "^1.0"
 num_cpus = "1.13.0"
 chrono = { version = "0.4", default-features = false }

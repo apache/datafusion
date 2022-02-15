@@ -106,7 +106,7 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`ListArray`] or [`StructArray`] by key
+    /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
     GetIndexedField {
         /// the expression to take the field from
         expr: Box<Expr>,
@@ -248,7 +248,7 @@ impl PartialOrd for Expr {
 }
 
 impl Expr {
-    /// Returns the name of this expression based on [crate::logical_plan::DFSchema].
+    /// Returns the name of this expression based on [datafusion_common::DFSchema].
     ///
     /// This represents how a column with this expression is named when no alias is chosen
     pub fn name(&self, input_schema: &DFSchema) -> Result<String> {

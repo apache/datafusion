@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::convert::TryInto;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -37,15 +36,17 @@ use ballista_core::serde::protobuf::{
     UpdateTaskStatusParams,
 };
 use ballista_core::serde::scheduler::{ExecutorSpecification, ExecutorState};
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::as_task_status;
 use crate::executor::Executor;
 
-pub async fn startup(
+pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
     executor: Arc<Executor>,
     executor_meta: ExecutorRegistration,
+    codec: BallistaCodec<T, U>,
 ) {
     // TODO make the buffer size configurable
     let (tx_task, rx_task) = mpsc::channel::<TaskDefinition>(1000);
@@ -55,6 +56,7 @@ pub async fn startup(
         executor.clone(),
         executor_meta.clone(),
         ExecutorEnv { tx_task },
+        codec,
     );
 
     // 1. Start executor grpc service
@@ -126,12 +128,13 @@ async fn register_executor(
 }
 
 #[derive(Clone)]
-pub struct ExecutorServer {
+pub struct ExecutorServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
     _start_time: u128,
     executor: Arc<Executor>,
     executor_meta: ExecutorRegistration,
     scheduler: SchedulerGrpcClient<Channel>,
     executor_env: ExecutorEnv,
+    codec: BallistaCodec<T, U>,
 }
 
 #[derive(Clone)]
@@ -141,12 +144,13 @@ struct ExecutorEnv {
 
 unsafe impl Sync for ExecutorEnv {}
 
-impl ExecutorServer {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T, U> {
     fn new(
         scheduler: SchedulerGrpcClient<Channel>,
         executor: Arc<Executor>,
         executor_meta: ExecutorRegistration,
         executor_env: ExecutorEnv,
+        codec: BallistaCodec<T, U>,
     ) -> Self {
         Self {
             _start_time: SystemTime::now()
@@ -157,6 +161,7 @@ impl ExecutorServer {
             executor_meta,
             scheduler,
             executor_env,
+            codec,
         }
     }
 
@@ -180,7 +185,16 @@ impl ExecutorServer {
         );
         info!("Start to run task {}", task_id_log);
 
-        let plan: Arc<dyn ExecutionPlan> = (&task.plan.unwrap()).try_into().unwrap();
+        let encoded_plan = &task.plan.as_slice();
+
+        let plan: Arc<dyn ExecutionPlan> =
+            U::try_decode(encoded_plan).and_then(|proto| {
+                proto.try_into_physical_plan(
+                    self.executor.ctx.as_ref(),
+                    self.codec.physical_extension_codec(),
+                )
+            })?;
+
         let shuffle_output_partitioning =
             parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
 
@@ -221,12 +235,12 @@ impl ExecutorServer {
     }
 }
 
-struct Heartbeater {
-    executor_server: Arc<ExecutorServer>,
+struct Heartbeater<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    executor_server: Arc<ExecutorServer<T, U>>,
 }
 
-impl Heartbeater {
-    fn new(executor_server: Arc<ExecutorServer>) -> Self {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> Heartbeater<T, U> {
+    fn new(executor_server: Arc<ExecutorServer<T, U>>) -> Self {
         Self { executor_server }
     }
 
@@ -242,12 +256,12 @@ impl Heartbeater {
     }
 }
 
-struct TaskRunnerPool {
-    executor_server: Arc<ExecutorServer>,
+struct TaskRunnerPool<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
+    executor_server: Arc<ExecutorServer<T, U>>,
 }
 
-impl TaskRunnerPool {
-    fn new(executor_server: Arc<ExecutorServer>) -> Self {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T, U> {
+    fn new(executor_server: Arc<ExecutorServer<T, U>>) -> Self {
         Self { executor_server }
     }
 
@@ -269,7 +283,9 @@ impl TaskRunnerPool {
 }
 
 #[tonic::async_trait]
-impl ExecutorGrpc for ExecutorServer {
+impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorGrpc
+    for ExecutorServer<T, U>
+{
     async fn launch_task(
         &self,
         request: Request<LaunchTaskParams>,

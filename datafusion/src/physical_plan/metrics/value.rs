@@ -312,7 +312,7 @@ impl<'a> Drop for ScopedTimerGuard<'a> {
     }
 }
 
-/// Possible values for a [`Metric`].
+/// Possible values for a [super::Metric].
 ///
 /// Among other differences, the metric types have different ways to
 /// logically interpret their underlying values and some metrics are

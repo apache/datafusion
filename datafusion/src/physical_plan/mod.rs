@@ -538,7 +538,7 @@ pub trait WindowExpr: Send + Sync + Debug {
     }
 
     /// expressions that are passed to the WindowAccumulator.
-    /// Functions which take a single input argument, such as `sum`, return a single [`Expr`],
+    /// Functions which take a single input argument, such as `sum`, return a single [`datafusion_expr::expr::Expr`],
     /// others (e.g. `cov`) return many.
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
 

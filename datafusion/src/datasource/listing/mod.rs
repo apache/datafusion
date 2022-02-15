@@ -21,4 +21,4 @@
 mod helpers;
 mod table;
 
-pub use table::{ListingOptions, ListingTable};
+pub use table::{ListingOptions, ListingTable, ListingTableConfig};
