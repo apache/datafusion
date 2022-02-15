@@ -116,3 +116,7 @@ harness = false
 [[bench]]
 name = "physical_plan"
 harness = false
+
+[[bench]]
+name = "parquet_query_sql"
+harness = false
