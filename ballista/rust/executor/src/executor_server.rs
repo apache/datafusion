@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-use log::{debug, info};
+use log::{debug, error, info};
 use tonic::transport::{Channel, Server};
 use tonic::{Request, Response, Status};
 
@@ -31,11 +31,10 @@ use ballista_core::serde::protobuf::executor_grpc_server::{
 use ballista_core::serde::protobuf::executor_registration::OptionalHost;
 use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
 use ballista_core::serde::protobuf::{
-    ExecutorRegistration, LaunchTaskParams, LaunchTaskResult, RegisterExecutorParams,
-    SendHeartBeatParams, StopExecutorParams, StopExecutorResult, TaskDefinition,
-    UpdateTaskStatusParams,
+    HeartBeatParams, LaunchTaskParams, LaunchTaskResult, RegisterExecutorParams,
+    StopExecutorParams, StopExecutorResult, TaskDefinition, UpdateTaskStatusParams,
 };
-use ballista_core::serde::scheduler::{ExecutorSpecification, ExecutorState};
+use ballista_core::serde::scheduler::ExecutorState;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
 
@@ -45,7 +44,6 @@ use crate::executor::Executor;
 pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
     executor: Arc<Executor>,
-    executor_meta: ExecutorRegistration,
     codec: BallistaCodec<T, U>,
 ) {
     // TODO make the buffer size configurable
@@ -54,14 +52,13 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     let executor_server = ExecutorServer::new(
         scheduler.clone(),
         executor.clone(),
-        executor_meta.clone(),
         ExecutorEnv { tx_task },
         codec,
     );
 
     // 1. Start executor grpc service
     {
-        let executor_meta = executor_meta.clone();
+        let executor_meta = executor.metadata.clone();
         let addr = format!(
             "{}:{}",
             executor_meta
@@ -83,8 +80,7 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     let executor_server = Arc::new(executor_server);
 
     // 2. Do executor registration
-    match register_executor(&mut scheduler, &executor_meta, &executor.specification).await
-    {
+    match register_executor(&mut scheduler, executor.clone()).await {
         Ok(_) => {
             info!("Executor registration succeed");
         }
@@ -109,13 +105,11 @@ pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
 #[allow(clippy::clone_on_copy)]
 async fn register_executor(
     scheduler: &mut SchedulerGrpcClient<Channel>,
-    executor_meta: &ExecutorRegistration,
-    specification: &ExecutorSpecification,
+    executor: Arc<Executor>,
 ) -> Result<(), BallistaError> {
     let result = scheduler
         .register_executor(RegisterExecutorParams {
-            metadata: Some(executor_meta.clone()),
-            specification: Some(specification.clone().into()),
+            metadata: Some(executor.metadata.clone()),
         })
         .await?;
     if result.into_inner().success {
@@ -131,7 +125,6 @@ async fn register_executor(
 pub struct ExecutorServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
     _start_time: u128,
     executor: Arc<Executor>,
-    executor_meta: ExecutorRegistration,
     scheduler: SchedulerGrpcClient<Channel>,
     executor_env: ExecutorEnv,
     codec: BallistaCodec<T, U>,
@@ -148,7 +141,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
     fn new(
         scheduler: SchedulerGrpcClient<Channel>,
         executor: Arc<Executor>,
-        executor_meta: ExecutorRegistration,
         executor_env: ExecutorEnv,
         codec: BallistaCodec<T, U>,
     ) -> Self {
@@ -158,7 +150,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 .unwrap()
                 .as_millis(),
             executor,
-            executor_meta,
             scheduler,
             executor_env,
             codec,
@@ -169,9 +160,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         // TODO Error handling
         self.scheduler
             .clone()
-            .send_heart_beat(SendHeartBeatParams {
-                metadata: Some(self.executor_meta.clone()),
-                state: Some(self.get_executor_state().await.into()),
+            .heart_beat_from_executor(HeartBeatParams {
+                executor_id: self.executor.metadata.id.clone(),
+                state: Some(self.get_executor_state().into()),
             })
             .await
             .unwrap();
@@ -211,14 +202,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         info!("Done with task {}", task_id_log);
         debug!("Statistics: {:?}", execution_result);
 
+        let executor_id = &self.executor.metadata.id;
         // TODO use another channel to update the status of a task set
         self.scheduler
             .clone()
             .update_task_status(UpdateTaskStatusParams {
-                metadata: Some(self.executor_meta.clone()),
+                executor_id: executor_id.clone(),
                 task_status: vec![as_task_status(
                     execution_result,
-                    self.executor_meta.id.clone(),
+                    executor_id.clone(),
                     task_id,
                 )],
             })
@@ -228,7 +220,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
     }
 
     // TODO with real state
-    async fn get_executor_state(&self) -> ExecutorState {
+    fn get_executor_state(&self) -> ExecutorState {
         ExecutorState {
             available_memory_size: u64::MAX,
         }
@@ -270,13 +262,30 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
         tokio::spawn(async move {
             info!("Starting the task runner pool");
             loop {
-                let task = rx_task.recv().await.unwrap();
-                info!("Received task {:?}", task);
+                if let Some(task) = rx_task.recv().await {
+                    if let Some(task_id) = &task.task_id {
+                        let task_id_log = format!(
+                            "{}/{}/{}",
+                            task_id.job_id, task_id.stage_id, task_id.partition_id
+                        );
+                        info!("Received task {:?}", &task_id_log);
 
-                let server = executor_server.clone();
-                tokio::spawn(async move {
-                    server.run_task(task).await.unwrap();
-                });
+                        let server = executor_server.clone();
+                        tokio::spawn(async move {
+                            server.run_task(task).await.unwrap_or_else(|e| {
+                                error!(
+                                    "Fail to run the task {:?} due to {:?}",
+                                    task_id_log, e
+                                );
+                            });
+                        });
+                    } else {
+                        error!("There's no task id in the task definition {:?}", task);
+                    }
+                } else {
+                    info!("Channel is closed and will exit the loop");
+                    return;
+                }
             }
         });
     }

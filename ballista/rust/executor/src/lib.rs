@@ -43,7 +43,7 @@ pub fn as_task_status(
             info!("Task {:?} finished", task_id);
 
             TaskStatus {
-                partition_id: Some(task_id),
+                task_id: Some(task_id),
                 status: Some(task_status::Status::Completed(CompletedTask {
                     executor_id,
                     partitions,
@@ -55,7 +55,7 @@ pub fn as_task_status(
             info!("Task {:?} failed: {}", task_id, error_msg);
 
             TaskStatus {
-                partition_id: Some(task_id),
+                task_id: Some(task_id),
                 status: Some(task_status::Status::Failed(FailedTask {
                     error: format!("Task failed due to Tokio error: {}", error_msg),
                 })),
