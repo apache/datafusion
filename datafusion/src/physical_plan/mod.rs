@@ -23,25 +23,20 @@ use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::{
-    error::{DataFusionError, Result},
-    execution::runtime_env::RuntimeEnv,
-    scalar::ScalarValue,
-};
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use crate::{error::Result, execution::runtime_env::RuntimeEnv, scalar::ScalarValue};
+
+use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use arrow::{array::ArrayRef, datatypes::Field};
+
 use async_trait::async_trait;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use std::fmt;
-use std::fmt::{Debug, Display};
-use std::ops::Range;
+use std::fmt::Debug;
+
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
@@ -474,138 +469,7 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-/// Expression that can be evaluated against a RecordBatch
-/// A Physical expression knows its type, nullability and how to evaluate itself.
-pub trait PhysicalExpr: Send + Sync + Display + Debug {
-    /// Returns the physical expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-    /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType>;
-    /// Determine whether this expression is nullable, given the schema of the input
-    fn nullable(&self, input_schema: &Schema) -> Result<bool>;
-    /// Evaluate an expression against a RecordBatch
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
-}
-
-/// An aggregate expression that:
-/// * knows its resulting field
-/// * knows how to create its accumulator
-/// * knows its accumulator's state's field
-/// * knows the expressions from whose its accumulator will receive values
-pub trait AggregateExpr: Send + Sync + Debug {
-    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
-    /// the field of the final result of this aggregation.
-    fn field(&self) -> Result<Field>;
-
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>>;
-
-    /// the fields that encapsulate the Accumulator's state
-    /// the number of fields here equals the number of states that the accumulator contains
-    fn state_fields(&self) -> Result<Vec<Field>>;
-
-    /// expressions that are passed to the Accumulator.
-    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
-
-    /// Human readable name such as `"MIN(c2)"`. The default
-    /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "AggregateExpr: default name"
-    }
-}
-
-/// A window expression that:
-/// * knows its resulting field
-pub trait WindowExpr: Send + Sync + Debug {
-    /// Returns the window expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
-    /// the field of the final result of this window function.
-    fn field(&self) -> Result<Field>;
-
-    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
-    /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "WindowExpr: default name"
-    }
-
-    /// expressions that are passed to the WindowAccumulator.
-    /// Functions which take a single input argument, such as `sum`, return a single [`datafusion_expr::expr::Expr`],
-    /// others (e.g. `cov`) return many.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
-
-    /// evaluate the window function arguments against the batch and return
-    /// array ref, normally the resulting vec is a single element one.
-    fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
-        self.expressions()
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect()
-    }
-
-    /// evaluate the window function values against the batch
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        if partition_columns.is_empty() {
-            Ok(vec![Range {
-                start: 0,
-                end: num_rows,
-            }])
-        } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
-        }
-    }
-
-    /// expressions that's from the window function's partition by clause, empty if absent
-    fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
-
-    /// expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> &[PhysicalSortExpr];
-
-    /// get partition columns that can be used for partitioning, empty if absent
-    fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.partition_by()
-            .iter()
-            .map(|expr| {
-                PhysicalSortExpr {
-                    expr: expr.clone(),
-                    options: SortOptions::default(),
-                }
-                .evaluate_to_sort_column(batch)
-            })
-            .collect()
-    }
-
-    /// get sort columns that can be used for peer evaluation, empty if absent
-    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        let mut sort_columns = self.partition_columns(batch)?;
-        let order_by_columns = self
-            .order_by()
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<SortColumn>>>()?;
-        sort_columns.extend(order_by_columns);
-        Ok(sort_columns)
-    }
-}
+pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, WindowExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema

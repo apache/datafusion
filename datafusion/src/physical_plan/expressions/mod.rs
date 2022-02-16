@@ -17,13 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::sync::Arc;
-
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::record_batch::RecordBatch;
+use datafusion_expr::ColumnarValue;
 
 mod approx_distinct;
 mod approx_percentile_cont;
@@ -118,52 +112,13 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
 }
 
-/// Represents Sort operation for a column in a RecordBatch
-#[derive(Clone, Debug)]
-pub struct PhysicalSortExpr {
-    /// Physical expression representing the column to sort
-    pub expr: Arc<dyn PhysicalExpr>,
-    /// Option to specify how the given column should be sorted
-    pub options: SortOptions,
-}
-
-impl std::fmt::Display for PhysicalSortExpr {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let opts_string = match (self.options.descending, self.options.nulls_first) {
-            (true, true) => "DESC",
-            (true, false) => "DESC NULLS LAST",
-            (false, true) => "ASC",
-            (false, false) => "ASC NULLS LAST",
-        };
-
-        write!(f, "{} {}", self.expr, opts_string)
-    }
-}
-
-impl PhysicalSortExpr {
-    /// evaluate the sort expression into SortColumn that can be passed into arrow sort kernel
-    pub fn evaluate_to_sort_column(&self, batch: &RecordBatch) -> Result<SortColumn> {
-        let value_to_sort = self.expr.evaluate(batch)?;
-        let array_to_sort = match value_to_sort {
-            ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => {
-                return Err(DataFusionError::Plan(format!(
-                    "Sort operation is not applicable to scalar value {}",
-                    scalar
-                )));
-            }
-        };
-        Ok(SortColumn {
-            values: array_to_sort,
-            options: Some(self.options),
-        })
-    }
-}
+pub use datafusion_physical_expr::PhysicalSortExpr;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::{error::Result, physical_plan::AggregateExpr, scalar::ScalarValue};
+    use arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
 
     /// macro to perform an aggregation and verify the result.
     #[macro_export]
