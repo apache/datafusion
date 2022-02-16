@@ -142,6 +142,8 @@ jobs:
           cd ballista/rust
           # snmalloc requires cmake so build without default features
           cargo test --no-default-features --features sled
+          # Ensure also compiles in standalone mode
+          cargo test --no-default-features --features standalone
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
