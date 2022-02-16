@@ -635,17 +635,29 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                         error!("{}", msg);
                         tonic::Status::internal(msg)
                     })?;
-                if task_status.task_id.is_some() {
-                    jobs.insert(task_status.task_id.unwrap().job_id.clone());
+                if let Some(task_id) = task_status.task_id {
+                    jobs.insert(task_id.job_id.clone());
                 }
             }
-            let mut executor_data = self.state.get_executor_data(&executor_id).unwrap();
-            executor_data.available_task_slots += num_tasks as u32;
-            self.state.save_executor_data(executor_data);
+            if let Some(mut executor_data) = self.state.get_executor_data(&executor_id) {
+                executor_data.available_task_slots += num_tasks as u32;
+                self.state.save_executor_data(executor_data);
+            } else {
+                error!("Fail to get executor data for {:?}", &executor_id);
+            }
         }
-        let tx_job = self.scheduler_env.as_ref().unwrap().tx_job.clone();
-        for job_id in jobs {
-            tx_job.send(job_id).await.unwrap();
+        if let Some(scheduler_env) = self.scheduler_env.as_ref() {
+            let tx_job = scheduler_env.tx_job.clone();
+            for job_id in jobs {
+                tx_job.send(job_id.clone()).await.map_err(|e| {
+                    let msg = format!(
+                        "Could not send job {} to the channel due to {:?}",
+                        &job_id, e
+                    );
+                    error!("{}", msg);
+                    tonic::Status::internal(msg)
+                })?;
+            }
         }
         Ok(Response::new(UpdateTaskStatusResult { success: true }))
     }

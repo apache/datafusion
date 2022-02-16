@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
-use log::{debug, info};
+use log::{debug, error, info};
 use tonic::transport::{Channel, Server};
 use tonic::{Request, Response, Status};
 
@@ -262,13 +262,30 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
         tokio::spawn(async move {
             info!("Starting the task runner pool");
             loop {
-                let task = rx_task.recv().await.unwrap();
-                info!("Received task {:?}", task);
+                if let Some(task) = rx_task.recv().await {
+                    if let Some(task_id) = &task.task_id {
+                        let task_id_log = format!(
+                            "{}/{}/{}",
+                            task_id.job_id, task_id.stage_id, task_id.partition_id
+                        );
+                        info!("Received task {:?}", &task_id_log);
 
-                let server = executor_server.clone();
-                tokio::spawn(async move {
-                    server.run_task(task).await.unwrap();
-                });
+                        let server = executor_server.clone();
+                        tokio::spawn(async move {
+                            server.run_task(task).await.unwrap_or_else(|e| {
+                                error!(
+                                    "Fail to run the task {:?} due to {:?}",
+                                    task_id_log, e
+                                );
+                            });
+                        });
+                    } else {
+                        error!("There's no task id in the task definition {:?}", task);
+                    }
+                } else {
+                    info!("Channel is closed and will exit the loop");
+                    return;
+                }
             }
         });
     }

@@ -23,7 +23,7 @@ use parking_lot::RwLock;
 
 use datafusion::physical_plan::ExecutionPlan;
 use futures::Stream;
-use log::{debug, info};
+use log::{debug, error, info, warn};
 use prost::Message;
 use tokio::sync::{mpsc, OwnedMutexGuard};
 
@@ -151,7 +151,7 @@ impl VolatileSchedulerState {
         executors_data.get(executor_id).cloned()
     }
 
-    /// There are too checks:
+    /// There are two checks:
     /// 1. firstly alive
     /// 2. secondly available task slots > 0
     fn get_available_executors_data(&self) -> Vec<ExecutorData> {
@@ -536,12 +536,28 @@ impl SchedulerStateWatcher {
         tokio::spawn(async move {
             info!("Starting the scheduler state watcher");
             loop {
-                let task_status = rx_task.recv().await.unwrap();
-                debug!("Watch on task status {:?}", task_status);
-                scheduler_state
-                    .synchronize_job_status(&task_status.task_id.unwrap().job_id)
-                    .await
-                    .unwrap();
+                if let Some(task_status) = rx_task.recv().await {
+                    debug!("Watch on task status {:?}", task_status);
+                    if let Some(task_id) = task_status.task_id {
+                        scheduler_state
+                            .synchronize_job_status(&task_id.job_id)
+                            .await
+                            .unwrap_or_else(|e| {
+                                error!(
+                                    "Fail to synchronize the status for job {:?} due to {:?}",
+                                    task_id.job_id, e
+                                );
+                            });
+                    } else {
+                        warn!(
+                            "There's no PartitionId in the task status {:?}",
+                            task_status
+                        );
+                    }
+                } else {
+                    info!("Channel is closed and will exit the loop");
+                    return;
+                };
             }
         });
     }
