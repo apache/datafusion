@@ -848,13 +848,16 @@ message ColumnStats {
   uint32 distinct_count = 4;
 }
 
+// Used by scheduler
 message ExecutorMetadata {
   string id = 1;
   string host = 2;
   uint32 port = 3;
   uint32 grpc_port = 4;
+  ExecutorSpecification specification = 5;
 }
 
+// Used by grpc
 message ExecutorRegistration {
   string id = 1;
   // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
@@ -864,10 +867,11 @@ message ExecutorRegistration {
   }
   uint32 port = 3;
   uint32 grpc_port = 4;
+  ExecutorSpecification specification = 5;
 }
 
 message ExecutorHeartbeat {
-  ExecutorMetadata meta = 1;
+  string executor_id = 1;
   // Unix epoch-based timestamp in seconds
   uint64 timestamp = 2;
   ExecutorState state = 3;
@@ -929,7 +933,7 @@ message ShuffleWritePartition {
 }
 
 message TaskStatus {
-  PartitionId partition_id = 1;
+  PartitionId task_id = 1;
   oneof status {
     RunningTask running = 2;
     FailedTask failed = 3;
@@ -957,19 +961,18 @@ message PollWorkResult {
 
 message RegisterExecutorParams {
   ExecutorRegistration metadata = 1;
-  ExecutorSpecification specification = 2;
 }
 
 message RegisterExecutorResult {
   bool success = 1;
 }
 
-message SendHeartBeatParams {
-  ExecutorRegistration metadata = 1;
+message HeartBeatParams {
+  string executor_id = 1;
   ExecutorState state = 2;
 }
 
-message SendHeartBeatResult {
+message HeartBeatResult {
   // TODO it's from Spark for BlockManager
   bool reregister = 1;
 }
@@ -981,7 +984,7 @@ message StopExecutorResult {
 }
 
 message UpdateTaskStatusParams {
-  ExecutorRegistration metadata = 1;
+  string executor_id = 1;
   // All tasks must be reported until they reach the failed or completed state
   repeated TaskStatus task_status = 2;
 }
@@ -1067,7 +1070,7 @@ service SchedulerGrpc {
 
   // Push-based task scheduler will only leverage this interface
   // rather than the PollWork interface to report executor states
-  rpc SendHeartBeat (SendHeartBeatParams) returns (SendHeartBeatResult) {}
+  rpc HeartBeatFromExecutor (HeartBeatParams) returns (HeartBeatResult) {}
 
   rpc UpdateTaskStatus (UpdateTaskStatusParams) returns (UpdateTaskStatusResult) {}
 

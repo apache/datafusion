@@ -100,13 +100,16 @@ async fn main() -> Result<()> {
             .map(executor_registration::OptionalHost::Host),
         port: port as u32,
         grpc_port: grpc_port as u32,
+        specification: Some(
+            ExecutorSpecification {
+                task_slots: opt.concurrent_tasks as u32,
+            }
+            .into(),
+        ),
     };
-    let executor_specification = ExecutorSpecification {
-        task_slots: opt.concurrent_tasks as u32,
-    };
-    let executor: Arc<Executor> = Arc::new(Executor::new_with_specification(
+    let executor = Arc::new(Executor::new(
+        executor_meta,
         &work_dir,
-        executor_specification,
         Arc::new(ExecutionContext::new()),
     ));
 
@@ -123,7 +126,6 @@ async fn main() -> Result<()> {
             tokio::spawn(executor_server::startup(
                 scheduler,
                 executor.clone(),
-                executor_meta,
                 default_codec,
             ));
         }
@@ -131,8 +133,6 @@ async fn main() -> Result<()> {
             tokio::spawn(execution_loop::poll_loop(
                 scheduler,
                 executor.clone(),
-                executor_meta,
-                opt.concurrent_tasks,
                 default_codec,
             ));
         }
