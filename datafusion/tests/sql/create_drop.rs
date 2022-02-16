@@ -81,8 +81,6 @@ async fn csv_query_create_external_table() {
     assert_batches_eq!(expected, &actual);
 }
 
-
-
 #[tokio::test]
 async fn create_external_table_with_timestamps() {
     let mut ctx = ExecutionContext::new();

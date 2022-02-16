@@ -16,7 +16,10 @@
 // under the License.
 
 use super::*;
-use datafusion::{from_slice::FromSlice, physical_plan::collect_partitioned, datasource::empty::EmptyTable};
+use datafusion::{
+    datasource::empty::EmptyTable, from_slice::FromSlice,
+    physical_plan::collect_partitioned,
+};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -985,7 +988,6 @@ async fn parallel_query_with_filter() -> Result<()> {
 
     Ok(())
 }
-
 
 #[tokio::test]
 async fn query_empty_table() {
