@@ -1581,52 +1581,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ref right,
             } => self.parse_sql_binary_op(left, op, right, schema),
 
+            #[cfg(feature = "unicode_expressions")]
             SQLExpr::Substring {
                 expr,
                 substring_from,
                 substring_for,
             } => {
-                #[cfg(feature = "unicode_expressions")]
-                {
-                    let arg = self.sql_expr_to_logical_expr(expr, schema)?;
-                    let args = match (substring_from, substring_for) {
-                        (Some(from_expr), Some(for_expr)) => {
-                            let from_logic =
-                                self.sql_expr_to_logical_expr(from_expr, schema)?;
-                            let for_logic =
-                                self.sql_expr_to_logical_expr(for_expr, schema)?;
-                            vec![arg, from_logic, for_logic]
-                        }
-                        (Some(from_expr), None) => {
-                            let from_logic =
-                                self.sql_expr_to_logical_expr(from_expr, schema)?;
-                            vec![arg, from_logic]
-                        }
-                        (None, Some(for_expr)) => {
-                            let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
-                            let for_logic =
-                                self.sql_expr_to_logical_expr(for_expr, schema)?;
-                            vec![arg, from_logic, for_logic]
-                        }
-                        _ => {
-                            return Err(DataFusionError::Plan(format!(
-                                "Substring without for/from is not valid {:?}",
-                                sql
-                            )))
-                        }
-                    };
-                    Ok(Expr::ScalarFunction {
-                        fun: functions::BuiltinScalarFunction::Substr,
-                        args,
-                    })
-                }
+                let arg = self.sql_expr_to_logical_expr(expr, schema)?;
+                let args = match (substring_from, substring_for) {
+                    (Some(from_expr), Some(for_expr)) => {
+                        let from_logic =
+                            self.sql_expr_to_logical_expr(from_expr, schema)?;
+                        let for_logic =
+                            self.sql_expr_to_logical_expr(for_expr, schema)?;
+                        vec![arg, from_logic, for_logic]
+                    }
+                    (Some(from_expr), None) => {
+                        let from_logic =
+                            self.sql_expr_to_logical_expr(from_expr, schema)?;
+                        vec![arg, from_logic]
+                    }
+                    (None, Some(for_expr)) => {
+                        let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
+                        let for_logic =
+                            self.sql_expr_to_logical_expr(for_expr, schema)?;
+                        vec![arg, from_logic, for_logic]
+                    }
+                    _ => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Substring without for/from is not valid {:?}",
+                            sql
+                        )))
+                    }
+                };
+                Ok(Expr::ScalarFunction {
+                    fun: functions::BuiltinScalarFunction::Substr,
+                    args,
+                })
+            }
 
-                #[cfg(not(feature = "unicode_expressions"))]
-                {
-                    Err(DataFusionError::Internal(
-                        "statement substring requires compilation with feature flag: unicode_expressions.".to_string()
-                    ))
-                }
+            #[cfg(not(feature = "unicode_expressions"))]
+            SQLExpr::Substring {
+                ..
+            } => {
+                Err(DataFusionError::Internal(
+                    "statement substring requires compilation with feature flag: unicode_expressions.".to_string()
+                ))
             }
 
             SQLExpr::Trim { expr, trim_where } => {
