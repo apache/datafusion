@@ -19,7 +19,16 @@
 
 # Example Usage
 
-Run a SQL query against data stored in a CSV:
+## Update `Cargo.toml`
+
+Add the following to your `Cargo.toml` file:
+
+```toml
+datafusion = "7.0.0"
+tokio = "1.0"
+```
+
+## Run a SQL query against data stored in a CSV:
 
 ```rust
 use datafusion::prelude::*;
@@ -28,10 +37,10 @@ use datafusion::prelude::*;
 async fn main() -> datafusion::error::Result<()> {
   // register the table
   let mut ctx = ExecutionContext::new();
-  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new())?;
+  ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
-  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100")?;
+  let df = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 
   // execute and print results
   df.show().await?;
@@ -39,7 +48,7 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-Use the DataFrame API to process data stored in a CSV:
+## Use the DataFrame API to process data stored in a CSV:
 
 ```rust
 use datafusion::prelude::*;
@@ -48,7 +57,7 @@ use datafusion::prelude::*;
 async fn main() -> datafusion::error::Result<()> {
   // create the dataframe
   let mut ctx = ExecutionContext::new();
-  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new())?;
+  let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?
            .aggregate(vec![col("a")], vec![min(col("b"))])?;
@@ -59,7 +68,7 @@ async fn main() -> datafusion::error::Result<()> {
 }
 ```
 
-Both of these examples will produce
+## Output from both examples
 
 ```text
 +---+--------+
