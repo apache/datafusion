@@ -113,6 +113,42 @@ psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USE
 python -m pytest -v integration-tests/test_psql_parity.py
 ```
 
+## Benchmarks
+
+### Criterion Benchmarks
+
+[Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by Datafusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within Datafusion.
+
+Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) and a given benchmark can be run with
+
+```
+cargo bench --bench BENCHMARK_NAME
+```
+
+A full list of benchmarks can be found [here](./datafusion/benches).
+
+_[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
+
+#### Parquet SQL Benchmarks
+
+The parquet SQL benchmarks can be run with
+
+```
+ cargo bench --bench parquet_query_sql
+```
+
+These randomly generate a parquet file, and then benchmark queries sourced from [parquet_query_sql.sql](./datafusion/benches/parquet_query_sql.sql) against it. This can therefore be a quick way to add coverage of particular query and/or data paths.
+
+If the environment variable `PARQUET_FILE` is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.
+
+The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
+
+### Upstream Benchmark Suites
+
+Instructions and tooling for running upstream benchmark suites against Datafusion and/or Ballista can be found in [benchmarks](./benchmarks).
+
+These are valuable for comparative evaluation against alternative Arrow implementations and query engines.
+
 ## How to add a new scalar function
 
 Below is a checklist of what you need to do to add a new scalar function to DataFusion:
