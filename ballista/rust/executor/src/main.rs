@@ -217,19 +217,16 @@ async fn check_modified_time_in_dirs(
         let mut dir = vec.pop().unwrap();
         while let Some(child) = dir.next_entry().await? {
             let meta = child.metadata().await?;
-            match meta.is_dir() {
-                true => {
-                    let dir = fs::read_dir(child.path()).await?;
-                    // check in next loop
-                    vec.push(dir);
-                }
-                false => {
-                    let modified_time: DateTime<Utc> =
-                        meta.modified().map(chrono::DateTime::from)?;
-                    if modified_time > cutoff {
-                        // if one file has been modified in ttl we won't delete the whole dir
-                        return Ok(false);
-                    }
+            if meta.is_dir() {
+                let dir = fs::read_dir(child.path()).await?;
+                // check in next loop
+                vec.push(dir);
+            } else {
+                let modified_time: DateTime<Utc> =
+                    meta.modified().map(chrono::DateTime::from)?;
+                if modified_time > cutoff {
+                    // if one file has been modified in ttl we won't delete the whole dir
+                    return Ok(false);
                 }
             }
         }
