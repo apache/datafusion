@@ -37,4 +37,4 @@ path = "src/lib.rs"
 [dependencies]
 datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
 datafusion-expr = { path = "../datafusion-expr", version = "7.0.0" }
-arrow = { version = "9.0.0", features = ["prettyprint"] }
+arrow = { version = "9.1", features = ["prettyprint"] }
