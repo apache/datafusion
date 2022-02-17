@@ -98,7 +98,7 @@ use parquet::file::properties::WriterProperties;
 use super::{
     disk_manager::DiskManagerConfig,
     memory_manager::MemoryManagerConfig,
-    options::{AvroReadOptions, CsvReadOptions},
+    options::{AvroReadOptions, CsvReadOptions, ArrowReadOptions},
     DiskManager, MemoryManager,
 };
 
@@ -370,6 +370,28 @@ impl ExecutionContext {
         Ok(Arc::new(DataFrameImpl::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
+                object_store,
+                path,
+                options,
+                None,
+                target_partitions,
+            )
+            .await?
+            .build()?,
+        )))
+    }
+
+    pub async fn read_arrow(
+        &mut self,
+        uri: impl Into<String>,
+        options: ArrowReadOptions<'_>,
+    ) -> Result<Arc<dyn DataFrame>> {
+        let uri: String = uri.into();
+        let (object_store, path) = self.object_store(&uri)?;
+        let target_partitions = self.state.lock().config.target_partitions;
+        Ok(Arc::new(DataFrameImpl::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_arrow(
                 object_store,
                 path,
                 options,

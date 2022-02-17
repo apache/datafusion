@@ -186,9 +186,9 @@ impl BallistaContext {
         Ok(df)
     }
 
-       /// Create a DataFrame representing a Parquet table scan
+    /// Create a DataFrame representing a Arrow table scan
     /// TODO fetch schema from scheduler instead of resolving locally
-    pub async fn read_parquet(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn read_arrow(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
