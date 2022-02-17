@@ -45,6 +45,8 @@ pub enum FileType {
     CSV,
     /// Avro binary records
     Avro,
+    /// Arrow data
+    Arrow,
 }
 
 impl FromStr for FileType {
@@ -56,8 +58,9 @@ impl FromStr for FileType {
             "NDJSON" => Ok(Self::NdJson),
             "CSV" => Ok(Self::CSV),
             "AVRO" => Ok(Self::Avro),
+            "ARROW" => Ok(Self::Arrow),
             other => Err(ParserError::ParserError(format!(
-                "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
+                "expect one of PARQUET, AVRO, NDJSON, CSV or ARROW, found: {}",
                 other
             ))),
         }

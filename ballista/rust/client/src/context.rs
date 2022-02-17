@@ -186,6 +186,26 @@ impl BallistaContext {
         Ok(df)
     }
 
+       /// Create a DataFrame representing a Parquet table scan
+    /// TODO fetch schema from scheduler instead of resolving locally
+    pub async fn read_parquet(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
+        // convert to absolute path because the executor likely has a different working directory
+        let path = PathBuf::from(path);
+        let path = fs::canonicalize(&path)?;
+
+        // use local DataFusion context for now but later this might call the scheduler
+        let mut ctx = {
+            let guard = self.state.lock();
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
+                &guard.scheduler_host,
+                guard.scheduler_port,
+                guard.config(),
+            )
+        };
+        let df = ctx.read_arrow(path.to_str().unwrap()).await?;
+        Ok(df)
+    }
+
     /// Create a DataFrame representing a CSV table scan
     /// TODO fetch schema from scheduler instead of resolving locally
     pub async fn read_csv(
@@ -237,6 +257,15 @@ impl BallistaContext {
 
     pub async fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
         match self.read_parquet(path).await?.to_logical_plan() {
+            LogicalPlan::TableScan(TableScan { source, .. }) => {
+                self.register_table(name, source)
+            }
+            _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
+        }
+    }
+
+    pub async fn register_arrow(&self, name: &str, path: &str) -> Result<()> {
+        match self.read_arrow(path).await?.to_logical_plan() {
             LogicalPlan::TableScan(TableScan { source, .. }) => {
                 self.register_table(name, source)
             }

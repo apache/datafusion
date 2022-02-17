@@ -155,6 +155,41 @@ impl<'a> AvroReadOptions<'a> {
     }
 }
 
+/// Arrow read options
+#[derive(Clone)]
+pub struct ArrowReadOptions<'a> {
+    /// The data source schema.
+    pub schema: Option<SchemaRef>,
+
+    /// File extension; only files with this extension are selected for data input.
+    /// Defaults to ".avro".
+    pub file_extension: &'a str,
+}
+
+impl<'a> Default for ArrowReadOptions<'a> {
+    fn default() -> Self {
+        Self {
+            schema: None,
+            file_extension: ".arrow",
+        }
+    }
+}
+
+impl<'a> ArrowReadOptions<'a> {
+    /// Helper to convert these user facing options to `ListingTable` options
+    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+        let file_format = AvroFormat::default();
+
+        ListingOptions {
+            format: Arc::new(file_format),
+            collect_stat: false,
+            file_extension: self.file_extension.to_owned(),
+            target_partitions,
+            table_partition_cols: vec![],
+        }
+    }
+}
+
 /// Line-delimited JSON read options
 #[derive(Clone)]
 pub struct NdJsonReadOptions<'a> {

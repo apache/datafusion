@@ -95,6 +95,7 @@ impl ListingTableConfig {
             "csv" => Ok(Arc::new(CsvFormat::default())),
             "json" => Ok(Arc::new(JsonFormat::default())),
             "parquet" => Ok(Arc::new(ParquetFormat::default())),
+            "arrow" => Ok(Arc::new(ArrowFormat::default())),
             _ => Err(DataFusionError::Internal(format!(
                 "Unable to infer file type from suffix {}",
                 suffix

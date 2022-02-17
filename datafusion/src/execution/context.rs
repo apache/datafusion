@@ -21,7 +21,7 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
-    datasource::listing::{ListingOptions, ListingTable},
+    datasource::{listing::{ListingOptions, ListingTable}, file_format::arrow::{DEFAULT_ARROW_EXTENSION, ArrowFormat}},
     datasource::{
         file_format::{
             avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
@@ -232,6 +232,10 @@ impl ExecutionContext {
                     FileType::Avro => Ok((
                         Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
                         DEFAULT_AVRO_EXTENSION,
+                    )),
+                    FileType::Arrow => Ok((
+                        Arc::new(ArrowFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_ARROW_EXTENSION,
                     )),
                     _ => Err(DataFusionError::NotImplemented(format!(
                         "Unsupported file type {:?}.",
@@ -499,6 +503,28 @@ impl ExecutionContext {
             format: Arc::new(file_format),
             collect_stat: true,
             file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
+            target_partitions,
+            table_partition_cols: vec![],
+        };
+
+        self.register_listing_table(name, uri, listing_options, None)
+            .await?;
+        Ok(())
+    }
+
+    /// Registers an Arrow data source so that it can be referenced from SQL statements
+    /// executed against this context.
+    pub async fn register_arrow(&mut self, name: &str, uri: &str) -> Result<()> {
+        let target_partitions = {
+            let m = self.state.lock();
+            m.config.target_partitions
+        };
+        let file_format = ArrowFormat::default();
+
+        let listing_options = ListingOptions {
+            format: Arc::new(file_format),
+            collect_stat: true,
+            file_extension: DEFAULT_ARROW_EXTENSION.to_owned(),
             target_partitions,
             table_partition_cols: vec![],
         };

@@ -17,6 +17,7 @@
 
 //! Execution plans that read file formats
 
+mod arrow;
 mod avro;
 mod csv;
 mod file_stream;
@@ -24,13 +25,14 @@ mod json;
 mod parquet;
 
 pub use self::parquet::ParquetExec;
-use arrow::{
+use ::arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
     buffer::Buffer,
     datatypes::{DataType, Field, Schema, SchemaRef, UInt8Type},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+pub use self::arrow::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::CsvExec;
 pub use json::NdJsonExec;
@@ -41,7 +43,7 @@ use crate::{
     error::Result,
     scalar::ScalarValue,
 };
-use arrow::array::new_null_array;
+use ::arrow::array::new_null_array;
 use lazy_static::lazy_static;
 use log::info;
 use std::{
