@@ -1293,7 +1293,6 @@ mod tests {
     use crate::execution::context::QueryPlanner;
     use crate::from_slice::FromSlice;
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::collect;
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::test;
     use crate::variable::VarType;
@@ -1302,16 +1301,14 @@ mod tests {
         logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::{empty::EmptyTable, MemTable},
-        logical_plan::create_udaf,
+        datasource::MemTable, logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::{
         Array, ArrayRef, DictionaryArray, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeStringArray, StringArray, UInt16Array,
-        UInt32Array, UInt64Array, UInt8Array,
+        Int32Array, Int64Array, Int8Array, LargeStringArray, UInt16Array, UInt32Array,
+        UInt64Array, UInt8Array,
     };
-    use arrow::compute::add;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
@@ -1396,79 +1393,6 @@ mod tests {
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn sort() -> Result<()> {
-        let results =
-            execute("SELECT c1, c2 FROM test ORDER BY c1 DESC, c2 ASC", 4).await?;
-        assert_eq!(results.len(), 1);
-
-        let expected: Vec<&str> = vec![
-            "+----+----+",
-            "| c1 | c2 |",
-            "+----+----+",
-            "| 3  | 1  |",
-            "| 3  | 2  |",
-            "| 3  | 3  |",
-            "| 3  | 4  |",
-            "| 3  | 5  |",
-            "| 3  | 6  |",
-            "| 3  | 7  |",
-            "| 3  | 8  |",
-            "| 3  | 9  |",
-            "| 3  | 10 |",
-            "| 2  | 1  |",
-            "| 2  | 2  |",
-            "| 2  | 3  |",
-            "| 2  | 4  |",
-            "| 2  | 5  |",
-            "| 2  | 6  |",
-            "| 2  | 7  |",
-            "| 2  | 8  |",
-            "| 2  | 9  |",
-            "| 2  | 10 |",
-            "| 1  | 1  |",
-            "| 1  | 2  |",
-            "| 1  | 3  |",
-            "| 1  | 4  |",
-            "| 1  | 5  |",
-            "| 1  | 6  |",
-            "| 1  | 7  |",
-            "| 1  | 8  |",
-            "| 1  | 9  |",
-            "| 1  | 10 |",
-            "| 0  | 1  |",
-            "| 0  | 2  |",
-            "| 0  | 3  |",
-            "| 0  | 4  |",
-            "| 0  | 5  |",
-            "| 0  | 6  |",
-            "| 0  | 7  |",
-            "| 0  | 8  |",
-            "| 0  | 9  |",
-            "| 0  | 10 |",
-            "+----+----+",
-        ];
-
-        // Note it is important to NOT use assert_batches_sorted_eq
-        // here as we are testing the sortedness of the output
-        assert_batches_eq!(expected, &results);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn sort_empty() -> Result<()> {
-        // The predicate on this query purposely generates no results
-        let results = execute(
-            "SELECT c1, c2 FROM test WHERE c1 > 100000 ORDER BY c1 DESC, c2 ASC",
-            4,
-        )
-        .await
-        .unwrap();
-        assert_eq!(results.len(), 0);
         Ok(())
     }
 
@@ -2828,7 +2752,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let mut ctx = create_ctx(&tmp_dir, 4).await?;
 
-        // execute a simple query and write the results to CSV
+        // execute a simple query and write the results to parquet
         let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
         write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
@@ -2940,111 +2864,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scalar_udf() -> Result<()> {
-        let schema = Schema::new(vec![
-            Field::new("a", DataType::Int32, false),
-            Field::new("b", DataType::Int32, false),
-        ]);
-
-        let batch = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![
-                Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
-                Arc::new(Int32Array::from_slice(&[2, 12, 12, 120])),
-            ],
-        )?;
-
-        let mut ctx = ExecutionContext::new();
-
-        let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]])?;
-        ctx.register_table("t", Arc::new(provider))?;
-
-        let myfunc = |args: &[ArrayRef]| {
-            let l = &args[0]
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("cast failed");
-            let r = &args[1]
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .expect("cast failed");
-            Ok(Arc::new(add(l, r)?) as ArrayRef)
-        };
-        let myfunc = make_scalar_function(myfunc);
-
-        ctx.register_udf(create_udf(
-            "my_add",
-            vec![DataType::Int32, DataType::Int32],
-            Arc::new(DataType::Int32),
-            Volatility::Immutable,
-            myfunc,
-        ));
-
-        // from here on, we may be in a different scope. We would still like to be able
-        // to call UDFs.
-
-        let t = ctx.table("t")?;
-
-        let plan = LogicalPlanBuilder::from(t.to_logical_plan())
-            .project(vec![
-                col("a"),
-                col("b"),
-                ctx.udf("my_add")?.call(vec![col("a"), col("b")]),
-            ])?
-            .build()?;
-
-        assert_eq!(
-            format!("{:?}", plan),
-            "Projection: #t.a, #t.b, my_add(#t.a, #t.b)\n  TableScan: t projection=None"
-        );
-
-        let plan = ctx.optimize(&plan)?;
-        let plan = ctx.create_physical_plan(&plan).await?;
-        let runtime = ctx.state.lock().runtime_env.clone();
-        let result = collect(plan, runtime).await?;
-
-        let expected = vec![
-            "+-----+-----+-----------------+",
-            "| a   | b   | my_add(t.a,t.b) |",
-            "+-----+-----+-----------------+",
-            "| 1   | 2   | 3               |",
-            "| 10  | 12  | 22              |",
-            "| 10  | 12  | 22              |",
-            "| 100 | 120 | 220             |",
-            "+-----+-----+-----------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
-        let batch = &result[0];
-        let a = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to cast a");
-        let b = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to cast b");
-        let sum = batch
-            .column(2)
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .expect("failed to cast sum");
-
-        assert_eq!(4, a.len());
-        assert_eq!(4, b.len());
-        assert_eq!(4, sum.len());
-        for i in 0..sum.len() {
-            assert_eq!(a.value(i) + b.value(i), sum.value(i));
-        }
-
-        ctx.deregister_table("t")?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn simple_avg() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
@@ -3077,52 +2896,6 @@ mod tests {
         assert_eq!(values.len(), 1);
         // avg(1,2,3,4,5) = 3.0
         assert_eq!(values.value(0), 3.0_f64);
-        Ok(())
-    }
-
-    /// tests the creation, registration and usage of a UDAF
-    #[tokio::test]
-    async fn simple_udaf() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-
-        let batch1 = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
-        )?;
-        let batch2 = RecordBatch::try_new(
-            Arc::new(schema.clone()),
-            vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
-        )?;
-
-        let mut ctx = ExecutionContext::new();
-
-        let provider =
-            MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
-        ctx.register_table("t", Arc::new(provider))?;
-
-        // define a udaf, using a DataFusion's accumulator
-        let my_avg = create_udaf(
-            "my_avg",
-            DataType::Float64,
-            Arc::new(DataType::Float64),
-            Volatility::Immutable,
-            Arc::new(|| Ok(Box::new(AvgAccumulator::try_new(&DataType::Float64)?))),
-            Arc::new(vec![DataType::UInt64, DataType::Float64]),
-        );
-
-        ctx.register_udaf(my_avg);
-
-        let result = plan_and_collect(&mut ctx, "SELECT MY_AVG(a) FROM t").await?;
-
-        let expected = vec![
-            "+-------------+",
-            "| my_avg(t.a) |",
-            "+-------------+",
-            "| 3           |",
-            "+-------------+",
-        ];
-        assert_batches_eq!(expected, &result);
-
         Ok(())
     }
 
@@ -3235,65 +3008,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_external_table_with_timestamps() {
-        let mut ctx = ExecutionContext::new();
-
-        let data = "Jorge,2018-12-13T12:12:10.011Z\n\
-                    Andrew,2018-11-13T17:11:10.011Z";
-
-        let tmp_dir = TempDir::new().unwrap();
-        let file_path = tmp_dir.path().join("timestamps.csv");
-
-        // scope to ensure the file is closed and written
-        {
-            File::create(&file_path)
-                .expect("creating temp file")
-                .write_all(data.as_bytes())
-                .expect("writing data");
-        }
-
-        let sql = format!(
-            "CREATE EXTERNAL TABLE csv_with_timestamps (
-                  name VARCHAR,
-                  ts TIMESTAMP
-              )
-              STORED AS CSV
-              LOCATION '{}'
-              ",
-            file_path.to_str().expect("path is utf8")
-        );
-
-        plan_and_collect(&mut ctx, &sql)
-            .await
-            .expect("Executing CREATE EXTERNAL TABLE");
-
-        let sql = "SELECT * from csv_with_timestamps";
-        let result = plan_and_collect(&mut ctx, sql).await.unwrap();
-        let expected = vec![
-            "+--------+-------------------------+",
-            "| name   | ts                      |",
-            "+--------+-------------------------+",
-            "| Andrew | 2018-11-13 17:11:10.011 |",
-            "| Jorge  | 2018-12-13 12:12:10.011 |",
-            "+--------+-------------------------+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-    }
-
-    #[tokio::test]
-    async fn query_empty_table() {
-        let mut ctx = ExecutionContext::new();
-        let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
-        ctx.register_table("test_tbl", empty_table).unwrap();
-        let sql = "SELECT * FROM test_tbl";
-        let result = plan_and_collect(&mut ctx, sql)
-            .await
-            .expect("Query empty table");
-        let expected = vec!["++", "++"];
-        assert_batches_sorted_eq!(expected, &result);
-    }
-
-    #[tokio::test]
     async fn catalogs_not_leaked() {
         // the information schema used to introduce cyclic Arcs
         let ctx = ExecutionContext::with_config(
@@ -3314,60 +3028,6 @@ mod tests {
 
         assert_eq!(Weak::strong_count(&catalog_list_weak), 0);
         assert_eq!(Weak::strong_count(&catalog_weak), 0);
-    }
-
-    #[tokio::test]
-    async fn schema_merge_ignores_metadata() {
-        // Create two parquet files in same table with same schema but different metadata
-        let tmp_dir = TempDir::new().unwrap();
-        let table_dir = tmp_dir.path().join("parquet_test");
-        let table_path = Path::new(&table_dir);
-
-        let mut non_empty_metadata: HashMap<String, String> = HashMap::new();
-        non_empty_metadata.insert("testing".to_string(), "metadata".to_string());
-
-        let fields = vec![
-            Field::new("id", DataType::Int32, true),
-            Field::new("name", DataType::Utf8, true),
-        ];
-        let schemas = vec![
-            Arc::new(Schema::new_with_metadata(
-                fields.clone(),
-                non_empty_metadata.clone(),
-            )),
-            Arc::new(Schema::new(fields.clone())),
-        ];
-
-        if let Ok(()) = fs::create_dir(table_path) {
-            for (i, schema) in schemas.iter().enumerate().take(2) {
-                let filename = format!("part-{}.parquet", i);
-                let path = table_path.join(&filename);
-                let file = fs::File::create(path).unwrap();
-                let mut writer =
-                    ArrowWriter::try_new(file.try_clone().unwrap(), schema.clone(), None)
-                        .unwrap();
-
-                // create mock record batch
-                let ids = Arc::new(Int32Array::from_slice(&[i as i32]));
-                let names = Arc::new(StringArray::from_slice(&["test"]));
-                let rec_batch =
-                    RecordBatch::try_new(schema.clone(), vec![ids, names]).unwrap();
-
-                writer.write(&rec_batch).unwrap();
-                writer.close().unwrap();
-            }
-        }
-
-        // Read the parquet files into a dataframe to confirm results
-        // (no errors)
-        let mut ctx = ExecutionContext::new();
-        let df = ctx
-            .read_parquet(table_dir.to_str().unwrap().to_string())
-            .await
-            .unwrap();
-        let result = df.collect().await.unwrap();
-
-        assert_eq!(result[0].schema().metadata(), result[1].schema().metadata());
     }
 
     #[tokio::test]

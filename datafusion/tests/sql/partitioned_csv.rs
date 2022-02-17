@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Utility functions for running with a partitioned csv dataset:
+//! Utility functions for creating and running with a partitioned csv dataset.
 
 use std::{io::Write, sync::Arc};
 

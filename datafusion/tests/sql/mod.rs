@@ -883,7 +883,7 @@ async fn nyc() -> Result<()> {
             },
             _ => unreachable!(),
         },
-        _ => unreachable!(false),
+        _ => unreachable!(),
     }
 
     Ok(())
