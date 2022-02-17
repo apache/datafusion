@@ -1069,21 +1069,11 @@ impl ScalarValue {
         scale: &usize,
         size: usize,
     ) -> DecimalArray {
-        let mut builder = DecimalBuilder::new(size, *precision, *scale);
-        match value {
-            None => {
-                for _i in 0..size {
-                    builder.append_null().unwrap();
-                }
-            }
-            Some(v) => {
-                let v = *v;
-                for _i in 0..size {
-                    builder.append_value(v).unwrap();
-                }
-            }
-        };
-        builder.finish()
+        std::iter::repeat(value)
+            .take(size)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)
+            .unwrap()
     }
 
     /// Converts a scalar value into an array of `size` rows.
