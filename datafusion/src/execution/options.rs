@@ -21,6 +21,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 
+use crate::datasource::file_format::arrow::ArrowFormat;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat},
@@ -178,7 +179,7 @@ impl<'a> Default for ArrowReadOptions<'a> {
 impl<'a> ArrowReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = Arrow::default();
+        let file_format = ArrowFormat::default();
 
         ListingOptions {
             format: Arc::new(file_format),
