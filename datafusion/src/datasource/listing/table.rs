@@ -27,7 +27,7 @@ use crate::{
     datasource::file_format::avro::AvroFormat,
     datasource::file_format::csv::CsvFormat,
     datasource::file_format::json::JsonFormat,
-    datasource::file_format::parquet::ParquetFormat,
+    datasource::file_format::{arrow::ArrowFormat, parquet::ParquetFormat},
     error::{DataFusionError, Result},
     logical_plan::Expr,
     physical_plan::{
