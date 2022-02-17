@@ -203,10 +203,14 @@ mod tests {
     use crate::physical_plan::file_format::FileScanConfig;
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::row::reader::read_as_batch;
+    #[cfg(feature = "jit")]
+    use crate::row::reader::read_as_batch_jit;
     use crate::row::writer::write_batch_unchecked;
     use arrow::record_batch::RecordBatch;
     use arrow::util::bit_util::{ceil, set_bit_raw, unset_bit_raw};
     use arrow::{array::*, datatypes::*};
+    #[cfg(feature = "jit")]
+    use datafusion_jit::api::Assembler;
     use rand::Rng;
     use DataType::*;
 
@@ -301,6 +305,22 @@ mod tests {
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
                     let output_batch = { read_as_batch(&mut vector, schema, row_offsets)? };
+                    assert_eq!(batch, output_batch);
+                    Ok(())
+                }
+
+                #[test]
+                #[allow(non_snake_case)]
+                #[cfg(feature = "jit")]
+                fn [<test_single_ $TYPE _jit>]() -> Result<()> {
+                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
+                    let a = $ARRAY::from($VEC);
+                    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+                    let mut vector = vec![0; 1024];
+                    let row_offsets =
+                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+                    let assembler = Assembler::default();
+                    let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -403,6 +423,24 @@ mod tests {
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
         let output_batch = { read_as_batch(&mut vector, schema, row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "jit")]
+    fn test_single_binary_jit() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, true)]));
+        let values: Vec<Option<&[u8]>> =
+            vec![Some(b"one"), Some(b"two"), None, Some(b""), Some(b"three")];
+        let a = BinaryArray::from_opt_vec(values);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 8192];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let assembler = Assembler::default();
+        let output_batch =
+            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }

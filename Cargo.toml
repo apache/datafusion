@@ -20,6 +20,7 @@ members = [
     "datafusion",
     "datafusion-common",
     "datafusion-expr",
+    "datafusion-jit",
     "datafusion-physical-expr",
     "datafusion-cli",
     "datafusion-examples",
