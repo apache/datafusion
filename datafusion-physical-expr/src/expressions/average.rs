@@ -281,11 +281,12 @@ mod tests {
     #[test]
     fn avg_decimal_all_nulls() -> Result<()> {
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(6)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
