@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Apache Avro format abstractions
+//! Apache Arrow format abstractions
 
 use std::any::Any;
 use std::io::Read;

@@ -178,7 +178,7 @@ impl<'a> Default for ArrowReadOptions<'a> {
 impl<'a> ArrowReadOptions<'a> {
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = AvroFormat::default();
+        let file_format = Arrow::default();
 
         ListingOptions {
             format: Arc::new(file_format),
