@@ -54,6 +54,7 @@ row = []
 [dependencies]
 datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
 datafusion-expr = { path = "../datafusion-expr", version = "7.0.0" }
+datafusion-physical-expr = { path = "../datafusion-physical-expr", version = "7.0.0" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
 arrow = { version = "9.0.0", features = ["prettyprint"] }
