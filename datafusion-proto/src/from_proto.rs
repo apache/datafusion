@@ -16,39 +16,57 @@
 // under the License.
 
 use crate::protobuf;
-use datafusion::arrow::datatypes::{
-    DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode,
+use datafusion::{
+    arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
+    error::DataFusionError,
+    logical_plan::{
+        abs, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum, sin,
+        sqrt, tan, trunc,
+        window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
+        Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
+    },
+    physical_plan::{
+        aggregates::AggregateFunction, functions::BuiltinScalarFunction,
+        window_functions::BuiltInWindowFunction,
+    },
+    prelude::{
+        date_part, date_trunc, lower, ltrim, octet_length, rtrim, sha224, sha256, sha384,
+        sha512, trim, upper,
+    },
+    scalar::ScalarValue,
 };
-use datafusion::error::DataFusionError;
-use datafusion::logical_plan::window_frames::{
-    WindowFrame, WindowFrameBound, WindowFrameUnits,
-};
-use datafusion::logical_plan::{
-    abs, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum, sin, sqrt,
-    tan, trunc, Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
-};
-use datafusion::physical_plan::aggregates::AggregateFunction;
-use datafusion::physical_plan::functions::BuiltinScalarFunction;
-use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
-use datafusion::prelude::{
-    date_part, date_trunc, lower, ltrim, octet_length, rtrim, sha224, sha256, sha384,
-    sha512, trim, upper,
-};
-use datafusion::scalar::ScalarValue;
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub enum Error {
     General(String),
+
     DataFusionError(DataFusionError),
+
+    MissingRequiredField(String),
+
+    AtLeastOneValue(String),
+
+    UnknownEnumVariant { name: String, value: i32 },
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::General(desc) => write!(f, "General error: {}", desc),
+
             Self::DataFusionError(desc) => {
                 write!(f, "DataFusion error: {:?}", desc)
+            }
+
+            Self::MissingRequiredField(name) => {
+                write!(f, "Missing required field {}", name)
+            }
+            Self::AtLeastOneValue(name) => {
+                write!(f, "Must have at least one {}, found 0", name)
+            }
+            Self::UnknownEnumVariant { name, value } => {
+                write!(f, "Unknown i32 value for {} enum: {}", name, value)
             }
         }
     }
@@ -62,26 +80,53 @@ impl From<DataFusionError> for Error {
     }
 }
 
-#[macro_export]
-macro_rules! convert_required {
-    ($PB:expr) => {{
-        if let Some(field) = $PB.as_ref() {
-            field.try_into()
-        } else {
-            Err(proto_error("Missing required field in protobuf"))
+impl Error {
+    fn required(field: impl Into<String>) -> Error {
+        Error::MissingRequiredField(field.into())
+    }
+
+    fn at_least_one(field: impl Into<String>) -> Error {
+        Error::AtLeastOneValue(field.into())
+    }
+
+    fn unknown(name: impl Into<String>, value: i32) -> Error {
+        Error::UnknownEnumVariant {
+            name: name.into(),
+            value,
         }
-    }};
+    }
 }
 
-#[macro_export]
-macro_rules! convert_box_required {
-    ($PB:expr) => {{
-        if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into()
-        } else {
-            Err(proto_error("Missing required field in protobuf"))
+/// An extension trait that adds the methods `optional` and `required` to any
+/// Option containing a type implementing `TryInto<U, Error = Error>`
+pub trait FromOptionalField<T> {
+    /// Converts an optional protobuf field to an option of a different type
+    ///
+    /// Returns None if the option is None, otherwise calls [`FromField::field`]
+    /// on the contained data, returning any error encountered
+    fn optional(self) -> Result<Option<T>, Error>;
+
+    /// Converts an optional protobuf field to a different type, returning an error if None
+    ///
+    /// Returns `Error::MissingRequiredField` if None, otherwise calls [`FromField::field`]
+    /// on the contained data, returning any error encountered
+    fn required(self, field: impl Into<String>) -> Result<T, Error>;
+}
+
+impl<T, U> FromOptionalField<U> for Option<T>
+where
+    T: TryInto<U, Error = Error>,
+{
+    fn optional(self) -> Result<Option<U>, Error> {
+        self.map(|t| t.try_into()).transpose()
+    }
+
+    fn required(self, field: impl Into<String>) -> Result<U, Error> {
+        match self {
+            None => Err(Error::required(field)),
+            Some(t) => t.try_into(),
         }
-    }};
+    }
 }
 
 impl From<protobuf::Column> for Column {
@@ -127,7 +172,7 @@ impl TryFrom<&protobuf::DfField> for DFField {
     type Error = Error;
 
     fn try_from(df_field: &protobuf::DfField) -> Result<Self, Self::Error> {
-        let field: Field = convert_required!(df_field.field)?;
+        let field = df_field.field.as_ref().required("field")?;
 
         Ok(match &df_field.qualifier {
             Some(q) => DFField::from_qualified(&q.relation, field),
@@ -190,13 +235,12 @@ impl From<protobuf::PrimitiveScalarType> for DataType {
 
 impl TryFrom<&protobuf::ArrowType> for DataType {
     type Error = Error;
+
     fn try_from(arrow_type: &protobuf::ArrowType) -> Result<Self, Self::Error> {
-        let pb_arrow_type = arrow_type.arrow_type_enum.as_ref().ok_or_else(|| {
-            proto_error(
-                "Protobuf deserialization error: ArrowType missing required field 'data_type'",
-            )
-        })?;
-        pb_arrow_type.try_into()
+        arrow_type
+            .arrow_type_enum
+            .as_ref()
+            .required("arrow_type_enum")
     }
 }
 
@@ -230,58 +274,46 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::Date32(_) => DataType::Date32,
             arrow_type::ArrowTypeEnum::Date64(_) => DataType::Date64,
             arrow_type::ArrowTypeEnum::Duration(time_unit) => {
-                DataType::Duration(protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?)
+                DataType::Duration(protobuf::TimeUnit::try_from(time_unit)?.into())
             }
             arrow_type::ArrowTypeEnum::Timestamp(protobuf::Timestamp {
                 time_unit,
                 timezone,
             }) => DataType::Timestamp(
-                protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?,
+                protobuf::TimeUnit::try_from(time_unit)?.into(),
                 match timezone.len() {
                     0 => None,
                     _ => Some(timezone.to_owned()),
                 },
             ),
             arrow_type::ArrowTypeEnum::Time32(time_unit) => {
-                DataType::Time32(protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?)
+                DataType::Time32(protobuf::TimeUnit::try_from(time_unit)?.into())
             }
             arrow_type::ArrowTypeEnum::Time64(time_unit) => {
-                DataType::Time64(protobuf::TimeUnit::from_i32_to_arrow(*time_unit)?)
+                DataType::Time64(protobuf::TimeUnit::try_from(time_unit)?.into())
             }
             arrow_type::ArrowTypeEnum::Interval(interval_unit) => DataType::Interval(
-                protobuf::IntervalUnit::from_i32_to_arrow(*interval_unit)?,
+                protobuf::IntervalUnit::try_from(interval_unit)?.into(),
             ),
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
                 whole,
                 fractional,
             }) => DataType::Decimal(*whole as usize, *fractional as usize),
             arrow_type::ArrowTypeEnum::List(list) => {
-                let list_type: &protobuf::Field = list
-                    .as_ref()
-                    .field_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
-                    .as_ref();
-                DataType::List(Box::new(list_type.try_into()?))
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
+                DataType::List(Box::new(list_type))
             }
             arrow_type::ArrowTypeEnum::LargeList(list) => {
-                let list_type: &protobuf::Field = list
-                    .as_ref()
-                    .field_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
-                    .as_ref();
-                DataType::LargeList(Box::new(list_type.try_into()?))
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
+                DataType::LargeList(Box::new(list_type))
             }
             arrow_type::ArrowTypeEnum::FixedSizeList(list) => {
-                let list_type: &protobuf::Field = list
-                    .as_ref()
-                    .field_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: List message missing required field 'field_type'"))?
-                    .as_ref();
+                let list_type =
+                    list.as_ref().field_type.as_deref().required("field_type")?;
                 let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type.try_into()?), list_size)
+                DataType::FixedSizeList(Box::new(list_type), list_size)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 strct
@@ -292,11 +324,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             ),
             arrow_type::ArrowTypeEnum::Union(union) => {
                 let union_mode = protobuf::UnionMode::from_i32(union.union_mode)
-                    .ok_or_else(|| {
-                        proto_error(
-                            "Protobuf deserialization error: Unknown union mode type",
-                        )
-                    })?;
+                    .ok_or_else(|| Error::unknown("UnionMode", union.union_mode))?;
                 let union_mode = match union_mode {
                     protobuf::UnionMode::Dense => UnionMode::Dense,
                     protobuf::UnionMode::Sparse => UnionMode::Sparse,
@@ -309,18 +337,8 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 DataType::Union(union_types, union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
-                let pb_key_datatype = dict
-                    .as_ref()
-                    .key
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message missing required field 'key'"))?;
-                let pb_value_datatype = dict
-                    .as_ref()
-                    .value
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: Dictionary message missing required field 'key'"))?;
-                let key_datatype: DataType = pb_key_datatype.as_ref().try_into()?;
-                let value_datatype: DataType = pb_value_datatype.as_ref().try_into()?;
+                let key_datatype = dict.as_ref().key.as_deref().required("key")?;
+                let value_datatype = dict.as_ref().value.as_deref().required("value")?;
                 DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
             }
         })
@@ -330,17 +348,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
 impl TryFrom<&protobuf::Field> for Field {
     type Error = Error;
     fn try_from(field: &protobuf::Field) -> Result<Self, Self::Error> {
-        let pb_datatype = field.arrow_type.as_ref().ok_or_else(|| {
-            proto_error(
-                "Protobuf deserialization error: Field message missing required field 'arrow_type'",
-            )
-        })?;
+        let datatype = field.arrow_type.as_deref().required("arrow_type")?;
 
-        Ok(Self::new(
-            field.name.as_str(),
-            pb_datatype.as_ref().try_into()?,
-            field.nullable,
-        ))
+        Ok(Self::new(field.name.as_str(), datatype, field.nullable))
     }
 }
 
@@ -432,6 +442,24 @@ impl From<protobuf::BuiltInWindowFunction> for BuiltInWindowFunction {
     }
 }
 
+impl TryFrom<&i32> for protobuf::PrimitiveScalarType {
+    type Error = Error;
+
+    fn try_from(value: &i32) -> Result<Self, Self::Error> {
+        protobuf::PrimitiveScalarType::from_i32(*value)
+            .ok_or_else(|| Error::unknown("PrimitiveScalarType", *value))
+    }
+}
+
+impl TryFrom<&i32> for protobuf::AggregateFunction {
+    type Error = Error;
+
+    fn try_from(value: &i32) -> Result<Self, Self::Error> {
+        protobuf::AggregateFunction::from_i32(*value)
+            .ok_or_else(|| Error::unknown("AggregateFunction", *value))
+    }
+}
+
 impl TryFrom<&protobuf::scalar_type::Datatype> for DataType {
     type Error = Error;
 
@@ -442,36 +470,21 @@ impl TryFrom<&protobuf::scalar_type::Datatype> for DataType {
 
         Ok(match scalar_type {
             Datatype::Scalar(scalar_type) => {
-                let pb_scalar_enum = protobuf::PrimitiveScalarType::from_i32(*scalar_type).ok_or_else(|| {
-                    proto_error(format!(
-                        "Protobuf deserialization error, scalar_type::Datatype missing was provided invalid enum variant: {}",
-                        *scalar_type
-                    ))
-                })?;
-                pb_scalar_enum.into()
+                protobuf::PrimitiveScalarType::try_from(scalar_type)?.into()
             }
             Datatype::List(protobuf::ScalarListType {
                 deepest_type,
                 field_names,
             }) => {
                 if field_names.is_empty() {
-                    return Err(proto_error(
-                        "Protobuf deserialization error: found no field names in ScalarListType message which requires at least one",
-                    ));
+                    return Err(Error::at_least_one("field_names"));
                 }
-                let pb_scalar_type = protobuf::PrimitiveScalarType::from_i32(
-                    *deepest_type,
-                )
-                .ok_or_else(|| {
-                    proto_error(format!(
-                        "Protobuf deserialization error: invalid i32 for scalar enum: {}",
-                        *deepest_type
-                    ))
-                })?;
+                let field_type =
+                    protobuf::PrimitiveScalarType::try_from(deepest_type)?.into();
                 //Because length is checked above it is safe to unwrap .last()
                 let mut scalar_type = DataType::List(Box::new(Field::new(
                     field_names.last().unwrap().as_str(),
-                    pb_scalar_type.into(),
+                    field_type,
                     true,
                 )));
                 //Iterate over field names in reverse order except for the last item in the vector
@@ -519,8 +532,7 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
             Value::ListValue(v) => v.try_into()?,
             Value::NullListValue(v) => ScalarValue::List(None, Box::new(v.try_into()?)),
             Value::NullValue(null_enum) => {
-                let primitive = PrimitiveScalarType::from_i32(*null_enum)
-                    .ok_or_else(|| proto_error("Invalid scalar type"))?;
+                let primitive = PrimitiveScalarType::try_from(null_enum)?;
                 (&primitive).try_into()?
             }
             Value::Decimal128Value(val) => {
@@ -554,26 +566,21 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
         let protobuf::ScalarListValue { datatype, values } = scalar_list_value;
         let pb_scalar_type = datatype
             .as_ref()
-            .ok_or_else(|| proto_error("Protobuf deserialization error: ScalarListValue messsage missing required field 'datatype'"))?;
+            .ok_or_else(|| Error::required("datatype"))?;
+
         let scalar_type = pb_scalar_type
             .datatype
             .as_ref()
-            .ok_or_else(|| proto_error("Protobuf deserialization error: ScalarListValue.Datatype messsage missing required field 'datatype'"))?;
+            .ok_or_else(|| Error::required("datatype"))?;
         let scalar_values = match scalar_type {
             Datatype::Scalar(scalar_type_i32) => {
                 let leaf_scalar_type =
-                    protobuf::PrimitiveScalarType::from_i32(*scalar_type_i32)
-                        .ok_or_else(|| {
-                            proto_error("Error converting i32 to basic scalar type")
-                        })?;
+                    protobuf::PrimitiveScalarType::try_from(scalar_type_i32)?;
                 let typechecked_values: Vec<datafusion::scalar::ScalarValue> = values
                     .iter()
                     .map(|protobuf::ScalarValue { value: opt_value }| {
-                        let value = opt_value.as_ref().ok_or_else(|| {
-                            proto_error(
-                                "Protobuf deserialization error: missing required field 'value'",
-                            )
-                        })?;
+                        let value =
+                            opt_value.as_ref().ok_or_else(|| Error::required("value"))?;
                         typechecked_scalar_value_conversion(value, leaf_scalar_type)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
@@ -587,23 +594,18 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                     deepest_type,
                     field_names,
                 } = &list_type;
-                let leaf_type =
-                    PrimitiveScalarType::from_i32(*deepest_type).ok_or_else(|| {
-                        proto_error("Error converting i32 to basic scalar type")
-                    })?;
+                let leaf_type = PrimitiveScalarType::try_from(deepest_type)?;
                 let depth = field_names.len();
 
                 let typechecked_values: Vec<ScalarValue> = if depth == 0 {
-                    return Err(proto_error(
-                        "Protobuf deserialization error, ScalarListType had no field names, requires at least one",
-                    ));
+                    return Err(Error::at_least_one("field_names"));
                 } else if depth == 1 {
                     values
                         .iter()
                         .map(|protobuf::ScalarValue { value: opt_value }| {
                             let value = opt_value
                                 .as_ref()
-                                .ok_or_else(|| proto_error("Protobuf deserialization error: missing required field 'value'"))?;
+                                .ok_or_else(|| Error::required("value"))?;
                             typechecked_scalar_value_conversion(value, leaf_type)
                         })
                         .collect::<Result<Vec<_>, _>>()?
@@ -611,10 +613,7 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
                     values
                         .iter()
                         .map(|protobuf::ScalarValue { value: opt_value }| {
-                            let value = opt_value
-                                .as_ref()
-                                .ok_or_else(|| proto_error("Protobuf deserialization error: missing required field 'value'"))?;
-                            value.try_into()
+                            opt_value.as_ref().required("value")
                         })
                         .collect::<Result<Vec<_>, _>>()?
                 };
@@ -633,11 +632,9 @@ impl TryFrom<&protobuf::ScalarListValue> for ScalarValue {
 
 impl TryFrom<&protobuf::ScalarType> for DataType {
     type Error = Error;
+
     fn try_from(scalar: &protobuf::ScalarType) -> Result<Self, Self::Error> {
-        let pb_scalartype = scalar.datatype.as_ref().ok_or_else(|| {
-            proto_error("ScalarType message missing required field 'datatype'")
-        })?;
-        pb_scalartype.try_into()
+        scalar.datatype.as_ref().required("datatype")
     }
 }
 
@@ -716,19 +713,13 @@ impl TryFrom<&protobuf::ScalarListType> for DataType {
 
         let depth = field_names.len();
         if depth == 0 {
-            return Err(proto_error(
-                "Protobuf deserialization error: Found a ScalarListType message with no field names, at least one is required",
-            ));
+            return Err(Error::at_least_one("field_names"));
         }
 
         let mut curr_type = Self::List(Box::new(Field::new(
             //Since checked vector is not empty above this is safe to unwrap
             field_names.last().unwrap(),
-            PrimitiveScalarType::from_i32(*deepest_type)
-                .ok_or_else(|| {
-                    proto_error("Could not convert to datafusion scalar type")
-                })?
-                .into(),
+            PrimitiveScalarType::try_from(deepest_type)?.into(),
             true,
         )));
         //Iterates over field names in reverse order except for the last item in the vector
@@ -746,9 +737,11 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
     fn try_from(scalar: &protobuf::ScalarValue) -> Result<Self, Self::Error> {
         use protobuf::scalar_value::Value;
 
-        let value = scalar.value.as_ref().ok_or_else(|| {
-            proto_error("Protobuf deserialization error: missing required field 'value'")
-        })?;
+        let value = scalar
+            .value
+            .as_ref()
+            .ok_or_else(|| Error::required("value"))?;
+
         Ok(match value {
             Value::BoolValue(v) => Self::Boolean(Some(*v)),
             Value::Utf8Value(v) => Self::Utf8(Some(v.to_owned())),
@@ -771,28 +764,23 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     values,
                     datatype: opt_scalar_type,
                 } = &scalar_list;
-                let pb_scalar_type = opt_scalar_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization err: ScalaListValue missing required field 'datatype'"))?;
+
+                let scalar_type = opt_scalar_type.as_ref().required("datatype")?;
+                let scalar_type = Box::new(scalar_type);
+
                 let typechecked_values: Vec<ScalarValue> = values
                     .iter()
                     .map(|val| val.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                let scalar_type: DataType = pb_scalar_type.try_into()?;
-                let scalar_type = Box::new(scalar_type);
+
                 Self::List(Some(Box::new(typechecked_values)), scalar_type)
             }
             Value::NullListValue(v) => {
-                let pb_datatype = v
-                    .datatype
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: NullListValue message missing required field 'datatyp'"))?;
-                let pb_datatype = Box::new(pb_datatype.try_into()?);
-                Self::List(None, pb_datatype)
+                let datatype = v.datatype.as_ref().required("datatype")?;
+                Self::List(None, Box::new(datatype))
             }
             Value::NullValue(v) => {
-                let null_type_enum = protobuf::PrimitiveScalarType::from_i32(*v)
-                    .ok_or_else(|| proto_error("Protobuf deserialization error found invalid enum variant for DatafusionScalar"))?;
+                let null_type_enum = protobuf::PrimitiveScalarType::try_from(v)?;
                 (&null_type_enum).try_into()?
             }
             Value::Decimal128Value(val) => {
@@ -822,12 +810,13 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
         let expr_type = expr
             .expr_type
             .as_ref()
-            .ok_or_else(|| proto_error("Unexpected empty logical expression"))?;
+            .ok_or_else(|| Error::required("expr_type"))?;
+
         match expr_type {
             ExprType::BinaryExpr(binary_expr) => Ok(Self::BinaryExpr {
-                left: Box::new(parse_required_expr(&binary_expr.l)?),
+                left: Box::new(binary_expr.l.as_deref().required("l")?),
                 op: from_proto_binary_op(&binary_expr.op)?,
-                right: Box::new(parse_required_expr(&binary_expr.r)?),
+                right: Box::new(binary_expr.r.as_deref().required("r")?),
             }),
             ExprType::Column(column) => Ok(Self::Column(column.into())),
             ExprType::Literal(literal) => {
@@ -838,7 +827,7 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                 let window_function = expr
                     .window_function
                     .as_ref()
-                    .ok_or_else(|| proto_error("Received empty window function"))?;
+                    .ok_or_else(|| Error::required("window_function"))?;
                 let partition_by = expr
                     .partition_by
                     .iter()
@@ -868,19 +857,14 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
 
                 match window_function {
                     window_expr_node::WindowFunction::AggrFunction(i) => {
-                        let aggr_function = protobuf::AggregateFunction::from_i32(*i)
-                            .ok_or_else(|| {
-                                proto_error(format!(
-                                    "Received an unknown aggregate window function: {}",
-                                    i
-                                ))
-                            })?;
+                        let aggr_function =
+                            protobuf::AggregateFunction::try_from(i)?.into();
 
                         Ok(Self::WindowFunction {
                             fun: window_functions::WindowFunction::AggregateFunction(
-                                AggregateFunction::from(aggr_function),
+                                aggr_function,
                             ),
-                            args: vec![parse_required_expr(&expr.expr)?],
+                            args: vec![expr.expr.as_deref().required("expr")?],
                             partition_by,
                             order_by,
                             window_frame,
@@ -888,20 +872,17 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     }
                     window_expr_node::WindowFunction::BuiltInFunction(i) => {
                         let built_in_function =
-                            protobuf::BuiltInWindowFunction::from_i32(*i).ok_or_else(
-                                || {
-                                    proto_error(format!(
-                                        "Received an unknown built-in window function: {}",
-                                        i
-                                    ))
-                                },
-                            )?;
+                            protobuf::BuiltInWindowFunction::from_i32(*i)
+                                .ok_or_else(|| {
+                                    Error::unknown("BuiltInWindowFunction", *i)
+                                })?
+                                .into();
 
                         Ok(Self::WindowFunction {
                             fun: window_functions::WindowFunction::BuiltInWindowFunction(
-                                BuiltInWindowFunction::from(built_in_function),
+                                built_in_function,
                             ),
-                            args: vec![parse_required_expr(&expr.expr)?],
+                            args: vec![expr.expr.as_deref().required("expr")?],
                             partition_by,
                             order_by,
                             window_frame,
@@ -910,15 +891,8 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                 }
             }
             ExprType::AggregateExpr(expr) => {
-                let aggr_function =
-                    protobuf::AggregateFunction::from_i32(expr.aggr_function)
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                                "Received an unknown aggregate function: {}",
-                                expr.aggr_function
-                            ))
-                        })?;
-                let fun = AggregateFunction::from(aggr_function);
+                let fun =
+                    protobuf::AggregateFunction::try_from(&expr.aggr_function)?.into();
 
                 Ok(Self::AggregateFunction {
                     fun,
@@ -931,39 +905,32 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                 })
             }
             ExprType::Alias(alias) => Ok(Self::Alias(
-                Box::new(parse_required_expr(&alias.expr)?),
+                Box::new(alias.expr.as_deref().required("expr")?),
                 alias.alias.clone(),
             )),
-            ExprType::IsNullExpr(is_null) => {
-                Ok(Self::IsNull(Box::new(parse_required_expr(&is_null.expr)?)))
-            }
+            ExprType::IsNullExpr(is_null) => Ok(Self::IsNull(Box::new(
+                is_null.expr.as_deref().required("expr")?,
+            ))),
             ExprType::IsNotNullExpr(is_not_null) => Ok(Self::IsNotNull(Box::new(
-                parse_required_expr(&is_not_null.expr)?,
+                is_not_null.expr.as_deref().required("expr")?,
             ))),
             ExprType::NotExpr(not) => {
-                Ok(Self::Not(Box::new(parse_required_expr(&not.expr)?)))
+                Ok(Self::Not(Box::new(not.expr.as_deref().required("expr")?)))
             }
             ExprType::Between(between) => Ok(Self::Between {
-                expr: Box::new(parse_required_expr(&between.expr)?),
+                expr: Box::new(between.expr.as_deref().required("expr")?),
                 negated: between.negated,
-                low: Box::new(parse_required_expr(&between.low)?),
-                high: Box::new(parse_required_expr(&between.high)?),
+                low: Box::new(between.low.as_deref().required("low")?),
+                high: Box::new(between.high.as_deref().required("high")?),
             }),
             ExprType::Case(case) => {
                 let when_then_expr = case
                     .when_then_expr
                     .iter()
                     .map(|e| {
-                        Ok((
-                            Box::new(match &e.when_expr {
-                                Some(e) => e.try_into(),
-                                None => Err(proto_error("Missing required expression")),
-                            }?),
-                            Box::new(match &e.then_expr {
-                                Some(e) => e.try_into(),
-                                None => Err(proto_error("Missing required expression")),
-                            }?),
-                        ))
+                        let when_expr = e.when_expr.as_ref().required("when_expr")?;
+                        let then_expr = e.then_expr.as_ref().required("then_expr")?;
+                        Ok((Box::new(when_expr), Box::new(then_expr)))
                     })
                     .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
                 Ok(Self::Case {
@@ -973,33 +940,25 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                 })
             }
             ExprType::Cast(cast) => {
-                let expr = Box::new(parse_required_expr(&cast.expr)?);
-                let arrow_type: &protobuf::ArrowType = cast
-                    .arrow_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: CastNode message missing required field 'arrow_type'"))?;
-                let data_type = arrow_type.try_into()?;
+                let expr = Box::new(cast.expr.as_deref().required("expr")?);
+                let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
                 Ok(Self::Cast { expr, data_type })
             }
             ExprType::TryCast(cast) => {
-                let expr = Box::new(parse_required_expr(&cast.expr)?);
-                let arrow_type: &protobuf::ArrowType = cast
-                    .arrow_type
-                    .as_ref()
-                    .ok_or_else(|| proto_error("Protobuf deserialization error: CastNode message missing required field 'arrow_type'"))?;
-                let data_type = arrow_type.try_into()?;
+                let expr = Box::new(cast.expr.as_deref().required("expr")?);
+                let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
                 Ok(Self::TryCast { expr, data_type })
             }
             ExprType::Sort(sort) => Ok(Self::Sort {
-                expr: Box::new(parse_required_expr(&sort.expr)?),
+                expr: Box::new(sort.expr.as_deref().required("expr")?),
                 asc: sort.asc,
                 nulls_first: sort.nulls_first,
             }),
             ExprType::Negative(negative) => Ok(Self::Negative(Box::new(
-                parse_required_expr(&negative.expr)?,
+                negative.expr.as_deref().required("expr")?,
             ))),
             ExprType::InList(in_list) => Ok(Self::InList {
-                expr: Box::new(parse_required_expr(&in_list.expr)?),
+                expr: Box::new(in_list.expr.as_deref().required("expr")?),
                 list: in_list
                     .list
                     .iter()
@@ -1010,12 +969,7 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
             ExprType::Wildcard(_) => Ok(Self::Wildcard),
             ExprType::ScalarFunction(expr) => {
                 let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)
-                    .ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown scalar function: {}",
-                            expr.fun
-                        ))
-                    })?;
+                    .ok_or_else(|| Error::unknown("ScalarFunction", expr.fun))?;
                 let args = &expr.args;
 
                 match scalar_function {
@@ -1076,21 +1030,9 @@ impl TryFrom<protobuf::WindowFrame> for WindowFrame {
 
     fn try_from(window: protobuf::WindowFrame) -> Result<Self, Self::Error> {
         let units = protobuf::WindowFrameUnits::from_i32(window.window_frame_units)
-            .ok_or_else(|| {
-                proto_error(format!(
-                    "Received a WindowFrame message with unknown WindowFrameUnits {}",
-                    window.window_frame_units
-                ))
-            })?
+            .ok_or_else(|| Error::unknown("WindowFrameUnits", window.window_frame_units))?
             .into();
-        let start_bound = window
-            .start_bound
-            .ok_or_else(|| {
-                proto_error(
-                    "Received a WindowFrame message with no start_bound".to_owned(),
-                )
-            })?
-            .try_into()?;
+        let start_bound = window.start_bound.required("start_bound")?;
         let end_bound = window
             .end_bound
             .map(|end_bound| match end_bound {
@@ -1112,12 +1054,11 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
     type Error = Error;
 
     fn try_from(bound: protobuf::WindowFrameBound) -> Result<Self, Self::Error> {
-        let bound_type = protobuf::WindowFrameBoundType::from_i32(bound.window_frame_bound_type).ok_or_else(|| {
-            proto_error(format!(
-                "Received a WindowFrameBound message with unknown WindowFrameBoundType {}",
-                bound.window_frame_bound_type
-            ))
-        })?;
+        let bound_type =
+            protobuf::WindowFrameBoundType::from_i32(bound.window_frame_bound_type)
+                .ok_or_else(|| {
+                    Error::unknown("WindowFrameBoundType", bound.window_frame_bound_type)
+                })?;
         match bound_type {
             protobuf::WindowFrameBoundType::CurrentRow => Ok(Self::CurrentRow),
             protobuf::WindowFrameBoundType::Preceding => {
@@ -1137,66 +1078,47 @@ impl TryFrom<protobuf::WindowFrameBound> for WindowFrameBound {
 impl TryFrom<&Box<protobuf::List>> for DataType {
     type Error = Error;
     fn try_from(list: &Box<protobuf::List>) -> Result<Self, Self::Error> {
-        let list_ref = list.as_ref();
-        match &list_ref.field_type {
-            Some(pb_field) => {
-                let pb_field_ref = pb_field.as_ref();
-                let arrow_field: Field = pb_field_ref.try_into()?;
-                Ok(Self::List(Box::new(arrow_field)))
-            }
-            None => Err(proto_error(
-                "List message missing required field 'field_type'",
-            )),
+        Ok(Self::List(Box::new(
+            list.as_ref().field_type.as_deref().required("field_type")?,
+        )))
+    }
+}
+
+impl TryFrom<&i32> for protobuf::TimeUnit {
+    type Error = Error;
+
+    fn try_from(value: &i32) -> Result<Self, Self::Error> {
+        protobuf::TimeUnit::from_i32(*value)
+            .ok_or_else(|| Error::unknown("TimeUnit", *value))
+    }
+}
+
+impl From<protobuf::TimeUnit> for TimeUnit {
+    fn from(time_unit: protobuf::TimeUnit) -> Self {
+        match time_unit {
+            protobuf::TimeUnit::Second => TimeUnit::Second,
+            protobuf::TimeUnit::TimeMillisecond => TimeUnit::Millisecond,
+            protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
+            protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
         }
     }
 }
 
-impl protobuf::TimeUnit {
-    pub fn from_arrow_time_unit(val: &TimeUnit) -> Self {
-        match val {
-            TimeUnit::Second => protobuf::TimeUnit::Second,
-            TimeUnit::Millisecond => protobuf::TimeUnit::TimeMillisecond,
-            TimeUnit::Microsecond => protobuf::TimeUnit::Microsecond,
-            TimeUnit::Nanosecond => protobuf::TimeUnit::Nanosecond,
-        }
-    }
+impl TryFrom<&i32> for protobuf::IntervalUnit {
+    type Error = Error;
 
-    pub fn from_i32_to_arrow(time_unit_i32: i32) -> Result<TimeUnit, Error> {
-        let pb_time_unit = protobuf::TimeUnit::from_i32(time_unit_i32);
-        match pb_time_unit {
-            Some(time_unit) => Ok(match time_unit {
-                protobuf::TimeUnit::Second => TimeUnit::Second,
-                protobuf::TimeUnit::TimeMillisecond => TimeUnit::Millisecond,
-                protobuf::TimeUnit::Microsecond => TimeUnit::Microsecond,
-                protobuf::TimeUnit::Nanosecond => TimeUnit::Nanosecond,
-            }),
-            None => Err(proto_error(
-                "Error converting i32 to TimeUnit: Passed invalid variant",
-            )),
-        }
+    fn try_from(value: &i32) -> Result<Self, Self::Error> {
+        protobuf::IntervalUnit::from_i32(*value)
+            .ok_or_else(|| Error::unknown("IntervalUnit", *value))
     }
 }
 
-impl protobuf::IntervalUnit {
-    pub fn from_arrow_interval_unit(interval_unit: &IntervalUnit) -> Self {
+impl From<protobuf::IntervalUnit> for IntervalUnit {
+    fn from(interval_unit: protobuf::IntervalUnit) -> Self {
         match interval_unit {
-            IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
-            IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
-            IntervalUnit::MonthDayNano => protobuf::IntervalUnit::MonthDayNano,
-        }
-    }
-
-    pub fn from_i32_to_arrow(interval_unit_i32: i32) -> Result<IntervalUnit, Error> {
-        let pb_interval_unit = protobuf::IntervalUnit::from_i32(interval_unit_i32);
-        match pb_interval_unit {
-            Some(interval_unit) => Ok(match interval_unit {
-                protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
-                protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
-                protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
-            }),
-            None => Err(proto_error(
-                "Error converting i32 to DateUnit: Passed invalid variant",
-            )),
+            protobuf::IntervalUnit::YearMonth => IntervalUnit::YearMonth,
+            protobuf::IntervalUnit::DayTime => IntervalUnit::DayTime,
+            protobuf::IntervalUnit::MonthDayNano => IntervalUnit::MonthDayNano,
         }
     }
 }
@@ -1266,12 +1188,7 @@ fn typechecked_scalar_value_conversion(
 
         (Value::NullValue(i32_enum), required_scalar_type) => {
             if *i32_enum == *required_scalar_type as i32 {
-                let pb_scalar_type = PrimitiveScalarType::from_i32(*i32_enum).ok_or_else(|| {
-                    Error::General(format!(
-                        "Invalid i32_enum={} when converting with PrimitiveScalarType::from_i32()",
-                        *i32_enum
-                    ))
-                })?;
+                let pb_scalar_type = PrimitiveScalarType::try_from(i32_enum)?;
                 let scalar_value: ScalarValue = match pb_scalar_type {
                     PrimitiveScalarType::Bool => ScalarValue::Boolean(None),
                     PrimitiveScalarType::Uint8 => ScalarValue::UInt8(None),
@@ -1368,15 +1285,6 @@ fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
             "Unsupported binary operator '{:?}'",
             other
         ))),
-    }
-}
-
-fn parse_required_expr(
-    p: &Option<Box<protobuf::LogicalExprNode>>,
-) -> Result<Expr, Error> {
-    match p {
-        Some(expr) => expr.as_ref().try_into(),
-        None => Err(proto_error("Missing required expression")),
     }
 }
 

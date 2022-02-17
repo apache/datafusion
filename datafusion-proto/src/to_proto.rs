@@ -20,23 +20,40 @@
 //! processes.
 
 use crate::protobuf;
-use datafusion::arrow::datatypes::{
-    DataType, Field, Schema, SchemaRef, TimeUnit, UnionMode,
+use datafusion::{
+    arrow::datatypes::{
+        DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+    },
+    logical_plan::{
+        window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
+        Column, DFField, DFSchemaRef, Expr,
+    },
+    physical_plan::{
+        aggregates::AggregateFunction,
+        functions::BuiltinScalarFunction,
+        window_functions::{BuiltInWindowFunction, WindowFunction},
+    },
+    scalar::ScalarValue,
 };
-use datafusion::logical_plan::{
-    window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, DFField, DFSchemaRef, Expr,
-};
-use datafusion::physical_plan::aggregates::AggregateFunction;
-use datafusion::physical_plan::functions::BuiltinScalarFunction;
-use datafusion::physical_plan::window_functions::{
-    BuiltInWindowFunction, WindowFunction,
-};
-use datafusion::scalar::ScalarValue;
 
 #[derive(Debug)]
 pub enum Error {
     General(String),
+
+    InconsistentListTyping(DataType, DataType),
+
+    InconsistentListDesignated {
+        value: ScalarValue,
+        designated: DataType,
+    },
+
+    InvalidScalarValue(ScalarValue),
+
+    InvalidScalarType(DataType),
+
+    InvalidTimeUnit(TimeUnit),
+
+    UnsupportedScalarFunction(BuiltinScalarFunction),
 }
 
 impl std::error::Error for Error {}
@@ -45,7 +62,66 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
             Self::General(desc) => write!(f, "General error: {}", desc),
+            Self::InconsistentListTyping(type1, type2) => {
+                write!(
+                    f,
+                    "Lists with inconsistent typing; {:?} and {:?} found within list",
+                    type1, type2,
+                )
+            }
+            Self::InconsistentListDesignated { value, designated } => {
+                write!(
+                    f,
+                    "Value {:?} was inconsistent with designated type {:?}",
+                    value, designated
+                )
+            }
+            Self::InvalidScalarValue(value) => {
+                write!(f, "{:?} is invalid as a DataFusion scalar value", value)
+            }
+            Self::InvalidScalarType(data_type) => {
+                write!(f, "{:?} is invalid as a DataFusion scalar type", data_type)
+            }
+            Self::InvalidTimeUnit(time_unit) => {
+                write!(
+                    f,
+                    "Only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units, found: {:?}",
+                    time_unit
+                )
+            }
+            Self::UnsupportedScalarFunction(function) => {
+                write!(f, "Unsupported scalar function {:?}", function)
+            }
         }
+    }
+}
+
+impl Error {
+    fn inconsistent_list_typing(type1: &DataType, type2: &DataType) -> Self {
+        Self::InconsistentListTyping(type1.to_owned(), type2.to_owned())
+    }
+
+    fn inconsistent_list_designated(value: &ScalarValue, designated: &DataType) -> Self {
+        Self::InconsistentListDesignated {
+            value: value.to_owned(),
+            designated: designated.to_owned(),
+        }
+    }
+
+    fn invalid_scalar_value(value: &ScalarValue) -> Self {
+        Self::InvalidScalarValue(value.to_owned())
+    }
+
+    fn invalid_scalar_type(data_type: &DataType) -> Self {
+        Self::InvalidScalarType(data_type.to_owned())
+    }
+
+    fn invalid_time_unit(time_unit: &TimeUnit) -> Self {
+        Self::InvalidTimeUnit(time_unit.to_owned())
+    }
+
+    fn unsupported_scalar_function(function: &BuiltinScalarFunction) -> Self {
+        Self::UnsupportedScalarFunction(function.to_owned())
     }
 }
 
@@ -88,24 +164,24 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Float64 => Self::Float64(EmptyMessage {}),
             DataType::Timestamp(time_unit, timezone) => {
                 Self::Timestamp(protobuf::Timestamp {
-                    time_unit: protobuf::TimeUnit::from_arrow_time_unit(time_unit) as i32,
+                    time_unit: protobuf::TimeUnit::from(time_unit) as i32,
                     timezone: timezone.to_owned().unwrap_or_default(),
                 })
             }
             DataType::Date32 => Self::Date32(EmptyMessage {}),
             DataType::Date64 => Self::Date64(EmptyMessage {}),
             DataType::Time32(time_unit) => {
-                Self::Time32(protobuf::TimeUnit::from_arrow_time_unit(time_unit) as i32)
+                Self::Time32(protobuf::TimeUnit::from(time_unit) as i32)
             }
             DataType::Time64(time_unit) => {
-                Self::Time64(protobuf::TimeUnit::from_arrow_time_unit(time_unit) as i32)
+                Self::Time64(protobuf::TimeUnit::from(time_unit) as i32)
             }
             DataType::Duration(time_unit) => {
-                Self::Duration(protobuf::TimeUnit::from_arrow_time_unit(time_unit) as i32)
+                Self::Duration(protobuf::TimeUnit::from(time_unit) as i32)
             }
-            DataType::Interval(interval_unit) => Self::Interval(
-                protobuf::IntervalUnit::from_arrow_interval_unit(interval_unit) as i32,
-            ),
+            DataType::Interval(interval_unit) => {
+                Self::Interval(protobuf::IntervalUnit::from(interval_unit) as i32)
+            }
             DataType::Binary => Self::Binary(EmptyMessage {}),
             DataType::FixedSizeBinary(size) => Self::FixedSizeBinary(*size),
             DataType::LargeBinary => Self::LargeBinary(EmptyMessage {}),
@@ -307,28 +383,24 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
     fn try_from(expr: &Expr) -> Result<Self, Self::Error> {
         use protobuf::logical_expr_node::ExprType;
 
-        match expr {
-            Expr::Column(c) => {
-                let expr = Self {
-                    expr_type: Some(ExprType::Column(c.into())),
-                };
-                Ok(expr)
-            }
+        let expr_node = match expr {
+            Expr::Column(c) => Self {
+                expr_type: Some(ExprType::Column(c.into())),
+            },
             Expr::Alias(expr, alias) => {
                 let alias = Box::new(protobuf::AliasNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     alias: alias.to_owned(),
                 });
-                let expr = Self {
+                Self {
                     expr_type: Some(ExprType::Alias(alias)),
-                };
-                Ok(expr)
+                }
             }
             Expr::Literal(value) => {
                 let pb_value: protobuf::ScalarValue = value.try_into()?;
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::Literal(pb_value)),
-                })
+                }
             }
             Expr::BinaryExpr { left, op, right } => {
                 let binary_expr = Box::new(protobuf::BinaryExprNode {
@@ -336,9 +408,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     r: Some(Box::new(right.as_ref().try_into()?)),
                     op: format!("{:?}", op),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::BinaryExpr(binary_expr)),
-                })
+                }
             }
             Expr::WindowFunction {
                 ref fun,
@@ -383,9 +455,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     order_by,
                     window_frame,
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::WindowExpr(window_expr)),
-                })
+                }
             }
             Expr::AggregateFunction {
                 ref fun, ref args, ..
@@ -432,9 +504,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .map(|v| v.try_into())
                         .collect::<Result<Vec<_>, _>>()?,
                 };
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
-                })
+                }
             }
             Expr::ScalarVariable(_) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
@@ -443,14 +515,14 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     .iter()
                     .map(|e| e.try_into())
                     .collect::<Result<Vec<Self>, Error>>()?;
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::ScalarFunction(
                         protobuf::ScalarFunctionNode {
                             fun: fun.into(),
                             args,
                         },
                     )),
-                })
+                }
             }
             Expr::ScalarUDF { .. } => unimplemented!(),
             Expr::AggregateUDF { .. } => unimplemented!(),
@@ -458,25 +530,25 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::NotExpr(expr)),
-                })
+                }
             }
             Expr::IsNull(expr) => {
                 let expr = Box::new(protobuf::IsNull {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::IsNullExpr(expr)),
-                })
+                }
             }
             Expr::IsNotNull(expr) => {
                 let expr = Box::new(protobuf::IsNotNull {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::IsNotNullExpr(expr)),
-                })
+                }
             }
             Expr::Between {
                 expr,
@@ -490,9 +562,9 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     low: Some(Box::new(low.as_ref().try_into()?)),
                     high: Some(Box::new(high.as_ref().try_into()?)),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::Between(expr)),
-                })
+                }
             }
             Expr::Case {
                 expr,
@@ -519,18 +591,18 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         None => None,
                     },
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::Case(expr)),
-                })
+                }
             }
             Expr::Cast { expr, data_type } => {
                 let expr = Box::new(protobuf::CastNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                     arrow_type: Some(data_type.into()),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::Cast(expr)),
-                })
+                }
             }
             Expr::Sort {
                 expr,
@@ -542,17 +614,17 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     asc: *asc,
                     nulls_first: *nulls_first,
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::Sort(expr)),
-                })
+                }
             }
             Expr::Negative(expr) => {
                 let expr = Box::new(protobuf::NegativeNode {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::Negative(expr)),
-                })
+                }
             }
             Expr::InList {
                 expr,
@@ -567,27 +639,32 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                         .collect::<Result<Vec<_>, Error>>()?,
                     negated: *negated,
                 });
-                Ok(Self {
+                Self {
                     expr_type: Some(ExprType::InList(expr)),
-                })
+                }
             }
-            Expr::Wildcard => Ok(Self {
+            Expr::Wildcard => Self {
                 expr_type: Some(ExprType::Wildcard(true)),
-            }),
+            },
             _ => unimplemented!(),
-        }
+        };
+
+        Ok(expr_node)
     }
 }
 
 impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
     type Error = Error;
+
     fn try_from(val: &ScalarValue) -> Result<Self, Self::Error> {
         use datafusion::scalar;
         use protobuf::{scalar_value::Value, PrimitiveScalarType};
 
         let scalar_val = match val {
             scalar::ScalarValue::Boolean(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Bool, |s| Value::BoolValue(*s))
+                create_proto_scalar(val, PrimitiveScalarType::Bool, |s| {
+                    Value::BoolValue(*s)
+                })
             }
             scalar::ScalarValue::Float32(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Float32, |s| {
@@ -610,10 +687,14 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             scalar::ScalarValue::Int32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int32, |s| Value::Int32Value(*s))
+                create_proto_scalar(val, PrimitiveScalarType::Int32, |s| {
+                    Value::Int32Value(*s)
+                })
             }
             scalar::ScalarValue::Int64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Int64, |s| Value::Int64Value(*s))
+                create_proto_scalar(val, PrimitiveScalarType::Int64, |s| {
+                    Value::Int64Value(*s)
+                })
             }
             scalar::ScalarValue::UInt8(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Uint8, |s| {
@@ -626,10 +707,14 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             scalar::ScalarValue::UInt32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint32, |s| Value::Uint32Value(*s))
+                create_proto_scalar(val, PrimitiveScalarType::Uint32, |s| {
+                    Value::Uint32Value(*s)
+                })
             }
             scalar::ScalarValue::UInt64(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Uint64, |s| Value::Uint64Value(*s))
+                create_proto_scalar(val, PrimitiveScalarType::Uint64, |s| {
+                    Value::Uint64Value(*s)
+                })
             }
             scalar::ScalarValue::Utf8(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Utf8, |s| {
@@ -663,41 +748,81 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                             let type_checked_values: Vec<protobuf::ScalarValue> = values
                                 .iter()
                                 .map(|scalar| match (scalar, scalar_type) {
-                                    (scalar::ScalarValue::List(_, list_type), DataType::List(field)) => {
-                                        if let DataType::List(list_field) = list_type.as_ref() {
+                                    (
+                                        scalar::ScalarValue::List(_, list_type),
+                                        DataType::List(field),
+                                    ) => {
+                                        if let DataType::List(list_field) =
+                                            list_type.as_ref()
+                                        {
                                             let scalar_datatype = field.data_type();
                                             let list_datatype = list_field.data_type();
-                                            if std::mem::discriminant(list_datatype) != std::mem::discriminant(scalar_datatype) {
-                                                return Err(proto_error(format!(
-                                                    "Protobuf serialization error: Lists with inconsistent typing {:?} and {:?} found within list",
-                                                    list_datatype, scalar_datatype
-                                                )));
+                                            if std::mem::discriminant(list_datatype)
+                                                != std::mem::discriminant(scalar_datatype)
+                                            {
+                                                return Err(
+                                                    Error::inconsistent_list_typing(
+                                                        list_datatype,
+                                                        scalar_datatype,
+                                                    ),
+                                                );
                                             }
                                             scalar.try_into()
                                         } else {
-                                            Err(proto_error(format!(
-                                                "Protobuf serialization error, {:?} was inconsistent with designated type {:?}",
-                                                scalar, datatype
-                                            )))
+                                            Err(Error::inconsistent_list_designated(
+                                                scalar, datatype,
+                                            ))
                                         }
                                     }
-                                    (scalar::ScalarValue::Boolean(_), DataType::Boolean) => scalar.try_into(),
-                                    (scalar::ScalarValue::Float32(_), DataType::Float32) => scalar.try_into(),
-                                    (scalar::ScalarValue::Float64(_), DataType::Float64) => scalar.try_into(),
-                                    (scalar::ScalarValue::Int8(_), DataType::Int8) => scalar.try_into(),
-                                    (scalar::ScalarValue::Int16(_), DataType::Int16) => scalar.try_into(),
-                                    (scalar::ScalarValue::Int32(_), DataType::Int32) => scalar.try_into(),
-                                    (scalar::ScalarValue::Int64(_), DataType::Int64) => scalar.try_into(),
-                                    (scalar::ScalarValue::UInt8(_), DataType::UInt8) => scalar.try_into(),
-                                    (scalar::ScalarValue::UInt16(_), DataType::UInt16) => scalar.try_into(),
-                                    (scalar::ScalarValue::UInt32(_), DataType::UInt32) => scalar.try_into(),
-                                    (scalar::ScalarValue::UInt64(_), DataType::UInt64) => scalar.try_into(),
-                                    (scalar::ScalarValue::Utf8(_), DataType::Utf8) => scalar.try_into(),
-                                    (scalar::ScalarValue::LargeUtf8(_), DataType::LargeUtf8) => scalar.try_into(),
-                                    _ => Err(proto_error(format!(
-                                        "Protobuf serialization error, {:?} was inconsistent with designated type {:?}",
-                                        scalar, datatype
-                                    ))),
+                                    (
+                                        scalar::ScalarValue::Boolean(_),
+                                        DataType::Boolean,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::Float32(_),
+                                        DataType::Float32,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::Float64(_),
+                                        DataType::Float64,
+                                    ) => scalar.try_into(),
+                                    (scalar::ScalarValue::Int8(_), DataType::Int8) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::Int16(_), DataType::Int16) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::Int32(_), DataType::Int32) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::Int64(_), DataType::Int64) => {
+                                        scalar.try_into()
+                                    }
+                                    (scalar::ScalarValue::UInt8(_), DataType::UInt8) => {
+                                        scalar.try_into()
+                                    }
+                                    (
+                                        scalar::ScalarValue::UInt16(_),
+                                        DataType::UInt16,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::UInt32(_),
+                                        DataType::UInt32,
+                                    ) => scalar.try_into(),
+                                    (
+                                        scalar::ScalarValue::UInt64(_),
+                                        DataType::UInt64,
+                                    ) => scalar.try_into(),
+                                    (scalar::ScalarValue::Utf8(_), DataType::Utf8) => {
+                                        scalar.try_into()
+                                    }
+                                    (
+                                        scalar::ScalarValue::LargeUtf8(_),
+                                        DataType::LargeUtf8,
+                                    ) => scalar.try_into(),
+                                    _ => Err(Error::inconsistent_list_designated(
+                                        scalar, datatype,
+                                    )),
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
                             protobuf::ScalarValue {
@@ -718,7 +843,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 }
             }
             datafusion::scalar::ScalarValue::Date32(val) => {
-                create_proto_scalar(val, PrimitiveScalarType::Date32, |s| Value::Date32Value(*s))
+                create_proto_scalar(val, PrimitiveScalarType::Date32, |s| {
+                    Value::Date32Value(*s)
+                })
             }
             datafusion::scalar::ScalarValue::TimestampMicrosecond(val, _) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeMicrosecond, |s| {
@@ -730,26 +857,24 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::TimeNanosecondValue(*s)
                 })
             }
-            datafusion::scalar::ScalarValue::Decimal128(val, p, s) => {
-                match *val {
-                    Some(v) => {
-                        let array = v.to_be_bytes();
-                        let vec_val: Vec<u8> = array.to_vec();
-                        protobuf::ScalarValue {
-                            value: Some(Value::Decimal128Value(protobuf::Decimal128 {
-                                value: vec_val,
-                                p: *p as i64,
-                                s: *s as i64,
-                            })),
-                        }
-                    }
-                    None => {
-                        protobuf::ScalarValue {
-                            value: Some(protobuf::scalar_value::Value::NullValue(PrimitiveScalarType::Decimal128 as i32))
-                        }
+            datafusion::scalar::ScalarValue::Decimal128(val, p, s) => match *val {
+                Some(v) => {
+                    let array = v.to_be_bytes();
+                    let vec_val: Vec<u8> = array.to_vec();
+                    protobuf::ScalarValue {
+                        value: Some(Value::Decimal128Value(protobuf::Decimal128 {
+                            value: vec_val,
+                            p: *p as i64,
+                            s: *s as i64,
+                        })),
                     }
                 }
-            }
+                None => protobuf::ScalarValue {
+                    value: Some(protobuf::scalar_value::Value::NullValue(
+                        PrimitiveScalarType::Decimal128 as i32,
+                    )),
+                },
+            },
             datafusion::scalar::ScalarValue::Date64(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::Date64, |s| {
                     Value::Date64Value(*s)
@@ -776,60 +901,58 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                 })
             }
             _ => {
-                return Err(proto_error(format!(
-                    "Error converting to Datatype to scalar type, {:?} is invalid as a datafusion scalar.",
-                    val
-                )))
+                return Err(Error::invalid_scalar_value(val));
             }
         };
+
         Ok(scalar_val)
     }
 }
 
 impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
     type Error = Error;
+
     fn try_from(scalar: &BuiltinScalarFunction) -> Result<Self, Self::Error> {
-        match scalar {
-            BuiltinScalarFunction::Sqrt => Ok(Self::Sqrt),
-            BuiltinScalarFunction::Sin => Ok(Self::Sin),
-            BuiltinScalarFunction::Cos => Ok(Self::Cos),
-            BuiltinScalarFunction::Tan => Ok(Self::Tan),
-            BuiltinScalarFunction::Asin => Ok(Self::Asin),
-            BuiltinScalarFunction::Acos => Ok(Self::Acos),
-            BuiltinScalarFunction::Atan => Ok(Self::Atan),
-            BuiltinScalarFunction::Exp => Ok(Self::Exp),
-            BuiltinScalarFunction::Log => Ok(Self::Log),
-            BuiltinScalarFunction::Ln => Ok(Self::Ln),
-            BuiltinScalarFunction::Log10 => Ok(Self::Log10),
-            BuiltinScalarFunction::Floor => Ok(Self::Floor),
-            BuiltinScalarFunction::Ceil => Ok(Self::Ceil),
-            BuiltinScalarFunction::Round => Ok(Self::Round),
-            BuiltinScalarFunction::Trunc => Ok(Self::Trunc),
-            BuiltinScalarFunction::Abs => Ok(Self::Abs),
-            BuiltinScalarFunction::OctetLength => Ok(Self::Octetlength),
-            BuiltinScalarFunction::Concat => Ok(Self::Concat),
-            BuiltinScalarFunction::Lower => Ok(Self::Lower),
-            BuiltinScalarFunction::Upper => Ok(Self::Upper),
-            BuiltinScalarFunction::Trim => Ok(Self::Trim),
-            BuiltinScalarFunction::Ltrim => Ok(Self::Ltrim),
-            BuiltinScalarFunction::Rtrim => Ok(Self::Rtrim),
-            BuiltinScalarFunction::ToTimestamp => Ok(Self::Totimestamp),
-            BuiltinScalarFunction::Array => Ok(Self::Array),
-            BuiltinScalarFunction::NullIf => Ok(Self::Nullif),
-            BuiltinScalarFunction::DatePart => Ok(Self::Datepart),
-            BuiltinScalarFunction::DateTrunc => Ok(Self::Datetrunc),
-            BuiltinScalarFunction::MD5 => Ok(Self::Md5),
-            BuiltinScalarFunction::SHA224 => Ok(Self::Sha224),
-            BuiltinScalarFunction::SHA256 => Ok(Self::Sha256),
-            BuiltinScalarFunction::SHA384 => Ok(Self::Sha384),
-            BuiltinScalarFunction::SHA512 => Ok(Self::Sha512),
-            BuiltinScalarFunction::Digest => Ok(Self::Digest),
-            BuiltinScalarFunction::ToTimestampMillis => Ok(Self::Totimestampmillis),
-            _ => Err(Error::General(format!(
-                "logical_plan::to_proto() unsupported scalar function {:?}",
-                scalar
-            ))),
-        }
+        let scalar_function = match scalar {
+            BuiltinScalarFunction::Sqrt => Self::Sqrt,
+            BuiltinScalarFunction::Sin => Self::Sin,
+            BuiltinScalarFunction::Cos => Self::Cos,
+            BuiltinScalarFunction::Tan => Self::Tan,
+            BuiltinScalarFunction::Asin => Self::Asin,
+            BuiltinScalarFunction::Acos => Self::Acos,
+            BuiltinScalarFunction::Atan => Self::Atan,
+            BuiltinScalarFunction::Exp => Self::Exp,
+            BuiltinScalarFunction::Log => Self::Log,
+            BuiltinScalarFunction::Ln => Self::Ln,
+            BuiltinScalarFunction::Log10 => Self::Log10,
+            BuiltinScalarFunction::Floor => Self::Floor,
+            BuiltinScalarFunction::Ceil => Self::Ceil,
+            BuiltinScalarFunction::Round => Self::Round,
+            BuiltinScalarFunction::Trunc => Self::Trunc,
+            BuiltinScalarFunction::Abs => Self::Abs,
+            BuiltinScalarFunction::OctetLength => Self::Octetlength,
+            BuiltinScalarFunction::Concat => Self::Concat,
+            BuiltinScalarFunction::Lower => Self::Lower,
+            BuiltinScalarFunction::Upper => Self::Upper,
+            BuiltinScalarFunction::Trim => Self::Trim,
+            BuiltinScalarFunction::Ltrim => Self::Ltrim,
+            BuiltinScalarFunction::Rtrim => Self::Rtrim,
+            BuiltinScalarFunction::ToTimestamp => Self::Totimestamp,
+            BuiltinScalarFunction::Array => Self::Array,
+            BuiltinScalarFunction::NullIf => Self::Nullif,
+            BuiltinScalarFunction::DatePart => Self::Datepart,
+            BuiltinScalarFunction::DateTrunc => Self::Datetrunc,
+            BuiltinScalarFunction::MD5 => Self::Md5,
+            BuiltinScalarFunction::SHA224 => Self::Sha224,
+            BuiltinScalarFunction::SHA256 => Self::Sha256,
+            BuiltinScalarFunction::SHA384 => Self::Sha384,
+            BuiltinScalarFunction::SHA512 => Self::Sha512,
+            BuiltinScalarFunction::Digest => Self::Digest,
+            BuiltinScalarFunction::ToTimestampMillis => Self::Totimestampmillis,
+            _ => return Err(Error::unsupported_scalar_function(scalar)),
+        };
+
+        Ok(scalar_function)
     }
 }
 
@@ -864,13 +987,14 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             DataType::Float64 => Self::Scalar(PrimitiveScalarType::Float64 as i32),
             DataType::Date32 => Self::Scalar(PrimitiveScalarType::Date32 as i32),
             DataType::Time64(time_unit) => match time_unit {
-                TimeUnit::Microsecond => Self::Scalar(PrimitiveScalarType::TimeMicrosecond as i32),
-                TimeUnit::Nanosecond => Self::Scalar(PrimitiveScalarType::TimeNanosecond as i32),
+                TimeUnit::Microsecond => {
+                    Self::Scalar(PrimitiveScalarType::TimeMicrosecond as i32)
+                }
+                TimeUnit::Nanosecond => {
+                    Self::Scalar(PrimitiveScalarType::TimeNanosecond as i32)
+                }
                 _ => {
-                    return Err(proto_error(format!(
-                        "Found invalid time unit for scalar value, only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units: {:?}",
-                        time_unit
-                    )))
+                    return Err(Error::invalid_time_unit(time_unit));
                 }
             },
             DataType::Utf8 => Self::Scalar(PrimitiveScalarType::Utf8 as i32),
@@ -879,19 +1003,20 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
                 let mut field_names: Vec<String> = Vec::new();
                 let mut curr_field = field_type.as_ref();
                 field_names.push(curr_field.name().to_owned());
-                //For each nested field check nested datatype, since datafusion scalars only support recursive lists with a leaf scalar type
+                // For each nested field check nested datatype, since datafusion scalars only
+                // support recursive lists with a leaf scalar type
                 // any other compound types are errors.
 
                 while let DataType::List(nested_field_type) = curr_field.data_type() {
                     curr_field = nested_field_type.as_ref();
                     field_names.push(curr_field.name().to_owned());
                     if !is_valid_scalar_type_no_list_check(curr_field.data_type()) {
-                        return Err(proto_error(format!("{:?} is an invalid scalar type", curr_field)));
+                        return Err(Error::invalid_scalar_type(curr_field.data_type()));
                     }
                 }
                 let deepest_datatype = curr_field.data_type();
                 if !is_valid_scalar_type_no_list_check(deepest_datatype) {
-                    return Err(proto_error(format!("The list nested type {:?} is an invalid scalar type", curr_field)));
+                    return Err(Error::invalid_scalar_type(deepest_datatype));
                 }
                 let pb_deepest_type: PrimitiveScalarType = match deepest_datatype {
                     DataType::Boolean => PrimitiveScalarType::Bool,
@@ -910,20 +1035,14 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
                         TimeUnit::Microsecond => PrimitiveScalarType::TimeMicrosecond,
                         TimeUnit::Nanosecond => PrimitiveScalarType::TimeNanosecond,
                         _ => {
-                            return Err(proto_error(format!(
-                                "Found invalid time unit for scalar value, only TimeUnit::Microsecond and TimeUnit::Nanosecond are valid time units: {:?}",
-                                time_unit
-                            )))
+                            return Err(Error::invalid_time_unit(time_unit));
                         }
                     },
 
                     DataType::Utf8 => PrimitiveScalarType::Utf8,
                     DataType::LargeUtf8 => PrimitiveScalarType::LargeUtf8,
                     _ => {
-                        return Err(proto_error(format!(
-                            "Error converting to Datatype to scalar type, {:?} is invalid as a datafusion scalar.",
-                            val
-                        )))
+                        return Err(Error::invalid_scalar_type(val));
                     }
                 };
                 Self::List(protobuf::ScalarListType {
@@ -948,13 +1067,32 @@ impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
             | DataType::Dictionary(_, _)
             | DataType::Map(_, _)
             | DataType::Decimal(_, _) => {
-                return Err(proto_error(format!(
-                    "Error converting to Datatype to scalar type, {:?} is invalid as a datafusion scalar.",
-                    val
-                )))
+                return Err(Error::invalid_scalar_type(val));
             }
         };
+
         Ok(scalar_value)
+    }
+}
+
+impl From<&TimeUnit> for protobuf::TimeUnit {
+    fn from(val: &TimeUnit) -> Self {
+        match val {
+            TimeUnit::Second => protobuf::TimeUnit::Second,
+            TimeUnit::Millisecond => protobuf::TimeUnit::TimeMillisecond,
+            TimeUnit::Microsecond => protobuf::TimeUnit::Microsecond,
+            TimeUnit::Nanosecond => protobuf::TimeUnit::Nanosecond,
+        }
+    }
+}
+
+impl From<&IntervalUnit> for protobuf::IntervalUnit {
+    fn from(interval_unit: &IntervalUnit) -> Self {
+        match interval_unit {
+            IntervalUnit::YearMonth => protobuf::IntervalUnit::YearMonth,
+            IntervalUnit::DayTime => protobuf::IntervalUnit::DayTime,
+            IntervalUnit::MonthDayNano => protobuf::IntervalUnit::MonthDayNano,
+        }
     }
 }
 
@@ -970,7 +1108,7 @@ fn create_proto_scalar<I, T: FnOnce(&I) -> protobuf::scalar_value::Value>(
     }
 }
 
-//Does not check if list subtypes are valid
+// Does not check if list subtypes are valid
 fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
     match datatype {
         DataType::Boolean
@@ -994,8 +1132,4 @@ fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
         DataType::List(_) => true,
         _ => false,
     }
-}
-
-fn proto_error<S: Into<String>>(message: S) -> Error {
-    Error::General(message.into())
 }
