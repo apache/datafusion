@@ -375,7 +375,7 @@ impl LogicalPlanBuilder {
         .await
     }
 
-    /// Scan an Avro data source and register it with a given table name
+    /// Scan an Arrow data source and register it with a given table name
     pub async fn scan_arrow_with_name(
         object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,

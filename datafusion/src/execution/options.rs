@@ -162,7 +162,7 @@ pub struct ArrowReadOptions<'a> {
     pub schema: Option<SchemaRef>,
 
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to ".avro".
+    /// Defaults to ".arrow".
     pub file_extension: &'a str,
 }
 
