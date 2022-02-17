@@ -24,6 +24,7 @@ mod file_stream;
 mod json;
 mod parquet;
 
+pub use self::arrow::ArrowExec;
 pub use self::parquet::ParquetExec;
 use ::arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
@@ -32,7 +33,6 @@ use ::arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-pub use self::arrow::ArrowExec;
 pub use avro::AvroExec;
 pub use csv::CsvExec;
 pub use json::NdJsonExec;

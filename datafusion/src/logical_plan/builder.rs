@@ -17,13 +17,6 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::{datasource::{
-    empty::EmptyTable,
-    file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-    listing::{ListingOptions, ListingTable, ListingTableConfig},
-    object_store::ObjectStore,
-    MemTable, TableProvider,
-}, execution::options::ArrowReadOptions};
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
@@ -33,6 +26,16 @@ use crate::logical_plan::plan::{
 use crate::optimizer::utils;
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
+use crate::{
+    datasource::{
+        empty::EmptyTable,
+        file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+        listing::{ListingOptions, ListingTable, ListingTableConfig},
+        object_store::ObjectStore,
+        MemTable, TableProvider,
+    },
+    execution::options::ArrowReadOptions,
+};
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,

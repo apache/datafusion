@@ -21,7 +21,10 @@ use crate::{
         catalog::{CatalogList, MemoryCatalogList},
         information_schema::CatalogWithInformationSchema,
     },
-    datasource::{listing::{ListingOptions, ListingTable}, file_format::arrow::{DEFAULT_ARROW_EXTENSION, ArrowFormat}},
+    datasource::{
+        file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION},
+        listing::{ListingOptions, ListingTable},
+    },
     datasource::{
         file_format::{
             avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
@@ -98,7 +101,7 @@ use parquet::file::properties::WriterProperties;
 use super::{
     disk_manager::DiskManagerConfig,
     memory_manager::MemoryManagerConfig,
-    options::{AvroReadOptions, CsvReadOptions, ArrowReadOptions},
+    options::{ArrowReadOptions, AvroReadOptions, CsvReadOptions},
     DiskManager, MemoryManager,
 };
 
