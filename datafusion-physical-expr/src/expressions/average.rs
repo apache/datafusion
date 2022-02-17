@@ -255,14 +255,6 @@ mod tests {
 
     #[test]
     fn avg_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i)?;
-            }
-        }
         let array: ArrayRef = Arc::new(
             (1..6)
                 .map(|i| if i == 2 { None } else { Some(i) })
