@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::io::Write;
+
+use tempfile::TempDir;
+
 use super::*;
 
 #[tokio::test]
@@ -75,4 +79,50 @@ async fn csv_query_create_external_table() {
         "+----+----+----+-------+------------+----------------------+----+-------+------------+-----------+-------------+--------------------+--------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
+async fn create_external_table_with_timestamps() {
+    let mut ctx = ExecutionContext::new();
+
+    let data = "Jorge,2018-12-13T12:12:10.011Z\n\
+                Andrew,2018-11-13T17:11:10.011Z";
+
+    let tmp_dir = TempDir::new().unwrap();
+    let file_path = tmp_dir.path().join("timestamps.csv");
+
+    // scope to ensure the file is closed and written
+    {
+        std::fs::File::create(&file_path)
+            .expect("creating temp file")
+            .write_all(data.as_bytes())
+            .expect("writing data");
+    }
+
+    let sql = format!(
+        "CREATE EXTERNAL TABLE csv_with_timestamps (
+                  name VARCHAR,
+                  ts TIMESTAMP
+              )
+              STORED AS CSV
+              LOCATION '{}'
+              ",
+        file_path.to_str().expect("path is utf8")
+    );
+
+    plan_and_collect(&mut ctx, &sql)
+        .await
+        .expect("Executing CREATE EXTERNAL TABLE");
+
+    let sql = "SELECT * from csv_with_timestamps";
+    let result = plan_and_collect(&mut ctx, sql).await.unwrap();
+    let expected = vec![
+        "+--------+-------------------------+",
+        "| name   | ts                      |",
+        "+--------+-------------------------+",
+        "| Andrew | 2018-11-13 17:11:10.011 |",
+        "| Jorge  | 2018-12-13 12:12:10.011 |",
+        "+--------+-------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
 }

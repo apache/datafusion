@@ -16,7 +16,10 @@
 // under the License.
 
 use super::*;
-use datafusion::{from_slice::FromSlice, physical_plan::collect_partitioned};
+use datafusion::{
+    datasource::empty::EmptyTable, from_slice::FromSlice,
+    physical_plan::collect_partitioned,
+};
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -984,4 +987,17 @@ async fn parallel_query_with_filter() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn query_empty_table() {
+    let mut ctx = ExecutionContext::new();
+    let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
+    ctx.register_table("test_tbl", empty_table).unwrap();
+    let sql = "SELECT * FROM test_tbl";
+    let result = plan_and_collect(&mut ctx, sql)
+        .await
+        .expect("Query empty table");
+    let expected = vec!["++", "++"];
+    assert_batches_sorted_eq!(expected, &result);
 }
