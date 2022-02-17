@@ -250,13 +250,6 @@ git tag ballista-0.5.0
 git push apache ballista-0.5.0
 ```
 
-If there is a datafusion python binding release, also push the python tag
-
-```
-git tag python-0.3.0
-git push apache python-0.3.0
-```
-
 ### Publish on Crates.io
 
 Only approved releases of the tarball should be published to
@@ -284,6 +277,8 @@ Verify that the Cargo.toml in the tarball contains the correct version
 following commands
 
 ```shell
+(cd datafusion-common && cargo publish)
+(cd datafusion-expr && cargo publish)
 (cd datafusion && cargo publish)
 ```
 
@@ -296,22 +291,6 @@ If there is a ballista release, run
 (cd ballista/rust/client && cargo publish)
 ```
 
-### Publish Python binding on PyPI
-
-Only approved releases of the source tarball and wheels should be published to
-PyPI, in order to conform to Apache Software Foundation governance standards.
-
-First, download all official python release artifacts:
-
-```shell
-svn co https://dist.apache.org/repos/dist/release/arrow/arrow-datafusion-5.1.0/python ./python-artifacts
-```
-
-Use [twine](https://pypi.org/project/twine/) to perform the upload.
-
-```shell
-twine upload ./python-artifacts/*.{tar.gz,whl}
-```
 
 ### Publish datafusion-cli on Homebrew and crates.io
 
