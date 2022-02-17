@@ -237,11 +237,12 @@ mod tests {
     #[test]
     fn avg_decimal() -> Result<()> {
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
-        for i in 1..7 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..7)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
 
         generic_test_op!(
             array,
@@ -262,7 +263,12 @@ mod tests {
                 decimal_builder.append_value(i)?;
             }
         }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
