@@ -985,26 +985,15 @@ impl ScalarValue {
         precision: &usize,
         scale: &usize,
     ) -> Result<DecimalArray> {
-        // collect the value as Option<i128>
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
                 ScalarValue::Decimal128(v1, _, _) => v1,
                 _ => unreachable!(),
             })
-            .collect::<Vec<Option<i128>>>();
-
-        // build the decimal array using the Decimal Builder
-        let mut builder = DecimalBuilder::new(array.len(), *precision, *scale);
-        array.iter().for_each(|element| match element {
-            None => {
-                builder.append_null().unwrap();
-            }
-            Some(v) => {
-                builder.append_value(*v).unwrap();
-            }
-        });
-        Ok(builder.finish())
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)?;
+        Ok(array)
     }
 
     fn iter_to_array_list(
