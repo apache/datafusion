@@ -25,7 +25,7 @@ mod parquet;
 
 pub use self::parquet::ParquetExec;
 use arrow::{
-    array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
+    array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
     datatypes::{DataType, Field, Schema, SchemaRef, UInt16Type},
     error::{ArrowError, Result as ArrowResult},
@@ -41,7 +41,7 @@ use crate::{
     error::Result,
     scalar::ScalarValue,
 };
-use arrow::array::new_null_array;
+use arrow::array::{new_null_array, UInt16BufferBuilder};
 use lazy_static::lazy_static;
 use log::info;
 use std::{
@@ -336,10 +336,10 @@ fn create_dict_array(
 
     // build keys array
     let sliced_key_buffer = match key_buffer_cache {
-        Some(buf) if buf.len() >= len => buf.slice(buf.len() - len),
+        Some(buf) if buf.len() >= len * 2 => buf.slice(buf.len() - len * 2),
         _ => {
-            let mut key_buffer_builder = UInt8BufferBuilder::new(len);
-            key_buffer_builder.advance(len); // keys are all 0
+            let mut key_buffer_builder = UInt16BufferBuilder::new(len * 2);
+            key_buffer_builder.advance(len * 2); // keys are all 0
             key_buffer_cache.insert(key_buffer_builder.finish()).clone()
         }
     };
