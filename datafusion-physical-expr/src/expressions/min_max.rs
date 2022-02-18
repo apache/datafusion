@@ -553,10 +553,11 @@ impl Accumulator for MinAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::tests::aggregate;
-    use crate::generic_test_op;
-    use arrow::array::DecimalBuilder;
+    use crate::from_slice::FromSlice;
+    use crate::physical_plan::expressions::col;
+    use crate::physical_plan::expressions::tests::aggregate;
+    use crate::scalar::ScalarValue::Decimal128;
+    use crate::{error::Result, generic_test_op};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
@@ -572,32 +573,33 @@ mod tests {
         assert_eq!(result, left);
 
         // min batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
 
         let result = min_batch(&array)?;
         assert_eq!(result, ScalarValue::Decimal128(Some(1), 10, 0));
-        // min batch without values
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-        let result = min_batch(&array)?;
-        assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
-        let mut decimal_builder = DecimalBuilder::new(0, 10, 0);
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        // min batch without values
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(0)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         let result = min_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // min batch with agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
-        decimal_builder.append_null().unwrap();
-        for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -610,11 +612,12 @@ mod tests {
     #[test]
     fn min_decimal_all_nulls() -> Result<()> {
         // min batch all nulls
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(6)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -627,15 +630,13 @@ mod tests {
     #[test]
     fn min_decimal_with_nulls() -> Result<()> {
         // min batch with nulls
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i as i128)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
+
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -662,30 +663,32 @@ mod tests {
         assert_eq!(expect.to_string(), result.unwrap_err().to_string());
 
         // max batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 5);
-        for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 5)?,
+        );
         let result = max_batch(&array)?;
         assert_eq!(result, ScalarValue::Decimal128(Some(5), 10, 5));
+
         // max batch without values
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(0)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         let result = max_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
-        let mut decimal_builder = DecimalBuilder::new(0, 10, 0);
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
-        let result = max_batch(&array)?;
-        assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
         // max batch with agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
-        decimal_builder.append_null().unwrap();
-        for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -697,15 +700,12 @@ mod tests {
 
     #[test]
     fn max_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i as i128)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -717,11 +717,12 @@ mod tests {
 
     #[test]
     fn max_decimal_all_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(6)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
