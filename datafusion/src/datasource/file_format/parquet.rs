@@ -40,6 +40,7 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
+use crate::datasource::object_store::ReadSeek;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
@@ -346,7 +347,7 @@ impl Length for ChunkObjectReader {
 }
 
 impl ChunkReader for ChunkObjectReader {
-    type T = Box<dyn Read + Send + Sync>;
+    type T = Box<dyn ReadSeek + Send + Sync>;
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
         self.0

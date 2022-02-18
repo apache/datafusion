@@ -143,7 +143,7 @@ impl ExecutionPlan for ArrowExec {
         _runtime: Arc<RuntimeEnv>,
     ) -> Result<SendableRecordBatchStream> {
         let fun = move |file, _remaining: &Option<usize>| {
-            let arrow_reader = arrow::ipc::reader::StreamReader::try_new(file);
+            let arrow_reader = arrow::ipc::reader::FileReader::try_new(file);
 
             match arrow_reader {
                 Ok(r) => Box::new(r) as BatchIter,

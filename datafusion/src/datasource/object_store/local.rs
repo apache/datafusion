@@ -30,7 +30,7 @@ use crate::datasource::object_store::{
 use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
 
-use super::{ObjectReaderStream, SizedFile};
+use super::{ObjectReaderStream, ReadSeek, SizedFile};
 
 #[derive(Debug)]
 /// Local File System as Object Store.
@@ -86,14 +86,13 @@ impl ObjectReader for LocalFileReader {
         &self,
         start: u64,
         length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>> {
+    ) -> Result<Box<dyn ReadSeek + Send + Sync>> {
         // A new file descriptor is opened for each chunk reader.
         // This okay because chunks are usually fairly large.
         let mut file = File::open(&self.file.path)?;
         file.seek(SeekFrom::Start(start))?;
 
-        let file = BufReader::new(file.take(length as u64));
-
+        let file = BufReader::new(file);
         Ok(Box::new(file))
     }
 

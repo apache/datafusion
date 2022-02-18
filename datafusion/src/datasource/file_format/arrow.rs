@@ -18,11 +18,11 @@
 //! Apache Arrow format abstractions
 
 use std::any::Any;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
-use arrow::ipc::reader::StreamReader;
+use arrow::ipc::reader::FileReader;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -72,8 +72,8 @@ impl FileFormat for ArrowFormat {
     }
 }
 
-fn read_arrow_schema_from_reader<R: Read>(reader: R) -> Result<SchemaRef> {
-    let reader = StreamReader::try_new(reader)?;
+fn read_arrow_schema_from_reader<R: Read + Seek>(reader: R) -> Result<SchemaRef> {
+    let reader = FileReader::try_new(reader)?;
     Ok(reader.schema())
 }
 

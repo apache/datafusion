@@ -739,6 +739,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     FileType::Parquet => protobuf::FileType::Parquet,
                     FileType::CSV => protobuf::FileType::Csv,
                     FileType::Avro => protobuf::FileType::Avro,
+                    FileType::Arrow => protobuf::FileType::Arrow,
                 };
 
                 Ok(protobuf::LogicalPlanNode {

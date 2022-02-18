@@ -22,7 +22,10 @@
 //! compliant with the `SendableRecordBatchStream` trait.
 
 use crate::{
-    datasource::{object_store::ObjectStore, PartitionedFile},
+    datasource::{
+        object_store::{ObjectStore, ReadSeek},
+        PartitionedFile,
+    },
     physical_plan::RecordBatchStream,
     scalar::ScalarValue,
 };
@@ -48,12 +51,15 @@ pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + 
 /// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
 /// and an optional number of required records.
 pub trait FormatReaderOpener:
-    FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+    FnMut(Box<dyn ReadSeek + Send + Sync>, &Option<usize>) -> BatchIter
+    + Send
+    + Unpin
+    + 'static
 {
 }
 
 impl<T> FormatReaderOpener for T where
-    T: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
+    T: FnMut(Box<dyn ReadSeek + Send + Sync>, &Option<usize>) -> BatchIter
         + Send
         + Unpin
         + 'static
