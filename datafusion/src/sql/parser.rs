@@ -433,7 +433,7 @@ mod tests {
         // Error cases: Invalid type
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
-        expect_parse_error(sql, "expect one of PARQUET, AVRO, NDJSON, or CSV");
+        expect_parse_error(sql, "expect one of PARQUET, AVRO, NDJSON, CSV or ARROW");
 
         Ok(())
     }
