@@ -36,7 +36,6 @@ use arrow::{
 };
 use futures::Stream;
 use std::{
-    io::Read,
     iter,
     pin::Pin,
     sync::Arc,

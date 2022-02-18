@@ -34,6 +34,7 @@ use local::LocalFileSystem;
 
 use crate::error::{DataFusionError, Result};
 
+/// Trait Combining Read and Seek
 pub trait ReadSeek: Read + Seek {}
 impl<R: Seek + Read> ReadSeek for BufReader<R> {}
 

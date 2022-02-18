@@ -18,7 +18,7 @@
 //! Object store that represents the Local File System.
 
 use std::fs::{self, File, Metadata};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -85,7 +85,7 @@ impl ObjectReader for LocalFileReader {
     fn sync_chunk_reader(
         &self,
         start: u64,
-        length: usize,
+        _length: usize,
     ) -> Result<Box<dyn ReadSeek + Send + Sync>> {
         // A new file descriptor is opened for each chunk reader.
         // This okay because chunks are usually fairly large.

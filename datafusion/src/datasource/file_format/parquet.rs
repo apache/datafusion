@@ -18,7 +18,6 @@
 //! Parquet format abstractions
 
 use std::any::Any;
-use std::io::Read;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;

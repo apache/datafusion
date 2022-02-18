@@ -83,17 +83,6 @@ impl ArrowExec {
     }
 }
 
-impl ArrowFileMetrics {
-    /// Create new metrics
-    pub fn new(
-        _partition: usize,
-        _filename: &str,
-        _metrics: &ExecutionPlanMetricsSet,
-    ) -> Self {
-        Self {}
-    }
-}
-
 #[async_trait]
 impl ExecutionPlan for ArrowExec {
     /// Return a reference to Any that can be used for downcasting

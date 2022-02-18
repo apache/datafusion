@@ -361,7 +361,6 @@ impl ExecutionContext {
     }
 
     /// Creates a DataFrame for reading an Avro data source.
-
     pub async fn read_avro(
         &mut self,
         uri: impl Into<String>,
@@ -384,6 +383,7 @@ impl ExecutionContext {
         )))
     }
 
+    /// Creates a DataFrame for reading an Arrow data source.
     pub async fn read_arrow(
         &mut self,
         uri: impl Into<String>,
