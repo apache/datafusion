@@ -22,7 +22,7 @@ pub mod local;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
-use std::io::{BufReader, Cursor, Read, Seek, Take};
+use std::io::{BufReader, Read, Seek};
 use std::pin::Pin;
 use std::sync::Arc;
 
