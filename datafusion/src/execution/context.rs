@@ -22,7 +22,7 @@ use crate::{
         information_schema::CatalogWithInformationSchema,
     },
     datasource::{
-        file_format::arrow::{ArrowFormat, DEFAULT_ARROW_EXTENSION},
+        file_format::arrow_file::{ArrowFormat, DEFAULT_ARROW_EXTENSION},
         listing::{ListingOptions, ListingTable},
     },
     datasource::{
@@ -539,20 +539,14 @@ impl ExecutionContext {
 
     /// Registers an Arrow data source so that it can be referenced from SQL statements
     /// executed against this context.
-    pub async fn register_arrow(&mut self, name: &str, uri: &str) -> Result<()> {
-        let target_partitions = {
-            let m = self.state.lock();
-            m.config.target_partitions
-        };
-        let file_format = ArrowFormat::default();
-
-        let listing_options = ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: true,
-            file_extension: DEFAULT_ARROW_EXTENSION.to_owned(),
-            target_partitions,
-            table_partition_cols: vec![],
-        };
+    pub async fn register_arrow(
+        &mut self,
+        name: &str,
+        uri: &str,
+        options: ArrowReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options =
+            options.to_listing_options(self.state.lock().config.target_partitions);
 
         self.register_listing_table(name, uri, listing_options, None)
             .await?;

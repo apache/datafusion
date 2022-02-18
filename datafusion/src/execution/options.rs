@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 
-use crate::datasource::file_format::arrow::ArrowFormat;
+use crate::datasource::file_format::arrow_file::ArrowFormat;
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat},
