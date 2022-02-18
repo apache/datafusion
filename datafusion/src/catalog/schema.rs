@@ -23,6 +23,8 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::datasource::listing::{ListingTable, ListingTableConfig};
+use crate::datasource::object_store::ObjectStore;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 
@@ -69,6 +71,7 @@ pub trait SchemaProvider: Sync + Send {
 /// Simple in-memory implementation of a schema.
 pub struct MemorySchemaProvider {
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
+    object_store: Option<Arc<dyn ObjectStore>>,
 }
 
 impl MemorySchemaProvider {
@@ -76,7 +79,44 @@ impl MemorySchemaProvider {
     pub fn new() -> Self {
         Self {
             tables: RwLock::new(HashMap::new()),
+            object_store: None,
         }
+    }
+
+    /// Assign an `ObjectStore` which enables calling `register_listing_table`.
+    pub fn register_object_store(self, object_store: Arc<dyn ObjectStore>) -> Self {
+        Self {
+            tables: self.tables,
+            object_store: Some(object_store),
+        }
+    }
+
+    /// If supported by the implementation, adds a new table to this schema by creating a
+    /// `ListingTable` from the provided `uri` and a previously registered `ObjectStore`.
+    /// If a table of the same name existed before, it returns "Table already exists" error.
+    pub async fn register_listing_table(
+        &self,
+        name: &str,
+        uri: &str,
+        config: Option<ListingTableConfig>,
+    ) -> Result<()> {
+        let config = match config {
+            Some(cfg) => cfg,
+            None => {
+                let object_store = self.object_store.as_ref().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "No ObjectStore available to register ListingTable".into(),
+                    )
+                })?;
+                ListingTableConfig::new(object_store.clone(), uri)
+                    .infer()
+                    .await?
+            }
+        };
+
+        let table = Arc::new(ListingTable::try_new(config)?);
+        self.register_table(name.into(), table)?;
+        Ok(())
     }
 }
 
