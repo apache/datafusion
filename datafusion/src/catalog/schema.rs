@@ -18,13 +18,13 @@
 //! Describes the interface and built-in implementations of schemas,
 //! representing collections of named tables.
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::listing::{ListingTable, ListingTableConfig};
-use crate::datasource::object_store::ObjectStore;
+use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 
@@ -71,7 +71,7 @@ pub trait SchemaProvider: Sync + Send {
 /// Simple in-memory implementation of a schema.
 pub struct MemorySchemaProvider {
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
-    object_store: Option<Arc<dyn ObjectStore>>,
+    object_store_registry: Arc<Mutex<ObjectStoreRegistry>>,
 }
 
 impl MemorySchemaProvider {
@@ -79,16 +79,32 @@ impl MemorySchemaProvider {
     pub fn new() -> Self {
         Self {
             tables: RwLock::new(HashMap::new()),
-            object_store: None,
+            object_store_registry: Arc::new(Mutex::new(ObjectStoreRegistry::new())),
         }
     }
 
     /// Assign an `ObjectStore` which enables calling `register_listing_table`.
-    pub fn register_object_store(self, object_store: Arc<dyn ObjectStore>) -> Self {
-        Self {
-            tables: self.tables,
-            object_store: Some(object_store),
-        }
+    /// Only one `ObjectStore` can be used per `MemorySchemaProvider`.
+    /// TODO: Can `ObjectStoreRegistry` be used instead?  Need to figure out scheme inference
+    pub fn register_object_store(
+        &self,
+        scheme: impl Into<String>,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.object_store_registry
+            .lock()
+            .register_store(scheme.into(), object_store)
+    }
+
+    /// Retrieves a `ObjectStore` instance by scheme
+    pub fn object_store<'a>(
+        &self,
+        uri: &'a str,
+    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
+        self.object_store_registry
+            .lock()
+            .get_by_uri(uri)
+            .map_err(DataFusionError::from)
     }
 
     /// If supported by the implementation, adds a new table to this schema by creating a
@@ -103,14 +119,8 @@ impl MemorySchemaProvider {
         let config = match config {
             Some(cfg) => cfg,
             None => {
-                let object_store = self.object_store.as_ref().ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "No ObjectStore available to register ListingTable".into(),
-                    )
-                })?;
-                ListingTableConfig::new(object_store.clone(), uri)
-                    .infer()
-                    .await?
+                let (object_store, path) = self.object_store(uri)?;
+                ListingTableConfig::new(object_store, uri).infer().await?
             }
         };
 
@@ -175,6 +185,8 @@ mod tests {
 
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
     use crate::datasource::empty::EmptyTable;
+    use crate::datasource::listing::{ListingTable, ListingTableConfig};
+    use crate::datasource::object_store::local::LocalFileSystem;
 
     #[tokio::test]
     async fn test_mem_provider() {
@@ -193,5 +205,18 @@ mod tests {
         let result =
             provider.register_table(table_name.to_string(), Arc::new(other_table));
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_schema_register_listing_table() {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+
+        let schema = MemorySchemaProvider::new();
+        let schema = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
+
+        schema
+            .register_listing_table("data", &filename, None)
+            .unwrap();
     }
 }
