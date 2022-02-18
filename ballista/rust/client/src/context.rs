@@ -17,6 +17,7 @@
 
 //! Distributed execution context.
 
+use datafusion::execution::options::ArrowReadOptions;
 use parking_lot::Mutex;
 use sqlparser::ast::Statement;
 use std::collections::HashMap;
@@ -188,7 +189,11 @@ impl BallistaContext {
 
     /// Create a DataFrame representing a Arrow table scan
     /// TODO fetch schema from scheduler instead of resolving locally
-    pub async fn read_arrow(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn read_arrow(
+        &self,
+        path: &str,
+        options: ArrowReadOptions<'_>,
+    ) -> Result<Arc<dyn DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
@@ -202,7 +207,7 @@ impl BallistaContext {
                 guard.config(),
             )
         };
-        let df = ctx.read_arrow(path.to_str().unwrap()).await?;
+        let df = ctx.read_arrow(path.to_str().unwrap(), options).await?;
         Ok(df)
     }
 
@@ -264,8 +269,13 @@ impl BallistaContext {
         }
     }
 
-    pub async fn register_arrow(&self, name: &str, path: &str) -> Result<()> {
-        match self.read_arrow(path).await?.to_logical_plan() {
+    pub async fn register_arrow(
+        &self,
+        name: &str,
+        path: &str,
+        options: ArrowReadOptions<'_>,
+    ) -> Result<()> {
+        match self.read_arrow(path, options).await?.to_logical_plan() {
             LogicalPlan::TableScan(TableScan { source, .. }) => {
                 self.register_table(name, source)
             }

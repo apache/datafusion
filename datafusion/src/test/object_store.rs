@@ -16,11 +16,7 @@
 // under the License.
 //! Object store implem used for testing
 
-use std::{
-    io,
-    io::{Cursor, Read, Seek},
-    sync::Arc,
-};
+use std::{io, io::Cursor, sync::Arc};
 
 use crate::{
     datasource::object_store::{
@@ -95,7 +91,7 @@ impl ObjectStore for TestObjectStore {
         }
     }
 }
-impl<R: Seek + Read + AsRef<[u8]>> ReadSeek for Cursor<R> {}
+impl<R: AsRef<[u8]>> ReadSeek for Cursor<R> {}
 
 struct EmptyObjectReader(u64);
 
