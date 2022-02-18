@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -31,8 +31,7 @@ use arrow::{
     },
     datatypes::Field,
 };
-use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use datafusion_common::{ScalarValue, DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 use super::format_state_name;
@@ -63,7 +62,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Decimal(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+10), s)
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 10);
+            let new_precision = DECIMAL_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal(new_precision, *scale))
         }
         other => Err(DataFusionError::Plan(format!(
