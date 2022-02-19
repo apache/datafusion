@@ -252,4 +252,24 @@ mod tests {
         ];
         assert_batches_eq!(expected, &actual);
     }
+
+    #[tokio::test]
+    #[should_panic(expected = "already exists")]
+    async fn test_schema_register_same_listing_table() {
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
+
+        let schema = MemorySchemaProvider::new();
+        let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
+
+        schema
+            .register_listing_table("alltypes_plain", &filename, None)
+            .await
+            .unwrap();
+
+        schema
+            .register_listing_table("alltypes_plain", &filename, None)
+            .await
+            .unwrap();
+    }
 }
