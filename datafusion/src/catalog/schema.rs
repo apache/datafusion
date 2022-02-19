@@ -84,8 +84,6 @@ impl MemorySchemaProvider {
     }
 
     /// Assign an `ObjectStore` which enables calling `register_listing_table`.
-    /// Only one `ObjectStore` can be used per `MemorySchemaProvider`.
-    /// TODO: Can `ObjectStoreRegistry` be used instead?  Need to figure out scheme inference
     pub fn register_object_store(
         &self,
         scheme: impl Into<String>,
