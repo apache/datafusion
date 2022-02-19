@@ -46,6 +46,10 @@ use std::string::String;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
+use futures::{StreamExt, TryStreamExt};
+use tokio::task::{self, JoinHandle};
+
+use arrow::{csv, json};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -707,6 +711,44 @@ impl SessionContext {
     ) -> Result<()> {
         let state = self.state.read().clone();
         plan_to_csv(&state, plan, path).await
+    }
+
+    pub async fn write_json(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        path: impl AsRef<str>,
+    ) -> Result<()> {
+        let path = path.as_ref();
+        // create directory to contain the CSV files (one per partition)
+        let fs_path = Path::new(path);
+        let runtime = self.runtime_env();
+        match fs::create_dir(fs_path) {
+            Ok(()) => {
+                let mut tasks = vec![];
+                for i in 0..plan.output_partitioning().partition_count() {
+                    let plan = plan.clone();
+                    let filename = format!("part-{}.csv", i);
+                    let path = fs_path.join(&filename);
+                    let file = fs::File::create(path)?;
+                    let mut writer = json::Writer::new(file);
+                    let stream = plan.execute(i, runtime.clone()).await?;
+                    let handle: JoinHandle<Result<()>> = task::spawn(async move {
+                        stream
+                            // .map(|batch| writer.write_batches(&batch?))
+                            .try_collect()
+                            .await
+                            .map_err(DataFusionError::from)
+                    });
+                    tasks.push(handle);
+                }
+                futures::future::join_all(tasks).await;
+                Ok(())
+            }
+            Err(e) => Err(DataFusionError::Execution(format!(
+                "Could not create directory {}: {:?}",
+                path, e
+            ))),
+        }
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
