@@ -66,6 +66,17 @@ DataFusion CLI v4.0.0-SNAPSHOT
 ```
 
 ## Ballista
+If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
+
+```bash,ignore
+cargo build --features ballista
+```
+
+or
+
+```bash,ignore
+cargo build -p datafusion-cli --features ballista
+```
 
 The DataFusion CLI can connect to a Ballista scheduler for query execution.
 
