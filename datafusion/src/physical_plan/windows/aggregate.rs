@@ -18,7 +18,6 @@
 //! Physical exec for aggregate window function expressions.
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::windows::find_ranges_in_range;
 use crate::physical_plan::{
     expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
 };
@@ -26,6 +25,7 @@ use arrow::compute::concat;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
+use datafusion_physical_expr::window::find_ranges_in_range;
 use std::any::Any;
 use std::iter::IntoIterator;
 use std::ops::Range;

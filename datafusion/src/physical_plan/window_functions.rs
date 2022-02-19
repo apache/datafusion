@@ -20,20 +20,11 @@
 //!
 //! see also <https://www.postgresql.org/docs/current/functions-window.html>
 
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::functions::{TypeSignature, Volatility};
-use crate::physical_plan::{
-    aggregates, functions::Signature, type_coercion::data_types,
-    windows::find_ranges_in_range, PhysicalExpr,
-};
-use arrow::array::ArrayRef;
+use crate::physical_plan::{aggregates, functions::Signature, type_coercion::data_types};
 use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
-use arrow::record_batch::RecordBatch;
 pub use datafusion_expr::{BuiltInWindowFunction, WindowFunction};
-use std::any::Any;
-use std::ops::Range;
-use std::sync::Arc;
 
 /// Returns the datatype of the window function
 pub fn return_type(
@@ -110,81 +101,6 @@ pub(super) fn signature_for_built_in(fun: &BuiltInWindowFunction) -> Signature {
         }
         BuiltInWindowFunction::NthValue => Signature::any(2, Volatility::Immutable),
     }
-}
-
-/// Partition evaluator
-pub(crate) trait PartitionEvaluator {
-    /// Whether the evaluator should be evaluated with rank
-    fn include_rank(&self) -> bool {
-        false
-    }
-
-    /// evaluate the partition evaluator against the partitions
-    fn evaluate(&self, partition_points: Vec<Range<usize>>) -> Result<Vec<ArrayRef>> {
-        partition_points
-            .into_iter()
-            .map(|partition| self.evaluate_partition(partition))
-            .collect()
-    }
-
-    /// evaluate the partition evaluator against the partitions with rank information
-    fn evaluate_with_rank(
-        &self,
-        partition_points: Vec<Range<usize>>,
-        sort_partition_points: Vec<Range<usize>>,
-    ) -> Result<Vec<ArrayRef>> {
-        partition_points
-            .into_iter()
-            .map(|partition| {
-                let ranks_in_partition =
-                    find_ranges_in_range(&partition, &sort_partition_points);
-                self.evaluate_partition_with_rank(partition, ranks_in_partition)
-            })
-            .collect()
-    }
-
-    /// evaluate the partition evaluator against the partition
-    fn evaluate_partition(&self, _partition: Range<usize>) -> Result<ArrayRef>;
-
-    /// evaluate the partition evaluator against the partition but with rank
-    fn evaluate_partition_with_rank(
-        &self,
-        _partition: Range<usize>,
-        _ranks_in_partition: &[Range<usize>],
-    ) -> Result<ArrayRef> {
-        Err(DataFusionError::NotImplemented(
-            "evaluate_partition_with_rank is not implemented by default".into(),
-        ))
-    }
-}
-
-/// A window expression that is a built-in window function.
-///
-/// Note that unlike aggregation based window functions, built-in window functions normally ignore
-/// window frame spec, with the exception of first_value, last_value, and nth_value.
-pub(crate) trait BuiltInWindowFunctionExpr: Send + Sync + std::fmt::Debug {
-    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
-    /// the field of the final result of this aggregation.
-    fn field(&self) -> Result<Field>;
-
-    /// expressions that are passed to the Accumulator.
-    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
-
-    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
-    /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "BuiltInWindowFunctionExpr: default name"
-    }
-
-    /// Create built-in window evaluator with a batch
-    fn create_evaluator(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<Box<dyn PartitionEvaluator>>;
 }
 
 #[cfg(test)]
