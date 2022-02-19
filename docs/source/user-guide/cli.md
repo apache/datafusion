@@ -69,7 +69,7 @@ DataFusion CLI v5.1.0-SNAPSHOT
 
 The DataFusion CLI can also connect to a Ballista scheduler for query execution.
 
-Before you use the `datafusion-cli` to connect the Ballista scheduler, you should build/compile 
+Before you use the `datafusion-cli` to connect the Ballista scheduler, you should build/compile
 the `datafusion-cli` with feature of "ballista" first.
 
 ```bash
@@ -78,7 +78,7 @@ cargo build --features ballista
 
 or
 
-```basj
+```bash
 cargo build -p datafusion-cli --features ballista
 
 ```
