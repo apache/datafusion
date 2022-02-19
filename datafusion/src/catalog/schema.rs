@@ -265,7 +265,7 @@ mod tests {
         let mut files = store.list_file(&testdata).await.unwrap();
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let file = sized_file.path.split("/").last().unwrap();
+            let file = sized_file.path.split('/').last().unwrap();
             if file == "alltypes_dictionary.parquet" || file == "alltypes_plain.parquet" {
                 let (name, _) = file.split_once(".").unwrap();
                 schema
