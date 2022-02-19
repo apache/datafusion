@@ -188,6 +188,8 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::ExecutionContext;
 
+    use futures::StreamExt;
+
     #[tokio::test]
     async fn test_mem_provider() {
         let provider = MemorySchemaProvider::new();
@@ -249,6 +251,38 @@ mod tests {
             "+----+----------+",
         ];
         assert_batches_eq!(expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_schema_register_listing_tables() {
+        let testdata = crate::test_util::parquet_test_data();
+
+        let schema = MemorySchemaProvider::new();
+        let store = schema
+            .register_object_store("file", Arc::new(LocalFileSystem {}))
+            .unwrap();
+
+        let mut files = store.list_file(&testdata).await.unwrap();
+        while let Some(file) = files.next().await {
+            let sized_file = file.unwrap().sized_file;
+            let file = sized_file.path.split("/").last().unwrap();
+            if file == "alltypes_dictionary.parquet" || file == "alltypes_plain.parquet" {
+                let (name, _) = file.split_once(".").unwrap();
+                schema
+                    .register_listing_table(name, &sized_file.path, None)
+                    .await
+                    .unwrap();
+            }
+        }
+
+        let tables = vec![
+            String::from("alltypes_dictionary"),
+            String::from("alltypes_plain"),
+        ];
+
+        let mut schema_tables = schema.table_names();
+        schema_tables.sort();
+        assert_eq!(schema_tables, tables);
     }
 
     #[tokio::test]
