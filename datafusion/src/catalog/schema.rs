@@ -183,9 +183,12 @@ mod tests {
 
     use arrow::datatypes::Schema;
 
+    use crate::assert_batches_eq;
+    use crate::catalog::catalog::MemoryCatalogProvider;
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
     use crate::datasource::empty::EmptyTable;
     use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::execution::context::ExecutionContext;
 
     #[tokio::test]
     async fn test_mem_provider() {
@@ -215,8 +218,38 @@ mod tests {
         let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
 
         schema
-            .register_listing_table("data", &filename, None)
+            .register_listing_table("alltypes_plain", &filename, None)
             .await
             .unwrap();
+
+        let catalog = MemoryCatalogProvider::new();
+        catalog.register_schema("active", Arc::new(schema));
+
+        let mut ctx = ExecutionContext::new();
+
+        ctx.register_catalog("cat", Arc::new(catalog));
+
+        let df = ctx
+            .sql("SELECT id, bool_col FROM cat.active.alltypes_plain")
+            .await
+            .unwrap();
+
+        let actual = df.collect().await.unwrap();
+
+        let expected = vec![
+            "+----+----------+",
+            "| id | bool_col |",
+            "+----+----------+",
+            "| 4  | true     |",
+            "| 5  | false    |",
+            "| 6  | true     |",
+            "| 7  | false    |",
+            "| 2  | true     |",
+            "| 3  | false    |",
+            "| 0  | true     |",
+            "| 1  | false    |",
+            "+----+----------+",
+        ];
+        assert_batches_eq!(expected, &actual);
     }
 }
