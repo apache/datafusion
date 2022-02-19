@@ -732,9 +732,11 @@ impl SessionContext {
                     let file = fs::File::create(path)?;
                     let mut writer = json::Writer::new(file);
                     let stream = plan.execute(i, runtime.clone()).await?;
+                    let mut batches = Vec::new();
+
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
                         stream
-                            // .map(|batch| writer.write_batches(&batch?))
+                            .map(|batch| batches.push(&batch))
                             .try_collect()
                             .await
                             .map_err(DataFusionError::from)
