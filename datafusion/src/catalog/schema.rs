@@ -119,7 +119,7 @@ impl MemorySchemaProvider {
         let config = match config {
             Some(cfg) => cfg,
             None => {
-                let (object_store, path) = self.object_store(uri)?;
+                let (object_store, _path) = self.object_store(uri)?;
                 ListingTableConfig::new(object_store, uri).infer().await?
             }
         };
@@ -185,7 +185,6 @@ mod tests {
 
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
     use crate::datasource::empty::EmptyTable;
-    use crate::datasource::listing::{ListingTable, ListingTableConfig};
     use crate::datasource::object_store::local::LocalFileSystem;
 
     #[tokio::test]
@@ -213,10 +212,11 @@ mod tests {
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
 
         let schema = MemorySchemaProvider::new();
-        let schema = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
+        let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
 
         schema
             .register_listing_table("data", &filename, None)
+            .await
             .unwrap();
     }
 }
