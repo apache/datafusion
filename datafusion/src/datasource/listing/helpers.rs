@@ -17,6 +17,7 @@
 
 //! Helper functions for the table implementation
 
+use std::path::{Component, Path};
 use std::sync::Arc;
 
 use arrow::{
@@ -366,14 +367,14 @@ fn parse_partitions_for_path<'a>(
 ) -> Option<Vec<&'a str>> {
     let subpath = file_path.strip_prefix(table_path)?;
 
-    // ignore whether table_path ended with "/" or not
-    let subpath = match subpath.strip_prefix('/') {
-        Some(subpath) => subpath,
-        None => subpath,
-    };
+    // split subpath into components ignoring leading separator if exists
+    let subpath = Path::new(subpath)
+        .components()
+        .filter(|c| !matches!(c, Component::RootDir))
+        .filter_map(|c| c.as_os_str().to_str());
 
     let mut part_values = vec![];
-    for (path, pn) in subpath.split('/').zip(table_partition_cols) {
+    for (path, pn) in subpath.zip(table_partition_cols) {
         match path.split_once('=') {
             Some((name, val)) if name == pn => part_values.push(val),
             _ => return None,
@@ -607,6 +608,27 @@ mod tests {
                 "bucket/mytable",
                 "bucket/mytable/mypartition=v1/otherpartition=v2/file.csv",
                 &[String::from("mypartition")]
+            )
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_parse_partitions_for_path_windows() {
+        assert_eq!(
+            Some(vec!["v1"]),
+            parse_partitions_for_path(
+                "bucket\\mytable",
+                "bucket\\mytable\\mypartition=v1\\file.csv",
+                &[String::from("mypartition")]
+            )
+        );
+        assert_eq!(
+            Some(vec!["v1", "v2"]),
+            parse_partitions_for_path(
+                "bucket\\mytable",
+                "bucket\\mytable\\mypartition=v1\\otherpartition=v2\\file.csv",
+                &[String::from("mypartition"), String::from("otherpartition")]
             )
         );
     }
