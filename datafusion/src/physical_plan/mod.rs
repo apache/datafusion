@@ -469,7 +469,8 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, WindowExpr};
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema

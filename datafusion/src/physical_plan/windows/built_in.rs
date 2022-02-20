@@ -18,13 +18,11 @@
 //! Physical exec for built-in window function expressions.
 
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    expressions::PhysicalSortExpr, window_functions::BuiltInWindowFunctionExpr,
-    PhysicalExpr, WindowExpr,
-};
+use crate::physical_plan::{expressions::PhysicalSortExpr, PhysicalExpr, WindowExpr};
 use arrow::compute::concat;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
 use std::any::Any;
 use std::sync::Arc;
 
