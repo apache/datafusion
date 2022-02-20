@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate_expr;
-mod physical_expr;
-mod sort_expr;
-pub mod window;
+mod built_in_window_function_expr;
+mod partition_evaluator;
+mod window_expr;
 
-pub use aggregate_expr::AggregateExpr;
-pub use physical_expr::PhysicalExpr;
-pub use sort_expr::PhysicalSortExpr;
+pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
+pub use partition_evaluator::find_ranges_in_range;
+pub use partition_evaluator::PartitionEvaluator;
+pub use window_expr::WindowExpr;
