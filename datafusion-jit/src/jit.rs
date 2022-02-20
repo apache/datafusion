@@ -19,7 +19,7 @@ use crate::api::GeneratedFunction;
 use crate::ast::{BinaryExpr, Expr, JITType, Literal, Stmt, TypedLit, BOOL, I64, NIL};
 use cranelift::prelude::*;
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataContext, Linkage, Module};
+use cranelift_module::{Linkage, Module};
 use datafusion_common::internal_err;
 use datafusion_common::{DataFusionError, Result};
 use std::collections::HashMap;
@@ -36,9 +36,6 @@ pub struct JIT {
     /// context per thread, though this is not the case now.
     ctx: codegen::Context,
 
-    /// The data context, which is to data objects what `ctx` is to functions.
-    data_ctx: DataContext,
-
     /// The module, with the jit backend, which manages the JIT'd
     /// functions.
     module: JITModule,
@@ -51,7 +48,6 @@ impl Default for JIT {
         Self {
             builder_context: FunctionBuilderContext::new(),
             ctx: module.make_context(),
-            data_ctx: DataContext::new(),
             module,
         }
     }
@@ -80,7 +76,6 @@ impl JIT {
         Self {
             builder_context: FunctionBuilderContext::new(),
             ctx: module.make_context(),
-            data_ctx: DataContext::new(),
             module,
         }
     }
