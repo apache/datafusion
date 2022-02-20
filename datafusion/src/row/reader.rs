@@ -18,6 +18,10 @@
 //! Accessing row from raw bytes
 
 use crate::error::{DataFusionError, Result};
+#[cfg(feature = "jit")]
+use crate::reg_fn;
+#[cfg(feature = "jit")]
+use crate::row::fn_name;
 use crate::row::{all_valid, get_offsets, supported, NullBitsFormatter};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
@@ -290,7 +294,7 @@ fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema
 }
 
 #[cfg(feature = "jit")]
-fn get_array(
+fn get_array_mut(
     batch: &mut MutableRecordBatch,
     col_idx: usize,
 ) -> &mut Box<dyn ArrayBuilder> {
@@ -299,30 +303,9 @@ fn get_array(
 }
 
 #[cfg(feature = "jit")]
-macro_rules! reg_fn {
-    ($ASS:ident, $FN: ident, $PARAM: expr, $RET: expr) => {
-        $ASS.register_extern_fn(fn_name($FN), $FN as *const u8, $PARAM, $RET)?;
-    };
-}
-
-#[cfg(feature = "jit")]
-fn fn_name<T>(f: T) -> &'static str {
-    fn type_name_of<T>(_: T) -> &'static str {
-        std::any::type_name::<T>()
-    }
-    let name = type_name_of(f);
-
-    // Find and cut the rest of the path
-    match &name.rfind(':') {
-        Some(pos) => &name[pos + 1..name.len()],
-        None => name,
-    }
-}
-
-#[cfg(feature = "jit")]
 fn register_read_functions(asm: &Assembler) -> Result<()> {
     let reader_param = vec![PTR, I64, PTR];
-    reg_fn!(asm, get_array, vec![PTR, I64], Some(PTR));
+    reg_fn!(asm, get_array_mut, vec![PTR, I64], Some(PTR));
     reg_fn!(asm, read_field_bool, reader_param.clone(), None);
     reg_fn!(asm, read_field_u8, reader_param.clone(), None);
     reg_fn!(asm, read_field_u16, reader_param.clone(), None);
@@ -366,11 +349,10 @@ fn gen_read_row(schema: &Arc<Schema>, assembler: &Assembler) -> Result<*const u8
     let mut b = builder.enter_block();
     for (i, f) in schema.fields().iter().enumerate() {
         let dt = f.data_type();
-        // let c0 = get_array()
         let arr = format!("a{}", i);
         b.declare_as(
             &arr,
-            b.call("get_array", vec![b.id("batch")?, b.lit_i(i as i64)])?,
+            b.call("get_array_mut", vec![b.id("batch")?, b.lit_i(i as i64)])?,
         )?;
         let params = vec![b.id(&arr)?, b.lit_i(i as i64), b.id("row")?];
         if f.is_nullable() {

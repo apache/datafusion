@@ -189,6 +189,28 @@ fn supported(schema: &Arc<Schema>) -> bool {
         .all(|f| supported_type(f.data_type()))
 }
 
+#[cfg(feature = "jit")]
+#[macro_export]
+macro_rules! reg_fn {
+    ($ASS:ident, $FN: ident, $PARAM: expr, $RET: expr) => {
+        $ASS.register_extern_fn(fn_name($FN), $FN as *const u8, $PARAM, $RET)?;
+    };
+}
+
+#[cfg(feature = "jit")]
+fn fn_name<T>(f: T) -> &'static str {
+    fn type_name_of<T>(_: T) -> &'static str {
+        std::any::type_name::<T>()
+    }
+    let name = type_name_of(f);
+
+    // Find and cut the rest of the path
+    match &name.rfind(':') {
+        Some(pos) => &name[pos + 1..name.len()],
+        None => name,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +228,8 @@ mod tests {
     #[cfg(feature = "jit")]
     use crate::row::reader::read_as_batch_jit;
     use crate::row::writer::write_batch_unchecked;
+    #[cfg(feature = "jit")]
+    use crate::row::writer::write_batch_unchecked_jit;
     use arrow::record_batch::RecordBatch;
     use arrow::util::bit_util::{ceil, set_bit_raw, unset_bit_raw};
     use arrow::{array::*, datatypes::*};
@@ -317,9 +341,9 @@ mod tests {
                     let a = $ARRAY::from($VEC);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
-                    let row_offsets =
-                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
                     let assembler = Assembler::default();
+                    let row_offsets =
+                        { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
                     let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
@@ -436,9 +460,17 @@ mod tests {
         let a = BinaryArray::from_opt_vec(values);
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
         let mut vector = vec![0; 8192];
-        let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
         let assembler = Assembler::default();
+        let row_offsets = {
+            write_batch_unchecked_jit(
+                &mut vector,
+                0,
+                &batch,
+                0,
+                schema.clone(),
+                &assembler,
+            )?
+        };
         let output_batch =
             { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
         assert_eq!(batch, output_batch);

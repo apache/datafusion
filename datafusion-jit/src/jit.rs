@@ -65,7 +65,17 @@ impl JIT {
         It: IntoIterator<Item = (K, *const u8)>,
         K: Into<String>,
     {
-        let mut builder = JITBuilder::new(cranelift_module::default_libcall_names());
+        let mut flag_builder = settings::builder();
+        flag_builder.set("use_colocated_libcalls", "false").unwrap();
+        flag_builder.set("is_pic", "true").unwrap();
+        flag_builder.set("opt_level", "speed").unwrap();
+        flag_builder.set("enable_simd", "true").unwrap();
+        let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
+            panic!("host machine is not supported: {}", msg);
+        });
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder));
+        let mut builder =
+            JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         builder.symbols(symbols);
         let module = JITModule::new(builder);
         Self {

@@ -211,7 +211,7 @@ impl IfElseState {
     }
 }
 
-/// Code block that
+/// Code block consists of statements and acts as anonymous namespace scope for items and variable declarations.
 pub struct CodeBlock<'a> {
     /// A stack that containing all defined variables so far. The variables defined
     /// in the current block are at the top stack frame.
