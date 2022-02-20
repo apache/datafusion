@@ -23,7 +23,6 @@ use cranelift_module::{DataContext, Linkage, Module};
 use datafusion_common::internal_err;
 use datafusion_common::{DataFusionError, Result};
 use std::collections::HashMap;
-use std::slice;
 
 /// The basic JIT class.
 #[allow(clippy::upper_case_acronyms)]
@@ -124,22 +123,6 @@ impl JIT {
         let code = self.module.get_finalized_function(id);
 
         Ok(code)
-    }
-
-    /// Create a zero-initialized data section.
-    pub fn create_data(&mut self, name: &str, contents: Vec<u8>) -> Result<&[u8]> {
-        // The steps here are analogous to `compile`, except that data is much
-        // simpler than functions.
-        self.data_ctx.define(contents.into_boxed_slice());
-        let id = self
-            .module
-            .declare_data(name, Linkage::Export, true, false)?;
-
-        self.module.define_data(id, &self.data_ctx)?;
-        self.data_ctx.clear();
-        self.module.finalize_definitions();
-        let buffer = self.module.get_finalized_data(id);
-        Ok(unsafe { slice::from_raw_parts(buffer.0, buffer.1) })
     }
 
     // Translate into Cranelift IR.

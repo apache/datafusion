@@ -232,7 +232,7 @@ impl<'a> CodeBlock<'a> {
     pub fn build(&mut self) -> GeneratedFunction {
         assert!(
             self.fn_state.is_some(),
-            "Calling build on a non function block"
+            "Can only call build on outermost function block"
         );
         let mut gen = self.fn_state.take().unwrap();
         gen.body = self.stmts.drain(..).collect::<Vec<_>>();
