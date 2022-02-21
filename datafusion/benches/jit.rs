@@ -50,9 +50,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("row serializer jit codegen only", |b| {
-        b.iter(|| {
-            bench_write_batch_jit_dummy(schema.clone()).unwrap()
-        })
+        b.iter(|| bench_write_batch_jit_dummy(schema.clone()).unwrap())
     });
 }
 

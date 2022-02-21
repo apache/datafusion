@@ -38,7 +38,7 @@ name = "datafusion"
 path = "src/lib.rs"
 
 [features]
-default = ["crypto_expressions", "regex_expressions", "unicode_expressions", "row", "jit"]
+default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 simd = ["arrow/simd"]
 crypto_expressions = ["md-5", "sha2", "blake2", "blake3"]
 regex_expressions = ["regex"]
@@ -128,3 +128,4 @@ harness = false
 [[bench]]
 name = "jit"
 harness = false
+required-features = ["row", "jit"]

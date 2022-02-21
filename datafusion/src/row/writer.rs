@@ -27,8 +27,10 @@ use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{ceil, round_upto_power_of_2, set_bit_raw, unset_bit_raw};
+use datafusion_jit::api::CodeBlock;
 #[cfg(feature = "jit")]
 use datafusion_jit::api::{Assembler, GeneratedFunction};
+use datafusion_jit::ast::Expr;
 #[cfg(feature = "jit")]
 use datafusion_jit::ast::{BOOL, I64, PTR};
 use std::cmp::max;
@@ -349,22 +351,7 @@ fn write_row(row: &mut RowWriter, row_idx: usize, batch: &RecordBatch) -> usize 
     row.row_width
 }
 
-#[cfg(feature = "jit")]
-// TODO: we could remove these functions wrappers below once we enabled call struct/trait methods
-fn get_array(batch: &RecordBatch, col_idx: usize) -> &Arc<dyn Array> {
-    batch.column(col_idx)
-}
-
-#[cfg(feature = "jit")]
-fn set_null_at(row: &mut RowWriter, col_idx: usize) {
-    row.set_null_at(col_idx)
-}
-
-#[cfg(feature = "jit")]
-fn set_non_null_at(row: &mut RowWriter, col_idx: usize) {
-    row.set_non_null_at(col_idx)
-}
-
+// we could remove this function wrapper once we find a way to call the trait method directly.
 #[cfg(feature = "jit")]
 fn is_null(col: &Arc<dyn Array>, row_idx: usize) -> bool {
     col.is_null(row_idx)
@@ -373,9 +360,9 @@ fn is_null(col: &Arc<dyn Array>, row_idx: usize) -> bool {
 #[cfg(feature = "jit")]
 fn register_write_functions(asm: &Assembler) -> Result<()> {
     let reader_param = vec![PTR, I64, PTR];
-    reg_fn!(asm, get_array, vec![PTR, I64], Some(PTR));
-    reg_fn!(asm, set_null_at, vec![PTR, I64], None);
-    reg_fn!(asm, set_non_null_at, vec![PTR, I64], None);
+    reg_fn!(asm, RecordBatch::column, vec![PTR, I64], Some(PTR));
+    reg_fn!(asm, RowWriter::set_null_at, vec![PTR, I64], None);
+    reg_fn!(asm, RowWriter::set_non_null_at, vec![PTR, I64], None);
     reg_fn!(asm, is_null, vec![PTR, I64], Some(BOOL));
     reg_fn!(asm, write_field_bool, reader_param.clone(), None);
     reg_fn!(asm, write_field_u8, reader_param.clone(), None);
@@ -400,7 +387,6 @@ fn gen_write_row(
     schema: &Arc<Schema>,
     assembler: &Assembler,
 ) -> Result<GeneratedFunction> {
-    use DataType::*;
     let mut builder = assembler
         .new_func_builder("write_row")
         .param("row", PTR)
@@ -412,7 +398,7 @@ fn gen_write_row(
         let arr = format!("a{}", i);
         b.declare_as(
             &arr,
-            b.call("get_array", vec![b.id("batch")?, b.lit_i(i as i64)])?,
+            b.call("column", vec![b.id("batch")?, b.lit_i(i as i64)])?,
         )?;
         if f.is_nullable() {
             b.if_block(
@@ -432,24 +418,7 @@ fn gen_write_row(
                         e.lit_i(i as i64),
                         e.id("row_idx")?,
                     ];
-                    match dt {
-                        Boolean => e.call_stmt("write_field_bool", params)?,
-                        UInt8 => e.call_stmt("write_field_u8", params)?,
-                        UInt16 => e.call_stmt("write_field_u16", params)?,
-                        UInt32 => e.call_stmt("write_field_u32", params)?,
-                        UInt64 => e.call_stmt("write_field_u64", params)?,
-                        Int8 => e.call_stmt("write_field_i8", params)?,
-                        Int16 => e.call_stmt("write_field_i16", params)?,
-                        Int32 => e.call_stmt("write_field_i32", params)?,
-                        Int64 => e.call_stmt("write_field_i64", params)?,
-                        Float32 => e.call_stmt("write_field_f32", params)?,
-                        Float64 => e.call_stmt("write_field_f64", params)?,
-                        Date32 => e.call_stmt("write_field_date32", params)?,
-                        Date64 => e.call_stmt("write_field_date64", params)?,
-                        Utf8 => e.call_stmt("write_field_utf8", params)?,
-                        Binary => e.call_stmt("write_field_binary", params)?,
-                        _ => unimplemented!(),
-                    }
+                    write_typed_field_stmt(dt, e, params)?;
                     Ok(())
                 },
             )?;
@@ -461,28 +430,38 @@ fn gen_write_row(
                 b.lit_i(i as i64),
                 b.id("row_idx")?,
             ];
-            match dt {
-                Boolean => b.call_stmt("write_field_bool", params)?,
-                UInt8 => b.call_stmt("write_field_u8", params)?,
-                UInt16 => b.call_stmt("write_field_u16", params)?,
-                UInt32 => b.call_stmt("write_field_u32", params)?,
-                UInt64 => b.call_stmt("write_field_u64", params)?,
-                Int8 => b.call_stmt("write_field_i8", params)?,
-                Int16 => b.call_stmt("write_field_i16", params)?,
-                Int32 => b.call_stmt("write_field_i32", params)?,
-                Int64 => b.call_stmt("write_field_i64", params)?,
-                Float32 => b.call_stmt("write_field_f32", params)?,
-                Float64 => b.call_stmt("write_field_f64", params)?,
-                Date32 => b.call_stmt("write_field_date32", params)?,
-                Date64 => b.call_stmt("write_field_date64", params)?,
-                Utf8 => b.call_stmt("write_field_utf8", params)?,
-                Binary => b.call_stmt("write_field_binary", params)?,
-                _ => unimplemented!(),
-            }
+            write_typed_field_stmt(dt, &mut b, params)?;
         }
     }
-    let gen_func = b.build();
-    Ok(gen_func)
+    Ok(b.build())
+}
+
+#[cfg(feature = "jit")]
+fn write_typed_field_stmt<'a>(
+    dt: &DataType,
+    b: &mut CodeBlock<'a>,
+    params: Vec<Expr>,
+) -> Result<()> {
+    use DataType::*;
+    match dt {
+        Boolean => b.call_stmt("write_field_bool", params)?,
+        UInt8 => b.call_stmt("write_field_u8", params)?,
+        UInt16 => b.call_stmt("write_field_u16", params)?,
+        UInt32 => b.call_stmt("write_field_u32", params)?,
+        UInt64 => b.call_stmt("write_field_u64", params)?,
+        Int8 => b.call_stmt("write_field_i8", params)?,
+        Int16 => b.call_stmt("write_field_i16", params)?,
+        Int32 => b.call_stmt("write_field_i32", params)?,
+        Int64 => b.call_stmt("write_field_i64", params)?,
+        Float32 => b.call_stmt("write_field_f32", params)?,
+        Float64 => b.call_stmt("write_field_f64", params)?,
+        Date32 => b.call_stmt("write_field_date32", params)?,
+        Date64 => b.call_stmt("write_field_date64", params)?,
+        Utf8 => b.call_stmt("write_field_utf8", params)?,
+        Binary => b.call_stmt("write_field_binary", params)?,
+        _ => unimplemented!(),
+    }
+    Ok(())
 }
 
 macro_rules! fn_write_field {

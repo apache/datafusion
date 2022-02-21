@@ -31,6 +31,8 @@ use arrow::util::bit_util::{ceil, get_bit_raw};
 #[cfg(feature = "jit")]
 use datafusion_jit::api::Assembler;
 #[cfg(feature = "jit")]
+use datafusion_jit::api::GeneratedFunction;
+#[cfg(feature = "jit")]
 use datafusion_jit::ast::{I64, PTR};
 use std::sync::Arc;
 
@@ -64,7 +66,9 @@ pub fn read_as_batch_jit(
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
     let mut row = RowReader::new(&schema, data);
     register_read_functions(assembler)?;
-    let code_ptr = gen_read_row(&schema, assembler)?;
+    let gen_func = gen_read_row(&schema, assembler)?;
+    let mut jit = assembler.create_jit();
+    let code_ptr = jit.compile(gen_func)?;
     let code_fn = unsafe {
         std::mem::transmute::<_, fn(&RowReader, &mut MutableRecordBatch)>(code_ptr)
     };
@@ -340,7 +344,10 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
 }
 
 #[cfg(feature = "jit")]
-fn gen_read_row(schema: &Arc<Schema>, assembler: &Assembler) -> Result<*const u8> {
+fn gen_read_row(
+    schema: &Arc<Schema>,
+    assembler: &Assembler,
+) -> Result<GeneratedFunction> {
     use DataType::*;
     let mut builder = assembler
         .new_func_builder("read_row")
@@ -395,10 +402,7 @@ fn gen_read_row(schema: &Arc<Schema>, assembler: &Assembler) -> Result<*const u8
             }
         }
     }
-    let gen_func = b.build();
-    let mut jit = assembler.create_jit();
-    let code_ptr = jit.compile(gen_func)?;
-    Ok(code_ptr)
+    Ok(b.build())
 }
 
 macro_rules! fn_read_field {
