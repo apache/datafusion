@@ -98,6 +98,7 @@ pub fn write_batch_unchecked_jit(
 }
 
 #[cfg(feature = "jit")]
+/// bench interpreted version write
 pub fn bench_write_batch(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
@@ -117,6 +118,7 @@ pub fn bench_write_batch(
 }
 
 #[cfg(feature = "jit")]
+/// bench jit version write
 pub fn bench_write_batch_jit(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
@@ -144,6 +146,7 @@ pub fn bench_write_batch_jit(
 }
 
 #[cfg(feature = "jit")]
+/// bench code generation cost
 pub fn bench_write_batch_jit_dummy(schema: Arc<Schema>) -> Result<()> {
     let assembler = Assembler::default();
     register_write_functions(&assembler)?;

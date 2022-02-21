@@ -52,7 +52,7 @@ fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
-fn create_schema() -> Schema {
+pub(crate) fn create_schema() -> Schema {
     Schema::new(vec![
         Field::new("utf8", DataType::Utf8, false),
         Field::new("f32", DataType::Float32, false),
@@ -138,7 +138,7 @@ fn create_record_batch(
     .unwrap()
 }
 
-fn create_record_batches(
+pub(crate) fn create_record_batches(
     schema: SchemaRef,
     array_len: usize,
     partitions_len: usize,

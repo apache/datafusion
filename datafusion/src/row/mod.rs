@@ -17,7 +17,7 @@
 
 //! An implementation of Row backed by raw bytes
 //!
-//! Each tuple consists of up to three parts: [null bit set] [values] [var length data]
+//! Each tuple consists of up to three parts: "`null bit set`" , "`values`"  and  "`var length data`"
 //!
 //! The null bit set is used for null tracking and is aligned to 1-byte. It stores
 //! one bit per field.
@@ -52,8 +52,8 @@ use arrow::util::bit_util::{get_bit_raw, round_upto_power_of_2};
 use std::fmt::Write;
 use std::sync::Arc;
 
-mod reader;
-mod writer;
+pub mod reader;
+pub mod writer;
 
 const ALL_VALID_MASK: [u8; 8] = [1, 3, 7, 15, 31, 63, 127, 255];
 
@@ -191,6 +191,7 @@ fn supported(schema: &Arc<Schema>) -> bool {
 
 #[cfg(feature = "jit")]
 #[macro_export]
+/// register external functions to the assembler
 macro_rules! reg_fn {
     ($ASS:ident, $FN: ident, $PARAM: expr, $RET: expr) => {
         $ASS.register_extern_fn(fn_name($FN), $FN as *const u8, $PARAM, $RET)?;
@@ -328,7 +329,7 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&mut vector, schema, row_offsets)? };
+                    let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -446,7 +447,7 @@ mod tests {
         let mut vector = vec![0; 8192];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&mut vector, schema, row_offsets)? };
+        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
