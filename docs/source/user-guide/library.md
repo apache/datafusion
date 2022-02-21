@@ -24,6 +24,7 @@
 ```shell
 cargo new hello_datafusion
 ```
+
 ```shell
 $ cd hello_datafusion
 $ tree .
@@ -103,7 +104,7 @@ Finally, in order to build with the `simd` optimization `cargo nightly` is requi
 rustup toolchain install nightly
 ```
 
- Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
+Based on the instruction set architecture you are building on you will want to configure the `target-cpu` as well, ideally
 with `native` or at least `avx2`.
 
 ```
