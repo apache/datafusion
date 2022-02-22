@@ -24,8 +24,6 @@ use datafusion_cli::{
 };
 use mimalloc::MiMalloc;
 use std::env;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 #[global_allocator]
@@ -58,6 +56,16 @@ struct Args {
         validator(is_valid_file)
     )]
     file: Vec<String>,
+
+    #[clap(
+        short,
+        long,
+        multiple_values = true,
+        help = "Execute commands from file(s)",
+        validator(is_valid_file),
+        conflicts_with = "file"
+    )]
+    run: Vec<String>,
 
     #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
     format: PrintFormat,
@@ -106,17 +114,15 @@ pub async fn main() -> Result<()> {
         quiet: args.quiet,
     };
 
-    let files = args.file;
-    if !files.is_empty() {
-        let files = files
-            .into_iter()
-            .map(|file_path| File::open(file_path).unwrap())
-            .collect::<Vec<_>>();
-        for file in files {
-            let mut reader = BufReader::new(file);
-            exec::exec_from_lines(&mut ctx, &mut reader, &print_options).await;
-        }
+    let files_to_run_then_quit = args.file;
+    let files_to_run = args.run;
+    if !files_to_run_then_quit.is_empty() {
+        exec::exec_from_files(files_to_run_then_quit, &mut ctx, &print_options).await
     } else {
+        if !files_to_run.is_empty() {
+            println!("Running files: {}", &files_to_run.join(","));
+            exec::exec_from_files(files_to_run, &mut ctx, &print_options).await
+        }
         exec::exec_from_repl(&mut ctx, &mut print_options).await;
     }
 
