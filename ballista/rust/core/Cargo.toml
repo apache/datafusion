@@ -31,7 +31,7 @@ simd = ["datafusion/simd"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-async-trait = "0.1.36"
+async-trait = "0.1.41"
 futures = "0.3"
 hashbrown = "0.12"
 log = "0.4"
