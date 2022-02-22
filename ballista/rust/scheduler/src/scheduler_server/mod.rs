@@ -33,7 +33,8 @@ use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use crate::scheduler_server::event_loop::{
     SchedulerServerEvent, SchedulerServerEventAction,
 };
-use crate::state::{ConfigBackendClient, SchedulerState};
+use crate::state::backend::StateBackendClient;
+use crate::state::SchedulerState;
 
 // include the generated protobuf source as a submodule
 #[allow(clippy::all)]
@@ -44,7 +45,6 @@ pub mod externalscaler {
 mod event_loop;
 mod external_scaler;
 mod grpc;
-mod task_scheduler;
 
 type ExecutorsClient = Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>;
 
@@ -61,7 +61,7 @@ pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T, U> {
     pub fn new(
-        config: Arc<dyn ConfigBackendClient>,
+        config: Arc<dyn StateBackendClient>,
         namespace: String,
         ctx: Arc<RwLock<ExecutionContext>>,
         codec: BallistaCodec<T, U>,
@@ -76,7 +76,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
     }
 
     pub fn new_with_policy(
-        config: Arc<dyn ConfigBackendClient>,
+        config: Arc<dyn StateBackendClient>,
         namespace: String,
         policy: TaskSchedulingPolicy,
         ctx: Arc<RwLock<ExecutionContext>>,

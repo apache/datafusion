@@ -27,8 +27,8 @@ use ballista_core::serde::protobuf::{LaunchTaskParams, TaskDefinition};
 use ballista_core::serde::scheduler::ExecutorData;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 
-use crate::scheduler_server::task_scheduler::TaskScheduler;
 use crate::scheduler_server::ExecutorsClient;
+use crate::state::task_scheduler::TaskScheduler;
 use crate::state::SchedulerState;
 
 #[derive(Clone)]

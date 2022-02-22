@@ -583,7 +583,7 @@ mod test {
 
     use tonic::Request;
 
-    use crate::state::{SchedulerState, StandaloneClient};
+    use crate::state::{backend::standalone::StandaloneClient, SchedulerState};
     use ballista_core::error::BallistaError;
     use ballista_core::serde::protobuf::{
         executor_registration::OptionalHost, ExecutorRegistration, LogicalPlanNode,
