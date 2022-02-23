@@ -83,7 +83,7 @@ pub async fn exec_from_files(
         .collect::<Vec<_>>();
     for file in files {
         let mut reader = BufReader::new(file);
-        exec_from_lines(ctx, &mut reader, &print_options).await;
+        exec_from_lines(ctx, &mut reader, print_options).await;
     }
 }
 

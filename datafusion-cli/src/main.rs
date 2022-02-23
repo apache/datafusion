@@ -55,7 +55,7 @@ struct Args {
         help = "Execute commands from file(s), then exit",
         validator(is_valid_file)
     )]
-    file: Vec<String>,
+    file_exit: Vec<String>,
 
     #[clap(
         short,
@@ -65,7 +65,7 @@ struct Args {
         validator(is_valid_file),
         conflicts_with = "file"
     )]
-    run: Vec<String>,
+    file_run: Vec<String>,
 
     #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
     format: PrintFormat,
@@ -114,8 +114,8 @@ pub async fn main() -> Result<()> {
         quiet: args.quiet,
     };
 
-    let files_to_run_then_quit = args.file;
-    let files_to_run = args.run;
+    let files_to_run_then_quit = args.file_exit;
+    let files_to_run = args.file_run;
     if !files_to_run_then_quit.is_empty() {
         exec::exec_from_files(files_to_run_then_quit, &mut ctx, &print_options).await
     } else {
