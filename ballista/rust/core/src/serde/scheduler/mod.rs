@@ -66,43 +66,47 @@ impl PartitionId {
 #[derive(Debug, Clone)]
 pub struct PartitionLocation {
     pub partition_id: PartitionId,
-    pub executor_meta: ExecutorMeta,
+    pub executor_meta: ExecutorMetadata,
     pub partition_stats: PartitionStats,
     pub path: String,
 }
 
 /// Meta-data for an executor, used when fetching shuffle partitions from other executors
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ExecutorMeta {
+pub struct ExecutorMetadata {
     pub id: String,
     pub host: String,
     pub port: u16,
     pub grpc_port: u16,
+    pub specification: ExecutorSpecification,
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<protobuf::ExecutorMetadata> for ExecutorMeta {
+impl Into<protobuf::ExecutorMetadata> for ExecutorMetadata {
     fn into(self) -> protobuf::ExecutorMetadata {
         protobuf::ExecutorMetadata {
             id: self.id,
             host: self.host,
             port: self.port as u32,
             grpc_port: self.grpc_port as u32,
+            specification: Some(self.specification.into()),
         }
     }
 }
 
-impl From<protobuf::ExecutorMetadata> for ExecutorMeta {
+impl From<protobuf::ExecutorMetadata> for ExecutorMetadata {
     fn from(meta: protobuf::ExecutorMetadata) -> Self {
         Self {
             id: meta.id,
             host: meta.host,
             port: meta.port as u16,
             grpc_port: meta.grpc_port as u16,
+            specification: meta.specification.unwrap().into(),
         }
     }
 }
 
+/// Specification of an executor, indicting executor resources, like total task slots
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct ExecutorSpecification {
     pub task_slots: u32,
@@ -136,6 +140,7 @@ impl From<protobuf::ExecutorSpecification> for ExecutorSpecification {
     }
 }
 
+/// From Spark, available resources for an executor, like available task slots
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecutorData {
     pub executor_id: String,
@@ -204,6 +209,7 @@ impl From<protobuf::ExecutorData> for ExecutorData {
     }
 }
 
+/// The internal state of an executor, like cpu usage, memory usage, etc
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct ExecutorState {
     // in bytes
@@ -359,7 +365,7 @@ pub struct ExecutePartition {
     /// The physical plan for this query stage
     pub plan: Arc<dyn ExecutionPlan>,
     /// Location of shuffle partitions that this query stage may depend on
-    pub shuffle_locations: HashMap<PartitionId, ExecutorMeta>,
+    pub shuffle_locations: HashMap<PartitionId, ExecutorMetadata>,
     /// Output partitioning for shuffle writes
     pub output_partitioning: Option<Partitioning>,
 }
@@ -370,7 +376,7 @@ impl ExecutePartition {
         stage_id: usize,
         partition_id: Vec<usize>,
         plan: Arc<dyn ExecutionPlan>,
-        shuffle_locations: HashMap<PartitionId, ExecutorMeta>,
+        shuffle_locations: HashMap<PartitionId, ExecutorMetadata>,
         output_partitioning: Option<Partitioning>,
     ) -> Self {
         Self {

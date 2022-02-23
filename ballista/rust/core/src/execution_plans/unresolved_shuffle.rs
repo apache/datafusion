@@ -23,6 +23,7 @@ use crate::serde::scheduler::PartitionLocation;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -83,6 +84,14 @@ impl ExecutionPlan for UnresolvedShuffleExec {
         //TODO the output partition is known and should be populated here!
         // see https://github.com/apache/arrow-datafusion/issues/758
         Partitioning::UnknownPartitioning(self.output_partition_count)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

@@ -35,6 +35,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
+use super::expressions::PhysicalSortExpr;
 use super::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -97,6 +98,22 @@ impl ExecutionPlan for GlobalLimitExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        self.input.output_ordering().is_some()
+    }
+
+    fn maintains_input_order(&self) -> bool {
+        true
+    }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.input.output_ordering()
     }
 
     fn with_new_children(
@@ -230,6 +247,24 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        self.input.output_ordering().is_some()
+    }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
+
+    // Local limit does not make any attempt to maintain the input
+    // sortedness (if there is more than one partition)
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        if self.output_partitioning().partition_count() == 1 {
+            self.input.output_ordering()
+        } else {
+            None
+        }
     }
 
     fn with_new_children(

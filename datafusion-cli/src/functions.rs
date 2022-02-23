@@ -20,7 +20,7 @@ use arrow::array::StringArray;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;

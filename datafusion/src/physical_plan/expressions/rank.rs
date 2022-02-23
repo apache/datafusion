@@ -19,12 +19,13 @@
 //! at runtime during query execution
 
 use crate::error::Result;
-use crate::physical_plan::window_functions::PartitionEvaluator;
-use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
+use crate::physical_plan::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
+use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
+use datafusion_physical_expr::window::PartitionEvaluator;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;

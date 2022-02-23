@@ -154,6 +154,15 @@ pub(crate) fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
+        AggregateFunction::ApproxMedian => {
+            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
     }
 }
 

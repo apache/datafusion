@@ -36,7 +36,7 @@ use crate::logical_plan::{
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
-use crate::sql::utils::make_decimal_type;
+use crate::sql::utils::{make_decimal_type, normalize_ident};
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::udaf::AggregateUDF,
@@ -50,9 +50,10 @@ use arrow::datatypes::*;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
-    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
-    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    FunctionArgExpr, HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator,
+    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
+    TableFactor, TableWithJoins, TrimWhereField, UnaryOperator, Value,
+    Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
@@ -85,30 +86,40 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
 }
 
-fn plan_key(key: Value) -> ScalarValue {
-    match key {
-        Value::Number(s, _) => ScalarValue::Int64(Some(s.parse().unwrap())),
-        Value::SingleQuotedString(s) => ScalarValue::Utf8(Some(s)),
-        _ => unreachable!(),
-    }
+fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
+    let scalar = match key {
+        SQLExpr::Value(Value::Number(s, _)) => {
+            ScalarValue::Int64(Some(s.parse().unwrap()))
+        }
+        SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
+        _ => {
+            return Err(DataFusionError::SQL(ParserError(format!(
+                "Unsuported index key expression: {}",
+                key
+            ))))
+        }
+    };
+
+    Ok(scalar)
 }
 
-#[allow(clippy::branches_sharing_code)]
-fn plan_indexed(expr: Expr, mut keys: Vec<Value>) -> Expr {
-    if keys.len() == 1 {
-        let key = keys.pop().unwrap();
-        Expr::GetIndexedField {
-            expr: Box::new(expr),
-            key: plan_key(key),
-        }
+fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
+    let key = keys.pop().ok_or_else(|| {
+        DataFusionError::SQL(ParserError(
+            "Internal error: Missing index key expression".to_string(),
+        ))
+    })?;
+
+    let expr = if !keys.is_empty() {
+        plan_indexed(expr, keys)?
     } else {
-        let key = keys.pop().unwrap();
-        let expr = Box::new(plan_indexed(expr, keys));
-        Expr::GetIndexedField {
-            expr,
-            key: plan_key(key),
-        }
-    }
+        expr
+    };
+
+    Ok(Expr::GetIndexedField {
+        expr: Box::new(expr),
+        key: plan_key(key)?,
+    })
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -153,6 +164,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 external: false,
                 if_not_exists: false,
                 without_rowid: _without_row_id,
+                engine: _engine,
+                default_charset: _default_charset,
             } if columns.is_empty()
                 && constraints.is_empty()
                 && table_properties.is_empty()
@@ -698,7 +711,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logic plan from selection clause, the function contain optimization for cross join to inner join
-    /// Related PR: https://github.com/apache/arrow-datafusion/pull/1566
+    /// Related PR: <https://github.com/apache/arrow-datafusion/pull/1566>
     fn plan_selection(
         &self,
         select: &Select,
@@ -1191,7 +1204,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SelectItem::UnnamedExpr(expr) => self.sql_to_rex(expr, schema),
             SelectItem::ExprWithAlias { expr, alias } => Ok(Alias(
                 Box::new(self.sql_to_rex(expr, schema)?),
-                alias.value.clone(),
+                normalize_ident(alias),
             )),
             SelectItem::Wildcard => Ok(Expr::Wildcard),
             SelectItem::QualifiedWildcard(_) => Err(DataFusionError::NotImplemented(
@@ -1241,11 +1254,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql: &FunctionArg,
         schema: &DFSchema,
     ) -> Result<Expr> {
-        match sql {
-            FunctionArg::Named { name: _, arg } => {
-                self.sql_expr_to_logical_expr(arg, schema)
+        let arg: &FunctionArgExpr = match sql {
+            FunctionArg::Named { name: _, arg } => arg,
+            FunctionArg::Unnamed(arg) => arg,
+        };
+
+        match arg {
+            FunctionArgExpr::Expr(arg) => self.sql_expr_to_logical_expr(arg, schema),
+            FunctionArgExpr::Wildcard => Ok(Expr::Wildcard),
+            FunctionArgExpr::QualifiedWildcard(_) => {
+                Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported qualified wildcard argument: {:?}",
+                    sql
+                )))
             }
-            FunctionArg::Unnamed(value) => self.sql_expr_to_logical_expr(value, schema),
         }
     }
 
@@ -1392,6 +1414,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Identifier(ref id) => {
                 if id.value.starts_with('@') {
+                    // TODO: figure out if ScalarVariables should be insensitive.
                     let var_names = vec![id.value.clone()];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
@@ -1401,14 +1424,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
                     Ok(Expr::Column(Column {
                         relation: None,
-                        name: id.value.clone(),
+                        name: normalize_ident(id),
                     }))
                 }
             }
 
             SQLExpr::MapAccess { ref column, keys } => {
                 if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    Ok(plan_indexed(col(&id.value), keys.clone()))
+                    plan_indexed(col(&id.value), keys.clone())
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
@@ -1418,8 +1441,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names: Vec<_> =
-                    ids.iter().map(|id| id.value.clone()).collect();
+                let mut var_names: Vec<_> = ids.iter().map(normalize_ident).collect();
 
                 if &var_names[0][0..1] == "@" {
                     Ok(Expr::ScalarVariable(var_names))
@@ -1439,8 +1461,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     }
                 }
             }
-
-            SQLExpr::Wildcard => Ok(Expr::Wildcard),
 
             SQLExpr::Case {
                 operand,
@@ -1561,52 +1581,52 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ref right,
             } => self.parse_sql_binary_op(left, op, right, schema),
 
+            #[cfg(feature = "unicode_expressions")]
             SQLExpr::Substring {
                 expr,
                 substring_from,
                 substring_for,
             } => {
-                #[cfg(feature = "unicode_expressions")]
-                {
-                    let arg = self.sql_expr_to_logical_expr(expr, schema)?;
-                    let args = match (substring_from, substring_for) {
-                        (Some(from_expr), Some(for_expr)) => {
-                            let from_logic =
-                                self.sql_expr_to_logical_expr(from_expr, schema)?;
-                            let for_logic =
-                                self.sql_expr_to_logical_expr(for_expr, schema)?;
-                            vec![arg, from_logic, for_logic]
-                        }
-                        (Some(from_expr), None) => {
-                            let from_logic =
-                                self.sql_expr_to_logical_expr(from_expr, schema)?;
-                            vec![arg, from_logic]
-                        }
-                        (None, Some(for_expr)) => {
-                            let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
-                            let for_logic =
-                                self.sql_expr_to_logical_expr(for_expr, schema)?;
-                            vec![arg, from_logic, for_logic]
-                        }
-                        _ => {
-                            return Err(DataFusionError::Plan(format!(
-                                "Substring without for/from is not valid {:?}",
-                                sql
-                            )))
-                        }
-                    };
-                    Ok(Expr::ScalarFunction {
-                        fun: functions::BuiltinScalarFunction::Substr,
-                        args,
-                    })
-                }
+                let arg = self.sql_expr_to_logical_expr(expr, schema)?;
+                let args = match (substring_from, substring_for) {
+                    (Some(from_expr), Some(for_expr)) => {
+                        let from_logic =
+                            self.sql_expr_to_logical_expr(from_expr, schema)?;
+                        let for_logic =
+                            self.sql_expr_to_logical_expr(for_expr, schema)?;
+                        vec![arg, from_logic, for_logic]
+                    }
+                    (Some(from_expr), None) => {
+                        let from_logic =
+                            self.sql_expr_to_logical_expr(from_expr, schema)?;
+                        vec![arg, from_logic]
+                    }
+                    (None, Some(for_expr)) => {
+                        let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
+                        let for_logic =
+                            self.sql_expr_to_logical_expr(for_expr, schema)?;
+                        vec![arg, from_logic, for_logic]
+                    }
+                    _ => {
+                        return Err(DataFusionError::Plan(format!(
+                            "Substring without for/from is not valid {:?}",
+                            sql
+                        )))
+                    }
+                };
+                Ok(Expr::ScalarFunction {
+                    fun: functions::BuiltinScalarFunction::Substr,
+                    args,
+                })
+            }
 
-                #[cfg(not(feature = "unicode_expressions"))]
-                {
-                    Err(DataFusionError::Internal(
-                        "statement substring requires compilation with feature flag: unicode_expressions.".to_string()
-                    ))
-                }
+            #[cfg(not(feature = "unicode_expressions"))]
+            SQLExpr::Substring {
+                ..
+            } => {
+                Err(DataFusionError::Internal(
+                    "statement substring requires compilation with feature flag: unicode_expressions.".to_string()
+                ))
             }
 
             SQLExpr::Trim { expr, trim_where } => {
@@ -1639,13 +1659,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    // if there is a quote style, then don't normalize
-                    // the name, otherwise normalize to lowercase
-                    let ident = &function.name.0[0];
-                    match ident.quote_style {
-                        Some(_) => ident.value.clone(),
-                        None => ident.value.to_ascii_lowercase(),
-                    }
+                    normalize_ident(&function.name.0[0])
                 };
 
                 // first, scalar built-in
@@ -1779,10 +1793,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .args
                 .iter()
                 .map(|a| match a {
-                    FunctionArg::Unnamed(SQLExpr::Value(Value::Number(_, _))) => {
-                        Ok(lit(1_u8))
-                    }
-                    FunctionArg::Unnamed(SQLExpr::Wildcard) => Ok(lit(1_u8)),
+                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Value(
+                        Value::Number(_, _),
+                    ))) => Ok(lit(1_u8)),
+                    FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(lit(1_u8)),
                     _ => self.sql_fn_arg_to_logical_expr(a, schema),
                 })
                 .collect::<Result<Vec<Expr>>>()
@@ -2090,11 +2104,11 @@ fn remove_join_expressions(
 /// Filters matching this pattern are added to `accum`
 /// Filters that don't match this pattern are added to `accum_filter`
 /// Examples:
-///
+/// ```text
 /// foo = bar => accum=[(foo, bar)] accum_filter=[]
 /// foo = bar AND bar = baz => accum=[(foo, bar), (bar, baz)] accum_filter=[]
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
-///
+/// ```
 fn extract_join_keys(
     expr: &Expr,
     accum: &mut Vec<(Column, Column)>,
@@ -2178,11 +2192,10 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
 
 #[cfg(test)]
 mod tests {
-    use functions::ScalarFunctionImplementation;
-
     use crate::datasource::empty::EmptyTable;
     use crate::physical_plan::functions::Volatility;
     use crate::{logical_plan::create_udf, sql::parser::DFParser};
+    use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
 

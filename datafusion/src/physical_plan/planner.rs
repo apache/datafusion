@@ -64,7 +64,7 @@ use async_trait::async_trait;
 use expressions::col;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use log::debug;
+use log::{debug, trace};
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -1399,7 +1399,11 @@ impl DefaultPhysicalPlanner {
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
         let optimizers = &ctx_state.config.physical_optimizers;
-        debug!("Physical plan:\n{:?}", plan);
+        debug!(
+            "Input physical plan:\n{}\n",
+            displayable(plan.as_ref()).indent()
+        );
+        trace!("Detailed input physical plan:\n{:?}", plan);
 
         let mut new_plan = plan;
         for optimizer in optimizers {
@@ -1407,10 +1411,10 @@ impl DefaultPhysicalPlanner {
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(
-            "Optimized physical plan short version:\n{}\n",
+            "Optimized physical plan:\n{}\n",
             displayable(new_plan.as_ref()).indent()
         );
-        debug!("Optimized physical plan:\n{:?}", new_plan);
+        trace!("Detailed optimized physical plan:\n{:?}", new_plan);
         Ok(new_plan)
     }
 }
@@ -1431,17 +1435,18 @@ mod tests {
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::plan::Extension;
-    use crate::logical_plan::{DFField, DFSchema, DFSchemaRef};
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
     use crate::scalar::ScalarValue;
     use crate::{
-        logical_plan::{col, lit, sum, LogicalPlanBuilder},
-        physical_plan::SendableRecordBatchStream,
+        logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
     use async_trait::async_trait;
+    use datafusion_common::{DFField, DFSchema, DFSchemaRef};
+    use datafusion_expr::sum;
+    use datafusion_expr::{col, lit};
     use fmt::Debug;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};
@@ -1876,6 +1881,14 @@ mod tests {
 
         fn output_partitioning(&self) -> Partitioning {
             Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            None
+        }
+
+        fn relies_on_input_order(&self) -> bool {
+            false
         }
 
         fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

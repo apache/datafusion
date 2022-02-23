@@ -54,6 +54,7 @@ use hashbrown::raw::RawTable;
 
 use super::{
     coalesce_partitions::CoalescePartitionsExec,
+    expressions::PhysicalSortExpr,
     join_utils::{build_join_schema, check_join_is_valid, ColumnIndex, JoinOn, JoinSide},
 };
 use super::{
@@ -276,6 +277,14 @@ impl ExecutionPlan for HashJoinExec {
 
     fn output_partitioning(&self) -> Partitioning {
         self.right.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     async fn execute(

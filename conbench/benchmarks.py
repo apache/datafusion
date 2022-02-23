@@ -1,5 +1,3 @@
-#!/bin/bash
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -16,17 +14,28 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
-#
 
-# Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-python.sh
+import conbench.runner
 
-SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
+import _criterion
 
-CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/python/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
-${SOURCE_DIR}/update_change_log.sh \
-    python \
-    python-0.3.0 \
-    --exclude-tags-regex "ballista-.+" \
-    --future-release "python-${CURRENT_VER}"
+
+@conbench.runner.register_benchmark
+class TestBenchmark(conbench.runner.Benchmark):
+    name = "test"
+
+    def run(self, **kwargs):
+        yield self.conbench.benchmark(
+            self._f(),
+            self.name,
+            options=kwargs,
+        )
+
+    def _f(self):
+        return lambda: 1 + 1
+
+
+@conbench.runner.register_benchmark
+class CargoBenchmarks(_criterion.CriterionBenchmark):
+    name = "datafusion"
+    description = "Run Arrow Datafusion micro benchmarks."
