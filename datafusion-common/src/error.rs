@@ -25,6 +25,8 @@ use std::result;
 use arrow::error::ArrowError;
 #[cfg(feature = "avro")]
 use avro_rs::Error as AvroError;
+#[cfg(feature = "jit")]
+use cranelift_module::ModuleError;
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
 
@@ -69,6 +71,9 @@ pub enum DataFusionError {
     /// Errors originating from outside DataFusion's core codebase.
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
     External(GenericError),
+    #[cfg(feature = "jit")]
+    /// Error occurs during code generation
+    JITError(ModuleError),
 }
 
 impl From<io::Error> for DataFusionError {
@@ -112,6 +117,13 @@ impl From<ParserError> for DataFusionError {
     }
 }
 
+#[cfg(feature = "jit")]
+impl From<ModuleError> for DataFusionError {
+    fn from(e: ModuleError) -> Self {
+        DataFusionError::JITError(e)
+    }
+}
+
 impl From<GenericError> for DataFusionError {
     fn from(err: GenericError) -> Self {
         DataFusionError::External(err)
@@ -151,6 +163,10 @@ impl Display for DataFusionError {
             }
             DataFusionError::External(ref desc) => {
                 write!(f, "External error: {}", desc)
+            }
+            #[cfg(feature = "jit")]
+            DataFusionError::JITError(ref desc) => {
+                write!(f, "JIT error: {}", desc)
             }
         }
     }
@@ -195,4 +211,11 @@ mod test {
         let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
         Ok(())
     }
+}
+
+#[macro_export]
+macro_rules! internal_err {
+    ($($arg:tt)*) => {
+        Err(DataFusionError::Internal(format!($($arg)*)))
+    };
 }

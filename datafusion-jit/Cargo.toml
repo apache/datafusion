@@ -16,12 +16,12 @@
 # under the License.
 
 [package]
-name = "datafusion-common"
+name = "datafusion-jit"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
 version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
-readme = "README.md"
+readme = "../README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
@@ -29,19 +29,16 @@ edition = "2021"
 rust-version = "1.58"
 
 [lib]
-name = "datafusion_common"
+name = "datafusion_jit"
 path = "src/lib.rs"
 
 [features]
-avro = ["avro-rs"]
-pyarrow = ["pyo3"]
-jit = ["cranelift-module"]
+jit = []
 
 [dependencies]
-arrow = { version = "9.0.0", features = ["prettyprint"] }
-parquet = { version = "9.0.0", features = ["arrow"] }
-avro-rs = { version = "0.13", features = ["snappy"], optional = true }
-pyo3 = { version = "0.15", optional = true }
-sqlparser = "0.14"
-ordered-float = "2.10"
-cranelift-module = { version = "0.81.1", optional = true }
+datafusion-common = { path = "../datafusion-common", version = "7.0.0", features = ["jit"] }
+cranelift = "0.81.1"
+cranelift-module = "0.81.1"
+cranelift-jit = "0.81.1"
+cranelift-native = "0.81.1"
+parking_lot = "0.12"
