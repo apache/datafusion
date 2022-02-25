@@ -1151,7 +1151,7 @@ impl ExecutionProps {
         var_type: VarType,
         provider: Arc<dyn VarProvider + Send + Sync>,
     ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
-        let mut var_providers = self.var_providers.take().unwrap_or_else(HashMap::new);
+        let mut var_providers = self.var_providers.take().unwrap_or_default();
 
         let old_provider = var_providers.insert(var_type, provider);
 
