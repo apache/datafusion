@@ -26,7 +26,7 @@ pub use env_logger;
 pub fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
     batches
         .iter()
-        .map(|batch| {
+        .flat_map(|batch| {
             assert_eq!(batch.num_columns(), 1);
             batch
                 .column(0)
@@ -35,7 +35,6 @@ pub fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
                 .unwrap()
                 .iter()
         })
-        .flatten()
         .collect()
 }
 
@@ -43,8 +42,7 @@ pub fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
 pub fn partitions_to_sorted_vec(partitions: &[Vec<RecordBatch>]) -> Vec<Option<i32>> {
     let mut values: Vec<_> = partitions
         .iter()
-        .map(|batches| batches_to_vec(batches).into_iter())
-        .flatten()
+        .flat_map(|batches| batches_to_vec(batches).into_iter())
         .collect();
 
     values.sort_unstable();
@@ -60,7 +58,7 @@ pub fn add_empty_batches(
 
     batches
         .into_iter()
-        .map(|batch| {
+        .flat_map(|batch| {
             // insert 0, or 1 empty batches before and after the current batch
             let empty_batch = RecordBatch::new_empty(schema.clone());
             std::iter::repeat(empty_batch.clone())
@@ -68,6 +66,5 @@ pub fn add_empty_batches(
                 .chain(std::iter::once(batch))
                 .chain(std::iter::repeat(empty_batch).take(rng.gen_range(0..2)))
         })
-        .flatten()
         .collect()
 }

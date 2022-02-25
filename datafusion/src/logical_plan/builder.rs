@@ -1041,14 +1041,13 @@ pub(crate) fn expand_wildcard(
     let columns_to_skip = using_columns
         .into_iter()
         // For each USING JOIN condition, only expand to one column in projection
-        .map(|cols| {
+        .flat_map(|cols| {
             let mut cols = cols.into_iter().collect::<Vec<_>>();
             // sort join columns to make sure we consistently keep the same
             // qualified column
             cols.sort();
             cols.into_iter().skip(1)
         })
-        .flatten()
         .collect::<HashSet<_>>();
 
     if columns_to_skip.is_empty() {

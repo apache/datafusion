@@ -1151,7 +1151,7 @@ impl ExecutionProps {
         var_type: VarType,
         provider: Arc<dyn VarProvider + Send + Sync>,
     ) -> Option<Arc<dyn VarProvider + Send + Sync>> {
-        let mut var_providers = self.var_providers.take().unwrap_or_else(HashMap::new);
+        let mut var_providers = self.var_providers.take().unwrap_or_default();
 
         let old_provider = var_providers.insert(var_type, provider);
 
@@ -3262,7 +3262,7 @@ mod tests {
         let logical_plan = ctx.create_logical_plan(sql)?;
         let logical_plan = ctx.optimize(&logical_plan)?;
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-        ctx.write_csv(physical_plan, out_dir.to_string()).await
+        ctx.write_csv(physical_plan, out_dir).await
     }
 
     /// Execute SQL and write results to partitioned parquet files
@@ -3275,7 +3275,7 @@ mod tests {
         let logical_plan = ctx.create_logical_plan(sql)?;
         let logical_plan = ctx.optimize(&logical_plan)?;
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-        ctx.write_parquet(physical_plan, out_dir.to_string(), writer_properties)
+        ctx.write_parquet(physical_plan, out_dir, writer_properties)
             .await
     }
 
