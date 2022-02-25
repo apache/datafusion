@@ -24,6 +24,8 @@ pub mod executor_server;
 pub mod flight_service;
 
 mod standalone;
+mod cpu_bound_executor;
+
 pub use standalone::new_standalone_executor;
 
 use log::info;
