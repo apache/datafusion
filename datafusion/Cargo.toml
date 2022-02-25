@@ -54,7 +54,7 @@ row = []
 jit = ["datafusion-jit"]
 
 [dependencies]
-datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
+datafusion-common = { path = "../datafusion-common", version = "7.0.0", features = ["parquet"] }
 datafusion-expr = { path = "../datafusion-expr", version = "7.0.0" }
 datafusion-jit = { path = "../datafusion-jit", version = "7.0.0", optional = true }
 datafusion-physical-expr = { path = "../datafusion-physical-expr", version = "7.0.0" }
