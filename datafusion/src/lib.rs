@@ -216,6 +216,9 @@ pub mod logical_plan;
 pub mod optimizer;
 pub mod physical_optimizer;
 pub mod physical_plan;
+
+/// some plugins
+pub mod plugin;
 pub mod prelude;
 pub mod scalar;
 pub mod sql;

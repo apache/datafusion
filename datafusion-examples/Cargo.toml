@@ -29,6 +29,11 @@ publish = false
 rust-version = "1.58"
 
 [[example]]
+name = "simple_udf_plugin"
+path = "examples/simple_udf_plugin.rs"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "avro_sql"
 path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
@@ -41,3 +46,5 @@ tonic = "0.6"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 futures = "0.3"
 num_cpus = "1.13.0"
+test-cdylib = "1.1.0"
+lazy_static = { version = "^1.4.0" }
