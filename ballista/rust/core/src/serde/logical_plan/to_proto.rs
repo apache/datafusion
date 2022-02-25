@@ -198,7 +198,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Timestamp(time_unit, timezone) => {
                 ArrowTypeEnum::Timestamp(protobuf::Timestamp {
                     time_unit: protobuf::TimeUnit::from_arrow_time_unit(time_unit) as i32,
-                    timezone: timezone.to_owned().unwrap_or_else(String::new),
+                    timezone: timezone.to_owned().unwrap_or_default(),
                 })
             }
             DataType::Date32 => ArrowTypeEnum::Date32(EmptyMessage {}),

@@ -543,8 +543,7 @@ impl LogicalPlan {
                 {
                     self.using_columns.push(
                         on.iter()
-                            .map(|entry| [&entry.0, &entry.1])
-                            .flatten()
+                            .flat_map(|entry| [&entry.0, &entry.1])
                             .cloned()
                             .collect::<HashSet<Column>>(),
                     );

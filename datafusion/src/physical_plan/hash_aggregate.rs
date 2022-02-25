@@ -1176,12 +1176,12 @@ mod tests {
             _partition: usize,
             _runtime: Arc<RuntimeEnv>,
         ) -> Result<SendableRecordBatchStream> {
-            let stream;
-            if self.yield_first {
-                stream = TestYieldingStream::New;
+            let stream = if self.yield_first {
+                TestYieldingStream::New
             } else {
-                stream = TestYieldingStream::Yielded;
-            }
+                TestYieldingStream::Yielded
+            };
+
             Ok(Box::pin(stream))
         }
 
