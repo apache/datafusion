@@ -139,7 +139,7 @@ pub fn regexp_replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<Arr
                     let (pattern, replace_all) = if flags == "g" {
                         (pattern.to_string(), true)
                     } else if flags.contains('g') {
-                        (format!("(?{}){}", flags.to_string().replace("g", ""), pattern), true)
+                        (format!("(?{}){}", flags.to_string().replace('g', ""), pattern), true)
                     } else {
                         (format!("(?{}){}", flags, pattern), false)
                     };
