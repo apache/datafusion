@@ -19,11 +19,11 @@
 
 use crate::error::Result;
 use crate::physical_plan::PhysicalExpr;
+use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::PartitionEvaluator;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
-use datafusion_physical_expr::window::PartitionEvaluator;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;

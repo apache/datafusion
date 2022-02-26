@@ -112,7 +112,7 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
 }
 
-pub use datafusion_physical_expr::PhysicalSortExpr;
+pub use crate::PhysicalSortExpr;
 
 #[cfg(test)]
 mod tests {

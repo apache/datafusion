@@ -526,7 +526,7 @@ pub mod datetime_expressions;
 pub mod display;
 pub mod empty;
 pub mod explain;
-pub mod expressions;
+pub use datafusion_physical_expr::expressions;
 pub mod file_format;
 pub mod filter;
 pub mod functions;

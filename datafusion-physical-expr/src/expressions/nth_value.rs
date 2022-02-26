@@ -21,12 +21,12 @@
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::PhysicalExpr;
 use crate::scalar::ScalarValue;
+use crate::window::BuiltInWindowFunctionExpr;
+use crate::window::PartitionEvaluator;
 use arrow::array::{new_null_array, ArrayRef};
 use arrow::compute::kernels::window::shift;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
-use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
-use datafusion_physical_expr::window::PartitionEvaluator;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
