@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
-/// 定义udf插件，udf的定义方需要实现该trait
+/// UDF plugin trait
 pub trait UDFPlugin: Plugin {
     /// get a ScalarUDF by name
     fn get_scalar_udf_by_name(&self, fun_name: &str) -> Result<ScalarUDF>;
