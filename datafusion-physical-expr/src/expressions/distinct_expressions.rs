@@ -27,9 +27,10 @@ use ahash::RandomState;
 use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::{AggregateExpr, PhysicalExpr};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Accumulator;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct DistinctScalarValues(Vec<ScalarValue>);
@@ -362,10 +363,8 @@ impl Accumulator for DistinctArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::expressions::tests::aggregate;
-
+    use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
@@ -680,12 +679,11 @@ mod tests {
 
         let zero_count_values = BooleanArray::from(Vec::<bool>::new());
 
-        let one_count_values = BooleanArray::from_slice(&[false, false]);
+        let one_count_values = BooleanArray::from(vec![false, false]);
         let one_count_values_with_null =
             BooleanArray::from(vec![Some(true), Some(true), None, None]);
 
-        let two_count_values =
-            BooleanArray::from_slice(&[true, false, true, false, true]);
+        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
         let two_count_values_with_null = BooleanArray::from(vec![
             Some(true),
             Some(false),
@@ -732,7 +730,7 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_empty() -> Result<()> {
-        let arrays = vec![Arc::new(Int32Array::from_slice(&[])) as ArrayRef];
+        let arrays = vec![Arc::new(Int32Array::from(vec![0_i32; 0])) as ArrayRef];
 
         let (states, result) = run_update_batch(&arrays)?;
 
@@ -745,8 +743,8 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_multiple_columns() -> Result<()> {
-        let array_int8: ArrayRef = Arc::new(Int8Array::from_slice(&[1, 1, 2]));
-        let array_int16: ArrayRef = Arc::new(Int16Array::from_slice(&[3, 3, 4]));
+        let array_int8: ArrayRef = Arc::new(Int8Array::from(vec![1, 1, 2]));
+        let array_int16: ArrayRef = Arc::new(Int16Array::from(vec![3, 3, 4]));
         let arrays = vec![array_int8, array_int16];
 
         let (states, result) = run_update_batch(&arrays)?;

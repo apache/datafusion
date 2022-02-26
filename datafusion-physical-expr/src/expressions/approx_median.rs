@@ -17,12 +17,12 @@
 
 //! Defines physical expressions for APPROX_MEDIAN that can be evaluated MEDIAN at runtime during query execution
 
+use crate::{AggregateExpr, PhysicalExpr};
+use arrow::{datatypes::DataType, datatypes::Field};
+use datafusion_common::Result;
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
-
-use crate::error::Result;
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use arrow::{datatypes::DataType, datatypes::Field};
 
 /// MEDIAN aggregate expression
 #[derive(Debug)]

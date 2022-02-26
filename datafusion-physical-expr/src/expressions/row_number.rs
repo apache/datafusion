@@ -17,13 +17,13 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
-use crate::error::Result;
-use crate::physical_plan::PhysicalExpr;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::window::PartitionEvaluator;
+use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use std::any::Any;
 use std::ops::Range;
 use std::sync::Arc;
@@ -84,10 +84,9 @@ impl PartitionEvaluator for NumRowsEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::from_slice::FromSlice;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::Result;
 
     #[test]
     fn row_number_all_null() -> Result<()> {
@@ -107,7 +106,7 @@ mod tests {
 
     #[test]
     fn row_number_all_values() -> Result<()> {
-        let arr: ArrayRef = Arc::new(BooleanArray::from_slice(&[
+        let arr: ArrayRef = Arc::new(BooleanArray::from(vec![
             true, false, true, false, false, true, false, true,
         ]));
         let schema = Schema::new(vec![Field::new("arr", DataType::Boolean, false)]);

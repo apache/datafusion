@@ -19,15 +19,15 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use crate::scalar::ScalarValue;
+use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 /// TRY_CAST expression casts an expression to a specific data type and retuns NULL on invalid cast
 #[derive(Debug)]
@@ -117,8 +117,7 @@ pub fn try_cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::physical_plan::expressions::col;
+    use crate::expressions::col;
     use arrow::array::{
         DecimalArray, DecimalBuilder, StringArray, Time64NanosecondArray,
     };
@@ -129,6 +128,7 @@ mod tests {
         },
         datatypes::*,
     };
+    use datafusion_common::Result;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A

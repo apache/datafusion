@@ -18,15 +18,15 @@
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use crate::scalar::ScalarValue;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::window::PartitionEvaluator;
+use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::compute::cast;
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::ops::Neg;
 use std::ops::Range;
@@ -179,15 +179,13 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::Column;
+    use crate::expressions::Column;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::Result;
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef =
-            Arc::new(Int32Array::from_slice(&[1, -2, 3, -4, 5, -6, 7, 8]));
+        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;

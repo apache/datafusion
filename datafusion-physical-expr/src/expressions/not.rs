@@ -21,13 +21,13 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use crate::scalar::ScalarValue;
+use crate::PhysicalExpr;
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 /// Not expression
 #[derive(Debug)]
@@ -118,9 +118,9 @@ pub fn not(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::physical_plan::expressions::col;
+    use crate::expressions::col;
     use arrow::datatypes::*;
+    use datafusion_common::Result;
 
     #[test]
     fn neg_op() -> Result<()> {

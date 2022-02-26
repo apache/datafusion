@@ -28,9 +28,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::coercion_rule::binary_rule::is_signed_numeric;
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::coercion_rule::binary_rule::is_signed_numeric;
+use crate::PhysicalExpr;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 /// Invoke a compute kernel on array(s)
 macro_rules! compute_op {

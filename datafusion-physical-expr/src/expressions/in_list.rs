@@ -32,11 +32,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::PhysicalExpr;
 use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
@@ -472,8 +473,8 @@ mod tests {
     use arrow::{array::StringArray, datatypes::Field};
 
     use super::*;
-    use crate::error::Result;
-    use crate::physical_plan::expressions::{col, lit};
+    use crate::expressions::{col, lit};
+    use datafusion_common::Result;
 
     // applies the in_list expr to an input batch and list
     macro_rules! in_list {

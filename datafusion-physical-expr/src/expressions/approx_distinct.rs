@@ -18,11 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use super::format_state_name;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    hyperloglog::HyperLogLog, Accumulator, AggregateExpr, PhysicalExpr,
-};
-use crate::scalar::ScalarValue;
+use crate::{hyperloglog::HyperLogLog, AggregateExpr, PhysicalExpr};
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryOffsetSizeTrait, GenericBinaryArray, GenericStringArray,
     PrimitiveArray, StringOffsetSizeTrait,
@@ -31,6 +27,9 @@ use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type, Int64Type, Int8Type,
     UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Accumulator;
 use std::any::type_name;
 use std::any::Any;
 use std::convert::TryFrom;

@@ -25,8 +25,10 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::{error::Result, scalar::ScalarValue};
+use crate::PhysicalExpr;
+use datafusion_common::Result;
+use datafusion_common::ScalarValue;
+use datafusion_expr::ColumnarValue;
 
 /// Represents a literal value
 #[derive(Debug)]
@@ -79,9 +81,9 @@ pub fn lit(value: ScalarValue) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
+    use datafusion_common::Result;
 
     #[test]
     fn literal_i32() -> Result<()> {

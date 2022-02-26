@@ -19,14 +19,15 @@
 
 use std::{any::Any, sync::Arc};
 
+use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::{error::Result, scalar::ScalarValue};
+use datafusion_common::Result;
+use datafusion_common::ScalarValue;
+use datafusion_expr::ColumnarValue;
 
 /// IS NOT NULL expression
 #[derive(Debug)]
@@ -88,8 +89,7 @@ pub fn is_not_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::col;
+    use crate::expressions::col;
     use arrow::{
         array::{BooleanArray, StringArray},
         datatypes::*,
@@ -111,7 +111,7 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .expect("failed to downcast to BooleanArray");
 
-        let expected = &BooleanArray::from_slice(&[true, false]);
+        let expected = &BooleanArray::from(vec![true, false]);
 
         assert_eq!(expected, result);
 

@@ -17,10 +17,7 @@
 
 use std::sync::Arc;
 
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::binary::{eq_decimal, eq_decimal_scalar};
-use crate::scalar::ScalarValue;
+use crate::expressions::binary::{eq_decimal, eq_decimal_scalar};
 use arrow::array::Array;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::nullif;
@@ -28,6 +25,9 @@ use arrow::compute::kernels::comparison::{
     eq, eq_bool, eq_bool_scalar, eq_scalar, eq_utf8, eq_utf8_scalar,
 };
 use arrow::datatypes::{DataType, TimeUnit};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 /// Invoke a compute kernel on a primitive array and a Boolean Array
 macro_rules! compute_bool_array_op {
@@ -122,8 +122,7 @@ pub static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::from_slice::FromSlice;
+    use datafusion_common::Result;
 
     #[test]
     fn nullif_int32() -> Result<()> {
@@ -163,7 +162,7 @@ mod tests {
     #[test]
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
     fn nullif_int32_nonulls() -> Result<()> {
-        let a = Int32Array::from_slice(&[1, 3, 10, 7, 8, 1, 2, 4, 5]);
+        let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));

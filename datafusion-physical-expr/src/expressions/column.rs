@@ -24,8 +24,9 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::error::Result;
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::PhysicalExpr;
+use datafusion_common::Result;
+use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]

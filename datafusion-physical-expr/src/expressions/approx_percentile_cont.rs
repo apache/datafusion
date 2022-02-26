@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{any::Any, iter, sync::Arc};
-
+use super::{format_state_name, Literal};
+use crate::{tdigest::TDigest, AggregateExpr, PhysicalExpr};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -24,16 +24,11 @@ use arrow::{
     },
     datatypes::{DataType, Field},
 };
-
-use crate::{
-    error::DataFusionError,
-    physical_plan::{tdigest::TDigest, Accumulator, AggregateExpr, PhysicalExpr},
-    scalar::ScalarValue,
-};
-
-use crate::error::Result;
-
-use super::{format_state_name, Literal};
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_common::ScalarValue;
+use datafusion_expr::Accumulator;
+use std::{any::Any, iter, sync::Arc};
 
 /// Return `true` if `arg_type` is of a [`DataType`] that the
 /// [`ApproxPercentileCont`] aggregation can operate on.

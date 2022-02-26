@@ -17,9 +17,10 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use crate::arrow::datatypes::DataType;
-use crate::error::{DataFusionError, Result};
-use crate::scalar::{MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};
+use arrow::datatypes::DataType;
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_common::{MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};
 use datafusion_expr::Operator;
 
 /// Coercion rules for all binary operators. Returns the output type
@@ -492,8 +493,9 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::datatypes::DataType;
-    use crate::error::{DataFusionError, Result};
+    use arrow::datatypes::DataType;
+    use datafusion_common::DataFusionError;
+    use datafusion_common::Result;
     use datafusion_expr::Operator;
 
     #[test]

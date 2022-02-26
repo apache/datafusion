@@ -19,16 +19,16 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use crate::scalar::ScalarValue;
+use crate::PhysicalExpr;
 use arrow::compute;
 use arrow::compute::kernels;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use compute::can_cast_types;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 /// provide Datafusion default cast options
 pub const DEFAULT_DATAFUSION_CAST_OPTIONS: CastOptions = CastOptions { safe: false };
@@ -158,9 +158,7 @@ pub fn cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::col;
+    use crate::expressions::col;
     use arrow::{
         array::{
             Array, DecimalArray, DecimalBuilder, Float32Array, Float64Array, Int16Array,
@@ -169,6 +167,7 @@ mod tests {
         },
         datatypes::*,
     };
+    use datafusion_common::Result;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -621,7 +620,7 @@ mod tests {
     fn invalid_cast_with_options_error() -> Result<()> {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let a = StringArray::from_slice(&["9.1"]);
+        let a = StringArray::from(vec!["9.1"]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let expression = cast_with_options(
             col("a", &schema)?,

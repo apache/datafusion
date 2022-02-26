@@ -18,11 +18,12 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use super::format_state_name;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -157,18 +158,18 @@ impl Accumulator for ArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::expressions::tests::aggregate;
-    use crate::{error::Result, generic_test_op};
+    use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
+    use crate::generic_test_op;
     use arrow::array::ArrayRef;
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::Result;
 
     #[test]
     fn array_agg_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
 
         let list = ScalarValue::List(
             Some(Box::new(vec![

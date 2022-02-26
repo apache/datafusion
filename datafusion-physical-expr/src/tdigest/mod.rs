@@ -28,13 +28,11 @@
 //! [Facebook's Folly TDigest]: https://github.com/facebook/folly/blob/main/folly/stats/TDigest.h
 
 use arrow::datatypes::DataType;
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_common::ScalarValue;
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
-
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
 
 // Cast a non-null [`ScalarValue::Float64`] to an [`OrderedFloat<f64>`], or
 // panic.
@@ -582,23 +580,23 @@ impl TDigest {
     ///    ┌────────┬────────┬────────┬───────┬────────┬────────┐
     ///    │max_size│  sum   │ count  │  max  │  min   │centroid│
     ///    └────────┴────────┴────────┴───────┴────────┴────────┘
-    ///                                                     │    
-    ///                               ┌─────────────────────┘    
-    ///                               ▼                          
-    ///                          ┌ List ───┐                     
-    ///                          │┌ ─ ─ ─ ┐│                     
-    ///                          │  mean   │                     
-    ///                          │├ ─ ─ ─ ┼│─ ─ Centroid 1       
-    ///                          │ weight  │                     
-    ///                          │└ ─ ─ ─ ┘│                     
-    ///                          │         │                     
-    ///                          │┌ ─ ─ ─ ┐│                     
-    ///                          │  mean   │                     
-    ///                          │├ ─ ─ ─ ┼│─ ─ Centroid 2       
-    ///                          │ weight  │                     
-    ///                          │└ ─ ─ ─ ┘│                     
-    ///                          │         │                     
-    ///                              ...                         
+    ///                                                     │
+    ///                               ┌─────────────────────┘
+    ///                               ▼
+    ///                          ┌ List ───┐
+    ///                          │┌ ─ ─ ─ ┐│
+    ///                          │  mean   │
+    ///                          │├ ─ ─ ─ ┼│─ ─ Centroid 1
+    ///                          │ weight  │
+    ///                          │└ ─ ─ ─ ┘│
+    ///                          │         │
+    ///                          │┌ ─ ─ ─ ┐│
+    ///                          │  mean   │
+    ///                          │├ ─ ─ ─ ┼│─ ─ Centroid 2
+    ///                          │ weight  │
+    ///                          │└ ─ ─ ─ ┘│
+    ///                          │         │
+    ///                              ...
     ///
     /// ```
     ///

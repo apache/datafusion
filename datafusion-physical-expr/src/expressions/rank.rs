@@ -18,14 +18,14 @@
 //! Defines physical expression for `rank`, `dense_rank`, and `percent_rank` that can evaluated
 //! at runtime during query execution
 
-use crate::error::Result;
-use crate::physical_plan::PhysicalExpr;
 use crate::window::BuiltInWindowFunctionExpr;
 use crate::window::PartitionEvaluator;
+use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;

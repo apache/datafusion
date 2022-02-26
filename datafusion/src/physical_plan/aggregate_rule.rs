@@ -17,26 +17,24 @@
 
 //! Support the coercion rule for aggregate function.
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::aggregates::AggregateFunction;
-use crate::physical_plan::expressions::{
+use arrow::datatypes::DataType;
+use arrow::datatypes::Schema;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::AggregateFunction;
+use datafusion_expr::{Signature, TypeSignature};
+use datafusion_physical_expr::expressions::is_approx_percentile_cont_supported_arg_type;
+use datafusion_physical_expr::expressions::{
     is_avg_support_arg_type, is_correlation_support_arg_type,
     is_covariance_support_arg_type, is_stddev_support_arg_type, is_sum_support_arg_type,
     is_variance_support_arg_type, try_cast,
 };
-use crate::physical_plan::functions::{Signature, TypeSignature};
-use crate::physical_plan::PhysicalExpr;
-use crate::{
-    arrow::datatypes::Schema,
-    physical_plan::expressions::is_approx_percentile_cont_supported_arg_type,
-};
-use arrow::datatypes::DataType;
+use datafusion_physical_expr::PhysicalExpr;
 use std::ops::Deref;
 use std::sync::Arc;
 
 /// Returns the coerced data type for each `input_types`.
 /// Different aggregate function with different input data type will get corresponding coerced data type.
-pub(crate) fn coerce_types(
+pub fn coerce_types(
     agg_fun: &AggregateFunction,
     input_types: &[DataType],
     signature: &Signature,
@@ -238,7 +236,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
 /// Returns the coerced exprs for each `input_exprs`.
 /// Get the coerced data type from `aggregate_rule::coerce_types` and add `try_cast` if the
 /// data type of `input_exprs` need to be coerced.
-pub(crate) fn coerce_exprs(
+pub fn coerce_exprs(
     agg_fun: &AggregateFunction,
     input_exprs: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
@@ -265,10 +263,10 @@ pub(crate) fn coerce_exprs(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::physical_plan::aggregates;
-    use crate::physical_plan::aggregates::AggregateFunction;
-    use crate::physical_plan::coercion_rule::aggregate_rule::coerce_types;
     use arrow::datatypes::DataType;
+    use datafusion_expr::AggregateFunction;
 
     #[test]
     fn test_aggregate_coerce_types() {

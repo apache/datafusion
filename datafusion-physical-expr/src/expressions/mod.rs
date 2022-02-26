@@ -17,8 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use datafusion_expr::ColumnarValue;
-
 mod approx_distinct;
 mod approx_percentile_cont;
 mod array_agg;
@@ -60,12 +58,12 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
-pub(crate) use approx_median::ApproxMedian;
+pub use approx_median::ApproxMedian;
 pub use approx_percentile_cont::{
     is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
 };
 pub use array_agg::ArrayAgg;
-pub(crate) use average::is_avg_support_arg_type;
+pub use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
 pub use case::{case, CaseExpr};
@@ -73,14 +71,15 @@ pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 pub use column::{col, Column};
-pub(crate) use correlation::{
+pub use correlation::{
     correlation_return_type, is_correlation_support_arg_type, Correlation,
 };
 pub use count::Count;
-pub(crate) use covariance::{
+pub use covariance::{
     covariance_return_type, is_covariance_support_arg_type, Covariance, CovariancePop,
 };
 pub use cume_dist::cume_dist;
+
 pub use distinct_expressions::{DistinctArrayAgg, DistinctCount};
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
@@ -89,7 +88,7 @@ pub use is_null::{is_null, IsNullExpr};
 pub use lead_lag::{lag, lead};
 pub use literal::{lit, Literal};
 pub use min_max::{Max, Min};
-pub(crate) use min_max::{MaxAccumulator, MinAccumulator};
+pub use min_max::{MaxAccumulator, MinAccumulator};
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nth_value::NthValue;
@@ -97,13 +96,11 @@ pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
 pub use rank::{dense_rank, percent_rank, rank};
 pub use row_number::RowNumber;
 pub use stats::StatsType;
-pub(crate) use stddev::{
-    is_stddev_support_arg_type, stddev_return_type, Stddev, StddevPop,
-};
-pub(crate) use sum::is_sum_support_arg_type;
+pub use stddev::{is_stddev_support_arg_type, stddev_return_type, Stddev, StddevPop};
+pub use sum::is_sum_support_arg_type;
 pub use sum::{sum_return_type, Sum};
 pub use try_cast::{try_cast, TryCastExpr};
-pub(crate) use variance::{
+pub use variance::{
     is_variance_support_arg_type, variance_return_type, Variance, VariancePop,
 };
 
@@ -111,13 +108,14 @@ pub(crate) use variance::{
 pub fn format_state_name(name: &str, state_name: &str) -> String {
     format!("{}[{}]", name, state_name)
 }
-
 pub use crate::PhysicalSortExpr;
 
 #[cfg(test)]
 mod tests {
-    use crate::{error::Result, physical_plan::AggregateExpr, scalar::ScalarValue};
+    use crate::AggregateExpr;
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
     use std::sync::Arc;
 
     /// macro to perform an aggregation and verify the result.

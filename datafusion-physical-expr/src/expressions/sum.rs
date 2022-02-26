@@ -21,9 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::DataType;
 use arrow::{
@@ -33,9 +31,12 @@ use arrow::{
     },
     datatypes::Field,
 };
+use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use datafusion_expr::Accumulator;
 
 use super::format_state_name;
-use crate::arrow::array::Array;
+use arrow::array::Array;
 use arrow::array::DecimalArray;
 
 /// SUM aggregate expression
@@ -72,7 +73,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
     }
 }
 
-pub(crate) fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
+pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
     matches!(
         arg_type,
         DataType::UInt8
@@ -374,12 +375,12 @@ impl Accumulator for SumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array::DecimalBuilder;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::col;
-    use crate::{error::Result, generic_test_op};
+    use crate::expressions::col;
+    use crate::generic_test_op;
+    use arrow::array::DecimalBuilder;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
+    use datafusion_common::Result;
 
     #[test]
     fn test_sum_return_data_type() -> Result<()> {
@@ -516,7 +517,7 @@ mod tests {
 
     #[test]
     fn sum_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -558,9 +559,8 @@ mod tests {
 
     #[test]
     fn sum_u32() -> Result<()> {
-        let a: ArrayRef = Arc::new(UInt32Array::from_slice(&[
-            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
-        ]));
+        let a: ArrayRef =
+            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -572,9 +572,8 @@ mod tests {
 
     #[test]
     fn sum_f32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float32Array::from_slice(&[
-            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
-        ]));
+        let a: ArrayRef =
+            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -586,9 +585,8 @@ mod tests {
 
     #[test]
     fn sum_f64() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from_slice(&[
-            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
-        ]));
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(
             a,
             DataType::Float64,

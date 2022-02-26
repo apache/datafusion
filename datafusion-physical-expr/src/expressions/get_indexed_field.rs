@@ -17,25 +17,21 @@
 
 //! get field of a `ListArray`
 
-use std::convert::TryInto;
-use std::{any::Any, sync::Arc};
-
+use crate::{field_util::get_indexed_field as get_data_type_field, PhysicalExpr};
+use arrow::array::Array;
+use arrow::array::{ListArray, StructArray};
+use arrow::compute::concat;
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
-
-use crate::arrow::array::Array;
-use crate::arrow::compute::concat;
-use crate::scalar::ScalarValue;
-use crate::{
-    error::DataFusionError,
-    error::Result,
-    field_util::get_indexed_field as get_data_type_field,
-    physical_plan::{ColumnarValue, PhysicalExpr},
-};
-use arrow::array::{ListArray, StructArray};
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_common::ScalarValue;
+use datafusion_expr::ColumnarValue;
+use std::convert::TryInto;
 use std::fmt::Debug;
+use std::{any::Any, sync::Arc};
 
 /// expression to get a field of a struct array.
 #[derive(Debug)]
@@ -119,13 +115,13 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array::GenericListArray;
-    use crate::error::Result;
-    use crate::physical_plan::expressions::{col, lit};
+    use crate::expressions::{col, lit};
+    use arrow::array::GenericListArray;
     use arrow::array::{
         Int64Array, Int64Builder, ListBuilder, StringBuilder, StructArray, StructBuilder,
     };
     use arrow::{array::StringArray, datatypes::Field};
+    use datafusion_common::Result;
 
     fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> GenericListArray<i32> {
         let builder = StringBuilder::new(list_of_lists.len());

@@ -54,11 +54,12 @@ use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::coercion_rule::binary_rule::coerce_types;
-use crate::physical_plan::expressions::try_cast;
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::coercion_rule::binary_rule::coerce_types;
+use crate::expressions::try_cast;
+use crate::PhysicalExpr;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 use datafusion_expr::Operator;
 
 // TODO move to arrow_rs
@@ -1375,11 +1376,10 @@ pub fn binary(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::{col, lit};
+    use crate::expressions::{col, lit};
     use arrow::datatypes::{ArrowNumericType, Field, Int32Type, SchemaRef};
     use arrow::util::display::array_value_to_string;
+    use datafusion_common::Result;
 
     // Create a binary expression without coercion. Used here when we do not want to coerce the expressions
     // to valid types. Usage can result in an execution (after plan) error.
@@ -1398,8 +1398,8 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let a = Int32Array::from_slice(&[1, 2, 3, 4, 5]);
-        let b = Int32Array::from_slice(&[1, 2, 4, 8, 16]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
 
         // expression: "a < b"
         let lt = binary_simple(
@@ -1432,8 +1432,8 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let a = Int32Array::from_slice(&[2, 4, 6, 8, 10]);
-        let b = Int32Array::from_slice(&[2, 5, 4, 8, 8]);
+        let a = Int32Array::from(vec![2, 4, 6, 8, 10]);
+        let b = Int32Array::from(vec![2, 5, 4, 8, 8]);
 
         // expression: "a < b OR a == b"
         let expr = binary_simple(
@@ -1831,14 +1831,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let a = Int32Array::from_slice(&[1, 2, 3, 4, 5]);
-        let b = Int32Array::from_slice(&[1, 2, 4, 8, 16]);
+        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
+        let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
 
         apply_arithmetic::<Int32Type>(
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Plus,
-            Int32Array::from_slice(&[2, 4, 7, 12, 21]),
+            Int32Array::from(vec![2, 4, 7, 12, 21]),
         )?;
 
         Ok(())
@@ -1850,14 +1850,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from_slice(&[1, 2, 4, 8, 16]));
-        let b = Arc::new(Int32Array::from_slice(&[1, 2, 3, 4, 5]));
+        let a = Arc::new(Int32Array::from(vec![1, 2, 4, 8, 16]));
+        let b = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
 
         apply_arithmetic::<Int32Type>(
             schema.clone(),
             vec![a.clone(), b.clone()],
             Operator::Minus,
-            Int32Array::from_slice(&[0, 0, 1, 4, 11]),
+            Int32Array::from(vec![0, 0, 1, 4, 11]),
         )?;
 
         // should handle have negative values in result (for signed)
@@ -1865,7 +1865,7 @@ mod tests {
             schema,
             vec![b, a],
             Operator::Minus,
-            Int32Array::from_slice(&[0, 0, -1, -4, -11]),
+            Int32Array::from(vec![0, 0, -1, -4, -11]),
         )?;
 
         Ok(())
@@ -1877,14 +1877,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from_slice(&[4, 8, 16, 32, 64]));
-        let b = Arc::new(Int32Array::from_slice(&[2, 4, 8, 16, 32]));
+        let a = Arc::new(Int32Array::from(vec![4, 8, 16, 32, 64]));
+        let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32]));
 
         apply_arithmetic::<Int32Type>(
             schema,
             vec![a, b],
             Operator::Multiply,
-            Int32Array::from_slice(&[8, 32, 128, 512, 2048]),
+            Int32Array::from(vec![8, 32, 128, 512, 2048]),
         )?;
 
         Ok(())
@@ -1896,14 +1896,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from_slice(&[8, 32, 128, 512, 2048]));
-        let b = Arc::new(Int32Array::from_slice(&[2, 4, 8, 16, 32]));
+        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048]));
+        let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32]));
 
         apply_arithmetic::<Int32Type>(
             schema,
             vec![a, b],
             Operator::Divide,
-            Int32Array::from_slice(&[4, 8, 16, 32, 64]),
+            Int32Array::from(vec![4, 8, 16, 32, 64]),
         )?;
 
         Ok(())
@@ -1915,14 +1915,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from_slice(&[8, 32, 128, 512, 2048]));
-        let b = Arc::new(Int32Array::from_slice(&[2, 4, 7, 14, 32]));
+        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048]));
+        let b = Arc::new(Int32Array::from(vec![2, 4, 7, 14, 32]));
 
         apply_arithmetic::<Int32Type>(
             schema,
             vec![a, b],
             Operator::Modulo,
-            Int32Array::from_slice(&[0, 0, 2, 8, 0]),
+            Int32Array::from(vec![0, 0, 2, 8, 0]),
         )?;
 
         Ok(())

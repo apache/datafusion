@@ -17,13 +17,14 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::try_cast;
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use crate::expressions::try_cast;
+use crate::PhysicalExpr;
 use arrow::array::{self, *};
 use arrow::compute::{eq, eq_utf8};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -454,13 +455,12 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        error::Result,
-        physical_plan::expressions::{binary, col, lit},
-        scalar::ScalarValue,
-    };
+    use crate::expressions::binary;
+    use crate::expressions::col;
+    use crate::expressions::lit;
     use arrow::array::StringArray;
     use arrow::datatypes::*;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
     #[test]
