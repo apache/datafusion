@@ -15,16 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate_expr;
-pub mod coercion_rule;
-pub mod expressions;
-pub mod field_util;
-mod hyperloglog;
-mod physical_expr;
-mod sort_expr;
-mod tdigest;
-pub mod window;
+//! Define coercion rules for different Expr type.
+//!
+//! Aggregate function rule
+//! Binary operation rule
 
-pub use aggregate_expr::AggregateExpr;
-pub use physical_expr::PhysicalExpr;
-pub use sort_expr::PhysicalSortExpr;
+pub mod binary_rule;
