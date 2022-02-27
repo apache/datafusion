@@ -34,10 +34,3 @@ members = [
 [profile.release]
 lto = true
 codegen-units = 1
-
-
-# TEMP patch until 9.1 is released
-[patch.crates-io]
-arrow = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_10.0.0_release" }
-arrow-flight = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_10.0.0_release" }
-parquet = { git = "https://github.com/alamb/arrow-rs.git", branch = "alamb/prepare_for_10.0.0_release" }
