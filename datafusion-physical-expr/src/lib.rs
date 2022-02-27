@@ -16,11 +16,15 @@
 // under the License.
 
 mod aggregate_expr;
+pub mod coercion_rule;
+pub mod expressions;
+pub mod field_util;
+mod hyperloglog;
 mod physical_expr;
 mod sort_expr;
-mod window_expr;
+mod tdigest;
+pub mod window;
 
 pub use aggregate_expr::AggregateExpr;
 pub use physical_expr::PhysicalExpr;
 pub use sort_expr::PhysicalSortExpr;
-pub use window_expr::WindowExpr;

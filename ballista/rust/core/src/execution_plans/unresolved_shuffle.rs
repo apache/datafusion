@@ -15,24 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, pin::Pin};
-
-use crate::serde::scheduler::PartitionLocation;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_plan::RecordBatchStream,
-};
-use log::info;
-use std::fmt::Formatter;
 
 /// UnresolvedShuffleExec represents a dependency on the results of a ShuffleWriterExec node which hasn't computed yet.
 ///

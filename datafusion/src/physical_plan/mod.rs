@@ -469,7 +469,8 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, WindowExpr};
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -516,7 +517,6 @@ pub mod analyze;
 pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
-mod coercion_rule;
 pub mod common;
 pub mod cross_join;
 #[cfg(feature = "crypto_expressions")]
@@ -525,14 +525,14 @@ pub mod datetime_expressions;
 pub mod display;
 pub mod empty;
 pub mod explain;
-pub mod expressions;
+pub use datafusion_physical_expr::expressions;
+pub mod aggregate_rule;
 pub mod file_format;
 pub mod filter;
 pub mod functions;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
-pub(crate) mod hyperloglog;
 pub mod join_utils;
 pub mod limit;
 pub mod math_expressions;
@@ -546,7 +546,6 @@ pub mod repartition;
 pub mod sorts;
 pub mod stream;
 pub mod string_expressions;
-pub(crate) mod tdigest;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;

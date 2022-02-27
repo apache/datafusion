@@ -35,7 +35,8 @@ use std::sync::Arc;
 
 /// create an in-memory table given the partition len, array len, and batch size,
 /// and the result table will be of array_len in total, and then partitioned, and batched.
-pub(crate) fn create_table_provider(
+#[allow(dead_code)]
+pub fn create_table_provider(
     partitions_len: usize,
     array_len: usize,
     batch_size: usize,
@@ -52,7 +53,8 @@ fn seedable_rng() -> StdRng {
     StdRng::seed_from_u64(42)
 }
 
-fn create_schema() -> Schema {
+/// Create test data schema
+pub fn create_schema() -> Schema {
     Schema::new(vec![
         Field::new("utf8", DataType::Utf8, false),
         Field::new("f32", DataType::Float32, false),
@@ -138,7 +140,9 @@ fn create_record_batch(
     .unwrap()
 }
 
-fn create_record_batches(
+/// Create record batches of `partitions_len` partitions and `batch_size` for each batch,
+/// with a total number of `array_len` records
+pub fn create_record_batches(
     schema: SchemaRef,
     array_len: usize,
     partitions_len: usize,

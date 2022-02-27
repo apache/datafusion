@@ -61,7 +61,6 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
-use expressions::col;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -524,9 +523,7 @@ impl DefaultPhysicalPlanner {
                     )?);
 
                     // update group column indices based on partial aggregate plan evaluation
-                    let final_group: Vec<Arc<dyn PhysicalExpr>> = (0..groups.len())
-                        .map(|i| col(&groups[i].1, &initial_aggr.schema()))
-                        .collect::<Result<_>>()?;
+                    let final_group: Vec<Arc<dyn PhysicalExpr>> = initial_aggr.output_group_expr();
 
                     // TODO: dictionary type not yet supported in Hash Repartition
                     let contains_dict = groups

@@ -23,7 +23,7 @@ use crate::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
 use crate::serde::protobuf::physical_expr_node::ExprType;
 use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
-use crate::serde::protobuf::ShuffleReaderPartition;
+
 use crate::serde::protobuf::{PhysicalExtensionNode, PhysicalPlanNode};
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{
@@ -926,7 +926,7 @@ macro_rules! into_physical_plan {
 
 #[cfg(test)]
 mod roundtrip_tests {
-    use std::{convert::TryInto, sync::Arc};
+    use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
     use datafusion::physical_plan::sorts::sort::SortExec;
@@ -945,8 +945,7 @@ mod roundtrip_tests {
             hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
-            AggregateExpr, ColumnarValue, Distribution, ExecutionPlan, Partitioning,
-            PhysicalExpr,
+            AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr,
         },
         scalar::ScalarValue,
     };

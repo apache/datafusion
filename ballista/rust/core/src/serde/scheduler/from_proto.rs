@@ -15,17 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{collections::HashMap, convert::TryInto};
+use std::convert::TryInto;
 
 use crate::error::BallistaError;
 use crate::serde::protobuf;
 use crate::serde::protobuf::action::ActionType;
-use crate::serde::scheduler::{
-    Action, ExecutePartition, PartitionId, PartitionLocation, PartitionStats,
-};
-
-use datafusion::logical_plan::LogicalPlan;
-use uuid::Uuid;
+use crate::serde::scheduler::{Action, PartitionId, PartitionLocation, PartitionStats};
 
 impl TryInto<Action> for protobuf::Action {
     type Error = BallistaError;

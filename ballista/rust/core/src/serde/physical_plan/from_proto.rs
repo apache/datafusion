@@ -17,24 +17,16 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use crate::error::BallistaError;
-use crate::execution_plans::{
-    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
-};
-use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
-use crate::serde::protobuf::ShuffleReaderPartition;
-use crate::serde::scheduler::PartitionLocation;
-use crate::serde::{from_proto_binary_op, proto_error, protobuf, str_to_byte};
-use crate::{convert_box_required, convert_required, into_required};
+
+use crate::serde::{from_proto_binary_op, proto_error, protobuf};
+use crate::{convert_box_required, convert_required};
 use chrono::{TimeZone, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::catalog::catalog::{
-    CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
-};
+
+use datafusion::catalog::catalog::{CatalogList, MemoryCatalogList};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::object_store::{FileMeta, ObjectStoreRegistry, SizedFile};
 use datafusion::datasource::PartitionedFile;
@@ -42,47 +34,22 @@ use datafusion::execution::context::{
     ExecutionConfig, ExecutionContextState, ExecutionProps,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::{
-    window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
-};
-use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::file_format::{
-    AvroExec, CsvExec, FileScanConfig, ParquetExec,
-};
-use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
-use datafusion::physical_plan::hash_join::PartitionMode;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
-use datafusion::physical_plan::sorts::sort::{SortExec, SortOptions};
-use datafusion::physical_plan::window_functions::{
-    BuiltInWindowFunction, WindowFunction,
-};
-use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
+
+use datafusion::physical_plan::file_format::FileScanConfig;
+
+use datafusion::physical_plan::window_functions::WindowFunction;
+
 use datafusion::physical_plan::{
-    coalesce_batches::CoalesceBatchesExec,
-    cross_join::CrossJoinExec,
-    empty::EmptyExec,
     expressions::{
-        col, Avg, BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
-        IsNullExpr, Literal, NegativeExpr, NotExpr, PhysicalSortExpr, TryCastExpr,
-        DEFAULT_DATAFUSION_CAST_OPTIONS,
+        BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+        Literal, NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
     },
-    filter::FilterExec,
     functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
-    hash_join::HashJoinExec,
-    limit::{GlobalLimitExec, LocalLimitExec},
-    projection::ProjectionExec,
-    repartition::RepartitionExec,
     Partitioning,
 };
-use datafusion::physical_plan::{
-    AggregateExpr, ColumnStatistics, ExecutionPlan, PhysicalExpr, Statistics, WindowExpr,
-};
-use datafusion::prelude::CsvReadOptions;
-use log::debug;
+use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
+
 use protobuf::physical_expr_node::ExprType;
-use protobuf::physical_plan_node::PhysicalPlanType;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
