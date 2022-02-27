@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! partition evaluation module
+
 use arrow::array::ArrayRef;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
@@ -25,7 +27,7 @@ use std::ops::Range;
 /// boundaries would align (what's sorted on [partition columns...] would definitely be sorted
 /// on finer columns), so this will use binary search to find ranges that are within the
 /// partition range and return the valid slice.
-pub fn find_ranges_in_range<'a>(
+pub(crate) fn find_ranges_in_range<'a>(
     partition_range: &Range<usize>,
     sort_partition_points: &'a [Range<usize>],
 ) -> &'a [Range<usize>] {

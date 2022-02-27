@@ -16,13 +16,7 @@
 // under the License.
 
 //! DateTime expressions
-use std::sync::Arc;
 
-use super::ColumnarValue;
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::{ScalarType, ScalarValue},
-};
 use arrow::{
     array::{Array, ArrayRef, GenericStringArray, PrimitiveArray, StringOffsetSizeTrait},
     compute::kernels::cast_utils::string_to_timestamp_nanos,
@@ -42,7 +36,11 @@ use arrow::{
 };
 use chrono::prelude::*;
 use chrono::Duration;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{ScalarType, ScalarValue};
+use datafusion_expr::ColumnarValue;
 use std::borrow::Borrow;
+use std::sync::Arc;
 
 /// given a function `op` that maps a `&str` to a Result of an arrow native type,
 /// returns a `PrimitiveArray` after the application

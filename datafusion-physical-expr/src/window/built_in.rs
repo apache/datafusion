@@ -17,12 +17,14 @@
 
 //! Physical exec for built-in window function expressions.
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{expressions::PhysicalSortExpr, PhysicalExpr, WindowExpr};
+use super::BuiltInWindowFunctionExpr;
+use super::WindowExpr;
+use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use arrow::compute::concat;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -36,7 +38,7 @@ pub struct BuiltInWindowExpr {
 
 impl BuiltInWindowExpr {
     /// create a new built-in window function expression
-    pub(super) fn new(
+    pub fn new(
         expr: Arc<dyn BuiltInWindowFunctionExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],

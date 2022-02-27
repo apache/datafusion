@@ -16,13 +16,11 @@
 // under the License.
 
 use crate::PhysicalExpr;
-
 use arrow::datatypes::Field;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
-use std::fmt::Debug;
-
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// An aggregate expression that:
