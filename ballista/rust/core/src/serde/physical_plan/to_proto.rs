@@ -26,54 +26,26 @@ use std::{
     sync::Arc,
 };
 
-use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
-use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{cross_join::CrossJoinExec, ColumnStatistics};
+use datafusion::physical_plan::expressions::{CastExpr, TryCastExpr};
+use datafusion::physical_plan::ColumnStatistics;
 use datafusion::physical_plan::{
     expressions::{
         CaseExpr, InListExpr, IsNotNullExpr, IsNullExpr, NegativeExpr, NotExpr,
     },
     Statistics,
 };
-use datafusion::physical_plan::{
-    expressions::{CastExpr, TryCastExpr},
-    file_format::ParquetExec,
-};
-use datafusion::physical_plan::{file_format::AvroExec, filter::FilterExec};
-use datafusion::physical_plan::{
-    file_format::FileScanConfig, hash_aggregate::AggregateMode,
-};
-use datafusion::{
-    datasource::PartitionedFile, physical_plan::coalesce_batches::CoalesceBatchesExec,
-};
-use datafusion::{logical_plan::JoinType, physical_plan::file_format::CsvExec};
-use datafusion::{
-    physical_plan::expressions::{Count, Literal},
-    scalar::ScalarValue,
-};
 
-use datafusion::physical_plan::{
-    empty::EmptyExec,
-    expressions::{Avg, BinaryExpr, Column, Max, Min, Sum},
-    Partitioning,
-};
-use datafusion::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr};
+use datafusion::datasource::PartitionedFile;
+use datafusion::physical_plan::file_format::FileScanConfig;
 
-use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
-use protobuf::physical_plan_node::PhysicalPlanType;
+use datafusion::physical_plan::expressions::{Count, Literal};
 
-use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
-use crate::serde::scheduler::PartitionLocation;
+use datafusion::physical_plan::expressions::{Avg, BinaryExpr, Column, Max, Min, Sum};
+use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
+
 use crate::serde::{protobuf, BallistaError};
-use crate::{
-    execution_plans::{ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec},
-    serde::byte_to_string,
-};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+
 use datafusion::physical_plan::functions::{BuiltinScalarFunction, ScalarFunctionExpr};
-use datafusion::physical_plan::repartition::RepartitionExec;
 
 impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
     type Error = BallistaError;
