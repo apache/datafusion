@@ -515,6 +515,45 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_single_binary_nf() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
+        let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
+        let a = BinaryArray::from_vec(values);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 8192];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "jit")]
+    fn test_single_binary_jit_nf() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
+        let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
+        let a = BinaryArray::from_vec(values);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 8192];
+        let assembler = Assembler::default();
+        let row_offsets = {
+            write_batch_unchecked_jit(
+                &mut vector,
+                0,
+                &batch,
+                0,
+                schema.clone(),
+                &assembler,
+            )?
+        };
+        let output_batch =
+            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_with_parquet() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
