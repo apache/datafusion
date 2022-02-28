@@ -16,11 +16,7 @@
 // under the License.
 
 //! Crypto expressions
-use super::ColumnarValue;
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+
 use arrow::{
     array::{
         Array, ArrayRef, BinaryArray, GenericStringArray, StringArray,
@@ -30,6 +26,9 @@ use arrow::{
 };
 use blake2::{Blake2b512, Blake2s256, Digest};
 use blake3::Hasher as Blake3;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 use md5::Md5;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 use std::any::type_name;

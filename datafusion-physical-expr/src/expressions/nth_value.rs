@@ -18,8 +18,8 @@
 //! Defines physical expressions for `first_value`, `last_value`, and `nth_value`
 //! that can evaluated at runtime during query execution
 
+use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::window::PartitionEvaluator;
 use crate::PhysicalExpr;
 use arrow::array::{new_null_array, ArrayRef};
 use arrow::compute::kernels::window::shift;

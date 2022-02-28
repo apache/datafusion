@@ -26,7 +26,7 @@ use crate::physical_plan::{
     },
     type_coercion::coerce,
     window_functions::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
-    PhysicalExpr, WindowExpr,
+    PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
@@ -35,12 +35,11 @@ use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
 use std::convert::TryInto;
 use std::sync::Arc;
 
-mod aggregate;
-mod built_in;
 mod window_agg_exec;
 
-pub use aggregate::AggregateWindowExpr;
-pub use built_in::BuiltInWindowExpr;
+pub use datafusion_physical_expr::window::{
+    AggregateWindowExpr, BuiltInWindowExpr, WindowExpr,
+};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function

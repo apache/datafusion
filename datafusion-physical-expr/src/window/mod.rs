@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod aggregate;
+mod built_in;
 mod built_in_window_function_expr;
-mod partition_evaluator;
+pub(crate) mod partition_evaluator;
 mod window_expr;
 
+pub use aggregate::AggregateWindowExpr;
+pub use built_in::BuiltInWindowExpr;
 pub use built_in_window_function_expr::BuiltInWindowFunctionExpr;
-pub use partition_evaluator::find_ranges_in_range;
-pub use partition_evaluator::PartitionEvaluator;
 pub use window_expr::WindowExpr;

@@ -21,13 +21,6 @@
 
 //! String expressions
 
-use std::any::type_name;
-use std::sync::Arc;
-
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
 use arrow::{
     array::{
         Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
@@ -35,8 +28,11 @@ use arrow::{
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
-
-use super::ColumnarValue;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
+use std::any::type_name;
+use std::sync::Arc;
 
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{

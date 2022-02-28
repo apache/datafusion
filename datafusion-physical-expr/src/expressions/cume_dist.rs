@@ -18,8 +18,8 @@
 //! Defines physical expression for `cume_dist` that can evaluated
 //! at runtime during query execution
 
+use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::window::PartitionEvaluator;
 use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::Float64Array;

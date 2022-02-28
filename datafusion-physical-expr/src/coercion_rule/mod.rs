@@ -20,4 +20,5 @@
 //! Aggregate function rule
 //! Binary operation rule
 
+pub mod aggregate_rule;
 pub mod binary_rule;

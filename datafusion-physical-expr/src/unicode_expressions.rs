@@ -21,18 +21,17 @@
 
 //! Unicode expressions
 
-use std::any::type_name;
-use std::cmp::Ordering;
-use std::sync::Arc;
-
-use crate::error::{DataFusionError, Result};
 use arrow::{
     array::{
         ArrayRef, GenericStringArray, Int64Array, PrimitiveArray, StringOffsetSizeTrait,
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType},
 };
+use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashMap;
+use std::any::type_name;
+use std::cmp::Ordering;
+use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
 macro_rules! downcast_string_arg {
