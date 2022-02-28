@@ -33,7 +33,8 @@ use futures::Future;
 type Task = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Runs futures (and any `tasks` that are `tokio::task::spawned` by
-/// them) on a separate tokio runtime
+/// them) on a separate tokio runtime, like separate CPU-bound (execute a datafusion plan) tasks
+/// from IO-bound tasks(heartbeats). Get more from the above blog.
 #[derive(Clone)]
 pub struct DedicatedExecutor {
     state: Arc<Mutex<State>>,
