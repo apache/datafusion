@@ -16,10 +16,12 @@
 // under the License.
 
 //! Math expressions
-use super::{ColumnarValue, ScalarValue};
-use crate::error::{DataFusionError, Result};
+
 use arrow::array::{Float32Array, Float64Array};
 use arrow::datatypes::DataType;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
 use std::iter;
 use std::sync::Arc;

@@ -17,8 +17,8 @@
 
 //! Defines physical expression for `row_number` that can evaluated at runtime during query execution
 
+use crate::window::partition_evaluator::PartitionEvaluator;
 use crate::window::BuiltInWindowFunctionExpr;
-use crate::window::PartitionEvaluator;
 use crate::PhysicalExpr;
 use arrow::array::{ArrayRef, UInt64Array};
 use arrow::datatypes::{DataType, Field};

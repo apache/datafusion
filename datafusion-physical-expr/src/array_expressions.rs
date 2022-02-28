@@ -17,12 +17,11 @@
 
 //! Array expressions
 
-use crate::error::{DataFusionError, Result};
 use arrow::array::*;
 use arrow::datatypes::DataType;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
-
-use super::ColumnarValue;
 
 macro_rules! downcast_vec {
     ($ARGS:expr, $ARRAY_TYPE:ident) => {{

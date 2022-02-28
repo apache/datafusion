@@ -17,15 +17,16 @@
 
 //! Physical exec for aggregate window function expressions.
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    expressions::PhysicalSortExpr, Accumulator, AggregateExpr, PhysicalExpr, WindowExpr,
-};
+use crate::window::partition_evaluator::find_ranges_in_range;
+use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
+use crate::{window::WindowExpr, AggregateExpr};
 use arrow::compute::concat;
 use arrow::record_batch::RecordBatch;
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_expr::Accumulator;
 use datafusion_expr::{WindowFrame, WindowFrameUnits};
-use datafusion_physical_expr::window::find_ranges_in_range;
 use std::any::Any;
 use std::iter::IntoIterator;
 use std::ops::Range;
@@ -42,7 +43,7 @@ pub struct AggregateWindowExpr {
 
 impl AggregateWindowExpr {
     /// create a new aggregate window function expression
-    pub(super) fn new(
+    pub fn new(
         aggregate: Arc<dyn AggregateExpr>,
         partition_by: &[Arc<dyn PhysicalExpr>],
         order_by: &[PhysicalSortExpr],

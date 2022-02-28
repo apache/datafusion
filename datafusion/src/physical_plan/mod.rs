@@ -514,14 +514,10 @@ pub fn project_schema(
 
 pub mod aggregates;
 pub mod analyze;
-pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
 pub mod common;
 pub mod cross_join;
-#[cfg(feature = "crypto_expressions")]
-pub mod crypto_expressions;
-pub mod datetime_expressions;
 pub mod display;
 pub mod empty;
 pub mod explain;
@@ -535,22 +531,16 @@ pub mod hash_join;
 pub mod hash_utils;
 pub mod join_utils;
 pub mod limit;
-pub mod math_expressions;
 pub mod memory;
 pub mod metrics;
 pub mod planner;
 pub mod projection;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
 pub mod repartition;
 pub mod sorts;
 pub mod stream;
-pub mod string_expressions;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode_expressions;
 pub mod union;
 pub mod values;
 pub mod window_functions;
