@@ -16,11 +16,9 @@
 // under the License.
 
 //Inspire by https://thenewstack.io/using-rustlangs-async-tokio-runtime-for-cpu-bound-tasks/
-//! This module contains a dedicated thread pool for running "cpu
-//! intensive" workloads such as DataFusion plans
 
 //! This module contains a dedicated thread pool for running "cpu
-//! intensive" workloads such as DataFusion plans
+//! intensive" workloads as query plans
 
 use log::warn;
 use parking_lot::Mutex;
