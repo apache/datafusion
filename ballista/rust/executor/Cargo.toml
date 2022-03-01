@@ -55,3 +55,7 @@ configure_me_codegen = "0.4.0"
 
 [package.metadata.configure_me.bin]
 executor = "executor_config_spec.toml"
+
+# use libc on unix like platforms to set worker priority in DedicatedExecutor
+[target."cfg(unix)".dependencies.libc]
+version = "0.2"
