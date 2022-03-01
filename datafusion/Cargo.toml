@@ -60,8 +60,8 @@ datafusion-jit = { path = "../datafusion-jit", version = "7.0.0", optional = tru
 datafusion-physical-expr = { path = "../datafusion-physical-expr", version = "7.0.0" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
-arrow = { version = "9.0.0", features = ["prettyprint"] }
-parquet = { version = "9.0.0", features = ["arrow"] }
+arrow = { version = "9.1", features = ["prettyprint"] }
+parquet = { version = "9.1", features = ["arrow"] }
 sqlparser = "0.14"
 paste = "^1.0"
 num_cpus = "1.13.0"
