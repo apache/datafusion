@@ -262,6 +262,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
         let executor_server = self.executor_server.clone();
         tokio::spawn(async move {
             info!("Starting the task runner pool");
+            // Use a dedicated executor for CPU bound tasks so that the main tokio
+            // executor can still answer requests even when under load
             //TODO make it configurable
             let dedicated_executor = DedicatedExecutor::new("task_runner", 4);
             loop {
