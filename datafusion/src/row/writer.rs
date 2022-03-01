@@ -17,19 +17,24 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
+#[cfg(feature = "jit")]
 use crate::error::Result;
 #[cfg(feature = "jit")]
 use crate::reg_fn;
 #[cfg(feature = "jit")]
 use crate::row::fn_name;
-use crate::row::{estimate_row_width, fixed_size, get_offsets, supported};
+use crate::row::{
+    estimate_row_width, fixed_size, get_offsets, schema_null_free, supported,
+};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{ceil, round_upto_power_of_2, set_bit_raw, unset_bit_raw};
+#[cfg(feature = "jit")]
 use datafusion_jit::api::CodeBlock;
 #[cfg(feature = "jit")]
 use datafusion_jit::api::{Assembler, GeneratedFunction};
+#[cfg(feature = "jit")]
 use datafusion_jit::ast::Expr;
 #[cfg(feature = "jit")]
 use datafusion_jit::ast::{BOOL, I64, PTR};
@@ -147,17 +152,6 @@ pub fn bench_write_batch_jit(
     Ok(lengths)
 }
 
-#[cfg(feature = "jit")]
-/// bench code generation cost
-pub fn bench_write_batch_jit_dummy(schema: Arc<Schema>) -> Result<()> {
-    let assembler = Assembler::default();
-    register_write_functions(&assembler)?;
-    let gen_func = gen_write_row(&schema, &assembler)?;
-    let mut jit = assembler.create_jit();
-    let _: *const u8 = jit.compile(gen_func)?;
-    Ok(())
-}
-
 macro_rules! set_idx {
     ($WIDTH: literal, $SELF: ident, $IDX: ident, $VALUE: ident) => {{
         $SELF.assert_index_valid($IDX);
@@ -198,14 +192,17 @@ pub struct RowWriter {
     /// For fixed length fields, it's where the actual data stores.
     /// For variable length fields, it's a pack of (offset << 32 | length) if we use u64.
     field_offsets: Vec<usize>,
+    /// If a row is null free according to its schema
+    null_free: bool,
 }
 
 impl RowWriter {
     /// new
     pub fn new(schema: &Arc<Schema>) -> Self {
         assert!(supported(schema));
+        let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
-        let null_width = ceil(field_count, 8);
+        let null_width = if null_free { 0 } else { ceil(field_count, 8) };
         let (field_offsets, values_width) = get_offsets(null_width, schema);
         let mut init_capacity = estimate_row_width(null_width, schema);
         if !fixed_size(schema) {
@@ -221,6 +218,7 @@ impl RowWriter {
             varlena_width: 0,
             varlena_offset: null_width + values_width,
             field_offsets,
+            null_free,
         }
     }
 
@@ -238,6 +236,10 @@ impl RowWriter {
     }
 
     fn set_null_at(&mut self, idx: usize) {
+        assert!(
+            !self.null_free,
+            "Unexpected call to set_null_at on null-free row writer"
+        );
         let null_bits = &mut self.data[0..self.null_width];
         unsafe {
             unset_bit_raw(null_bits.as_mut_ptr(), idx);
@@ -245,6 +247,10 @@ impl RowWriter {
     }
 
     fn set_non_null_at(&mut self, idx: usize) {
+        assert!(
+            !self.null_free,
+            "Unexpected call to set_non_null_at on null-free row writer"
+        );
         let null_bits = &mut self.data[0..self.null_width];
         unsafe {
             set_bit_raw(null_bits.as_mut_ptr(), idx);
@@ -333,17 +339,30 @@ impl RowWriter {
 /// Stitch attributes of tuple in `batch` at `row_idx` and returns the tuple width
 fn write_row(row: &mut RowWriter, row_idx: usize, batch: &RecordBatch) -> usize {
     // Get the row from the batch denoted by row_idx
-    for ((i, f), col) in batch
-        .schema()
-        .fields()
-        .iter()
-        .enumerate()
-        .zip(batch.columns().iter())
-    {
-        if !col.is_null(row_idx) {
+    if row.null_free {
+        for ((i, f), col) in batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .zip(batch.columns().iter())
+        {
             write_field(i, row_idx, col, f.data_type(), row);
-        } else {
-            row.set_null_at(i);
+        }
+    } else {
+        for ((i, f), col) in batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .zip(batch.columns().iter())
+        {
+            if !col.is_null(row_idx) {
+                row.set_non_null_at(i);
+                write_field(i, row_idx, col, f.data_type(), row);
+            } else {
+                row.set_null_at(i);
+            }
         }
     }
 
@@ -392,6 +411,7 @@ fn gen_write_row(
         .param("row", PTR)
         .param("row_idx", I64)
         .param("batch", PTR);
+    let null_free = schema_null_free(schema);
     let mut b = builder.enter_block();
     for (i, f) in schema.fields().iter().enumerate() {
         let dt = f.data_type();
@@ -423,7 +443,9 @@ fn gen_write_row(
                 },
             )?;
         } else {
-            b.call_stmt("set_non_null_at", vec![b.id("row")?, b.lit_i(i as i64)])?;
+            if !null_free {
+                b.call_stmt("set_non_null_at", vec![b.id("row")?, b.lit_i(i as i64)])?;
+            }
             let params = vec![
                 b.id("row")?,
                 b.id(&arr)?,
@@ -550,7 +572,6 @@ fn write_field(
     row: &mut RowWriter,
 ) {
     use DataType::*;
-    row.set_non_null_at(col_idx);
     match dt {
         Boolean => write_field_bool(row, col, col_idx, row_idx),
         UInt8 => write_field_u8(row, col, col_idx, row_idx),
