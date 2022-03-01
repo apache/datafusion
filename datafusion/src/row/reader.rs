@@ -343,21 +343,21 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
     reg_fn!(asm, read_field_date64, reader_param.clone(), None);
     reg_fn!(asm, read_field_utf8, reader_param.clone(), None);
     reg_fn!(asm, read_field_binary, reader_param.clone(), None);
-    reg_fn!(asm, read_field_bool_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u8_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u16_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u32_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u64_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i8_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i16_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i32_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i64_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_f32_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_f64_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date32_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date64_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_utf8_nf, reader_param.clone(), None);
-    reg_fn!(asm, read_field_binary_nf, reader_param, None);
+    reg_fn!(asm, read_field_bool_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_u8_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_u16_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_u32_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_u64_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_i8_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_i16_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_i32_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_i64_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_f32_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_f64_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_date32_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_date64_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_utf8_null_free, reader_param.clone(), None);
+    reg_fn!(asm, read_field_binary_null_free, reader_param, None);
     Ok(())
 }
 
@@ -401,21 +401,21 @@ fn gen_read_row(
             }
         } else {
             match dt {
-                Boolean => b.call_stmt("read_field_bool_nf", params)?,
-                UInt8 => b.call_stmt("read_field_u8_nf", params)?,
-                UInt16 => b.call_stmt("read_field_u16_nf", params)?,
-                UInt32 => b.call_stmt("read_field_u32_nf", params)?,
-                UInt64 => b.call_stmt("read_field_u64_nf", params)?,
-                Int8 => b.call_stmt("read_field_i8_nf", params)?,
-                Int16 => b.call_stmt("read_field_i16_nf", params)?,
-                Int32 => b.call_stmt("read_field_i32_nf", params)?,
-                Int64 => b.call_stmt("read_field_i64_nf", params)?,
-                Float32 => b.call_stmt("read_field_f32_nf", params)?,
-                Float64 => b.call_stmt("read_field_f64_nf", params)?,
-                Date32 => b.call_stmt("read_field_date32_nf", params)?,
-                Date64 => b.call_stmt("read_field_date64_nf", params)?,
-                Utf8 => b.call_stmt("read_field_utf8_nf", params)?,
-                Binary => b.call_stmt("read_field_binary_nf", params)?,
+                Boolean => b.call_stmt("read_field_bool_null_free", params)?,
+                UInt8 => b.call_stmt("read_field_u8_null_free", params)?,
+                UInt16 => b.call_stmt("read_field_u16_null_free", params)?,
+                UInt32 => b.call_stmt("read_field_u32_null_free", params)?,
+                UInt64 => b.call_stmt("read_field_u64_null_free", params)?,
+                Int8 => b.call_stmt("read_field_i8_null_free", params)?,
+                Int16 => b.call_stmt("read_field_i16_null_free", params)?,
+                Int32 => b.call_stmt("read_field_i32_null_free", params)?,
+                Int64 => b.call_stmt("read_field_i64_null_free", params)?,
+                Float32 => b.call_stmt("read_field_f32_null_free", params)?,
+                Float64 => b.call_stmt("read_field_f64_null_free", params)?,
+                Date32 => b.call_stmt("read_field_date32_null_free", params)?,
+                Date64 => b.call_stmt("read_field_date64_null_free", params)?,
+                Utf8 => b.call_stmt("read_field_utf8_null_free", params)?,
+                Binary => b.call_stmt("read_field_binary_null_free", params)?,
                 _ => unimplemented!(),
             }
         }
@@ -436,7 +436,7 @@ macro_rules! fn_read_field {
                     .unwrap();
             }
 
-            fn [<read_field_ $NATIVE _nf>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+            fn [<read_field_ $NATIVE _null_free>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
@@ -473,7 +473,11 @@ fn read_field_binary(to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowRe
     }
 }
 
-fn read_field_binary_nf(to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+fn read_field_binary_null_free(
+    to: &mut Box<dyn ArrayBuilder>,
+    col_idx: usize,
+    row: &RowReader,
+) {
     let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
     to.append_value(row.get_binary(col_idx))
         .map_err(DataFusionError::ArrowError)
@@ -515,21 +519,21 @@ fn read_field_null_free(
 ) {
     use DataType::*;
     match dt {
-        Boolean => read_field_bool_nf(to, col_idx, row),
-        UInt8 => read_field_u8_nf(to, col_idx, row),
-        UInt16 => read_field_u16_nf(to, col_idx, row),
-        UInt32 => read_field_u32_nf(to, col_idx, row),
-        UInt64 => read_field_u64_nf(to, col_idx, row),
-        Int8 => read_field_i8_nf(to, col_idx, row),
-        Int16 => read_field_i16_nf(to, col_idx, row),
-        Int32 => read_field_i32_nf(to, col_idx, row),
-        Int64 => read_field_i64_nf(to, col_idx, row),
-        Float32 => read_field_f32_nf(to, col_idx, row),
-        Float64 => read_field_f64_nf(to, col_idx, row),
-        Date32 => read_field_date32_nf(to, col_idx, row),
-        Date64 => read_field_date64_nf(to, col_idx, row),
-        Utf8 => read_field_utf8_nf(to, col_idx, row),
-        Binary => read_field_binary_nf(to, col_idx, row),
+        Boolean => read_field_bool_null_free(to, col_idx, row),
+        UInt8 => read_field_u8_null_free(to, col_idx, row),
+        UInt16 => read_field_u16_null_free(to, col_idx, row),
+        UInt32 => read_field_u32_null_free(to, col_idx, row),
+        UInt64 => read_field_u64_null_free(to, col_idx, row),
+        Int8 => read_field_i8_null_free(to, col_idx, row),
+        Int16 => read_field_i16_null_free(to, col_idx, row),
+        Int32 => read_field_i32_null_free(to, col_idx, row),
+        Int64 => read_field_i64_null_free(to, col_idx, row),
+        Float32 => read_field_f32_null_free(to, col_idx, row),
+        Float64 => read_field_f64_null_free(to, col_idx, row),
+        Date32 => read_field_date32_null_free(to, col_idx, row),
+        Date64 => read_field_date64_null_free(to, col_idx, row),
+        Utf8 => read_field_utf8_null_free(to, col_idx, row),
+        Binary => read_field_binary_null_free(to, col_idx, row),
         _ => unimplemented!(),
     }
 }

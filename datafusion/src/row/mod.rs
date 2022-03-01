@@ -357,7 +357,7 @@ mod tests {
 
                 #[test]
                 #[allow(non_snake_case)]
-                fn [<test_single_ $TYPE _nf>]() -> Result<()> {
+                fn [<test_single_ $TYPE _null_free>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
                     let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
                     let a = $ARRAY::from(v);
@@ -373,7 +373,7 @@ mod tests {
                 #[test]
                 #[allow(non_snake_case)]
                 #[cfg(feature = "jit")]
-                fn [<test_single_ $TYPE _jit_nf>]() -> Result<()> {
+                fn [<test_single_ $TYPE _jit_null_free>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
                     let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
                     let a = $ARRAY::from(v);
@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn test_single_binary_nf() -> Result<()> {
+    fn test_single_binary_null_free() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
         let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
         let a = BinaryArray::from_vec(values);
@@ -531,7 +531,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "jit")]
-    fn test_single_binary_jit_nf() -> Result<()> {
+    fn test_single_binary_jit_null_free() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
         let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
         let a = BinaryArray::from_vec(values);
