@@ -19,7 +19,7 @@
 use std::io::Seek;
 use std::{io, io::Read, sync::Arc};
 
-use crate::datasource::object_store::ChunkObjectReader;
+use crate::datasource::object_store::ObjectReaderWrapper;
 use crate::{
     datasource::object_store::{
         FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
@@ -77,9 +77,9 @@ impl ObjectStore for TestObjectStore {
         unimplemented!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader> {
+    fn file_reader(&self, file: SizedFile) -> Result<ObjectReaderWrapper> {
         match self.files.iter().find(|item| file.path == item.0) {
-            Some((_, size)) if *size == file.size => Ok(ChunkObjectReader(Arc::new(
+            Some((_, size)) if *size == file.size => Ok(ObjectReaderWrapper(Arc::new(
                 Mutex::new(EmptyObjectReader(*size)),
             ))),
             Some(_) => Err(DataFusionError::IoError(io::Error::new(

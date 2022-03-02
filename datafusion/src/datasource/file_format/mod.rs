@@ -32,7 +32,7 @@ use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::FileScanConfig;
 use crate::physical_plan::{ExecutionPlan, Statistics};
 
-use crate::datasource::object_store::ChunkObjectReader;
+use crate::datasource::object_store::ObjectReaderWrapper;
 use async_trait::async_trait;
 
 use super::object_store::ObjectReaderStream;
@@ -54,7 +54,7 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
     /// estimated statistics might vary greatly between file formats.
-    async fn infer_stats(&self, reader: ChunkObjectReader) -> Result<Statistics>;
+    async fn infer_stats(&self, reader: ObjectReaderWrapper) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.

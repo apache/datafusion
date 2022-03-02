@@ -850,7 +850,7 @@ mod roundtrip_tests {
     use core::panic;
     use datafusion::datasource::listing::ListingTable;
     use datafusion::datasource::object_store::{
-        ChunkObjectReader, FileMetaStream, ListEntryStream, ObjectStore, SizedFile,
+        ObjectReaderWrapper, FileMetaStream, ListEntryStream, ObjectStore, SizedFile,
     };
     use datafusion::error::DataFusionError;
     use datafusion::{
@@ -895,7 +895,7 @@ mod roundtrip_tests {
         fn file_reader(
             &self,
             _file: SizedFile,
-        ) -> datafusion::error::Result<ChunkObjectReader> {
+        ) -> datafusion::error::Result<ObjectReaderWrapper> {
             Err(DataFusionError::NotImplemented(
                 "this is only a test object store".to_string(),
             ))

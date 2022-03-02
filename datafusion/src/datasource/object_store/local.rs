@@ -26,7 +26,7 @@ use futures::{stream, AsyncRead, StreamExt};
 use parking_lot::Mutex;
 
 use crate::datasource::object_store::{
-    ChunkObjectReader, FileMeta, FileMetaStream, ListEntryStream, ObjectReader,
+    ObjectReaderWrapper, FileMeta, FileMetaStream, ListEntryStream, ObjectReader,
     ObjectStore,
 };
 use crate::datasource::PartitionedFile;
@@ -57,8 +57,8 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader> {
-        Ok(ChunkObjectReader(Arc::new(Mutex::new(
+    fn file_reader(&self, file: SizedFile) -> Result<ObjectReaderWrapper> {
+        Ok(ObjectReaderWrapper(Arc::new(Mutex::new(
             LocalFileReader::new(file)?,
         ))))
     }
@@ -186,7 +186,7 @@ pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
 }
 
 /// Helper method to convert a file location to a `LocalFileReader`
-pub fn local_object_reader(file: String) -> ChunkObjectReader {
+pub fn local_object_reader(file: String) -> ObjectReaderWrapper {
     LocalFileSystem
         .file_reader(local_unpartitioned_file(file).file_meta.sized_file)
         .expect("File not found")

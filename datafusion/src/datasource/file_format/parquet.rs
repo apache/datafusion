@@ -40,7 +40,7 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::object_store::{ChunkObjectReader, ObjectReaderStream};
+use crate::datasource::object_store::{ObjectReaderWrapper, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
@@ -98,7 +98,7 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, reader: ChunkObjectReader) -> Result<Statistics> {
+    async fn infer_stats(&self, reader: ObjectReaderWrapper) -> Result<Statistics> {
         let stats = fetch_statistics(reader)?;
         Ok(stats)
     }
@@ -268,7 +268,7 @@ fn summarize_min_max(
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
-fn fetch_schema(object_reader: ChunkObjectReader) -> Result<Schema> {
+fn fetch_schema(object_reader: ObjectReaderWrapper) -> Result<Schema> {
     let file_reader = Arc::new(SerializedFileReader::new(object_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
@@ -277,7 +277,7 @@ fn fetch_schema(object_reader: ChunkObjectReader) -> Result<Schema> {
 }
 
 /// Read and parse the statistics of the Parquet file at location `path`
-fn fetch_statistics(object_reader: ChunkObjectReader) -> Result<Statistics> {
+fn fetch_statistics(object_reader: ObjectReaderWrapper) -> Result<Statistics> {
     let file_reader = Arc::new(SerializedFileReader::new(object_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
@@ -334,13 +334,13 @@ fn fetch_statistics(object_reader: ChunkObjectReader) -> Result<Statistics> {
     Ok(statistics)
 }
 
-impl Length for ChunkObjectReader {
+impl Length for ObjectReaderWrapper {
     fn len(&self) -> u64 {
         self.0.lock().length()
     }
 }
 
-impl ChunkReader for ChunkObjectReader {
+impl ChunkReader for ObjectReaderWrapper {
     type T = Self;
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {

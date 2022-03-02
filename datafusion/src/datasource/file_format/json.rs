@@ -30,7 +30,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::FileScanConfig;
-use crate::datasource::object_store::{ChunkObjectReader, ObjectReaderStream};
+use crate::datasource::object_store::{ObjectReaderWrapper, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
@@ -81,7 +81,7 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(&self, _reader: ChunkObjectReader) -> Result<Statistics> {
+    async fn infer_stats(&self, _reader: ObjectReaderWrapper) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 

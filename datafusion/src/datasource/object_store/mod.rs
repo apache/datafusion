@@ -48,16 +48,20 @@ pub trait ObjectReader: Read + Seek + Send {
     /// Imitate [`std::io::Read::take`] since we are not [`Sized`]
     fn set_limit(&mut self, limit: usize);
 
-    /// total length of the underlying file. It's currently only used by Parquet reader
+    /// Total length of the underlying file. It's currently only used by Parquet reader
     /// to read metadata from the end.
     fn length(&self) -> u64;
 }
 
 #[derive(Clone)]
-/// Chunked Reader
-pub struct ChunkObjectReader(pub Arc<Mutex<dyn ObjectReader>>);
+/// A wrapper over ObjectReader that reads file contents out.
+///
+/// Note: We use Arc<Mutex<>> over the reader mainly to reuse the same underlying
+/// file handle while conforming to Parquet ChunkReader's [`parquet::file::reader::ChunkReader::get_read`]
+/// over immutable reference.
+pub struct ObjectReaderWrapper(pub Arc<Mutex<dyn ObjectReader>>);
 
-impl Read for ChunkObjectReader {
+impl Read for ObjectReaderWrapper {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.0.lock().read(buf)
     }
@@ -126,7 +130,7 @@ pub type ListEntryStream =
 
 /// Stream readers opened on a given object store
 pub type ObjectReaderStream =
-    Pin<Box<dyn Stream<Item = Result<ChunkObjectReader>> + Send + Sync>>;
+    Pin<Box<dyn Stream<Item = Result<ObjectReaderWrapper>> + Send + Sync>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -161,7 +165,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader>;
+    fn file_reader(&self, file: SizedFile) -> Result<ObjectReaderWrapper>;
 }
 
 static LOCAL_SCHEME: &str = "file";

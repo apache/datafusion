@@ -21,7 +21,7 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
-use crate::datasource::object_store::ChunkObjectReader;
+use crate::datasource::object_store::ObjectReaderWrapper;
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     physical_plan::RecordBatchStream,
@@ -48,12 +48,12 @@ pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + 
 /// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
 /// and an optional number of required records.
 pub trait FormatReaderOpener:
-    FnMut(ChunkObjectReader, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+    FnMut(ObjectReaderWrapper, &Option<usize>) -> BatchIter + Send + Unpin + 'static
 {
 }
 
 impl<T> FormatReaderOpener for T where
-    T: FnMut(ChunkObjectReader, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+    T: FnMut(ObjectReaderWrapper, &Option<usize>) -> BatchIter + Send + Unpin + 'static
 {
 }
 
