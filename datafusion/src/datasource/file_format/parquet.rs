@@ -268,8 +268,7 @@ fn summarize_min_max(
 
 /// Read and parse the schema of the Parquet file at location `path`
 fn fetch_schema(object_reader: ChunkObjectReader) -> Result<Schema> {
-    let obj_reader = object_reader;
-    let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
+    let file_reader = Arc::new(SerializedFileReader::new(object_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
 
@@ -278,8 +277,7 @@ fn fetch_schema(object_reader: ChunkObjectReader) -> Result<Schema> {
 
 /// Read and parse the statistics of the Parquet file at location `path`
 fn fetch_statistics(object_reader: ChunkObjectReader) -> Result<Statistics> {
-    let obj_reader = object_reader;
-    let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
+    let file_reader = Arc::new(SerializedFileReader::new(object_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
     let num_fields = schema.fields().len();

@@ -18,7 +18,7 @@
 //! Object store that represents the Local File System.
 
 use std::fs::{self, File, Metadata};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -84,6 +84,7 @@ impl LocalFileReader {
     fn set_chunk(&mut self, start: u64, length: usize) -> Result<()> {
         let end = start + length as u64;
         assert!(end <= self.total_size);
+        self.r.seek(SeekFrom::Start(start))?;
         self.current_pos = start;
         self.chunk_range = Some((start, end));
         Ok(())

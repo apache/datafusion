@@ -960,7 +960,7 @@ mod tests {
         // invalid file should produce an error to that effect
         assert_contains!(
             batch.unwrap_err().to_string(),
-            "External error: Parquet error: Arrow: IO error"
+            "External error: IO error: No such file or directory"
         );
         assert!(results.next().await.is_none());
 
