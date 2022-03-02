@@ -20,13 +20,11 @@ use datafusion::arrow::datatypes::{DataType, Field, Int64Type};
 use datafusion::declare_udf_plugin;
 use datafusion::error::DataFusionError;
 use datafusion::error::Result;
-use datafusion::physical_plan::functions::{
-    make_scalar_function, ReturnTypeFunction, ScalarFunctionImplementation, Signature,
-    Volatility,
-};
+use datafusion::physical_plan::functions::{make_scalar_function, Signature, Volatility};
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
 use datafusion::plugin::udf::UDFPlugin;
+use datafusion_expr::{ReturnTypeFunction, ScalarFunctionImplementation};
 use lazy_static::lazy_static;
 use std::any::Any;
 use std::sync::Arc;
