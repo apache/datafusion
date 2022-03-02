@@ -18,6 +18,7 @@
 //! Parquet format abstractions
 
 use std::any::Any;
+use std::io::SeekFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -335,7 +336,7 @@ fn fetch_statistics(object_reader: ChunkObjectReader) -> Result<Statistics> {
 
 impl Length for ChunkObjectReader {
     fn len(&self) -> u64 {
-        self.0.lock().chunk_length()
+        self.0.lock().length()
     }
 }
 
@@ -343,10 +344,10 @@ impl ChunkReader for ChunkObjectReader {
     type T = Self;
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
-        self.0
-            .lock()
-            .set_chunk(start, length)
+        let mut r = self.0.lock();
+        r.seek(SeekFrom::Start(start))
             .map_err(|e| ParquetError::ArrowError(e.to_string()))?;
+        r.set_limit(length);
         Ok(self.clone())
     }
 }

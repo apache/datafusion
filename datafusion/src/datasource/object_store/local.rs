@@ -67,8 +67,7 @@ impl ObjectStore for LocalFileSystem {
 struct LocalFileReader {
     r: BufReader<File>,
     total_size: u64,
-    current_pos: u64,
-    chunk_range: Option<(u64, u64)>,
+    limit: usize,
 }
 
 impl LocalFileReader {
@@ -76,32 +75,28 @@ impl LocalFileReader {
         Ok(Self {
             r: BufReader::new(File::open(file.path)?),
             total_size: file.size,
-            current_pos: 0,
-            chunk_range: None,
+            limit: file.size as usize,
         })
-    }
-
-    fn set_chunk(&mut self, start: u64, length: usize) -> Result<()> {
-        let end = start + length as u64;
-        assert!(end <= self.total_size);
-        self.r.seek(SeekFrom::Start(start))?;
-        self.current_pos = start;
-        self.chunk_range = Some((start, end));
-        Ok(())
-    }
-
-    fn chunk_length(&self) -> u64 {
-        self.chunk_range.map_or(self.total_size, |r| r.1 - r.0)
     }
 }
 
 impl Read for LocalFileReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let chunk_end = self.chunk_range.map_or(self.total_size, |r| r.1);
-        let read_len = std::cmp::min(buf.len(), (chunk_end - self.current_pos) as usize);
-        let read_len = self.r.read(&mut buf[..read_len])?;
-        self.current_pos += read_len as u64;
-        Ok(read_len)
+        // read from current position to limit
+        if self.limit > 0 {
+            let read_len = std::cmp::min(self.limit, buf.len());
+            let read_len = self.r.read(&mut buf[..read_len])?;
+            self.limit -= read_len;
+            Ok(read_len)
+        } else {
+            Ok(0)
+        }
+    }
+}
+
+impl Seek for LocalFileReader {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.r.seek(pos)
     }
 }
 
@@ -117,12 +112,12 @@ impl ObjectReader for LocalFileReader {
         )
     }
 
-    fn set_chunk(&mut self, start: u64, length: usize) -> Result<()> {
-        self.set_chunk(start, length)
+    fn set_limit(&mut self, limit: usize) {
+        self.limit = limit;
     }
 
-    fn chunk_length(&self) -> u64 {
-        self.chunk_length()
+    fn length(&self) -> u64 {
+        self.total_size
     }
 }
 

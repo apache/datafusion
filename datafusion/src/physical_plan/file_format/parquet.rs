@@ -958,10 +958,7 @@ mod tests {
         let mut results = parquet_exec.execute(0, runtime).await?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
-        assert_contains!(
-            batch.unwrap_err().to_string(),
-            "External error: IO error: No such file or directory"
-        );
+        assert_contains!(batch.unwrap_err().to_string(), "External error: IO error");
         assert!(results.next().await.is_none());
 
         Ok(())

@@ -22,7 +22,7 @@ pub mod local;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -39,16 +39,18 @@ use crate::error::{DataFusionError, Result};
 /// Note that the dynamic dispatch on the reader might
 /// have some performance impacts.
 #[async_trait]
-pub trait ObjectReader: Read + Send {
+pub trait ObjectReader: Read + Seek + Send {
     /// Get reader for a part [start, start + length] in the file asynchronously
     async fn chunk_reader(&self, start: u64, length: usize)
         -> Result<Box<dyn AsyncRead>>;
 
-    /// limit ourself to part [start, start + length] in the file
-    fn set_chunk(&mut self, start: u64, length: usize) -> Result<()>;
+    /// Set the max number of bytes to be read from the underlying file, until it's reset.
+    /// Imitate [`std::io::Read::take`] since we are not [`Sized`]
+    fn set_limit(&mut self, limit: usize);
 
-    /// length of the current chunk, if it's a whole file, then the file length
-    fn chunk_length(&self) -> u64;
+    /// total length of the underlying file. It's currently only used by Parquet reader
+    /// to read metadata from the end.
+    fn length(&self) -> u64;
 }
 
 #[derive(Clone)]

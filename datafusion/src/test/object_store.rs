@@ -16,6 +16,7 @@
 // under the License.
 //! Object store implem used for testing
 
+use std::io::Seek;
 use std::{io, io::Read, sync::Arc};
 
 use crate::datasource::object_store::ChunkObjectReader;
@@ -102,6 +103,12 @@ impl Read for EmptyObjectReader {
     }
 }
 
+impl Seek for EmptyObjectReader {
+    fn seek(&mut self, _pos: io::SeekFrom) -> io::Result<u64> {
+        Ok(0)
+    }
+}
+
 #[async_trait]
 impl ObjectReader for EmptyObjectReader {
     async fn chunk_reader(
@@ -112,11 +119,11 @@ impl ObjectReader for EmptyObjectReader {
         unimplemented!()
     }
 
-    fn set_chunk(&mut self, _start: u64, _length: usize) -> Result<()> {
-        Ok(())
+    fn set_limit(&mut self, limit: usize) {
+        self.0 = limit as u64;
     }
 
-    fn chunk_length(&self) -> u64 {
+    fn length(&self) -> u64 {
         self.0
     }
 }
