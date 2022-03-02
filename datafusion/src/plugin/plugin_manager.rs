@@ -80,7 +80,7 @@ impl GlobalPluginManager {
                     "not found plugin_declaration in the library: {}",
                     plugin_file.path().to_str().unwrap()
                 );
-                return Ok(());
+                continue;
             }
 
             let dec = dec.unwrap().read();
