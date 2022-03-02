@@ -22,6 +22,7 @@ use datafusion_cli::{
     context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
 };
+use dirs;
 use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
@@ -55,17 +56,17 @@ struct Args {
         help = "Execute commands from file(s), then exit",
         validator(is_valid_file)
     )]
-    file_exit: Vec<String>,
+    file: Vec<String>,
 
     #[clap(
-        short,
+        short = 'r',
         long,
         multiple_values = true,
-        help = "Execute commands from file(s)",
+        help = "Run the provided files on startup instead of ~/.datafusionrc",
         validator(is_valid_file),
         conflicts_with = "file"
     )]
-    file_run: Vec<String>,
+    rc: Option<Vec<String>>,
 
     #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
     format: PrintFormat,
@@ -114,14 +115,31 @@ pub async fn main() -> Result<()> {
         quiet: args.quiet,
     };
 
-    let files_to_run_then_quit = args.file_exit;
-    let files_to_run = args.file_run;
-    if !files_to_run_then_quit.is_empty() {
-        exec::exec_from_files(files_to_run_then_quit, &mut ctx, &print_options).await
+    let files = args.file;
+    let rc = match args.rc {
+        Some(file) => file,
+        None => {
+            let mut files = Vec::new();
+            let home = dirs::home_dir();
+            match home {
+                Some(p) => {
+                    let home_rc = p.join(".datafusionrc");
+                    if home_rc.exists() {
+                        files.push(String::from(
+                            home_rc.into_os_string().into_string().unwrap(),
+                        ));
+                    }
+                }
+                None => (),
+            }
+            files
+        }
+    };
+    if !files.is_empty() {
+        exec::exec_from_files(files, &mut ctx, &print_options).await
     } else {
-        if !files_to_run.is_empty() {
-            println!("Running files: {}", &files_to_run.join(","));
-            exec::exec_from_files(files_to_run, &mut ctx, &print_options).await
+        if !rc.is_empty() {
+            exec::exec_from_files(rc, &mut ctx, &print_options).await
         }
         exec::exec_from_repl(&mut ctx, &mut print_options).await;
     }
