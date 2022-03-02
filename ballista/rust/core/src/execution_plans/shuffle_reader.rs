@@ -201,7 +201,7 @@ fn stats_for_partitions(
 
 async fn fetch_partition(
     location: &PartitionLocation,
-) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+) -> Result<Pin<Box<dyn RecordBatchStream + Send>>> {
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
     let mut ballista_client =
