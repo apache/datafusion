@@ -59,7 +59,7 @@ use futures::{Stream, StreamExt};
 /// Stream data to disk in Arrow IPC format
 
 pub async fn write_stream_to_disk(
-    stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
+    stream: &mut Pin<Box<dyn RecordBatchStream + Send>>,
     path: &str,
     disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
@@ -98,7 +98,7 @@ pub async fn write_stream_to_disk(
 }
 
 pub async fn collect_stream(
-    stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
+    stream: &mut Pin<Box<dyn RecordBatchStream + Send>>,
 ) -> Result<Vec<RecordBatch>> {
     let mut batches = vec![];
     while let Some(batch) = stream.next().await {
@@ -310,13 +310,13 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
 }
 
 pub struct WrappedStream {
-    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
     schema: SchemaRef,
 }
 
 impl WrappedStream {
     pub fn new(
-        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
         schema: SchemaRef,
     ) -> Self {
         Self { stream, schema }

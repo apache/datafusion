@@ -51,7 +51,7 @@ pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
 }
 
 /// Trait for a stream of record batches.
-pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync>>;
+pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
