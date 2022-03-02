@@ -850,7 +850,7 @@ mod roundtrip_tests {
     use core::panic;
     use datafusion::datasource::listing::ListingTable;
     use datafusion::datasource::object_store::{
-        ObjectReaderWrapper, FileMetaStream, ListEntryStream, ObjectStore, SizedFile,
+        FileMetaStream, ListEntryStream, ObjectReaderWrapper, ObjectStore, SizedFile,
     };
     use datafusion::error::DataFusionError;
     use datafusion::{

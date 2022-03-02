@@ -40,7 +40,7 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::object_store::{ObjectReaderWrapper, ObjectReaderStream};
+use crate::datasource::object_store::{ObjectReaderStream, ObjectReaderWrapper};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;

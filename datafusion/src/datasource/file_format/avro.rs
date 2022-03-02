@@ -27,7 +27,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::object_store::{ObjectReaderWrapper, ObjectReaderStream};
+use crate::datasource::object_store::{ObjectReaderStream, ObjectReaderWrapper};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};

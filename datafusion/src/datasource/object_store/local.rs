@@ -26,7 +26,7 @@ use futures::{stream, AsyncRead, StreamExt};
 use parking_lot::Mutex;
 
 use crate::datasource::object_store::{
-    ObjectReaderWrapper, FileMeta, FileMetaStream, ListEntryStream, ObjectReader,
+    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectReaderWrapper,
     ObjectStore,
 };
 use crate::datasource::PartitionedFile;

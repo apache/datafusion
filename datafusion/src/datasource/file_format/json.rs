@@ -30,7 +30,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::FileScanConfig;
-use crate::datasource::object_store::{ObjectReaderWrapper, ObjectReaderStream};
+use crate::datasource::object_store::{ObjectReaderStream, ObjectReaderWrapper};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
