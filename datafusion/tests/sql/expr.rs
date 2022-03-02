@@ -725,6 +725,22 @@ async fn test_extract_date_part() -> Result<()> {
         "EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00'))",
         "2020"
     );
+    test_expression!(
+        "EXTRACT(minute FROM to_timestamp('2020-09-08T12:12:00+00:00'))",
+        "12"
+    );
+    test_expression!(
+        "date_part('minute', to_timestamp('2020-09-08T12:12:00+00:00'))",
+        "12"
+    );
+    test_expression!(
+        "EXTRACT(second FROM to_timestamp('2020-09-08T12:00:12+00:00'))",
+        "12"
+    );
+    test_expression!(
+        "date_part('second', to_timestamp('2020-09-08T12:00:12+00:00'))",
+        "12"
+    );
     Ok(())
 }
 
