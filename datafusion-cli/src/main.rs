@@ -22,7 +22,6 @@ use datafusion_cli::{
     context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
 };
-use dirs;
 use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
@@ -121,16 +120,11 @@ pub async fn main() -> Result<()> {
         None => {
             let mut files = Vec::new();
             let home = dirs::home_dir();
-            match home {
-                Some(p) => {
-                    let home_rc = p.join(".datafusionrc");
-                    if home_rc.exists() {
-                        files.push(String::from(
-                            home_rc.into_os_string().into_string().unwrap(),
-                        ));
-                    }
+            if let Some(p) = home {
+                let home_rc = p.join(".datafusionrc");
+                if home_rc.exists() {
+                    files.push(home_rc.into_os_string().into_string().unwrap());
                 }
-                None => (),
             }
             files
         }
