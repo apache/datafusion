@@ -27,6 +27,7 @@ use arrow::error::ArrowError;
 use avro_rs::Error as AvroError;
 #[cfg(feature = "jit")]
 use cranelift_module::ModuleError;
+#[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
 
@@ -42,6 +43,7 @@ pub enum DataFusionError {
     /// Error returned by arrow.
     ArrowError(ArrowError),
     /// Wraps an error from the Parquet crate
+    #[cfg(feature = "parquet")]
     ParquetError(ParquetError),
     /// Wraps an error from the Avro crate
     #[cfg(feature = "avro")]
@@ -98,6 +100,7 @@ impl From<DataFusionError> for ArrowError {
     }
 }
 
+#[cfg(feature = "parquet")]
 impl From<ParquetError> for DataFusionError {
     fn from(e: ParquetError) -> Self {
         DataFusionError::ParquetError(e)
@@ -134,6 +137,7 @@ impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
+            #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
                 write!(f, "Parquet error: {}", desc)
             }

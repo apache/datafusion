@@ -34,13 +34,9 @@ use super::{
     ColumnarValue, PhysicalExpr,
 };
 use crate::execution::context::ExecutionProps;
-use crate::physical_plan::array_expressions;
-use crate::physical_plan::datetime_expressions;
 use crate::physical_plan::expressions::{
     cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
 };
-use crate::physical_plan::math_expressions;
-use crate::physical_plan::string_expressions;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -50,27 +46,14 @@ use arrow::{
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
-    record_batch::RecordBatch,
 };
-pub use datafusion_expr::NullColumnarValue;
+use datafusion_expr::ScalarFunctionImplementation;
 pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
-use fmt::{Debug, Formatter};
-use std::{any::Any, fmt, sync::Arc};
-
-/// Scalar function
-///
-/// The Fn param is the wrapped function but be aware that the function will
-/// be passed with the slice / vec of columnar values (either scalar or array)
-/// with the exception of zero param function, where a singular element vec
-/// will be passed. In that case the single element is a null array to indicate
-/// the batch's row count (so that the generative zero-argument function can know
-/// the result array size).
-pub type ScalarFunctionImplementation =
-    Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
-
-/// A function's return type
-pub type ReturnTypeFunction =
-    Arc<dyn Fn(&[DataType]) -> Result<Arc<DataType>> + Send + Sync>;
+use datafusion_physical_expr::array_expressions;
+use datafusion_physical_expr::datetime_expressions;
+use datafusion_physical_expr::math_expressions;
+use datafusion_physical_expr::string_expressions;
+use std::sync::Arc;
 
 macro_rules! make_utf8_to_return_type {
     ($FUNC:ident, $largeUtf8Type:expr, $utf8Type:expr) => {
@@ -256,10 +239,399 @@ pub fn return_type(
     }
 }
 
+/// Create a physical (function) expression.
+/// This function errors when `args`' can't be coerced to a valid argument type of the function.
+pub fn create_physical_expr(
+    fun: &BuiltinScalarFunction,
+    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
+    input_schema: &Schema,
+    execution_props: &ExecutionProps,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
+
+    let coerced_expr_types = coerced_phy_exprs
+        .iter()
+        .map(|e| e.data_type(input_schema))
+        .collect::<Result<Vec<_>>>()?;
+
+    let data_type = return_type(fun, &coerced_expr_types)?;
+
+    let fun_expr: ScalarFunctionImplementation = match fun {
+        // These functions need args and input schema to pick an implementation
+        // Unlike the string functions, which actually figure out the function to use with each array,
+        // here we return either a cast fn or string timestamp translation based on the expression data type
+        // so we don't have to pay a per-array/batch cost.
+        BuiltinScalarFunction::ToTimestamp => {
+            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp",
+                        other,
+                    )))
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampMillis => {
+            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Millisecond, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp_millis",
+                        other,
+                    )))
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampMicros => {
+            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Microsecond, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_micros,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp_micros",
+                        other,
+                    )))
+                }
+            })
+        }
+        BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
+            match coerced_phy_exprs[0].data_type(input_schema) {
+                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
+                    |col_values: &[ColumnarValue]| {
+                        cast_column(
+                            &col_values[0],
+                            &DataType::Timestamp(TimeUnit::Second, None),
+                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                        )
+                    }
+                }
+                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_seconds,
+                other => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Unsupported data type {:?} for function to_timestamp_seconds",
+                        other,
+                    )))
+                }
+            }
+        }),
+        // These don't need args and input schema
+        _ => create_physical_fun(fun, execution_props)?,
+    };
+
+    Ok(Arc::new(ScalarFunctionExpr::new(
+        &format!("{}", fun),
+        fun_expr,
+        coerced_phy_exprs,
+        &data_type,
+    )))
+}
+
+/// the signatures supported by the function `fun`.
+fn signature(fun: &BuiltinScalarFunction) -> Signature {
+    // note: the physical expression must accept the type returned by this function or the execution panics.
+
+    // for now, the list is small, as we do not have many built-in functions.
+    match fun {
+        BuiltinScalarFunction::Array => Signature::variadic(
+            array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
+            Signature::variadic(vec![DataType::Utf8], fun.volatility())
+        }
+        BuiltinScalarFunction::Ascii
+        | BuiltinScalarFunction::BitLength
+        | BuiltinScalarFunction::CharacterLength
+        | BuiltinScalarFunction::InitCap
+        | BuiltinScalarFunction::Lower
+        | BuiltinScalarFunction::MD5
+        | BuiltinScalarFunction::OctetLength
+        | BuiltinScalarFunction::Reverse
+        | BuiltinScalarFunction::SHA224
+        | BuiltinScalarFunction::SHA256
+        | BuiltinScalarFunction::SHA384
+        | BuiltinScalarFunction::SHA512
+        | BuiltinScalarFunction::Trim
+        | BuiltinScalarFunction::Upper => Signature::uniform(
+            1,
+            vec![DataType::Utf8, DataType::LargeUtf8],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Btrim
+        | BuiltinScalarFunction::Ltrim
+        | BuiltinScalarFunction::Rtrim => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
+            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
+        }
+        BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::LargeUtf8,
+                    DataType::Int64,
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::LargeUtf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::LargeUtf8,
+                    DataType::Int64,
+                    DataType::LargeUtf8,
+                ]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Left
+        | BuiltinScalarFunction::Repeat
+        | BuiltinScalarFunction::Right => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::ToTimestamp => Signature::uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::ToTimestampMillis => Signature::uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                DataType::Timestamp(TimeUnit::Second, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::ToTimestampSeconds => Signature::uniform(
+            1,
+            vec![
+                DataType::Utf8,
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Digest => {
+            Signature::exact(vec![DataType::Utf8, DataType::Utf8], fun.volatility())
+        }
+        BuiltinScalarFunction::DateTrunc => Signature::exact(
+            vec![
+                DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::DatePart => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Date32]),
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Date64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Second, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Microsecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Millisecond, None),
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Timestamp(TimeUnit::Nanosecond, None),
+                ]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::SplitPart => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Int64,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::LargeUtf8,
+                    DataType::Utf8,
+                    DataType::Int64,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::LargeUtf8,
+                    DataType::Int64,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::LargeUtf8,
+                    DataType::LargeUtf8,
+                    DataType::Int64,
+                ]),
+            ],
+            fun.volatility(),
+        ),
+
+        BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
+            Signature::one_of(
+                vec![
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::Utf8, DataType::LargeUtf8]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
+                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
+                ],
+                fun.volatility(),
+            )
+        }
+
+        BuiltinScalarFunction::Substr => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::LargeUtf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                ]),
+            ],
+            fun.volatility(),
+        ),
+
+        BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
+            Signature::one_of(
+                vec![TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ])],
+                fun.volatility(),
+            )
+        }
+        BuiltinScalarFunction::RegexpReplace => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ]),
+            ],
+            fun.volatility(),
+        ),
+
+        BuiltinScalarFunction::NullIf => {
+            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), fun.volatility())
+        }
+        BuiltinScalarFunction::RegexpMatch => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
+                TypeSignature::Exact(vec![
+                    DataType::Utf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ]),
+                TypeSignature::Exact(vec![
+                    DataType::LargeUtf8,
+                    DataType::Utf8,
+                    DataType::Utf8,
+                ]),
+            ],
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Random => Signature::exact(vec![], fun.volatility()),
+        // math expressions expect 1 argument of type f64 or f32
+        // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
+        // return the best approximation for it (in f64).
+        // We accept f32 because in this case it is clear that the best approximation
+        // will be as good as the number of digits in the number
+        _ => Signature::uniform(
+            1,
+            vec![DataType::Float64, DataType::Float32],
+            fun.volatility(),
+        ),
+    }
+}
+
+pub use datafusion_physical_expr::ScalarFunctionExpr;
+
 #[cfg(feature = "crypto_expressions")]
 macro_rules! invoke_if_crypto_expressions_feature_flag {
     ($FUNC:ident, $NAME:expr) => {{
-        use crate::physical_plan::crypto_expressions;
+        use datafusion_physical_expr::crypto_expressions;
         crypto_expressions::$FUNC
     }};
 }
@@ -279,7 +651,7 @@ macro_rules! invoke_if_crypto_expressions_feature_flag {
 #[cfg(feature = "regex_expressions")]
 macro_rules! invoke_if_regex_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {{
-        use crate::physical_plan::regex_expressions;
+        use datafusion_physical_expr::regex_expressions;
         regex_expressions::$FUNC::<$T>
     }};
 }
@@ -299,21 +671,59 @@ macro_rules! invoke_if_regex_expressions_feature_flag {
 #[cfg(feature = "unicode_expressions")]
 macro_rules! invoke_if_unicode_expressions_feature_flag {
     ($FUNC:ident, $T:tt, $NAME:expr) => {{
-        use crate::physical_plan::unicode_expressions;
+        use datafusion_physical_expr::unicode_expressions;
         unicode_expressions::$FUNC::<$T>
     }};
 }
 
 #[cfg(not(feature = "unicode_expressions"))]
 macro_rules! invoke_if_unicode_expressions_feature_flag {
-    ($FUNC:ident, $T:tt, $NAME:expr) => {
-        |_: &[ArrayRef]| -> Result<ArrayRef> {
-            Err(DataFusionError::Internal(format!(
-                "function {} requires compilation with feature flag: unicode_expressions.",
-                $NAME
-            )))
+  ($FUNC:ident, $T:tt, $NAME:expr) => {
+    |_: &[ArrayRef]| -> Result<ArrayRef> {
+      Err(DataFusionError::Internal(format!(
+        "function {} requires compilation with feature flag: unicode_expressions.",
+        $NAME
+      )))
+    }
+  };
+}
+
+/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
+/// and vice-versa after evaluation.
+pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
+where
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+{
+    Arc::new(move |args: &[ColumnarValue]| {
+        // first, identify if any of the arguments is an Array. If yes, store its `len`,
+        // as any scalar will need to be converted to an array of len `len`.
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        // to array
+        let args = if let Some(len) = len {
+            args.iter()
+                .map(|arg| arg.clone().into_array(len))
+                .collect::<Vec<ArrayRef>>()
+        } else {
+            args.iter()
+                .map(|arg| arg.clone().into_array(1))
+                .collect::<Vec<ArrayRef>>()
+        };
+
+        let result = (inner)(&args);
+
+        // maybe back to scalar
+        if len.is_some() {
+            result.map(ColumnarValue::Array)
+        } else {
+            ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
         }
-    };
+    })
 }
 
 /// Create a physical scalar function.
@@ -743,536 +1153,6 @@ pub fn create_physical_fun(
                 "create_physical_fun: Unsupported scalar function {:?}",
                 fun
             )))
-        }
-    })
-}
-
-/// Create a physical (function) expression.
-/// This function errors when `args`' can't be coerced to a valid argument type of the function.
-pub fn create_physical_expr(
-    fun: &BuiltinScalarFunction,
-    input_phy_exprs: &[Arc<dyn PhysicalExpr>],
-    input_schema: &Schema,
-    execution_props: &ExecutionProps,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
-
-    let coerced_expr_types = coerced_phy_exprs
-        .iter()
-        .map(|e| e.data_type(input_schema))
-        .collect::<Result<Vec<_>>>()?;
-
-    let data_type = return_type(fun, &coerced_expr_types)?;
-
-    let fun_expr: ScalarFunctionImplementation = match fun {
-        // These functions need args and input schema to pick an implementation
-        // Unlike the string functions, which actually figure out the function to use with each array,
-        // here we return either a cast fn or string timestamp translation based on the expression data type
-        // so we don't have to pay a per-array/batch cost.
-        BuiltinScalarFunction::ToTimestamp => {
-            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp,
-                other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp",
-                        other,
-                    )))
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampMillis => {
-            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Millisecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_millis,
-                other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp_millis",
-                        other,
-                    )))
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampMicros => {
-            Arc::new(match coerced_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Microsecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_micros,
-                other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp_micros",
-                        other,
-                    )))
-                }
-            })
-        }
-        BuiltinScalarFunction::ToTimestampSeconds => Arc::new({
-            match coerced_phy_exprs[0].data_type(input_schema) {
-                Ok(DataType::Int64) | Ok(DataType::Timestamp(_, None)) => {
-                    |col_values: &[ColumnarValue]| {
-                        cast_column(
-                            &col_values[0],
-                            &DataType::Timestamp(TimeUnit::Second, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
-                        )
-                    }
-                }
-                Ok(DataType::Utf8) => datetime_expressions::to_timestamp_seconds,
-                other => {
-                    return Err(DataFusionError::Internal(format!(
-                        "Unsupported data type {:?} for function to_timestamp_seconds",
-                        other,
-                    )))
-                }
-            }
-        }),
-        // These don't need args and input schema
-        _ => create_physical_fun(fun, execution_props)?,
-    };
-
-    Ok(Arc::new(ScalarFunctionExpr::new(
-        &format!("{}", fun),
-        fun_expr,
-        coerced_phy_exprs,
-        &data_type,
-    )))
-}
-
-/// the signatures supported by the function `fun`.
-fn signature(fun: &BuiltinScalarFunction) -> Signature {
-    // note: the physical expression must accept the type returned by this function or the execution panics.
-
-    // for now, the list is small, as we do not have many built-in functions.
-    match fun {
-        BuiltinScalarFunction::Array => Signature::variadic(
-            array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
-            Signature::variadic(vec![DataType::Utf8], fun.volatility())
-        }
-        BuiltinScalarFunction::Ascii
-        | BuiltinScalarFunction::BitLength
-        | BuiltinScalarFunction::CharacterLength
-        | BuiltinScalarFunction::InitCap
-        | BuiltinScalarFunction::Lower
-        | BuiltinScalarFunction::MD5
-        | BuiltinScalarFunction::OctetLength
-        | BuiltinScalarFunction::Reverse
-        | BuiltinScalarFunction::SHA224
-        | BuiltinScalarFunction::SHA256
-        | BuiltinScalarFunction::SHA384
-        | BuiltinScalarFunction::SHA512
-        | BuiltinScalarFunction::Trim
-        | BuiltinScalarFunction::Upper => Signature::uniform(
-            1,
-            vec![DataType::Utf8, DataType::LargeUtf8],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::Btrim
-        | BuiltinScalarFunction::Ltrim
-        | BuiltinScalarFunction::Rtrim => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::Chr | BuiltinScalarFunction::ToHex => {
-            Signature::uniform(1, vec![DataType::Int64], fun.volatility())
-        }
-        BuiltinScalarFunction::Lpad | BuiltinScalarFunction::Rpad => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
-                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Utf8,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                    DataType::Utf8,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::LargeUtf8,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                    DataType::LargeUtf8,
-                ]),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::Left
-        | BuiltinScalarFunction::Repeat
-        | BuiltinScalarFunction::Right => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
-                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::ToTimestamp => Signature::uniform(
-            1,
-            vec![
-                DataType::Utf8,
-                DataType::Int64,
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                DataType::Timestamp(TimeUnit::Second, None),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::ToTimestampMillis => Signature::uniform(
-            1,
-            vec![
-                DataType::Utf8,
-                DataType::Int64,
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                DataType::Timestamp(TimeUnit::Second, None),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::ToTimestampMicros => Signature::uniform(
-            1,
-            vec![
-                DataType::Utf8,
-                DataType::Int64,
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-                DataType::Timestamp(TimeUnit::Second, None),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::ToTimestampSeconds => Signature::uniform(
-            1,
-            vec![
-                DataType::Utf8,
-                DataType::Int64,
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-                DataType::Timestamp(TimeUnit::Microsecond, None),
-                DataType::Timestamp(TimeUnit::Millisecond, None),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::Digest => {
-            Signature::exact(vec![DataType::Utf8, DataType::Utf8], fun.volatility())
-        }
-        BuiltinScalarFunction::DateTrunc => Signature::exact(
-            vec![
-                DataType::Utf8,
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::DatePart => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Date32]),
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Date64]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Second, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Microsecond, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Millisecond, None),
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Timestamp(TimeUnit::Nanosecond, None),
-                ]),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::SplitPart => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Int64,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Utf8,
-                    DataType::Int64,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                ]),
-            ],
-            fun.volatility(),
-        ),
-
-        BuiltinScalarFunction::Strpos | BuiltinScalarFunction::StartsWith => {
-            Signature::one_of(
-                vec![
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-                    TypeSignature::Exact(vec![DataType::Utf8, DataType::LargeUtf8]),
-                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
-                    TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::LargeUtf8]),
-                ],
-                fun.volatility(),
-            )
-        }
-
-        BuiltinScalarFunction::Substr => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Int64]),
-                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Int64]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Int64,
-                    DataType::Int64,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Int64,
-                    DataType::Int64,
-                ]),
-            ],
-            fun.volatility(),
-        ),
-
-        BuiltinScalarFunction::Replace | BuiltinScalarFunction::Translate => {
-            Signature::one_of(
-                vec![TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ])],
-                fun.volatility(),
-            )
-        }
-        BuiltinScalarFunction::RegexpReplace => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ]),
-            ],
-            fun.volatility(),
-        ),
-
-        BuiltinScalarFunction::NullIf => {
-            Signature::uniform(2, SUPPORTED_NULLIF_TYPES.to_vec(), fun.volatility())
-        }
-        BuiltinScalarFunction::RegexpMatch => Signature::one_of(
-            vec![
-                TypeSignature::Exact(vec![DataType::Utf8, DataType::Utf8]),
-                TypeSignature::Exact(vec![DataType::LargeUtf8, DataType::Utf8]),
-                TypeSignature::Exact(vec![
-                    DataType::Utf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ]),
-                TypeSignature::Exact(vec![
-                    DataType::LargeUtf8,
-                    DataType::Utf8,
-                    DataType::Utf8,
-                ]),
-            ],
-            fun.volatility(),
-        ),
-        BuiltinScalarFunction::Random => Signature::exact(vec![], fun.volatility()),
-        // math expressions expect 1 argument of type f64 or f32
-        // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
-        // return the best approximation for it (in f64).
-        // We accept f32 because in this case it is clear that the best approximation
-        // will be as good as the number of digits in the number
-        _ => Signature::uniform(
-            1,
-            vec![DataType::Float64, DataType::Float32],
-            fun.volatility(),
-        ),
-    }
-}
-
-/// Physical expression of a scalar function
-pub struct ScalarFunctionExpr {
-    fun: ScalarFunctionImplementation,
-    name: String,
-    args: Vec<Arc<dyn PhysicalExpr>>,
-    return_type: DataType,
-}
-
-impl Debug for ScalarFunctionExpr {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("ScalarFunctionExpr")
-            .field("fun", &"<FUNC>")
-            .field("name", &self.name)
-            .field("args", &self.args)
-            .field("return_type", &self.return_type)
-            .finish()
-    }
-}
-
-impl ScalarFunctionExpr {
-    /// Create a new Scalar function
-    pub fn new(
-        name: &str,
-        fun: ScalarFunctionImplementation,
-        args: Vec<Arc<dyn PhysicalExpr>>,
-        return_type: &DataType,
-    ) -> Self {
-        Self {
-            fun,
-            name: name.to_owned(),
-            args,
-            return_type: return_type.clone(),
-        }
-    }
-
-    /// Get the scalar function implementation
-    pub fn fun(&self) -> &ScalarFunctionImplementation {
-        &self.fun
-    }
-
-    /// The name for this expression
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Input arguments
-    pub fn args(&self) -> &[Arc<dyn PhysicalExpr>] {
-        &self.args
-    }
-
-    /// Data type produced by this expression
-    pub fn return_type(&self) -> &DataType {
-        &self.return_type
-    }
-}
-
-impl fmt::Display for ScalarFunctionExpr {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{}({})",
-            self.name,
-            self.args
-                .iter()
-                .map(|e| format!("{}", e))
-                .collect::<Vec<String>>()
-                .join(", ")
-        )
-    }
-}
-
-impl PhysicalExpr for ScalarFunctionExpr {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
-        Ok(self.return_type.clone())
-    }
-
-    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
-        Ok(true)
-    }
-
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
-        // indicating the batch size (as a convention)
-        let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
-            (0, Ok(scalar_fun)) if scalar_fun.supports_zero_argument() => {
-                vec![NullColumnarValue::from(batch)]
-            }
-            _ => self
-                .args
-                .iter()
-                .map(|e| e.evaluate(batch))
-                .collect::<Result<Vec<_>>>()?,
-        };
-
-        // evaluate the function
-        let fun = self.fun.as_ref();
-        (fun)(&inputs)
-    }
-}
-
-/// decorates a function to handle [`ScalarValue`]s by converting them to arrays before calling the function
-/// and vice-versa after evaluation.
-pub fn make_scalar_function<F>(inner: F) -> ScalarFunctionImplementation
-where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
-{
-    Arc::new(move |args: &[ColumnarValue]| {
-        // first, identify if any of the arguments is an Array. If yes, store its `len`,
-        // as any scalar will need to be converted to an array of len `len`.
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
-        // to array
-        let args = if let Some(len) = len {
-            args.iter()
-                .map(|arg| arg.clone().into_array(len))
-                .collect::<Vec<ArrayRef>>()
-        } else {
-            args.iter()
-                .map(|arg| arg.clone().into_array(1))
-                .collect::<Vec<ArrayRef>>()
-        };
-
-        let result = (inner)(&args);
-
-        // maybe back to scalar
-        if len.is_some() {
-            result.map(ColumnarValue::Array)
-        } else {
-            ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
         }
     })
 }

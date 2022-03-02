@@ -26,21 +26,20 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
+use super::aggregate_rule::{coerce_exprs, coerce_types};
 use super::{
     functions::{Signature, TypeSignature, Volatility},
     AggregateExpr, PhysicalExpr,
 };
 use crate::error::{DataFusionError, Result};
-use crate::physical_plan::coercion_rule::aggregate_rule::{coerce_exprs, coerce_types};
 use crate::physical_plan::expressions;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+pub use datafusion_expr::AggregateFunction;
 use expressions::{
     avg_return_type, correlation_return_type, covariance_return_type, stddev_return_type,
     sum_return_type, variance_return_type,
 };
 use std::sync::Arc;
-
-pub use datafusion_expr::AggregateFunction;
 
 /// Returns the datatype of the aggregate function.
 /// This is used to get the returned data type for aggregate expr.

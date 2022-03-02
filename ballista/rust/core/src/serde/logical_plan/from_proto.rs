@@ -17,38 +17,26 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use crate::convert_required;
 use crate::error::BallistaError;
-use crate::serde::{
-    from_proto_binary_op, proto_error, protobuf, str_to_byte, vec_to_array,
-};
-use crate::{convert_box_required, convert_required};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::datasource::object_store::{FileMeta, SizedFile};
+use crate::serde::{from_proto_binary_op, proto_error, protobuf, vec_to_array};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
 use datafusion::logical_plan::window_frames::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::logical_plan::{
-    abs, acos, asin, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum,
-    sin, sqrt, tan, trunc, Column, CreateExternalTable, DFField, DFSchema, Expr,
-    JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
+    abs, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum, sin, sqrt,
+    tan, trunc, Column, DFField, DFSchema, Expr,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
-use protobuf::listing_table_scan_node::FileFormatType;
-use protobuf::logical_plan_node::LogicalPlanType;
-use protobuf::{logical_expr_node::ExprType, scalar_type};
+
 use std::{
     convert::{From, TryInto},
     sync::Arc,
-    unimplemented,
 };
 
 impl From<&protobuf::Column> for Column {
@@ -292,7 +280,6 @@ fn typechecked_scalar_value_conversion(
 impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value {
     type Error = BallistaError;
     fn try_into(self) -> Result<datafusion::scalar::ScalarValue, Self::Error> {
-        use datafusion::scalar::ScalarValue;
         use protobuf::PrimitiveScalarType;
         let scalar = match self {
             protobuf::scalar_value::Value::BoolValue(v) => ScalarValue::Boolean(Some(*v)),
@@ -500,7 +487,6 @@ impl TryInto<DataType> for &protobuf::ScalarListType {
 impl TryInto<datafusion::scalar::ScalarValue> for protobuf::PrimitiveScalarType {
     type Error = BallistaError;
     fn try_into(self) -> Result<datafusion::scalar::ScalarValue, Self::Error> {
-        use datafusion::scalar::ScalarValue;
         Ok(match self {
             protobuf::PrimitiveScalarType::Null => {
                 return Err(proto_error("Untyped null is an invalid scalar value"))
@@ -657,7 +643,6 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
         use datafusion::physical_plan::window_functions;
         use protobuf::logical_expr_node::ExprType;
         use protobuf::window_expr_node;
-        use protobuf::WindowExprNode;
 
         let expr_type = self
             .expr_type
@@ -671,7 +656,6 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
             }),
             ExprType::Column(column) => Ok(Expr::Column(column.into())),
             ExprType::Literal(literal) => {
-                use datafusion::scalar::ScalarValue;
                 let scalar_value: datafusion::scalar::ScalarValue = literal.try_into()?;
                 Ok(Expr::Literal(scalar_value))
             }
@@ -972,11 +956,9 @@ impl TryInto<Field> for &protobuf::Field {
     }
 }
 
-use crate::serde::protobuf::ColumnStats;
-use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
-    array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
-    sha384, sha512, trim, upper,
+    date_part, date_trunc, lower, ltrim, rtrim, sha224, sha256, sha384, sha512, trim,
+    upper,
 };
 use std::convert::TryFrom;
 

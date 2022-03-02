@@ -23,9 +23,7 @@ extern crate datafusion;
 mod data_utils;
 use crate::criterion::Criterion;
 use crate::data_utils::{create_record_batches, create_schema};
-use datafusion::row::writer::{
-    bench_write_batch, bench_write_batch_jit, bench_write_batch_jit_dummy,
-};
+use datafusion::row::writer::{bench_write_batch, bench_write_batch_jit};
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -47,10 +45,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             criterion::black_box(bench_write_batch_jit(&batches, schema.clone()).unwrap())
         })
-    });
-
-    c.bench_function("row serializer jit codegen only", |b| {
-        b.iter(|| bench_write_batch_jit_dummy(schema.clone()).unwrap())
     });
 }
 

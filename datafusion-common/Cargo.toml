@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-common"
-description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
+description = "Common functionality for DataFusion query engine"
 version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
@@ -38,8 +38,8 @@ pyarrow = ["pyo3"]
 jit = ["cranelift-module"]
 
 [dependencies]
-arrow = { version = "9.0.0", features = ["prettyprint"] }
-parquet = { version = "9.0.0", features = ["arrow"] }
+arrow = { version = "9.1", features = ["prettyprint"] }
+parquet = { version = "9.1", features = ["arrow"], optional = true }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 pyo3 = { version = "0.15", optional = true }
 sqlparser = "0.14"

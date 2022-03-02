@@ -104,8 +104,7 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
     for batch_size in batch_sizes {
         let first_batch = input
             .iter()
-            .map(|p| p.iter())
-            .flatten()
+            .flat_map(|p| p.iter())
             .next()
             .expect("at least one batch");
         let schema = first_batch.schema();
