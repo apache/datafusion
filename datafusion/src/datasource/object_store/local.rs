@@ -18,14 +18,16 @@
 //! Object store that represents the Local File System.
 
 use std::fs::{self, File, Metadata};
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
+use parking_lot::Mutex;
 
 use crate::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
+    ChunkObjectReader, FileMeta, FileMetaStream, ListEntryStream, ObjectReader,
+    ObjectStore,
 };
 use crate::datasource::PartitionedFile;
 use crate::error::{DataFusionError, Result};
@@ -55,18 +57,50 @@ impl ObjectStore for LocalFileSystem {
         todo!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
-        Ok(Arc::new(LocalFileReader::new(file)?))
+    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader> {
+        Ok(ChunkObjectReader(Arc::new(Mutex::new(
+            LocalFileReader::new(file)?,
+        ))))
     }
 }
 
 struct LocalFileReader {
-    file: SizedFile,
+    r: BufReader<File>,
+    total_size: u64,
+    current_pos: u64,
+    chunk_range: Option<(u64, u64)>,
 }
 
 impl LocalFileReader {
     fn new(file: SizedFile) -> Result<Self> {
-        Ok(Self { file })
+        Ok(Self {
+            r: BufReader::new(File::open(file.path)?),
+            total_size: file.size,
+            current_pos: 0,
+            chunk_range: None,
+        })
+    }
+
+    fn set_chunk(&mut self, start: u64, length: usize) -> Result<()> {
+        let end = start + length as u64;
+        assert!(end <= self.total_size);
+        self.current_pos = start;
+        self.chunk_range = Some((start, end));
+        Ok(())
+    }
+
+    fn chunk_length(&self) -> u64 {
+        self.chunk_range.map_or(self.total_size, |r| r.1 - r.0)
+    }
+}
+
+impl Read for LocalFileReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let chunk_end = self.chunk_range.map_or(self.total_size, |r| r.1);
+        let read_len = std::cmp::min(buf.len(), (chunk_end - self.current_pos) as usize);
+        let read_len = self.r.read(&mut buf[..read_len])?;
+        self.current_pos += read_len as u64;
+        Ok(read_len)
     }
 }
 
@@ -82,23 +116,12 @@ impl ObjectReader for LocalFileReader {
         )
     }
 
-    fn sync_chunk_reader(
-        &self,
-        start: u64,
-        length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>> {
-        // A new file descriptor is opened for each chunk reader.
-        // This okay because chunks are usually fairly large.
-        let mut file = File::open(&self.file.path)?;
-        file.seek(SeekFrom::Start(start))?;
-
-        let file = BufReader::new(file.take(length as u64));
-
-        Ok(Box::new(file))
+    fn set_chunk(&mut self, start: u64, length: usize) -> Result<()> {
+        self.set_chunk(start, length)
     }
 
-    fn length(&self) -> u64 {
-        self.file.size
+    fn chunk_length(&self) -> u64 {
+        self.chunk_length()
     }
 }
 
@@ -167,7 +190,7 @@ pub fn local_object_reader_stream(files: Vec<String>) -> ObjectReaderStream {
 }
 
 /// Helper method to convert a file location to a `LocalFileReader`
-pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
+pub fn local_object_reader(file: String) -> ChunkObjectReader {
     LocalFileSystem
         .file_reader(local_unpartitioned_file(file).file_meta.sized_file)
         .expect("File not found")

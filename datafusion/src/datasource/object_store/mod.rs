@@ -19,7 +19,7 @@
 
 pub mod local;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fmt::{self, Debug};
 use std::io::Read;
@@ -39,25 +39,26 @@ use crate::error::{DataFusionError, Result};
 /// Note that the dynamic dispatch on the reader might
 /// have some performance impacts.
 #[async_trait]
-pub trait ObjectReader: Send + Sync {
+pub trait ObjectReader: Read + Send {
     /// Get reader for a part [start, start + length] in the file asynchronously
     async fn chunk_reader(&self, start: u64, length: usize)
         -> Result<Box<dyn AsyncRead>>;
 
-    /// Get reader for a part [start, start + length] in the file
-    fn sync_chunk_reader(
-        &self,
-        start: u64,
-        length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>>;
+    /// limit ourself to part [start, start + length] in the file
+    fn set_chunk(&mut self, start: u64, length: usize) -> Result<()>;
 
-    /// Get reader for the entire file
-    fn sync_reader(&self) -> Result<Box<dyn Read + Send + Sync>> {
-        self.sync_chunk_reader(0, self.length() as usize)
+    /// length of the current chunk, if it's a whole file, then the file length
+    fn chunk_length(&self) -> u64;
+}
+
+#[derive(Clone)]
+/// Chunked Reader
+pub struct ChunkObjectReader(pub Arc<Mutex<dyn ObjectReader>>);
+
+impl Read for ChunkObjectReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.0.lock().read(buf)
     }
-
-    /// Get the size of the file
-    fn length(&self) -> u64;
 }
 
 /// Represents a specific file or a prefix (folder) that may
@@ -123,7 +124,7 @@ pub type ListEntryStream =
 
 /// Stream readers opened on a given object store
 pub type ObjectReaderStream =
-    Pin<Box<dyn Stream<Item = Result<Arc<dyn ObjectReader>>> + Send + Sync>>;
+    Pin<Box<dyn Stream<Item = Result<ChunkObjectReader>> + Send + Sync>>;
 
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
@@ -158,7 +159,7 @@ pub trait ObjectStore: Sync + Send + Debug {
     ) -> Result<ListEntryStream>;
 
     /// Get object reader for one file
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
+    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader>;
 }
 
 static LOCAL_SCHEME: &str = "file";

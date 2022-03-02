@@ -18,7 +18,6 @@
 //! Parquet format abstractions
 
 use std::any::Any;
-use std::io::Read;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
@@ -40,7 +39,7 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
+use crate::datasource::object_store::{ChunkObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
@@ -98,7 +97,7 @@ impl FileFormat for ParquetFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
+    async fn infer_stats(&self, reader: ChunkObjectReader) -> Result<Statistics> {
         let stats = fetch_statistics(reader)?;
         Ok(stats)
     }
@@ -268,8 +267,8 @@ fn summarize_min_max(
 }
 
 /// Read and parse the schema of the Parquet file at location `path`
-fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
-    let obj_reader = ChunkObjectReader(object_reader);
+fn fetch_schema(object_reader: ChunkObjectReader) -> Result<Schema> {
+    let obj_reader = object_reader;
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
@@ -278,8 +277,8 @@ fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
 }
 
 /// Read and parse the statistics of the Parquet file at location `path`
-fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
-    let obj_reader = ChunkObjectReader(object_reader);
+fn fetch_statistics(object_reader: ChunkObjectReader) -> Result<Statistics> {
+    let obj_reader = object_reader;
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
@@ -336,22 +335,21 @@ fn fetch_statistics(object_reader: Arc<dyn ObjectReader>) -> Result<Statistics> 
     Ok(statistics)
 }
 
-/// A wrapper around the object reader to make it implement `ChunkReader`
-pub struct ChunkObjectReader(pub Arc<dyn ObjectReader>);
-
 impl Length for ChunkObjectReader {
     fn len(&self) -> u64 {
-        self.0.length()
+        self.0.lock().chunk_length()
     }
 }
 
 impl ChunkReader for ChunkObjectReader {
-    type T = Box<dyn Read + Send + Sync>;
+    type T = Self;
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
         self.0
-            .sync_chunk_reader(start, length)
-            .map_err(|e| ParquetError::ArrowError(e.to_string()))
+            .lock()
+            .set_chunk(start, length)
+            .map_err(|e| ParquetError::ArrowError(e.to_string()))?;
+        Ok(self.clone())
     }
 }
 

@@ -21,6 +21,7 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
+use crate::datasource::object_store::ChunkObjectReader;
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     physical_plan::RecordBatchStream,
@@ -33,7 +34,6 @@ use arrow::{
 };
 use futures::Stream;
 use std::{
-    io::Read,
     iter,
     pin::Pin,
     sync::Arc,
@@ -48,15 +48,12 @@ pub type BatchIter = Box<dyn Iterator<Item = ArrowResult<RecordBatch>> + Send + 
 /// A closure that creates a file format reader (iterator over `RecordBatch`) from a `Read` object
 /// and an optional number of required records.
 pub trait FormatReaderOpener:
-    FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter + Send + Unpin + 'static
+    FnMut(ChunkObjectReader, &Option<usize>) -> BatchIter + Send + Unpin + 'static
 {
 }
 
 impl<T> FormatReaderOpener for T where
-    T: FnMut(Box<dyn Read + Send + Sync>, &Option<usize>) -> BatchIter
-        + Send
-        + Unpin
-        + 'static
+    T: FnMut(ChunkObjectReader, &Option<usize>) -> BatchIter + Send + Unpin + 'static
 {
 }
 
@@ -123,7 +120,6 @@ impl<F: FormatReaderOpener> FileStream<F> {
                     self.partition_values = f.partition_values;
                     self.object_store
                         .file_reader(f.file_meta.sized_file)
-                        .and_then(|r| r.sync_reader())
                         .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                         .and_then(|f| {
                             self.batch_iter = (self.file_reader)(f, &self.remain);

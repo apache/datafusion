@@ -21,7 +21,6 @@ use std::fmt;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
-use crate::datasource::file_format::parquet::ChunkObjectReader;
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -462,8 +461,7 @@ fn read_partition(
         );
         let object_reader =
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
-        let mut file_reader =
-            SerializedFileReader::new(ChunkObjectReader(object_reader))?;
+        let mut file_reader = SerializedFileReader::new(object_reader)?;
         if let Some(pruning_predicate) = pruning_predicate {
             let row_group_predicate = build_row_group_predicate(
                 pruning_predicate,

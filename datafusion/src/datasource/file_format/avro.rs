@@ -27,7 +27,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
+use crate::datasource::object_store::{ChunkObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
@@ -49,7 +49,7 @@ impl FileFormat for AvroFormat {
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
         while let Some(obj_reader) = readers.next().await {
-            let mut reader = obj_reader?.sync_reader()?;
+            let mut reader = obj_reader?;
             let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
         }
@@ -57,7 +57,7 @@ impl FileFormat for AvroFormat {
         Ok(Arc::new(merged_schema))
     }
 
-    async fn infer_stats(&self, _reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
+    async fn infer_stats(&self, _reader: ChunkObjectReader) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 

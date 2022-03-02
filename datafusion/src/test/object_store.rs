@@ -16,12 +16,9 @@
 // under the License.
 //! Object store implem used for testing
 
-use std::{
-    io,
-    io::{Cursor, Read},
-    sync::Arc,
-};
+use std::{io, io::Read, sync::Arc};
 
+use crate::datasource::object_store::ChunkObjectReader;
 use crate::{
     datasource::object_store::{
         FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
@@ -30,6 +27,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
+use parking_lot::Mutex;
 
 #[derive(Debug)]
 /// An object store implem that is useful for testing.
@@ -78,11 +76,11 @@ impl ObjectStore for TestObjectStore {
         unimplemented!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader> {
         match self.files.iter().find(|item| file.path == item.0) {
-            Some((_, size)) if *size == file.size => {
-                Ok(Arc::new(EmptyObjectReader(*size)))
-            }
+            Some((_, size)) if *size == file.size => Ok(ChunkObjectReader(Arc::new(
+                Mutex::new(EmptyObjectReader(*size)),
+            ))),
             Some(_) => Err(DataFusionError::IoError(io::Error::new(
                 io::ErrorKind::NotFound,
                 "found in test list but wrong size",
@@ -97,6 +95,13 @@ impl ObjectStore for TestObjectStore {
 
 struct EmptyObjectReader(u64);
 
+impl Read for EmptyObjectReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        buf.fill(0);
+        Ok(buf.len())
+    }
+}
+
 #[async_trait]
 impl ObjectReader for EmptyObjectReader {
     async fn chunk_reader(
@@ -107,15 +112,11 @@ impl ObjectReader for EmptyObjectReader {
         unimplemented!()
     }
 
-    fn sync_chunk_reader(
-        &self,
-        _start: u64,
-        _length: usize,
-    ) -> Result<Box<dyn Read + Send + Sync>> {
-        Ok(Box::new(Cursor::new(vec![0; self.0 as usize])))
+    fn set_chunk(&mut self, _start: u64, _length: usize) -> Result<()> {
+        Ok(())
     }
 
-    fn length(&self) -> u64 {
+    fn chunk_length(&self) -> u64 {
         self.0
     }
 }

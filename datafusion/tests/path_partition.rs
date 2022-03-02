@@ -20,6 +20,7 @@
 use std::{fs, io, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::datasource::object_store::ChunkObjectReader;
 use datafusion::{
     assert_batches_sorted_eq,
     datasource::{
@@ -27,7 +28,7 @@ use datafusion::{
         listing::{ListingOptions, ListingTable, ListingTableConfig},
         object_store::{
             local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
-            ObjectReader, ObjectStore, SizedFile,
+            ObjectStore, SizedFile,
         },
     },
     error::{DataFusionError, Result},
@@ -376,7 +377,7 @@ impl ObjectStore for MirroringObjectStore {
         unimplemented!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(&self, file: SizedFile) -> Result<ChunkObjectReader> {
         assert_eq!(
             self.file_size, file.size,
             "Requested files should have the same size as the mirrored file"
