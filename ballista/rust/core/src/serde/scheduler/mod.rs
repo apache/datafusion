@@ -18,14 +18,13 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use datafusion::arrow::array::{
-    ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
+    ArrayBuilder, StructArray, StructBuilder, UInt64Array, UInt64Builder,
 };
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::logical_plan::LogicalPlan;
+use datafusion::arrow::datatypes::{DataType, Field};
+
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::Partitioning;
 use serde::Serialize;
-use uuid::Uuid;
 
 use super::protobuf;
 use crate::error::BallistaError;

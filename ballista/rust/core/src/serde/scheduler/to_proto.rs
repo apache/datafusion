@@ -20,9 +20,7 @@ use std::convert::TryInto;
 use crate::error::BallistaError;
 use crate::serde::protobuf;
 use crate::serde::protobuf::action::ActionType;
-use crate::serde::scheduler::{
-    Action, ExecutePartition, PartitionId, PartitionLocation, PartitionStats,
-};
+use crate::serde::scheduler::{Action, PartitionId, PartitionLocation, PartitionStats};
 use datafusion::physical_plan::Partitioning;
 
 impl TryInto<protobuf::Action> for Action {

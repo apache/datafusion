@@ -39,6 +39,7 @@ use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::as_task_status;
+use crate::cpu_bound_executor::DedicatedExecutor;
 use crate::executor::Executor;
 
 pub async fn startup<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
@@ -261,6 +262,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
         let executor_server = self.executor_server.clone();
         tokio::spawn(async move {
             info!("Starting the task runner pool");
+            // Use a dedicated executor for CPU bound tasks so that the main tokio
+            // executor can still answer requests even when under load
+            //TODO make it configurable
+            let dedicated_executor = DedicatedExecutor::new("task_runner", 4);
             loop {
                 if let Some(task) = rx_task.recv().await {
                     if let Some(task_id) = &task.task_id {
@@ -271,7 +276,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
                         info!("Received task {:?}", &task_id_log);
 
                         let server = executor_server.clone();
-                        tokio::spawn(async move {
+                        dedicated_executor.spawn(async move {
                             server.run_task(task).await.unwrap_or_else(|e| {
                                 error!(
                                     "Fail to run the task {:?} due to {:?}",

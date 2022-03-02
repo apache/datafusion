@@ -163,6 +163,19 @@ impl HashAggregateExec {
         &self.group_expr
     }
 
+    /// Grouping expressions as they occur in the output schema
+    pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        // Update column indices. Since the group by columns come first in the output schema, their
+        // indices are simply 0..self.group_expr(len).
+        self.group_expr
+            .iter()
+            .enumerate()
+            .map(|(index, (_col, name))| {
+                Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>
+            })
+            .collect()
+    }
+
     /// Aggregate expressions
     pub fn aggr_expr(&self) -> &[Arc<dyn AggregateExpr>] {
         &self.aggr_expr
@@ -1176,12 +1189,12 @@ mod tests {
             _partition: usize,
             _runtime: Arc<RuntimeEnv>,
         ) -> Result<SendableRecordBatchStream> {
-            let stream;
-            if self.yield_first {
-                stream = TestYieldingStream::New;
+            let stream = if self.yield_first {
+                TestYieldingStream::New
             } else {
-                stream = TestYieldingStream::Yielded;
-            }
+                TestYieldingStream::Yielded
+            };
+
             Ok(Box::pin(stream))
         }
 

@@ -212,6 +212,11 @@ fn fn_name<T>(f: T) -> &'static str {
     }
 }
 
+/// Tell if schema contains no nullable field
+pub fn schema_null_free(schema: &Arc<Schema>) -> bool {
+    schema.fields().iter().all(|f| !f.is_nullable())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,7 +328,7 @@ mod tests {
                 #[test]
                 #[allow(non_snake_case)]
                 fn [<test_single_ $TYPE>]() -> Result<()> {
-                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
+                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
                     let a = $ARRAY::from($VEC);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
@@ -340,6 +345,38 @@ mod tests {
                 fn [<test_single_ $TYPE _jit>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
                     let a = $ARRAY::from($VEC);
+                    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+                    let mut vector = vec![0; 1024];
+                    let assembler = Assembler::default();
+                    let row_offsets =
+                        { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
+                    let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+                    assert_eq!(batch, output_batch);
+                    Ok(())
+                }
+
+                #[test]
+                #[allow(non_snake_case)]
+                fn [<test_single_ $TYPE _null_free>]() -> Result<()> {
+                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
+                    let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
+                    let a = $ARRAY::from(v);
+                    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+                    let mut vector = vec![0; 1024];
+                    let row_offsets =
+                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+                    let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+                    assert_eq!(batch, output_batch);
+                    Ok(())
+                }
+
+                #[test]
+                #[allow(non_snake_case)]
+                #[cfg(feature = "jit")]
+                fn [<test_single_ $TYPE _jit_null_free>]() -> Result<()> {
+                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
+                    let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
+                    let a = $ARRAY::from(v);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
                     let assembler = Assembler::default();
@@ -439,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_single_binary() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, true)]));
         let values: Vec<Option<&[u8]>> =
             vec![Some(b"one"), Some(b"two"), None, Some(b""), Some(b"three")];
         let a = BinaryArray::from_opt_vec(values);
@@ -459,6 +496,45 @@ mod tests {
         let values: Vec<Option<&[u8]>> =
             vec![Some(b"one"), Some(b"two"), None, Some(b""), Some(b"three")];
         let a = BinaryArray::from_opt_vec(values);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 8192];
+        let assembler = Assembler::default();
+        let row_offsets = {
+            write_batch_unchecked_jit(
+                &mut vector,
+                0,
+                &batch,
+                0,
+                schema.clone(),
+                &assembler,
+            )?
+        };
+        let output_batch =
+            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
+    fn test_single_binary_null_free() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
+        let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
+        let a = BinaryArray::from_vec(values);
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
+        let mut vector = vec![0; 8192];
+        let row_offsets =
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+        assert_eq!(batch, output_batch);
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "jit")]
+    fn test_single_binary_jit_null_free() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
+        let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
+        let a = BinaryArray::from_vec(values);
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
         let mut vector = vec![0; 8192];
         let assembler = Assembler::default();

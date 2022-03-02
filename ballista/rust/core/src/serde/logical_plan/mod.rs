@@ -28,24 +28,21 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::logical_plan::plan::Extension;
+
 use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
-    exprlist_to_fields,
-    window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
-    LogicalPlan, LogicalPlanBuilder, Repartition, TableScan, Values,
+    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan,
+    LogicalPlanBuilder, Repartition, TableScan, Values,
 };
 use datafusion::prelude::ExecutionContext;
-use log::error;
-use prost::bytes::{Buf, BufMut};
+
+use prost::bytes::BufMut;
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
 use protobuf::logical_plan_node::LogicalPlanType;
-use protobuf::{logical_expr_node::ExprType, scalar_type, LogicalPlanNode};
+use protobuf::LogicalPlanNode;
 use std::convert::TryInto;
 use std::sync::Arc;
 
@@ -855,22 +852,20 @@ mod roundtrip_tests {
     use datafusion::datasource::object_store::{
         FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
     };
-    use datafusion::datasource::TableProvider;
     use datafusion::error::DataFusionError;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
         datasource::object_store::local::LocalFileSystem,
         logical_plan::{
-            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder,
-            Partitioning, Repartition, ToDFSchema,
+            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
+            ToDFSchema,
         },
         physical_plan::{aggregates, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
         scalar::ScalarValue,
         sql::parser::FileType,
     };
-    use protobuf::arrow_type;
-    use sqlparser::test_utils::table;
+
     use std::{convert::TryInto, sync::Arc};
 
     #[derive(Debug)]
