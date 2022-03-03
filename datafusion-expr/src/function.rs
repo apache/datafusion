@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Function module contains typing and signature for built-in and user defined functions.
+
 use crate::Accumulator;
 use crate::ColumnarValue;
 use arrow::datatypes::DataType;

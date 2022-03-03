@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
+use ballista_core::serde::protobuf::LogicalPlanNode;
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
 
 use datafusion::catalog::TableReference;
@@ -69,6 +70,8 @@ impl BallistaContextState {
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
         use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
+        use ballista_core::serde::protobuf::PhysicalPlanNode;
+        use ballista_core::serde::BallistaCodec;
 
         log::info!("Running in local mode. Scheduler will be run in-proc");
 
@@ -89,7 +92,16 @@ impl BallistaContextState {
             }
         };
 
-        ballista_executor::new_standalone_executor(scheduler, concurrent_tasks).await?;
+        let default_codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+            BallistaCodec::default();
+
+        ballista_executor::new_standalone_executor(
+            scheduler,
+            concurrent_tasks,
+            default_codec,
+        )
+        .await?;
+
         Ok(Self {
             config: config.clone(),
             scheduler_host: "localhost".to_string(),
@@ -144,7 +156,7 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
             let guard = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -164,7 +176,7 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
             let guard = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -188,7 +200,7 @@ impl BallistaContext {
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
             let guard = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -282,7 +294,7 @@ impl BallistaContext {
     pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
             let state = self.state.lock();
-            create_df_ctx_with_ballista_query_planner(
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &state.scheduler_host,
                 state.scheduler_port,
                 state.config(),
@@ -457,13 +469,17 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "standalone")]
+    #[ignore]
+    // Tracking: https://github.com/apache/arrow-datafusion/issues/1840
     async fn test_task_stuck_when_referenced_task_failed() {
         use super::*;
         use datafusion::arrow::datatypes::Schema;
         use datafusion::arrow::util::pretty;
         use datafusion::datasource::file_format::csv::CsvFormat;
         use datafusion::datasource::file_format::parquet::ParquetFormat;
-        use datafusion::datasource::listing::{ListingOptions, ListingTable};
+        use datafusion::datasource::listing::{
+            ListingOptions, ListingTable, ListingTableConfig,
+        };
 
         use ballista_core::config::{
             BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
@@ -501,12 +517,16 @@ mod tests {
                         collect_stat: x.collect_stat,
                         target_partitions: x.target_partitions,
                     };
-                    let error_table = ListingTable::new(
+
+                    let config = ListingTableConfig::new(
                         listing_table.object_store().clone(),
                         listing_table.table_path().to_string(),
-                        Arc::new(Schema::new(vec![])),
-                        error_options,
-                    );
+                    )
+                    .with_schema(Arc::new(Schema::new(vec![])))
+                    .with_listing_options(error_options);
+
+                    let error_table = ListingTable::try_new(config).unwrap();
+
                     // change the table to an error table
                     guard
                         .tables

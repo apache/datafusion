@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Aggregate function module contains all built-in aggregate functions definitions
+
 use datafusion_common::{DataFusionError, Result};
 use std::{fmt, str::FromStr};
 
@@ -51,6 +53,8 @@ pub enum AggregateFunction {
     Correlation,
     /// Approximate continuous percentile function
     ApproxPercentileCont,
+    /// ApproxMedian
+    ApproxMedian,
 }
 
 impl fmt::Display for AggregateFunction {
@@ -82,6 +86,7 @@ impl FromStr for AggregateFunction {
             "covar_pop" => AggregateFunction::CovariancePop,
             "corr" => AggregateFunction::Correlation,
             "approx_percentile_cont" => AggregateFunction::ApproxPercentileCont,
+            "approx_median" => AggregateFunction::ApproxMedian,
             _ => {
                 return Err(DataFusionError::Plan(format!(
                     "There is no built-in function named {}",

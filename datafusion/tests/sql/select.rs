@@ -982,3 +982,16 @@ async fn parallel_query_with_filter() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn query_empty_table() {
+    let mut ctx = ExecutionContext::new();
+    let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
+    ctx.register_table("test_tbl", empty_table).unwrap();
+    let sql = "SELECT * FROM test_tbl";
+    let result = plan_and_collect(&mut ctx, sql)
+        .await
+        .expect("Query empty table");
+    let expected = vec!["++", "++"];
+    assert_batches_sorted_eq!(expected, &result);
+}

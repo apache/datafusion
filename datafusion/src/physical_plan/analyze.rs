@@ -31,6 +31,7 @@ use crate::{
 use arrow::datatypes::SchemaRef;
 use futures::StreamExt;
 
+use super::expressions::PhysicalSortExpr;
 use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
 use crate::execution::runtime_env::RuntimeEnv;
 use arrow::array::MutableUtf8Array;
@@ -82,6 +83,14 @@ impl ExecutionPlan for AnalyzeExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(

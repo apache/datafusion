@@ -22,6 +22,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use super::expressions::PhysicalSortExpr;
 use super::{
     common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -75,6 +76,14 @@ impl ExecutionPlan for MemoryExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.partitions.len())
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(

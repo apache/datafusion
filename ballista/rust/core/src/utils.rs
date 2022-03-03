@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::io::{BufWriter, Write};
-use std::ops::Deref;
+use std::marker::PhantomData;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{fs::File, pin::Pin};
@@ -29,6 +29,7 @@ use crate::execution_plans::{
 use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
+use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use arrow::chunk::Chunk;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
@@ -55,7 +56,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
+
 use datafusion::physical_plan::file_format::{CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
@@ -72,7 +73,7 @@ use std::time::Instant;
 /// Stream data to disk in Arrow IPC format
 
 pub async fn write_stream_to_disk(
-    stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
+    stream: &mut Pin<Box<dyn RecordBatchStream + Send>>,
     path: &str,
     disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
@@ -117,7 +118,7 @@ pub async fn write_stream_to_disk(
 }
 
 pub async fn collect_stream(
-    stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
+    stream: &mut Pin<Box<dyn RecordBatchStream + Send>>,
 ) -> Result<Vec<RecordBatch>> {
     let mut batches = vec![];
     while let Some(batch) = stream.next().await {
@@ -245,38 +246,68 @@ fn build_exec_plan_diagram(
 
 /// Create a DataFusion context that uses the BallistaQueryPlanner to send logical plans
 /// to a Ballista scheduler
-pub fn create_df_ctx_with_ballista_query_planner(
+pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
     scheduler_host: &str,
     scheduler_port: u16,
     config: &BallistaConfig,
 ) -> ExecutionContext {
     let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
+    let planner: Arc<BallistaQueryPlanner<T>> =
+        Arc::new(BallistaQueryPlanner::new(scheduler_url, config.clone()));
     let config = ExecutionConfig::new()
-        .with_query_planner(Arc::new(BallistaQueryPlanner::new(
-            scheduler_url,
-            config.clone(),
-        )))
+        .with_query_planner(planner)
         .with_target_partitions(config.default_shuffle_partitions())
         .with_information_schema(true);
     ExecutionContext::with_config(config)
 }
 
-pub struct BallistaQueryPlanner {
+pub struct BallistaQueryPlanner<T: AsLogicalPlan> {
     scheduler_url: String,
     config: BallistaConfig,
+    extension_codec: Arc<dyn LogicalExtensionCodec>,
+    plan_repr: PhantomData<T>,
 }
 
-impl BallistaQueryPlanner {
+impl<T: 'static + AsLogicalPlan> BallistaQueryPlanner<T> {
     pub fn new(scheduler_url: String, config: BallistaConfig) -> Self {
         Self {
             scheduler_url,
             config,
+            extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_extension(
+        scheduler_url: String,
+        config: BallistaConfig,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            extension_codec,
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_repr(
+        scheduler_url: String,
+        config: BallistaConfig,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+        plan_repr: PhantomData<T>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            extension_codec,
+            plan_repr,
         }
     }
 }
 
 #[async_trait]
-impl QueryPlanner for BallistaQueryPlanner {
+impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
@@ -287,23 +318,25 @@ impl QueryPlanner for BallistaQueryPlanner {
                 // table state is managed locally in the BallistaContext, not in the scheduler
                 Ok(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
             }
-            _ => Ok(Arc::new(DistributedQueryExec::new(
+            _ => Ok(Arc::new(DistributedQueryExec::with_repr(
                 self.scheduler_url.clone(),
                 self.config.clone(),
                 logical_plan.clone(),
+                self.extension_codec.clone(),
+                self.plan_repr,
             ))),
         }
     }
 }
 
 pub struct WrappedStream {
-    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
     schema: SchemaRef,
 }
 
 impl WrappedStream {
     pub fn new(
-        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
         schema: SchemaRef,
     ) -> Self {
         Self { stream, schema }

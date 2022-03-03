@@ -177,6 +177,7 @@ enum AggregateFunction {
   STDDEV_POP=12;
   CORRELATION=13;
   APPROX_PERCENTILE_CONT = 14;
+  APPROX_MEDIAN=15;
 }
 
 message AggregateExprNode {
@@ -265,7 +266,13 @@ message LogicalPlanNode {
     AnalyzeNode analyze = 14;
     CrossJoinNode cross_join = 15;
     ValuesNode values = 16;
+    LogicalExtensionNode extension = 17;
   }
+}
+
+message LogicalExtensionNode {
+  bytes node = 1;
+  repeated LogicalPlanNode inputs = 2;
 }
 
 message ProjectionColumns {
@@ -487,7 +494,13 @@ message PhysicalPlanNode {
     ShuffleWriterExecNode shuffle_writer = 18;
     CrossJoinExecNode cross_join = 19;
     AvroScanExecNode avro_scan = 20;
+    PhysicalExtensionNode extension = 21;
   }
+}
+
+message PhysicalExtensionNode {
+  bytes node = 1;
+  repeated PhysicalPlanNode inputs = 2;
 }
 
 // physical expressions
@@ -835,13 +848,16 @@ message ColumnStats {
   uint32 distinct_count = 4;
 }
 
+// Used by scheduler
 message ExecutorMetadata {
   string id = 1;
   string host = 2;
   uint32 port = 3;
   uint32 grpc_port = 4;
+  ExecutorSpecification specification = 5;
 }
 
+// Used by grpc
 message ExecutorRegistration {
   string id = 1;
   // "optional" keyword is stable in protoc 3.15 but prost is still on 3.14 (see https://github.com/tokio-rs/prost/issues/430 and https://github.com/tokio-rs/prost/pull/455)
@@ -851,10 +867,11 @@ message ExecutorRegistration {
   }
   uint32 port = 3;
   uint32 grpc_port = 4;
+  ExecutorSpecification specification = 5;
 }
 
 message ExecutorHeartbeat {
-  ExecutorMetadata meta = 1;
+  string executor_id = 1;
   // Unix epoch-based timestamp in seconds
   uint64 timestamp = 2;
   ExecutorState state = 3;
@@ -916,7 +933,7 @@ message ShuffleWritePartition {
 }
 
 message TaskStatus {
-  PartitionId partition_id = 1;
+  PartitionId task_id = 1;
   oneof status {
     RunningTask running = 2;
     FailedTask failed = 3;
@@ -933,7 +950,7 @@ message PollWorkParams {
 
 message TaskDefinition {
   PartitionId task_id = 1;
-  PhysicalPlanNode plan = 2;
+  bytes plan = 2;
   // Output partition for shuffle writer
   PhysicalHashRepartition output_partitioning = 3;
 }
@@ -944,19 +961,18 @@ message PollWorkResult {
 
 message RegisterExecutorParams {
   ExecutorRegistration metadata = 1;
-  ExecutorSpecification specification = 2;
 }
 
 message RegisterExecutorResult {
   bool success = 1;
 }
 
-message SendHeartBeatParams {
-  ExecutorRegistration metadata = 1;
+message HeartBeatParams {
+  string executor_id = 1;
   ExecutorState state = 2;
 }
 
-message SendHeartBeatResult {
+message HeartBeatResult {
   // TODO it's from Spark for BlockManager
   bool reregister = 1;
 }
@@ -968,7 +984,7 @@ message StopExecutorResult {
 }
 
 message UpdateTaskStatusParams {
-  ExecutorRegistration metadata = 1;
+  string executor_id = 1;
   // All tasks must be reported until they reach the failed or completed state
   repeated TaskStatus task_status = 2;
 }
@@ -979,7 +995,7 @@ message UpdateTaskStatusResult {
 
 message ExecuteQueryParams {
   oneof query {
-    LogicalPlanNode logical_plan = 1;
+    bytes logical_plan = 1;
     string sql = 2;
   }
   repeated KeyValuePair settings = 3;
@@ -1054,7 +1070,7 @@ service SchedulerGrpc {
 
   // Push-based task scheduler will only leverage this interface
   // rather than the PollWork interface to report executor states
-  rpc SendHeartBeat (SendHeartBeatParams) returns (SendHeartBeatResult) {}
+  rpc HeartBeatFromExecutor (HeartBeatParams) returns (HeartBeatResult) {}
 
   rpc UpdateTaskStatus (UpdateTaskStatusParams) returns (UpdateTaskStatusResult) {}
 

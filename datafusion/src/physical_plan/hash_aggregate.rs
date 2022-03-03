@@ -53,6 +53,7 @@ use crate::physical_plan::expressions::cast::cast_with_error;
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{
     self, BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, RecordOutput,
 };
@@ -163,6 +164,19 @@ impl HashAggregateExec {
         &self.group_expr
     }
 
+    /// Grouping expressions as they occur in the output schema
+    pub fn output_group_expr(&self) -> Vec<Arc<dyn PhysicalExpr>> {
+        // Update column indices. Since the group by columns come first in the output schema, their
+        // indices are simply 0..self.group_expr(len).
+        self.group_expr
+            .iter()
+            .enumerate()
+            .map(|(index, (_col, name))| {
+                Arc::new(Column::new(name, index)) as Arc<dyn PhysicalExpr>
+            })
+            .collect()
+    }
+
     /// Aggregate expressions
     pub fn aggr_expr(&self) -> &[Arc<dyn AggregateExpr>] {
         &self.aggr_expr
@@ -207,6 +221,14 @@ impl ExecutionPlan for HashAggregateExec {
     /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
         self.input.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     async fn execute(
@@ -1161,6 +1183,10 @@ mod tests {
 
         fn output_partitioning(&self) -> Partitioning {
             Partitioning::UnknownPartitioning(1)
+        }
+
+        fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+            None
         }
 
         fn with_new_children(

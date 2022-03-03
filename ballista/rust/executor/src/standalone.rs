@@ -24,6 +24,7 @@ use ballista_core::{
     serde::protobuf::{scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration},
     BALLISTA_VERSION,
 };
+use datafusion::prelude::ExecutionContext;
 use log::info;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -32,20 +33,14 @@ use uuid::Uuid;
 
 use crate::{execution_loop, executor::Executor, flight_service::BallistaFlightService};
 
-pub async fn new_standalone_executor(
+pub async fn new_standalone_executor<
+    T: 'static + AsLogicalPlan,
+    U: 'static + AsExecutionPlan,
+>(
     scheduler: SchedulerGrpcClient<Channel>,
     concurrent_tasks: usize,
+    codec: BallistaCodec<T, U>,
 ) -> Result<()> {
-    let work_dir = TempDir::new()?
-        .into_path()
-        .into_os_string()
-        .into_string()
-        .unwrap();
-    let executor = Arc::new(Executor::new(&work_dir));
-
-    let service = BallistaFlightService::new(executor.clone());
-
-    let server = FlightServiceServer::new(service);
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;
@@ -53,23 +48,37 @@ pub async fn new_standalone_executor(
         "Ballista v{} Rust Executor listening on {:?}",
         BALLISTA_VERSION, addr
     );
-    tokio::spawn(
-        Server::builder().add_service(server).serve_with_incoming(
-            tokio_stream::wrappers::TcpListenerStream::new(listener),
-        ),
-    );
+
     let executor_meta = ExecutorRegistration {
         id: Uuid::new_v4().to_string(), // assign this executor a unique ID
         optional_host: Some(OptionalHost::Host("localhost".to_string())),
         port: addr.port() as u32,
         // TODO Make it configurable
         grpc_port: 50020,
+        specification: Some(
+            ExecutorSpecification {
+                task_slots: concurrent_tasks as u32,
+            }
+            .into(),
+        ),
     };
-    tokio::spawn(execution_loop::poll_loop(
-        scheduler,
-        executor,
-        executor_meta,
-        concurrent_tasks,
-    ));
+    let work_dir = TempDir::new()?
+        .into_path()
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    info!("work_dir: {}", work_dir);
+    let ctx = Arc::new(ExecutionContext::new());
+    let executor = Arc::new(Executor::new(executor_meta, &work_dir, ctx));
+
+    let service = BallistaFlightService::new(executor.clone());
+    let server = FlightServiceServer::new(service);
+    tokio::spawn(
+        Server::builder().add_service(server).serve_with_incoming(
+            tokio_stream::wrappers::TcpListenerStream::new(listener),
+        ),
+    );
+
+    tokio::spawn(execution_loop::poll_loop(scheduler, executor, codec));
     Ok(())
 }

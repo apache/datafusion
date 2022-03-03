@@ -26,7 +26,7 @@ license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
 edition = "2021"
 publish = false
-rust-version = "1.58"
+rust-version = "1.59"
 
 [[example]]
 name = "avro_sql"

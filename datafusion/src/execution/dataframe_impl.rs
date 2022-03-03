@@ -101,7 +101,7 @@ impl TableProvider for DataFrameImpl {
                     let names = schema
                         .fields()
                         .iter()
-                        .map(|field| field.name())
+                        .map(|field| field.name().as_str())
                         .collect::<Vec<_>>();
                     self.select_columns(names.as_slice())
                 },

@@ -37,7 +37,7 @@ hashbrown = "0.12"
 log = "0.4"
 prost = "0.9"
 serde = {version = "1", features = ["derive"]}
-sqlparser = "0.13"
+sqlparser = "0.14"
 tokio = "1.0"
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
@@ -48,7 +48,7 @@ parse_arg = "0.1.3"
 arrow-format = { version = "0.4", features = ["flight-data", "flight-service"] }
 arrow = { package = "arrow2", version="0.9", features = ["io_ipc", "io_flight"] }
 
-datafusion = { path = "../../../datafusion", version = "6.0.0" }
+datafusion = { path = "../../../datafusion", version = "7.0.0" }
 
 parking_lot = "0.12"
 

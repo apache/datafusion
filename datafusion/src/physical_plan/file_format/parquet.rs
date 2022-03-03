@@ -29,7 +29,6 @@ use crate::field_util::SchemaExt;
 use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::{Column, Expr},
     physical_optimizer::pruning::{PruningPredicate, PruningStatistics},
     physical_plan::{
         file_format::FileScanConfig,
@@ -178,6 +177,14 @@ impl ExecutionPlan for ParquetExec {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -228,7 +235,7 @@ impl ExecutionPlan for ParquetExec {
                 &projection,
                 &pruning_predicate,
                 batch_size,
-                response_tx,
+                response_tx.clone(),
                 limit,
                 partition_col_proj,
             ) {
@@ -236,6 +243,12 @@ impl ExecutionPlan for ParquetExec {
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
                 );
+                // Send the error back to the main thread.
+                //
+                // Ignore error sending (via `.ok()`) because that
+                // means the receiver has been torn down (and nothing
+                // cares about the errors anymore)
+                send_result(&response_tx, Err(e.into())).ok();
             }
         });
 
@@ -566,7 +579,7 @@ mod tests {
         batches: Vec<RecordBatch>,
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
-    ) -> Vec<RecordBatch> {
+    ) -> Result<Vec<RecordBatch>> {
         // When vec is dropped, temp files are deleted
         let files: Vec<_> = batches
             .into_iter()
@@ -640,9 +653,7 @@ mod tests {
         );
 
         let runtime = Arc::new(RuntimeEnv::default());
-        collect(Arc::new(parquet_exec), runtime)
-            .await
-            .expect("reading parquet data")
+        collect(Arc::new(parquet_exec), runtime).await
     }
 
     // Add a new column with the specified field name to the RecordBatch
@@ -687,7 +698,9 @@ mod tests {
         let batch3 = add_to_batch(&batch1, "c3", c3);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
@@ -726,7 +739,9 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c2 | c3 |",
@@ -758,7 +773,9 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+----+----+",
             "| c1  | c3 | c2 |",
@@ -797,8 +814,9 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1), ("c4", c4)]);
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None).await;
+        let read = round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None)
+            .await
+            .unwrap();
         let expected = vec![
             "+-----+-----+",
             "| c1  | c4  |",
@@ -846,18 +864,8 @@ mod tests {
         let read =
             round_trip_to_parquet(vec![batch1, batch2], None, Some(Arc::new(schema)))
                 .await;
-
-        // expect only the first batch to be read
-        let expected = vec![
-            "+-----+----+----+",
-            "| c1  | c2 | c3 |",
-            "+-----+----+----+",
-            "| Foo | 1  | 10 |",
-            "|     | 2  | 20 |",
-            "| bar |    |    |",
-            "+-----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &read);
+        assert_contains!(read.unwrap_err().to_string(),
+                         "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
     }
 
     #[tokio::test]
@@ -959,6 +967,49 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn parquet_exec_with_error() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let partitioned_file = PartitionedFile {
+            file_meta: FileMeta {
+                sized_file: SizedFile {
+                    size: 1337,
+                    path: "invalid".into(),
+                },
+                last_modified: None,
+            },
+            partition_values: vec![],
+        };
+
+        let parquet_exec = ParquetExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![partitioned_file]],
+                file_schema: ParquetFormat::default()
+                    .infer_schema(local_object_reader_stream(vec![filename]))
+                    .await?,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            None,
+        );
+
+        let mut results = parquet_exec.execute(0, runtime).await?;
+        let batch = results.next().await.unwrap();
+        // invalid file should produce an error to that effect
+        assert_contains!(
+            batch.unwrap_err().to_string(),
+            "External error: Parquet error: Arrow: IO error"
+        );
+        assert!(results.next().await.is_none());
+
+        Ok(())
+    }
+
     fn parquet_file_metrics() -> ParquetFileMetrics {
         let metrics = Arc::new(ExecutionPlanMetricsSet::new());
         ParquetFileMetrics::new(0, "file.parquet", &metrics)
@@ -982,7 +1033,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_simple_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
@@ -1028,7 +1079,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_missing_stats() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
@@ -1076,7 +1127,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_partial_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // test row group predicate with partially supported expression
         // int > 1 and int % 2 => c1_max > 1 and true
         let expr = col("c1").gt(lit(15)).and(col("c2").modulus(lit(2)));
@@ -1206,7 +1257,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_null_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // int > 1 and IsNull(bool) => c1_max > 1 and bool_null_count > 0
         let expr = col("c1").gt(lit::<i32>(15)).and(col("c2").is_null());
         let schema = Arc::new(Schema::new(vec![
@@ -1234,7 +1285,7 @@ mod tests {
 
     #[test]
     fn row_group_pruning_predicate_eq_null_expr() -> Result<()> {
-        use crate::logical_plan::{col, lit};
+        use datafusion_expr::{col, lit};
         // test row group predicate with an unknown (Null) expr
         //
         // int > 15 and bool = NULL => c1_max > 15 and null

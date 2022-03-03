@@ -17,341 +17,27 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
+use crate::convert_required;
 use crate::error::BallistaError;
-use crate::serde::{
-    from_proto_binary_op, proto_error, protobuf, str_to_byte, vec_to_array,
-};
-use crate::{convert_box_required, convert_required};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTable};
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::datasource::object_store::{FileMeta, SizedFile};
+use crate::serde::{from_proto_binary_op, proto_error, protobuf, vec_to_array};
+use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
 use datafusion::logical_plan::window_frames::{
     WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use datafusion::logical_plan::{
-    abs, acos, asin, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum,
-    sin, sqrt, tan, trunc, Column, CreateExternalTable, DFField, DFSchema, Expr,
-    JoinConstraint, JoinType, LogicalPlan, LogicalPlanBuilder, Operator,
+    abs, atan, ceil, cos, digest, exp, floor, ln, log10, log2, round, signum, sin, sqrt,
+    tan, trunc, Column, DFField, DFSchema, Expr,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 use datafusion::prelude::*;
 use datafusion::scalar::ScalarValue;
-use protobuf::listing_table_scan_node::FileFormatType;
-use protobuf::logical_plan_node::LogicalPlanType;
-use protobuf::{logical_expr_node::ExprType, scalar_type};
+
 use std::{
     convert::{From, TryInto},
     sync::Arc,
-    unimplemented,
 };
-
-impl TryInto<LogicalPlan> for &protobuf::LogicalPlanNode {
-    type Error = BallistaError;
-
-    fn try_into(self) -> Result<LogicalPlan, Self::Error> {
-        let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
-            proto_error(format!(
-                "logical_plan::from_proto() Unsupported logical plan '{:?}'",
-                self
-            ))
-        })?;
-        match plan {
-            LogicalPlanType::Values(values) => {
-                let n_cols = values.n_cols as usize;
-                let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
-                    Ok(Vec::new())
-                } else if values.values_list.len() % n_cols != 0 {
-                    Err(BallistaError::General(format!(
-                        "Invalid values list length, expect {} to be divisible by {}",
-                        values.values_list.len(),
-                        n_cols
-                    )))
-                } else {
-                    values
-                        .values_list
-                        .chunks_exact(n_cols)
-                        .map(|r| {
-                            r.iter()
-                                .map(|v| v.try_into())
-                                .collect::<Result<Vec<_>, _>>()
-                        })
-                        .collect::<Result<Vec<_>, _>>()
-                }?;
-                LogicalPlanBuilder::values(values)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Projection(projection) => {
-                let input: LogicalPlan = convert_box_required!(projection.input)?;
-                let x: Vec<Expr> = projection
-                    .expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .project_with_alias(
-                        x,
-                        projection.optional_alias.as_ref().map(|a| match a {
-                            protobuf::projection_node::OptionalAlias::Alias(alias) => {
-                                alias.clone()
-                            }
-                        }),
-                    )?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Selection(selection) => {
-                let input: LogicalPlan = convert_box_required!(selection.input)?;
-                let expr: Expr = selection
-                    .expr
-                    .as_ref()
-                    .ok_or_else(|| {
-                        BallistaError::General("expression required".to_string())
-                    })?
-                    .try_into()?;
-                LogicalPlanBuilder::from(input)
-                    .filter(expr)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Window(window) => {
-                let input: LogicalPlan = convert_box_required!(window.input)?;
-                let window_expr = window
-                    .window_expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .window(window_expr)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Aggregate(aggregate) => {
-                let input: LogicalPlan = convert_box_required!(aggregate.input)?;
-                let group_expr = aggregate
-                    .group_expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<Expr>, _>>()?;
-                let aggr_expr = aggregate
-                    .aggr_expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .aggregate(group_expr, aggr_expr)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::ListingScan(scan) => {
-                let schema: Schema = convert_required!(scan.schema)?;
-
-                let mut projection = None;
-                if let Some(columns) = &scan.projection {
-                    let column_indices = columns
-                        .columns
-                        .iter()
-                        .map(|name| schema.index_of(name))
-                        .collect::<Result<Vec<usize>, _>>()?;
-                    projection = Some(column_indices);
-                }
-
-                let filters = scan
-                    .filters
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                let file_format: Arc<dyn FileFormat> =
-                    match scan.file_format_type.as_ref().ok_or_else(|| {
-                        proto_error(format!(
-                            "logical_plan::from_proto() Unsupported file format '{:?}'",
-                            self
-                        ))
-                    })? {
-                        &FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning,
-                        }) => Arc::new(
-                            ParquetFormat::default().with_enable_pruning(enable_pruning),
-                        ),
-                        FileFormatType::Csv(protobuf::CsvFormat {
-                            has_header,
-                            delimiter,
-                        }) => Arc::new(
-                            CsvFormat::default()
-                                .with_has_header(*has_header)
-                                .with_delimiter(str_to_byte(delimiter)?),
-                        ),
-                        FileFormatType::Avro(..) => Arc::new(AvroFormat::default()),
-                    };
-
-                let options = ListingOptions {
-                    file_extension: scan.file_extension.clone(),
-                    format: file_format,
-                    table_partition_cols: scan.table_partition_cols.clone(),
-                    collect_stat: scan.collect_stat,
-                    target_partitions: scan.target_partitions as usize,
-                };
-
-                let provider = ListingTable::new(
-                    Arc::new(LocalFileSystem {}),
-                    scan.path.clone(),
-                    Arc::new(schema),
-                    options,
-                );
-
-                LogicalPlanBuilder::scan_with_filters(
-                    &scan.table_name,
-                    Arc::new(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
-                .map_err(|e| e.into())
-            }
-            LogicalPlanType::Sort(sort) => {
-                let input: LogicalPlan = convert_box_required!(sort.input)?;
-                let sort_expr: Vec<Expr> = sort
-                    .expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<Expr>, _>>()?;
-                LogicalPlanBuilder::from(input)
-                    .sort(sort_expr)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Repartition(repartition) => {
-                use datafusion::logical_plan::Partitioning;
-                let input: LogicalPlan = convert_box_required!(repartition.input)?;
-                use protobuf::repartition_node::PartitionMethod;
-                let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
-                    BallistaError::General(String::from(
-                        "Protobuf deserialization error, RepartitionNode was missing required field 'partition_method'",
-                    ))
-                })?;
-
-                let partitioning_scheme = match pb_partition_method {
-                    PartitionMethod::Hash(protobuf::HashRepartition {
-                        hash_expr: pb_hash_expr,
-                        partition_count,
-                    }) => Partitioning::Hash(
-                        pb_hash_expr
-                            .iter()
-                            .map(|pb_expr| pb_expr.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                        partition_count as usize,
-                    ),
-                    PartitionMethod::RoundRobin(partition_count) => {
-                        Partitioning::RoundRobinBatch(partition_count as usize)
-                    }
-                };
-
-                LogicalPlanBuilder::from(input)
-                    .repartition(partitioning_scheme)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::EmptyRelation(empty_relation) => {
-                LogicalPlanBuilder::empty(empty_relation.produce_one_row)
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::CreateExternalTable(create_extern_table) => {
-                let pb_schema = (create_extern_table.schema.clone()).ok_or_else(|| {
-                    BallistaError::General(String::from(
-                        "Protobuf deserialization error, CreateExternalTableNode was missing required field schema.",
-                    ))
-                })?;
-
-                let pb_file_type: protobuf::FileType =
-                    create_extern_table.file_type.try_into()?;
-
-                Ok(LogicalPlan::CreateExternalTable(CreateExternalTable {
-                    schema: pb_schema.try_into()?,
-                    name: create_extern_table.name.clone(),
-                    location: create_extern_table.location.clone(),
-                    file_type: pb_file_type.into(),
-                    has_header: create_extern_table.has_header,
-                }))
-            }
-            LogicalPlanType::Analyze(analyze) => {
-                let input: LogicalPlan = convert_box_required!(analyze.input)?;
-                LogicalPlanBuilder::from(input)
-                    .explain(analyze.verbose, true)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Explain(explain) => {
-                let input: LogicalPlan = convert_box_required!(explain.input)?;
-                LogicalPlanBuilder::from(input)
-                    .explain(explain.verbose, false)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Limit(limit) => {
-                let input: LogicalPlan = convert_box_required!(limit.input)?;
-                LogicalPlanBuilder::from(input)
-                    .limit(limit.limit as usize)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-            LogicalPlanType::Join(join) => {
-                let left_keys: Vec<Column> =
-                    join.left_join_column.iter().map(|i| i.into()).collect();
-                let right_keys: Vec<Column> =
-                    join.right_join_column.iter().map(|i| i.into()).collect();
-                let join_type =
-                    protobuf::JoinType::from_i32(join.join_type).ok_or_else(|| {
-                        proto_error(format!(
-                            "Received a JoinNode message with unknown JoinType {}",
-                            join.join_type
-                        ))
-                    })?;
-                let join_constraint = protobuf::JoinConstraint::from_i32(
-                    join.join_constraint,
-                )
-                .ok_or_else(|| {
-                    proto_error(format!(
-                        "Received a JoinNode message with unknown JoinConstraint {}",
-                        join.join_constraint
-                    ))
-                })?;
-
-                let builder = LogicalPlanBuilder::from(convert_box_required!(join.left)?);
-                let builder = match join_constraint.into() {
-                    JoinConstraint::On => builder.join(
-                        &convert_box_required!(join.right)?,
-                        join_type.into(),
-                        (left_keys, right_keys),
-                    )?,
-                    JoinConstraint::Using => builder.join_using(
-                        &convert_box_required!(join.right)?,
-                        join_type.into(),
-                        left_keys,
-                    )?,
-                };
-
-                builder.build().map_err(|e| e.into())
-            }
-            LogicalPlanType::CrossJoin(crossjoin) => {
-                let left = convert_box_required!(crossjoin.left)?;
-                let right = convert_box_required!(crossjoin.right)?;
-
-                LogicalPlanBuilder::from(left)
-                    .cross_join(&right)?
-                    .build()
-                    .map_err(|e| e.into())
-            }
-        }
-    }
-}
 
 impl From<&protobuf::Column> for Column {
     fn from(c: &protobuf::Column) -> Column {
@@ -594,7 +280,6 @@ fn typechecked_scalar_value_conversion(
 impl TryInto<datafusion::scalar::ScalarValue> for &protobuf::scalar_value::Value {
     type Error = BallistaError;
     fn try_into(self) -> Result<datafusion::scalar::ScalarValue, Self::Error> {
-        use datafusion::scalar::ScalarValue;
         use protobuf::PrimitiveScalarType;
         let scalar = match self {
             protobuf::scalar_value::Value::BoolValue(v) => ScalarValue::Boolean(Some(*v)),
@@ -802,7 +487,6 @@ impl TryInto<DataType> for &protobuf::ScalarListType {
 impl TryInto<datafusion::scalar::ScalarValue> for protobuf::PrimitiveScalarType {
     type Error = BallistaError;
     fn try_into(self) -> Result<datafusion::scalar::ScalarValue, Self::Error> {
-        use datafusion::scalar::ScalarValue;
         Ok(match self {
             protobuf::PrimitiveScalarType::Null => {
                 return Err(proto_error("Untyped null is an invalid scalar value"))
@@ -960,7 +644,6 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
         use datafusion::physical_plan::window_functions;
         use protobuf::logical_expr_node::ExprType;
         use protobuf::window_expr_node;
-        use protobuf::WindowExprNode;
 
         let expr_type = self
             .expr_type
@@ -974,7 +657,6 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
             }),
             ExprType::Column(column) => Ok(Expr::Column(column.into())),
             ExprType::Literal(literal) => {
-                use datafusion::scalar::ScalarValue;
                 let scalar_value: datafusion::scalar::ScalarValue = literal.try_into()?;
                 Ok(Expr::Literal(scalar_value))
             }
@@ -1183,7 +865,7 @@ impl TryInto<Expr> for &protobuf::LogicalExprNode {
                         Ok(signum((&args[0]).try_into()?))
                     }
                     protobuf::ScalarFunction::Octetlength => {
-                        Ok(length((&args[0]).try_into()?))
+                        Ok(octet_length((&args[0]).try_into()?))
                     }
                     // // protobuf::ScalarFunction::Concat => Ok(concat((&args[0]).try_into()?)),
                     protobuf::ScalarFunction::Lower => Ok(lower((&args[0]).try_into()?)),
@@ -1280,8 +962,8 @@ use arrow::types::days_ms;
 use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
-    array, date_part, date_trunc, length, lower, ltrim, md5, rtrim, sha224, sha256,
-    sha384, sha512, trim, upper,
+    date_part, date_trunc, lower, ltrim, rtrim, sha224, sha256, sha384, sha512, trim,
+    upper,
 };
 use std::convert::TryFrom;
 

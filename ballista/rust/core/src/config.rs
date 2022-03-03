@@ -22,12 +22,10 @@ use clap::ArgEnum;
 use core::fmt;
 use std::collections::HashMap;
 use std::result;
-use std::string::ParseError;
 
 use crate::error::{BallistaError, Result};
 
 use datafusion::arrow::datatypes::DataType;
-use log::warn;
 
 pub const BALLISTA_DEFAULT_SHUFFLE_PARTITIONS: &str = "ballista.shuffle.partitions";
 pub const BALLISTA_WITH_INFORMATION_SCHEMA: &str = "ballista.with_information_schema";

@@ -29,9 +29,7 @@ use std::{
 
 use crate::error::{ballista_error, BallistaError, Result};
 use crate::serde::protobuf::{self};
-use crate::serde::scheduler::{
-    Action, ExecutePartition, ExecutePartitionResult, PartitionId, PartitionStats,
-};
+use crate::serde::scheduler::Action;
 
 use arrow_format::flight::data::{FlightData, Ticket};
 use arrow_format::flight::service::flight_service_client::FlightServiceClient;
@@ -49,7 +47,6 @@ use futures::{Stream, StreamExt};
 use log::debug;
 use prost::Message;
 use tonic::Streaming;
-use uuid::Uuid;
 
 /// Client for interacting with Ballista executors.
 #[derive(Clone)]

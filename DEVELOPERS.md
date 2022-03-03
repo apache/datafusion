@@ -35,10 +35,120 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 
 Testing setup:
 
+- `rustup update stable` DataFusion uses the latest stable release of rust
 - `git submodule init`
 - `git submodule update`
 - `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
 - `export ARROW_TEST_DATA=$(pwd)/testing/data/`
+
+## Test Organization
+
+DataFusion has several levels of tests in its [Test
+Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)
+and tries to follow [Testing Organization](https://doc.rust-lang.org/book/ch11-03-test-organization.html) in the The Book.
+
+This section highlights the most important test modules that exist
+
+### Unit tests
+
+Tests for the code in an individual module are defined in the same source file with a `test` module, following Rust convention
+
+### Rust Integration Tests
+
+There are several tests of the public interface of the DataFusion library in the [tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests) directory.
+
+You can run these tests individually using a command such as
+
+```shell
+cargo test -p datafusion --tests sql_integration
+```
+
+One very important test is the [sql_integraton](https://github.com/apache/arrow-datafusion/blob/master/datafusion/tests/sql_integration.rs) test which validates DataFusion's ability to run a large assortment of SQL queries against an assortment of data setsups.
+
+### SQL / Postgres Integration Tests
+
+The [integration-tests](https://github.com/apache/arrow-datafusion/blob/master/datafusion/integration-tests] directory contains a harness that runs certain queries against both postgres and datafusion and compares results
+
+#### setup environment
+
+```shell
+export POSTGRES_DB=postgres
+export POSTGRES_USER=postgres
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+```
+
+#### Install dependencies
+
+```shell
+# Install dependencies
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r integration-tests/requirements.txt
+
+# setup environment
+POSTGRES_DB=postgres POSTGRES_USER=postgres POSTGRES_HOST=localhost POSTGRES_PORT=5432 python -m pytest -v integration-tests/test_psql_parity.py
+
+# Create
+psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c 'CREATE TABLE IF NOT EXISTS test (
+  c1 character varying NOT NULL,
+  c2 integer NOT NULL,
+  c3 smallint NOT NULL,
+  c4 smallint NOT NULL,
+  c5 integer NOT NULL,
+  c6 bigint NOT NULL,
+  c7 smallint NOT NULL,
+  c8 integer NOT NULL,
+  c9 bigint NOT NULL,
+  c10 character varying NOT NULL,
+  c11 double precision NOT NULL,
+  c12 double precision NOT NULL,
+  c13 character varying NOT NULL
+);'
+
+psql -d "$POSTGRES_DB" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -U "$POSTGRES_USER" -c "\copy test FROM '$(pwd)/testing/data/csv/aggregate_test_100.csv' WITH (FORMAT csv, HEADER true);"
+```
+
+#### Invoke the test runner
+
+```shell
+python -m pytest -v integration-tests/test_psql_parity.py
+```
+
+## Benchmarks
+
+### Criterion Benchmarks
+
+[Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by Datafusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within Datafusion.
+
+Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) and a given benchmark can be run with
+
+```
+cargo bench --bench BENCHMARK_NAME
+```
+
+A full list of benchmarks can be found [here](./datafusion/benches).
+
+_[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
+
+#### Parquet SQL Benchmarks
+
+The parquet SQL benchmarks can be run with
+
+```
+ cargo bench --bench parquet_query_sql
+```
+
+These randomly generate a parquet file, and then benchmark queries sourced from [parquet_query_sql.sql](./datafusion/benches/parquet_query_sql.sql) against it. This can therefore be a quick way to add coverage of particular query and/or data paths.
+
+If the environment variable `PARQUET_FILE` is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.
+
+The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with `PARQUET_FILE` in subsequent runs.
+
+### Upstream Benchmark Suites
+
+Instructions and tooling for running upstream benchmark suites against Datafusion and/or Ballista can be found in [benchmarks](./benchmarks).
+
+These are valuable for comparative evaluation against alternative Arrow implementations and query engines.
 
 ## How to add a new scalar function
 

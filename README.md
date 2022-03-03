@@ -53,7 +53,6 @@ Projects that adapt to or serve as plugins to DataFusion:
 
 - [datafusion-python](https://github.com/datafusion-contrib/datafusion-python)
 - [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
-- [datafusion-ruby](https://github.com/j-a-m-l/datafusion-ruby)
 - [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
 - [datafusion-hdfs-native](https://github.com/datafusion-contrib/datafusion-hdfs-native)
 

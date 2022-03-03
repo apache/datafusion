@@ -96,7 +96,7 @@ pub mod window;
 mod explain;
 pub mod information_schema;
 mod partitioned_csv;
-#[cfg_attr(not(feature = "unicode_expressions"), ignore)]
+#[cfg(feature = "unicode_expressions")]
 pub mod unicode;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
@@ -682,6 +682,21 @@ pub fn table_with_sequence(
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
+/// Return a new table provider that has a single Int32 column with
+/// values between `seq_start` and `seq_end`
+pub fn table_with_sequence(
+    seq_start: i32,
+    seq_end: i32,
+) -> Result<Arc<dyn TableProvider>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
+    let partitions = vec![vec![RecordBatch::try_new(
+        schema.clone(),
+        vec![arr as ArrayRef],
+    )?]];
+    Ok(Arc::new(MemTable::try_new(schema, partitions)?))
+}
+
 // Normalizes parts of an explain plan that vary from run to run (such as path)
 fn normalize_for_explain(s: &str) -> String {
     // Convert things like /Users/alamb/Software/arrow/testing/data/csv/aggregate_test_100.csv
@@ -846,7 +861,7 @@ async fn nyc() -> Result<()> {
             },
             _ => unreachable!(),
         },
-        _ => unreachable!(false),
+        _ => unreachable!(),
     }
 
     Ok(())

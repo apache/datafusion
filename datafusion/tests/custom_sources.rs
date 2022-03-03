@@ -20,6 +20,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use datafusion::field_util::{FieldExt, SchemaExt};
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::record_batch::RecordBatch;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
@@ -112,6 +113,9 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]

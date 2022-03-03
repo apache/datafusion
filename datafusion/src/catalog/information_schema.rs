@@ -17,7 +17,7 @@
 
 //! Implements the SQL [Information Schema] for DataFusion.
 //!
-//! Information Schema](https://en.wikipedia.org/wiki/Information_schema)
+//! Information Schema]<https://en.wikipedia.org/wiki/Information_schema>
 
 use std::{
     any,
@@ -196,7 +196,7 @@ impl SchemaProvider for InformationSchemaProvider {
 
 /// Builds the `information_schema.TABLE` table row by row
 ///
-/// Columns are based on https://www.postgresql.org/docs/current/infoschema-columns.html
+/// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
 struct InformationSchemaTablesBuilder {
     catalog_names: MutableUtf8Array<i32>,
     schema_names: MutableUtf8Array<i32>,
@@ -267,7 +267,7 @@ impl From<InformationSchemaTablesBuilder> for MemTable {
 
 /// Builds the `information_schema.COLUMNS` table row by row
 ///
-/// Columns are based on https://www.postgresql.org/docs/current/infoschema-columns.html
+/// Columns are based on <https://www.postgresql.org/docs/current/infoschema-columns.html>
 struct InformationSchemaColumnsBuilder {
     catalog_names: MutableUtf8Array<i32>,
     schema_names: MutableUtf8Array<i32>,

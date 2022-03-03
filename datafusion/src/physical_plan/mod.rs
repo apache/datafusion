@@ -43,8 +43,8 @@ pub use display::DisplayFormatType;
 use futures::stream::Stream;
 use sorts::SortColumn;
 use std::fmt;
-use std::fmt::{Debug, Display};
-use std::ops::Range;
+use std::fmt::Debug;
+
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
@@ -59,7 +59,7 @@ pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
 }
 
 /// Trait for a stream of record batches.
-pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync>>;
+pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
@@ -147,19 +147,71 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// Specifies the output partitioning scheme of this plan
     fn output_partitioning(&self) -> Partitioning;
 
-    /// Specifies the data distribution requirements of all the children for this operator
+    /// If the output of this operator is sorted, returns `Some(keys)`
+    /// with the description of how it was sorted.
+    ///
+    /// For example, Sort, (obviously) produces sorted output as does
+    /// SortPreservingMergeStream. Less obviously `Projection`
+    /// produces sorted output if its input was sorted as it does not
+    /// reorder the input rows,
+    ///
+    /// It is safe to return `None` here if your operator does not
+    /// have any particular output order here
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]>;
+
+    /// Specifies the data distribution requirements of all the
+    /// children for this operator
     fn required_child_distribution(&self) -> Distribution {
         Distribution::UnspecifiedDistribution
     }
 
-    /// Returns `true` if the direct children of this `ExecutionPlan` should be repartitioned
-    /// to introduce greater concurrency to the plan
+    /// Returns `true` if this operator relies on its inputs being
+    /// produced in a certain order (for example that they are sorted
+    /// a particular way) for correctness.
     ///
-    /// The default implementation returns `true` unless `Self::required_child_distribution`
-    /// returns `Distribution::SinglePartition`
+    /// If `true` is returned, DataFusion will not apply certain
+    /// optimizations which might reorder the inputs (such as
+    /// repartitioning to increase concurrency).
     ///
-    /// Operators that do not benefit from additional partitioning may want to return `false`
-    fn should_repartition_children(&self) -> bool {
+    /// The default implementation returns `true`
+    ///
+    /// WARNING: if you override this default and return `false`, your
+    /// operator can not rely on datafusion preserving the input order
+    /// as it will likely not.
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
+    /// Returns `false` if this operator's implementation may reorder
+    /// rows within or between partitions.
+    ///
+    /// For example, Projection, Filter, and Limit maintain the order
+    /// of inputs -- they may transform values (Projection) or not
+    /// produce the same number of rows that went in (Filter and
+    /// Limit), but the rows that are produced go in the same way.
+    ///
+    /// DataFusion uses this metadata to apply certain optimizations
+    /// such as automatically repartitioning correctly.
+    ///
+    /// The default implementation returns `false`
+    ///
+    /// WARNING: if you override this default, you *MUST* ensure that
+    /// the operator's maintains the ordering invariant or else
+    /// DataFusion may produce incorrect results.
+    fn maintains_input_order(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if this operator would benefit from
+    /// partitioning its input (and thus from more parallelism). For
+    /// operators that do very little work the overhead of extra
+    /// parallelism may outweigh any benefits
+    ///
+    /// The default implementation returns `true` unless this operator
+    /// has signalled it requiers a single child input partition.
+    fn benefits_from_input_partitioning(&self) -> bool {
+        // By default try to maximize parallelism with more CPUs if
+        // possible
         !matches!(
             self.required_child_distribution(),
             Distribution::SinglePartition
@@ -170,6 +222,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     /// will be empty for leaf nodes, will contain a single value for unary nodes, or two
     /// values for binary nodes (such as joins).
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
+
     /// Returns a new plan where all children were replaced by new plans.
     /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
     fn with_new_children(
@@ -424,142 +477,8 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-/// Expression that can be evaluated against a RecordBatch
-/// A Physical expression knows its type, nullability and how to evaluate itself.
-pub trait PhysicalExpr: Send + Sync + Display + Debug {
-    /// Returns the physical expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-    /// Get the data type of this expression, given the schema of the input
-    fn data_type(&self, input_schema: &Schema) -> Result<DataType>;
-    /// Determine whether this expression is nullable, given the schema of the input
-    fn nullable(&self, input_schema: &Schema) -> Result<bool>;
-    /// Evaluate an expression against a RecordBatch
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
-}
-
-/// An aggregate expression that:
-/// * knows its resulting field
-/// * knows how to create its accumulator
-/// * knows its accumulator's state's field
-/// * knows the expressions from whose its accumulator will receive values
-pub trait AggregateExpr: Send + Sync + Debug {
-    /// Returns the aggregate expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
-    /// the field of the final result of this aggregation.
-    fn field(&self) -> Result<Field>;
-
-    /// the accumulator used to accumulate values from the expressions.
-    /// the accumulator expects the same number of arguments as `expressions` and must
-    /// return states with the same description as `state_fields`
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>>;
-
-    /// the fields that encapsulate the Accumulator's state
-    /// the number of fields here equals the number of states that the accumulator contains
-    fn state_fields(&self) -> Result<Vec<Field>>;
-
-    /// expressions that are passed to the Accumulator.
-    /// Single-column aggregations such as `sum` return a single value, others (e.g. `cov`) return many.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
-
-    /// Human readable name such as `"MIN(c2)"`. The default
-    /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "AggregateExpr: default name"
-    }
-}
-
-/// A window expression that:
-/// * knows its resulting field
-pub trait WindowExpr: Send + Sync + Debug {
-    /// Returns the window expression as [`Any`](std::any::Any) so that it can be
-    /// downcast to a specific implementation.
-    fn as_any(&self) -> &dyn Any;
-
-    /// the field of the final result of this window function.
-    fn field(&self) -> Result<Field>;
-
-    /// Human readable name such as `"MIN(c2)"` or `"RANK()"`. The default
-    /// implementation returns placeholder text.
-    fn name(&self) -> &str {
-        "WindowExpr: default name"
-    }
-
-    /// expressions that are passed to the WindowAccumulator.
-    /// Functions which take a single input argument, such as `sum`, return a single [`Expr`],
-    /// others (e.g. `cov`) return many.
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>>;
-
-    /// evaluate the window function arguments against the batch and return
-    /// array ref, normally the resulting vec is a single element one.
-    fn evaluate_args(&self, batch: &RecordBatch) -> Result<Vec<ArrayRef>> {
-        self.expressions()
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect()
-    }
-
-    /// evaluate the window function values against the batch
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
-
-    /// evaluate the partition points given the sort columns; if the sort columns are
-    /// empty then the result will be a single element vec of the whole column rows.
-    fn evaluate_partition_points(
-        &self,
-        num_rows: usize,
-        partition_columns: &[SortColumn],
-    ) -> Result<Vec<Range<usize>>> {
-        if partition_columns.is_empty() {
-            Ok(vec![Range {
-                start: 0,
-                end: num_rows,
-            }])
-        } else {
-            let v = partition_columns
-                .iter()
-                .map(|sc| sc.into())
-                .collect::<Vec<ArrowSortColumn>>();
-            Ok(lexicographical_partition_ranges(v.as_slice())
-                .map_err(DataFusionError::ArrowError)?
-                .collect())
-        }
-    }
-
-    /// expressions that's from the window function's partition by clause, empty if absent
-    fn partition_by(&self) -> &[Arc<dyn PhysicalExpr>];
-
-    /// expressions that's from the window function's order by clause, empty if absent
-    fn order_by(&self) -> &[PhysicalSortExpr];
-
-    /// get partition columns that can be used for partitioning, empty if absent
-    fn partition_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        self.partition_by()
-            .iter()
-            .map(|expr| {
-                PhysicalSortExpr {
-                    expr: expr.clone(),
-                    options: SortOptions::default(),
-                }
-                .evaluate_to_sort_column(batch)
-            })
-            .collect()
-    }
-
-    /// get sort columns that can be used for peer evaluation, empty if absent
-    fn sort_columns(&self, batch: &RecordBatch) -> Result<Vec<SortColumn>> {
-        let mut sort_columns = self.partition_columns(batch)?;
-        let order_by_columns = self
-            .order_by()
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(batch))
-            .collect::<Result<Vec<SortColumn>>>()?;
-        sort_columns.extend(order_by_columns);
-        Ok(sort_columns)
-    }
-}
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -604,46 +523,33 @@ pub fn project_schema(
 
 pub mod aggregates;
 pub mod analyze;
-pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
-mod coercion_rule;
 pub mod common;
 pub mod cross_join;
-#[cfg(feature = "crypto_expressions")]
-pub mod crypto_expressions;
-pub mod datetime_expressions;
 pub mod display;
 pub mod empty;
 pub mod explain;
-pub mod expressions;
+pub use datafusion_physical_expr::expressions;
+pub mod aggregate_rule;
 pub mod file_format;
 pub mod filter;
 pub mod functions;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
-pub(crate) mod hyperloglog;
 pub mod join_utils;
 pub mod limit;
-pub mod math_expressions;
 pub mod memory;
 pub mod metrics;
 pub mod planner;
 pub mod projection;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
 pub mod repartition;
 pub mod sorts;
 pub mod stream;
-pub mod string_expressions;
-pub(crate) mod tdigest;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
-
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode_expressions;
 pub mod union;
 pub mod values;
 pub mod window_functions;

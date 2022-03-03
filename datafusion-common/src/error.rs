@@ -23,7 +23,13 @@ use std::io;
 use std::result;
 
 use arrow::error::ArrowError;
+#[cfg(feature = "avro")]
+use avro_rs::Error as AvroError;
+#[cfg(feature = "jit")]
+use cranelift_module::ModuleError;
 use parquet::error::ParquetError;
+#[cfg(feature = "parquet")]
+use parquet::errors::ParquetError;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
@@ -38,7 +44,11 @@ pub enum DataFusionError {
     /// Error returned by arrow.
     ArrowError(ArrowError),
     /// Wraps an error from the Parquet crate
+    #[cfg(feature = "parquet")]
     ParquetError(ParquetError),
+    /// Wraps an error from the Avro crate
+    #[cfg(feature = "avro")]
+    AvroError(AvroError),
     /// Error associated to I/O operations and associated traits.
     IoError(io::Error),
     /// Error returned when SQL is syntactically incorrect.
@@ -64,6 +74,9 @@ pub enum DataFusionError {
     /// Errors originating from outside DataFusion's core codebase.
     /// For example, a custom S3Error from the crate datafusion-objectstore-s3
     External(GenericError),
+    #[cfg(feature = "jit")]
+    /// Error occurs during code generation
+    JITError(ModuleError),
 }
 
 impl From<io::Error> for DataFusionError {
@@ -88,15 +101,30 @@ impl From<DataFusionError> for ArrowError {
     }
 }
 
+#[cfg(feature = "parquet")]
 impl From<ParquetError> for DataFusionError {
     fn from(e: ParquetError) -> Self {
         DataFusionError::ParquetError(e)
     }
 }
 
+#[cfg(feature = "avro")]
+impl From<AvroError> for DataFusionError {
+    fn from(e: AvroError) -> Self {
+        DataFusionError::AvroError(e)
+    }
+}
+
 impl From<ParserError> for DataFusionError {
     fn from(e: ParserError) -> Self {
         DataFusionError::SQL(e)
+    }
+}
+
+#[cfg(feature = "jit")]
+impl From<ModuleError> for DataFusionError {
+    fn from(e: ModuleError) -> Self {
+        DataFusionError::JITError(e)
     }
 }
 
@@ -110,8 +138,13 @@ impl Display for DataFusionError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match *self {
             DataFusionError::ArrowError(ref desc) => write!(f, "Arrow error: {}", desc),
+            #[cfg(feature = "parquet")]
             DataFusionError::ParquetError(ref desc) => {
                 write!(f, "Parquet error: {}", desc)
+            }
+            #[cfg(feature = "avro")]
+            DataFusionError::AvroError(ref desc) => {
+                write!(f, "Avro error: {}", desc)
             }
             DataFusionError::IoError(ref desc) => write!(f, "IO error: {}", desc),
             DataFusionError::SQL(ref desc) => {
@@ -135,6 +168,10 @@ impl Display for DataFusionError {
             }
             DataFusionError::External(ref desc) => {
                 write!(f, "External error: {}", desc)
+            }
+            #[cfg(feature = "jit")]
+            DataFusionError::JITError(ref desc) => {
+                write!(f, "JIT error: {}", desc)
             }
         }
     }
@@ -181,4 +218,11 @@ mod test {
         ))?;
         Ok(())
     }
+}
+
+#[macro_export]
+macro_rules! internal_err {
+    ($($arg:tt)*) => {
+        Err(DataFusionError::Internal(format!($($arg)*)))
+    };
 }

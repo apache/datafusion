@@ -19,7 +19,8 @@
 
 use arrow::{
     array::{ArrayRef, Int32Array},
-    compute::sort::SortOptions,
+    compute::SortOptions,
+    record_batch::RecordBatch,
 };
 use datafusion::execution::memory_manager::MemoryManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
@@ -27,7 +28,6 @@ use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
-use datafusion::record_batch::RecordBatch;
 use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};

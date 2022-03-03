@@ -16,8 +16,10 @@
 // under the License.
 
 use std::any::Any;
-use std::convert::TryInto;
-use std::pin::Pin;
+
+use std::fmt::Debug;
+use std::marker::PhantomData;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -33,11 +35,12 @@ use crate::utils::WrappedStream;
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
+use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::future;
@@ -49,27 +52,64 @@ use log::{error, info};
 /// batches directly from the executors that hold the results from the final
 /// query stage.
 #[derive(Debug, Clone)]
-pub struct DistributedQueryExec {
+pub struct DistributedQueryExec<T: 'static + AsLogicalPlan> {
     /// Ballista scheduler URL
     scheduler_url: String,
     /// Ballista configuration
     config: BallistaConfig,
     /// Logical plan to execute
     plan: LogicalPlan,
+    /// Codec for LogicalPlan extensions
+    extension_codec: Arc<dyn LogicalExtensionCodec>,
+    /// Phantom data for serializable plan message
+    plan_repr: PhantomData<T>,
 }
 
-impl DistributedQueryExec {
+impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
     pub fn new(scheduler_url: String, config: BallistaConfig, plan: LogicalPlan) -> Self {
         Self {
             scheduler_url,
             config,
             plan,
+            extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_extension(
+        scheduler_url: String,
+        config: BallistaConfig,
+        plan: LogicalPlan,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            plan,
+            extension_codec,
+            plan_repr: PhantomData,
+        }
+    }
+
+    pub fn with_repr(
+        scheduler_url: String,
+        config: BallistaConfig,
+        plan: LogicalPlan,
+        extension_codec: Arc<dyn LogicalExtensionCodec>,
+        plan_repr: PhantomData<T>,
+    ) -> Self {
+        Self {
+            scheduler_url,
+            config,
+            plan,
+            extension_codec,
+            plan_repr,
         }
     }
 }
 
 #[async_trait]
-impl ExecutionPlan for DistributedQueryExec {
+impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -82,6 +122,14 @@ impl ExecutionPlan for DistributedQueryExec {
         Partitioning::UnknownPartitioning(1)
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }
@@ -90,11 +138,13 @@ impl ExecutionPlan for DistributedQueryExec {
         &self,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(DistributedQueryExec::new(
-            self.scheduler_url.clone(),
-            self.config.clone(),
-            self.plan.clone(),
-        )))
+        Ok(Arc::new(DistributedQueryExec {
+            scheduler_url: self.scheduler_url.clone(),
+            config: self.config.clone(),
+            plan: self.plan.clone(),
+            extension_codec: self.extension_codec.clone(),
+            plan_repr: self.plan_repr,
+        }))
     }
 
     async fn execute(
@@ -112,13 +162,23 @@ impl ExecutionPlan for DistributedQueryExec {
 
         let schema: Schema = self.plan.schema().as_ref().clone().into();
 
+        let mut buf: Vec<u8> = vec![];
+        let plan_message =
+            T::try_from_logical_plan(&self.plan, self.extension_codec.as_ref()).map_err(
+                |e| {
+                    DataFusionError::Internal(format!(
+                        "failed to serialize logical plan: {:?}",
+                        e
+                    ))
+                },
+            )?;
+        plan_message.try_encode(&mut buf).map_err(|e| {
+            DataFusionError::Execution(format!("failed to encode logical plan: {:?}", e))
+        })?;
+
         let job_id = scheduler
             .execute_query(ExecuteQueryParams {
-                query: Some(Query::LogicalPlan(
-                    (&self.plan)
-                        .try_into()
-                        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?,
-                )),
+                query: Some(Query::LogicalPlan(buf)),
                 settings: self
                     .config
                     .settings()

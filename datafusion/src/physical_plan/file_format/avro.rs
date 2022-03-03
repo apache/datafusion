@@ -21,6 +21,7 @@ use crate::avro_to_arrow;
 #[cfg(feature = "avro")]
 use crate::datasource::object_store::ReadSeek;
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -72,6 +73,14 @@ impl ExecutionPlan for AvroExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -170,6 +179,7 @@ mod tests {
     use crate::scalar::ScalarValue;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
+    use sqlparser::ast::ObjectType::Schema;
 
     use super::*;
 
@@ -232,14 +242,13 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_missing_column() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let actual_schema = AvroFormat {}
-            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
+            .infer_schema(local_object_reader_stream(vec![filename]))
             .await?;
 
-        let mut fields = actual_schema.fields().to_vec();
+        let mut fields = actual_schema.fields().clone();
         fields.push(Field::new("missing_col", DataType::Int32, true));
 
         let file_schema = Arc::new(Schema::new(fields));
@@ -256,10 +265,7 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec
-            .execute(0, runtime)
-            .await
-            .expect("plan execution failed");
+        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
         let batch = results
             .next()
             .await

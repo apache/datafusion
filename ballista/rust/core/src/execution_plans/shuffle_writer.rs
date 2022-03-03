@@ -26,9 +26,7 @@ use std::iter::{FromIterator, Iterator};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use std::{any::Any, pin::Pin};
 
-use crate::error::BallistaError;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
@@ -51,15 +49,13 @@ use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::Partitioning::RoundRobinBatch;
+
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion::record_batch::RecordBatch;
 use futures::StreamExt;
-use hashbrown::HashMap;
+
 use log::{debug, info};
 use std::cell::RefCell;
 use std::io::BufWriter;
@@ -340,6 +336,14 @@ impl ExecutionPlan for ShuffleWriterExec {
         self.plan.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.plan.clone()]
     }
@@ -448,7 +452,7 @@ mod tests {
     use datafusion::field_util::StructArrayExt;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
-    use datafusion::physical_plan::limit::GlobalLimitExec;
+
     use datafusion::physical_plan::memory::MemoryExec;
     use tempfile::TempDir;
 

@@ -173,6 +173,27 @@ async fn test_fn_approx_percentile_cont() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_fn_approx_percentile_cont() -> Result<()> {
+    let expr = approx_percentile_cont(col("b"), lit(0.5));
+
+    let expected = vec![
+        "+-------------------------------------------+",
+        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
+        "+-------------------------------------------+",
+        "| 10                                        |",
+        "+-------------------------------------------+",
+    ];
+
+    let df = create_test_table()?;
+    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
+
+    assert_batches_eq!(expected, &batches);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_character_length() -> Result<()> {
     let expr = character_length(col("a"));
 
@@ -230,6 +251,7 @@ async fn test_fn_initcap() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_left() -> Result<()> {
     let expr = left(col("a"), lit(3));
 
@@ -270,6 +292,7 @@ async fn test_fn_lower() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_lpad() -> Result<()> {
     let expr = lpad(vec![col("a"), lit(10)]);
 
@@ -290,6 +313,7 @@ async fn test_fn_lpad() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_lpad_with_string() -> Result<()> {
     let expr = lpad(vec![col("a"), lit(10), lit("*")]);
 
@@ -347,6 +371,7 @@ async fn test_fn_ltrim_with_columns() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_md5() -> Result<()> {
     let expr = md5(col("a"));
 
@@ -370,6 +395,7 @@ async fn test_fn_md5() -> Result<()> {
 //       https://github.com/apache/arrow-datafusion/issues/1429
 //       g flag doesn't compile
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_match() -> Result<()> {
     let expr = regexp_match(vec![col("a"), lit("[a-z]")]);
     // The below will fail
@@ -392,6 +418,7 @@ async fn test_fn_regexp_match() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_regexp_replace() -> Result<()> {
     let expr = regexp_replace(vec![col("a"), lit("[a-z]"), lit("x"), lit("g")]);
 
@@ -452,6 +479,7 @@ async fn test_fn_repeat() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_reverse() -> Result<()> {
     let expr = reverse(col("a"));
 
@@ -472,6 +500,7 @@ async fn test_fn_reverse() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_right() -> Result<()> {
     let expr = right(col("a"), lit(3));
 
@@ -492,6 +521,7 @@ async fn test_fn_right() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_rpad() -> Result<()> {
     let expr = rpad(vec![col("a"), lit(11)]);
 
@@ -512,6 +542,7 @@ async fn test_fn_rpad() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_rpad_with_characters() -> Result<()> {
     let expr = rpad(vec![col("a"), lit(11), lit("x")]);
 
@@ -532,6 +563,7 @@ async fn test_fn_rpad_with_characters() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_sha224() -> Result<()> {
     let expr = sha224(col("a"));
 
@@ -591,6 +623,7 @@ async fn test_fn_starts_with() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_strpos() -> Result<()> {
     let expr = strpos(col("a"), lit("f"));
 
@@ -610,6 +643,7 @@ async fn test_fn_strpos() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_substr() -> Result<()> {
     let expr = substr(col("a"), lit(2));
 
@@ -648,6 +682,7 @@ async fn test_fn_to_hex() -> Result<()> {
 }
 
 #[tokio::test]
+#[cfg(feature = "unicode_expressions")]
 async fn test_fn_translate() -> Result<()> {
     let expr = translate(col("a"), lit("bc"), lit("xx"));
 

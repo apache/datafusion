@@ -18,7 +18,6 @@
 //! Physical expressions for window functions
 
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::window_frames::WindowFrame;
 use crate::physical_plan::{
     aggregates,
     expressions::{
@@ -26,24 +25,21 @@ use crate::physical_plan::{
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
-    window_functions::{
-        signature_for_built_in, BuiltInWindowFunction, BuiltInWindowFunctionExpr,
-        WindowFunction,
-    },
-    PhysicalExpr, WindowExpr,
+    window_functions::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
+    PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
+use datafusion_expr::WindowFrame;
+use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
 use std::convert::TryInto;
-use std::ops::Range;
 use std::sync::Arc;
 
-mod aggregate;
-mod built_in;
 mod window_agg_exec;
 
-pub use aggregate::AggregateWindowExpr;
-pub use built_in::BuiltInWindowExpr;
+pub use datafusion_physical_expr::window::{
+    AggregateWindowExpr, BuiltInWindowExpr, WindowExpr,
+};
 pub use window_agg_exec::WindowAggExec;
 
 /// Create a physical expression for window function
@@ -151,23 +147,6 @@ fn create_built_in_window_expr(
             )))
         }
     })
-}
-
-/// Given a partition range, and the full list of sort partition points, given that the sort
-/// partition points are sorted using [partition columns..., order columns...], the split
-/// boundaries would align (what's sorted on [partition columns...] would definitely be sorted
-/// on finer columns), so this will use binary search to find ranges that are within the
-/// partition range and return the valid slice.
-pub(crate) fn find_ranges_in_range<'a>(
-    partition_range: &Range<usize>,
-    sort_partition_points: &'a [Range<usize>],
-) -> &'a [Range<usize>] {
-    let start_idx = sort_partition_points
-        .partition_point(|sort_range| sort_range.start < partition_range.start);
-    let end_idx = start_idx
-        + sort_partition_points[start_idx..]
-            .partition_point(|sort_range| sort_range.end <= partition_range.end);
-    &sort_partition_points[start_idx..end_idx]
 }
 
 #[cfg(test)]

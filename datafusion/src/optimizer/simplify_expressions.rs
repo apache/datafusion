@@ -246,6 +246,7 @@ impl SimplifyExpressions {
     }
 }
 
+#[allow(rustdoc::private_intra_doc_links)]
 /// Partially evaluate `Expr`s so constant subtrees are evaluated at plan time.
 ///
 /// Note it does not handle algebraic rewrites such as `(a or false)`
@@ -273,7 +274,7 @@ pub struct ConstEvaluator<'a> {
     /// non evaluatable (e.g. had a column reference or volatile
     /// function)
     ///
-    /// Specifically, can_evaluate[N] represents the state of
+    /// Specifically, `can_evaluate[N]` represents the state of
     /// traversal when we are N levels deep in the tree, one entry for
     /// this Expr and each of its parents.
     ///
