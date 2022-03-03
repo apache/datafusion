@@ -24,8 +24,6 @@ use datafusion_cli::{
 };
 use mimalloc::MiMalloc;
 use std::env;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 #[global_allocator]
@@ -58,6 +56,16 @@ struct Args {
         validator(is_valid_file)
     )]
     file: Vec<String>,
+
+    #[clap(
+        short = 'r',
+        long,
+        multiple_values = true,
+        help = "Run the provided files on startup instead of ~/.datafusionrc",
+        validator(is_valid_file),
+        conflicts_with = "file"
+    )]
+    rc: Option<Vec<String>>,
 
     #[clap(long, arg_enum, default_value_t = PrintFormat::Table)]
     format: PrintFormat,
@@ -107,16 +115,26 @@ pub async fn main() -> Result<()> {
     };
 
     let files = args.file;
-    if !files.is_empty() {
-        let files = files
-            .into_iter()
-            .map(|file_path| File::open(file_path).unwrap())
-            .collect::<Vec<_>>();
-        for file in files {
-            let mut reader = BufReader::new(file);
-            exec::exec_from_lines(&mut ctx, &mut reader, &print_options).await;
+    let rc = match args.rc {
+        Some(file) => file,
+        None => {
+            let mut files = Vec::new();
+            let home = dirs::home_dir();
+            if let Some(p) = home {
+                let home_rc = p.join(".datafusionrc");
+                if home_rc.exists() {
+                    files.push(home_rc.into_os_string().into_string().unwrap());
+                }
+            }
+            files
         }
+    };
+    if !files.is_empty() {
+        exec::exec_from_files(files, &mut ctx, &print_options).await
     } else {
+        if !rc.is_empty() {
+            exec::exec_from_files(rc, &mut ctx, &print_options).await
+        }
         exec::exec_from_repl(&mut ctx, &mut print_options).await;
     }
 
