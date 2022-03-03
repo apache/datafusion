@@ -18,16 +18,14 @@
 //! This crate contains code generated from the Ballista Protocol Buffer Definition as well
 //! as convenience code for interacting with the generated code.
 
-use prost::bytes::{Buf, BufMut};
+use prost::bytes::BufMut;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{convert::TryInto, io::Cursor};
 
 use datafusion::arrow::datatypes::{IntervalUnit, UnionMode};
-use datafusion::logical_plan::{
-    JoinConstraint, JoinType, LogicalPlan, Operator, UserDefinedLogicalNode,
-};
+use datafusion::logical_plan::{JoinConstraint, JoinType, LogicalPlan, Operator};
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::window_functions::BuiltInWindowFunction;
 
@@ -600,7 +598,7 @@ mod tests {
     use datafusion::prelude::{CsvReadOptions, ExecutionConfig, ExecutionContext};
     use prost::Message;
     use std::any::Any;
-    use std::collections::BTreeMap;
+
     use std::convert::TryInto;
     use std::fmt;
     use std::fmt::{Debug, Formatter};
@@ -608,7 +606,6 @@ mod tests {
 
     pub mod proto {
         use crate::serde::protobuf;
-        use prost::Message;
 
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct TopKPlanProto {
@@ -629,8 +626,7 @@ mod tests {
     use crate::error::BallistaError;
     use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
     use crate::serde::{
-        AsExecutionPlan, AsLogicalPlan, BallistaCodec, LogicalExtensionCodec,
-        PhysicalExtensionCodec,
+        AsExecutionPlan, AsLogicalPlan, LogicalExtensionCodec, PhysicalExtensionCodec,
     };
     use proto::{TopKExecProto, TopKPlanProto};
 

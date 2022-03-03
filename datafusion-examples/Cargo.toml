@@ -26,7 +26,7 @@ license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
 edition = "2021"
 publish = false
-rust-version = "1.58"
+rust-version = "1.59"
 
 [[example]]
 name = "avro_sql"
@@ -34,7 +34,7 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow-flight = { version = "9.0.0" }
+arrow-flight = { version = "9.1" }
 datafusion = { path = "../datafusion" }
 prost = "0.9"
 tonic = "0.6"

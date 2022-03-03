@@ -20,40 +20,23 @@
 //! processes.
 
 use super::super::proto_error;
-use crate::serde::{byte_to_string, protobuf, BallistaError};
+use crate::serde::{protobuf, BallistaError};
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
-use datafusion::datasource::file_format::avro::AvroFormat;
-use datafusion::datasource::file_format::csv::CsvFormat;
-use datafusion::datasource::TableProvider;
 
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::ListingTable;
-use datafusion::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
-};
 use datafusion::logical_plan::{
-    exprlist_to_fields,
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, JoinType, Limit,
-    LogicalPlan, Repartition, TableScan, Values,
+    Column, Expr,
 };
 use datafusion::physical_plan::aggregates::AggregateFunction;
 use datafusion::physical_plan::functions::BuiltinScalarFunction;
 use datafusion::physical_plan::window_functions::{
     BuiltInWindowFunction, WindowFunction,
 };
-use datafusion::physical_plan::{ColumnStatistics, Statistics};
-use protobuf::listing_table_scan_node::FileFormatType;
-use protobuf::{
-    arrow_type, logical_expr_node::ExprType, scalar_type, DateUnit, PrimitiveScalarType,
-    ScalarListValue, ScalarType,
-};
-use std::{
-    boxed,
-    convert::{TryFrom, TryInto},
-};
+
+use protobuf::{logical_expr_node::ExprType, scalar_type};
+use std::convert::{TryFrom, TryInto};
 
 impl protobuf::IntervalUnit {
     pub fn from_arrow_interval_unit(interval_unit: &IntervalUnit) -> Self {
@@ -179,7 +162,7 @@ impl TryInto<DataType> for &Box<protobuf::List> {
 impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     fn from(val: &DataType) -> protobuf::arrow_type::ArrowTypeEnum {
         use protobuf::arrow_type::ArrowTypeEnum;
-        use protobuf::ArrowType;
+
         use protobuf::EmptyMessage;
         match val {
             DataType::Null => ArrowTypeEnum::None(EmptyMessage {}),
@@ -198,7 +181,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             DataType::Timestamp(time_unit, timezone) => {
                 ArrowTypeEnum::Timestamp(protobuf::Timestamp {
                     time_unit: protobuf::TimeUnit::from_arrow_time_unit(time_unit) as i32,
-                    timezone: timezone.to_owned().unwrap_or_else(String::new),
+                    timezone: timezone.to_owned().unwrap_or_default(),
                 })
             }
             DataType::Date32 => ArrowTypeEnum::Date32(EmptyMessage {}),
@@ -301,7 +284,7 @@ fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
 impl TryFrom<&DataType> for protobuf::scalar_type::Datatype {
     type Error = BallistaError;
     fn try_from(val: &DataType) -> Result<Self, Self::Error> {
-        use protobuf::{List, PrimitiveScalarType};
+        use protobuf::PrimitiveScalarType;
         let scalar_value = match val {
             DataType::Boolean => scalar_type::Datatype::Scalar(PrimitiveScalarType::Bool as i32),
             DataType::Int8 => scalar_type::Datatype::Scalar(PrimitiveScalarType::Int8 as i32),
@@ -635,8 +618,6 @@ impl TryInto<protobuf::LogicalExprNode> for &Expr {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<protobuf::LogicalExprNode, Self::Error> {
-        use datafusion::scalar::ScalarValue;
-        use protobuf::scalar_value::Value;
         match self {
             Expr::Column(c) => {
                 let expr = protobuf::LogicalExprNode {

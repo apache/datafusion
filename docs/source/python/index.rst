@@ -27,7 +27,7 @@ It also allows you to use UDFs and UDAFs for complex operations.
 
 The major advantage of this library over other execution engines is that this library achieves zero-copy between Python and its execution engine: there is no cost in using UDFs, UDAFs, and collecting the results to Python apart from having to lock the GIL when running those operations.
 
-Its query engine, DataFusion, is written in `Rust <https://www.rust-lang.org>`_), which makes strong assumptions about thread safety and lack of memory leaks.
+Its query engine, DataFusion, is written in `Rust <https://www.rust-lang.org>`_, which makes strong assumptions about thread safety and lack of memory leaks.
 
 Technically, zero-copy is achieved via the `c data interface <https://arrow.apache.org/docs/format/CDataInterface.html>`_.
 

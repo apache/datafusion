@@ -25,7 +25,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 license = "Apache-2.0"
 publish = false
-rust-version = "1.58"
+rust-version = "1.59"
 
 [features]
 simd = ["datafusion/simd"]
@@ -39,7 +39,7 @@ tokio = { version = "^1.0", features = ["macros", "rt", "rt-multi-thread", "park
 futures = "0.3"
 env_logger = "0.9"
 mimalloc = { version = "0.1", optional = true, default-features = false }
-snmalloc-rs = {version = "0.2", optional = true, features= ["cache-friendly"] }
+snmalloc-rs = {version = "0.2", optional = true }
 rand = "0.8.4"
 serde = "1.0.136"
 serde_json = "1.0.78"

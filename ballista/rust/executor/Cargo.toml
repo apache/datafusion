@@ -29,8 +29,8 @@ edition = "2018"
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = { version = "9.0.0"  }
-arrow-flight = { version = "9.0.0"  }
+arrow = { version = "9.1"  }
+arrow-flight = { version = "9.1"  }
 anyhow = "1"
 async-trait = "0.1.36"
 ballista-core = { path = "../core", version = "0.6.0" }
@@ -39,7 +39,7 @@ datafusion = { path = "../../../datafusion", version = "7.0.0" }
 env_logger = "0.9"
 futures = "0.3"
 log = "0.4"
-snmalloc-rs = {version = "0.2", features= ["cache-friendly"], optional = true}
+snmalloc-rs = {version = "0.2", optional = true}
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 tokio-stream = { version = "0.1", features = ["net"] }
@@ -55,3 +55,7 @@ configure_me_codegen = "0.4.0"
 
 [package.metadata.configure_me.bin]
 executor = "executor_config_spec.toml"
+
+# use libc on unix like platforms to set worker priority in DedicatedExecutor
+[target."cfg(unix)".dependencies.libc]
+version = "0.2"

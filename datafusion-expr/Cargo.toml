@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-expr"
-description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
+description = "Logical expression representation for DataFusion query engine"
 version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
@@ -26,7 +26,7 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
 edition = "2021"
-rust-version = "1.58"
+rust-version = "1.59"
 
 [lib]
 name = "datafusion_expr"
@@ -36,6 +36,6 @@ path = "src/lib.rs"
 
 [dependencies]
 datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
-arrow = { version = "9.0.0", features = ["prettyprint"] }
+arrow = { version = "9.1", features = ["prettyprint"] }
 sqlparser = "0.14"
 ahash = { version = "0.7", default-features = false }

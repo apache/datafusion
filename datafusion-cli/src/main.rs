@@ -22,10 +22,14 @@ use datafusion_cli::{
     context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
 };
+use mimalloc::MiMalloc;
 use std::env;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[derive(Debug, Parser, PartialEq)]
 #[clap(author, version, about, long_about= None)]

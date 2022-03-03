@@ -51,7 +51,7 @@ pub trait RecordBatchStream: Stream<Item = ArrowResult<RecordBatch>> {
 }
 
 /// Trait for a stream of record batches.
-pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send + Sync>>;
+pub type SendableRecordBatchStream = Pin<Box<dyn RecordBatchStream + Send>>;
 
 /// EmptyRecordBatchStream can be used to create a RecordBatchStream
 /// that will produce no results
@@ -469,7 +469,8 @@ pub enum Distribution {
     HashPartitioned(Vec<Arc<dyn PhysicalExpr>>),
 }
 
-pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, WindowExpr};
+pub use datafusion_physical_expr::window::WindowExpr;
+pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 
 /// Applies an optional projection to a [`SchemaRef`], returning the
 /// projected schema
@@ -513,45 +514,33 @@ pub fn project_schema(
 
 pub mod aggregates;
 pub mod analyze;
-pub mod array_expressions;
 pub mod coalesce_batches;
 pub mod coalesce_partitions;
-mod coercion_rule;
 pub mod common;
 pub mod cross_join;
-#[cfg(feature = "crypto_expressions")]
-pub mod crypto_expressions;
-pub mod datetime_expressions;
 pub mod display;
 pub mod empty;
 pub mod explain;
-pub mod expressions;
+pub use datafusion_physical_expr::expressions;
+pub mod aggregate_rule;
 pub mod file_format;
 pub mod filter;
 pub mod functions;
 pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
-pub(crate) mod hyperloglog;
 pub mod join_utils;
 pub mod limit;
-pub mod math_expressions;
 pub mod memory;
 pub mod metrics;
 pub mod planner;
 pub mod projection;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
 pub mod repartition;
 pub mod sorts;
 pub mod stream;
-pub mod string_expressions;
-pub(crate) mod tdigest;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode_expressions;
 pub mod union;
 pub mod values;
 pub mod window_functions;

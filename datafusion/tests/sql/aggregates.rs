@@ -477,6 +477,46 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_sum_crossjoin() {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+----+-----------+",
+        "| c1 | c1 | SUM(a.c2) |",
+        "+----+----+-----------+",
+        "| a  | a  | 1260      |",
+        "| a  | b  | 1140      |",
+        "| a  | c  | 1260      |",
+        "| a  | d  | 1080      |",
+        "| a  | e  | 1260      |",
+        "| b  | a  | 1302      |",
+        "| b  | b  | 1178      |",
+        "| b  | c  | 1302      |",
+        "| b  | d  | 1116      |",
+        "| b  | e  | 1302      |",
+        "| c  | a  | 1176      |",
+        "| c  | b  | 1064      |",
+        "| c  | c  | 1176      |",
+        "| c  | d  | 1008      |",
+        "| c  | e  | 1176      |",
+        "| d  | a  | 924       |",
+        "| d  | b  | 836       |",
+        "| d  | c  | 924       |",
+        "| d  | d  | 792       |",
+        "| d  | e  | 924       |",
+        "| e  | a  | 1323      |",
+        "| e  | b  | 1197      |",
+        "| e  | c  | 1323      |",
+        "| e  | d  | 1134      |",
+        "| e  | e  | 1323      |",
+        "+----+----+-----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn query_count_without_from() -> Result<()> {
     let mut ctx = ExecutionContext::new();
     let sql = "SELECT count(1 + 1)";

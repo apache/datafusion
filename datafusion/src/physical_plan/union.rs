@@ -201,14 +201,12 @@ fn col_stats_union(
         .min_value
         .zip(right.min_value)
         .map(|(a, b)| expressions::helpers::min(&a, &b))
-        .map(Result::ok)
-        .flatten();
+        .and_then(Result::ok);
     left.max_value = left
         .max_value
         .zip(right.max_value)
         .map(|(a, b)| expressions::helpers::max(&a, &b))
-        .map(Result::ok)
-        .flatten();
+        .and_then(Result::ok);
     left.null_count = left.null_count.zip(right.null_count).map(|(a, b)| a + b);
 
     left

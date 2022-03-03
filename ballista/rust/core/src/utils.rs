@@ -15,10 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::io::{BufWriter, Write};
 use std::marker::PhantomData;
-use std::ops::Deref;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::{fs::File, pin::Pin};
@@ -35,43 +34,32 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::{
-    array::{
-        ArrayBuilder, ArrayRef, StructArray, StructBuilder, UInt64Array, UInt64Builder,
-    },
-    datatypes::{DataType, Field, SchemaRef},
-    ipc::reader::FileReader,
-    ipc::writer::FileWriter,
-    record_batch::RecordBatch,
+    datatypes::SchemaRef, ipc::writer::FileWriter, record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
-use datafusion::logical_plan::{LogicalPlan, Operator, TableScan};
-use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::logical_plan::LogicalPlan;
+
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::expressions::{BinaryExpr, Column, Literal};
+
 use datafusion::physical_plan::file_format::{CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{
-    metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
-};
-use futures::{future, Stream, StreamExt};
-use std::time::Instant;
+use datafusion::physical_plan::{metrics, ExecutionPlan, RecordBatchStream};
+use futures::{Stream, StreamExt};
 
 /// Stream data to disk in Arrow IPC format
 
 pub async fn write_stream_to_disk(
-    stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
+    stream: &mut Pin<Box<dyn RecordBatchStream + Send>>,
     path: &str,
     disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
@@ -110,7 +98,7 @@ pub async fn write_stream_to_disk(
 }
 
 pub async fn collect_stream(
-    stream: &mut Pin<Box<dyn RecordBatchStream + Send + Sync>>,
+    stream: &mut Pin<Box<dyn RecordBatchStream + Send>>,
 ) -> Result<Vec<RecordBatch>> {
     let mut batches = vec![];
     while let Some(batch) = stream.next().await {
@@ -322,13 +310,13 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
 }
 
 pub struct WrappedStream {
-    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+    stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
     schema: SchemaRef,
 }
 
 impl WrappedStream {
     pub fn new(
-        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send + Sync>>,
+        stream: Pin<Box<dyn Stream<Item = ArrowResult<RecordBatch>> + Send>>,
         schema: SchemaRef,
     ) -> Self {
         Self { stream, schema }

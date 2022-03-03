@@ -16,11 +16,10 @@
 // under the License.
 
 use std::any::Any;
-use std::convert::TryInto;
+
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::marker::Send;
-use std::pin::Pin;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,8 +37,7 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
 use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
