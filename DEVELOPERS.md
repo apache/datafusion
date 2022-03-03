@@ -35,6 +35,7 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 
 Testing setup:
 
+- `rustup update stable` DataFusion uses the latest stable release of rust
 - `git submodule init`
 - `git submodule update`
 - `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
