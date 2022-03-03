@@ -91,4 +91,4 @@ Please see [User Guide](https://arrow.apache.org/datafusion/) for more informati
 
 ## Contribution Guide
 
-Please see [Contibution Guid](CONTRIBUTING.md) for information about contributing to DataFusion.
+Please see [Contribution Guide](CONTRIBUTING.md) for information about contributing to DataFusion.
