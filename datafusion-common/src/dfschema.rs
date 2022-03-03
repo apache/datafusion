@@ -18,7 +18,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -36,16 +36,29 @@ pub type DFSchemaRef = Arc<DFSchema>;
 pub struct DFSchema {
     /// Fields
     fields: Vec<DFField>,
+    metadata: HashMap<String, String>,
 }
 
 impl DFSchema {
     /// Creates an empty `DFSchema`
     pub fn empty() -> Self {
-        Self { fields: vec![] }
+        Self {
+            fields: vec![],
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
+    /// Create a new `DFSchema`
+    pub fn new(fields: Vec<DFField>) -> Result<Self> {
+        Self::new_with_metadata(fields, HashMap::new())
     }
 
     /// Create a new `DFSchema`
-    pub fn new(fields: Vec<DFField>) -> Result<Self> {
+    pub fn new_with_metadata(
+        fields: Vec<DFField>,
+        metadata: HashMap<String, String>,
+    ) -> Result<Self> {
         let mut qualified_names = HashSet::new();
         let mut unqualified_names = HashSet::new();
 
@@ -86,25 +99,28 @@ impl DFSchema {
                 )));
             }
         }
-        Ok(Self { fields })
+        Ok(Self { fields, metadata })
     }
 
     /// Create a `DFSchema` from an Arrow schema
     pub fn try_from_qualified_schema(qualifier: &str, schema: &Schema) -> Result<Self> {
-        Self::new(
+        Self::new_with_metadata(
             schema
                 .fields()
                 .iter()
                 .map(|f| DFField::from_qualified(qualifier, f.clone()))
                 .collect(),
+            schema.metadata().clone(),
         )
     }
 
     /// Combine two schemas
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
         let mut fields = self.fields.clone();
+        let mut metadata = self.metadata.clone();
         fields.extend_from_slice(schema.fields().as_slice());
-        Self::new(fields)
+        metadata.extend(schema.metadata.clone());
+        Self::new_with_metadata(fields, metadata)
     }
 
     /// Merge a schema into self
@@ -120,6 +136,7 @@ impl DFSchema {
                 self.fields.push(field.clone());
             }
         }
+        self.metadata.extend(other_schema.metadata.clone())
     }
 
     /// Get a list of fields
@@ -263,6 +280,7 @@ impl DFSchema {
                 .into_iter()
                 .map(|f| f.strip_qualifier())
                 .collect(),
+            ..self
         }
     }
 
@@ -281,6 +299,7 @@ impl DFSchema {
                     )
                 })
                 .collect(),
+            ..self
         }
     }
 
@@ -295,12 +314,17 @@ impl DFSchema {
             .collect::<Vec<_>>()
             .join(", ")
     }
+
+    /// Get metadata of this schema
+    pub fn metadata(&self) -> &HashMap<String, String> {
+        &self.metadata
+    }
 }
 
 impl From<DFSchema> for Schema {
     /// Convert DFSchema into a Schema
     fn from(df_schema: DFSchema) -> Self {
-        Schema::new(
+        Schema::new_with_metadata(
             df_schema
                 .fields
                 .into_iter()
@@ -316,6 +340,7 @@ impl From<DFSchema> for Schema {
                     }
                 })
                 .collect(),
+            df_schema.metadata,
         )
     }
 }
@@ -323,7 +348,10 @@ impl From<DFSchema> for Schema {
 impl From<&DFSchema> for Schema {
     /// Convert DFSchema reference into a Schema
     fn from(df_schema: &DFSchema) -> Self {
-        Schema::new(df_schema.fields.iter().map(|f| f.field.clone()).collect())
+        Schema::new_with_metadata(
+            df_schema.fields.iter().map(|f| f.field.clone()).collect(),
+            df_schema.metadata.clone(),
+        )
     }
 }
 
@@ -331,12 +359,13 @@ impl From<&DFSchema> for Schema {
 impl TryFrom<Schema> for DFSchema {
     type Error = DataFusionError;
     fn try_from(schema: Schema) -> std::result::Result<Self, Self::Error> {
-        Self::new(
+        Self::new_with_metadata(
             schema
                 .fields()
                 .iter()
                 .map(|f| DFField::from(f.clone()))
                 .collect(),
+            schema.metadata().clone(),
         )
     }
 }
@@ -384,7 +413,7 @@ impl ToDFSchema for SchemaRef {
 
 impl ToDFSchema for Vec<DFField> {
     fn to_dfschema(self) -> Result<DFSchema> {
-        DFSchema::new(self)
+        DFSchema::new_with_metadata(self, HashMap::new())
     }
 }
 
@@ -392,12 +421,13 @@ impl Display for DFSchema {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "{}",
+            "fields:{}, metadata:{:?}",
             self.fields
                 .iter()
                 .map(|field| field.qualified_name())
                 .collect::<Vec<String>>()
-                .join(", ")
+                .join(", "),
+            self.metadata
         )
     }
 }
@@ -678,11 +708,18 @@ mod tests {
     #[test]
     fn into() {
         // Demonstrate how to convert back and forth between Schema, SchemaRef, DFSchema, and DFSchemaRef
-        let arrow_schema = Schema::new(vec![Field::new("c0", DataType::Int64, true)]);
+        let metadata = test_metadata();
+        let arrow_schema = Schema::new_with_metadata(
+            vec![Field::new("c0", DataType::Int64, true)],
+            metadata.clone(),
+        );
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 
-        let df_schema =
-            DFSchema::new(vec![DFField::new(None, "c0", DataType::Int64, true)]).unwrap();
+        let df_schema = DFSchema::new_with_metadata(
+            vec![DFField::new(None, "c0", DataType::Int64, true)],
+            metadata.clone(),
+        )
+        .unwrap();
         let df_schema_ref = Arc::new(df_schema.clone());
 
         {
@@ -718,5 +755,12 @@ mod tests {
             Field::new("c100", DataType::Boolean, true),
             Field::new("c101", DataType::Boolean, true),
         ])
+    }
+
+    fn test_metadata() -> HashMap<String, String> {
+        vec![("k1", "v1"), ("k2", "v2")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<HashMap<_, _>>()
     }
 }
