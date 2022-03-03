@@ -227,7 +227,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 
     async fn fetch_tasks(
         &self,
-        available_executors: &mut Vec<ExecutorData>,
+        available_executors: &mut [ExecutorData],
         job_id: &str,
     ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError> {
         let mut ret: Vec<Vec<TaskDefinition>> =
