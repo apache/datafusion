@@ -71,11 +71,72 @@ pub trait SchemaProvider: Sync + Send {
 /// Simple in-memory implementation of a schema.
 pub struct MemorySchemaProvider {
     tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
-    object_store_registry: Arc<Mutex<ObjectStoreRegistry>>,
 }
 
 impl MemorySchemaProvider {
     /// Instantiates a new MemorySchemaProvider with an empty collection of tables.
+    pub fn new() -> Self {
+        Self {
+            tables: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+impl Default for MemorySchemaProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SchemaProvider for MemorySchemaProvider {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn table_names(&self) -> Vec<String> {
+        let tables = self.tables.read();
+        tables.keys().cloned().collect()
+    }
+
+    fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
+        let tables = self.tables.read();
+        tables.get(name).cloned()
+    }
+
+    fn register_table(
+        &self,
+        name: String,
+        table: Arc<dyn TableProvider>,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        if self.table_exist(name.as_str()) {
+            return Err(DataFusionError::Execution(format!(
+                "The table {} already exists",
+                name
+            )));
+        }
+        let mut tables = self.tables.write();
+        Ok(tables.insert(name, table))
+    }
+
+    fn deregister_table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        let mut tables = self.tables.write();
+        Ok(tables.remove(name))
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        let tables = self.tables.read();
+        tables.contains_key(name)
+    }
+}
+
+/// `ObjectStore` implementation of `SchemaProvider` to enable registering a `ListingTable`
+pub struct ObjectStoreSchemaProvider {
+    tables: RwLock<HashMap<String, Arc<dyn TableProvider>>>,
+    object_store_registry: Arc<Mutex<ObjectStoreRegistry>>,
+}
+
+impl ObjectStoreSchemaProvider {
+    /// Instantiates a new `ObjectStoreSchemaProvider` with an empty collection of tables.
     pub fn new() -> Self {
         Self {
             tables: RwLock::new(HashMap::new()),
@@ -128,13 +189,13 @@ impl MemorySchemaProvider {
     }
 }
 
-impl Default for MemorySchemaProvider {
+impl Default for ObjectStoreSchemaProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SchemaProvider for MemorySchemaProvider {
+impl SchemaProvider for ObjectStoreSchemaProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -177,13 +238,17 @@ impl SchemaProvider for MemorySchemaProvider {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+    use std::path::Path;
     use std::sync::Arc;
 
     use arrow::datatypes::Schema;
 
     use crate::assert_batches_eq;
     use crate::catalog::catalog::MemoryCatalogProvider;
-    use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
+    use crate::catalog::schema::{
+        MemorySchemaProvider, ObjectStoreSchemaProvider, SchemaProvider,
+    };
     use crate::datasource::empty::EmptyTable;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::ExecutionContext;
@@ -214,7 +279,7 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
 
-        let schema = MemorySchemaProvider::new();
+        let schema = ObjectStoreSchemaProvider::new();
         let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
 
         schema
@@ -257,7 +322,7 @@ mod tests {
     async fn test_schema_register_listing_tables() {
         let testdata = crate::test_util::parquet_test_data();
 
-        let schema = MemorySchemaProvider::new();
+        let schema = ObjectStoreSchemaProvider::new();
         let store = schema
             .register_object_store("file", Arc::new(LocalFileSystem {}))
             .unwrap();
@@ -265,9 +330,12 @@ mod tests {
         let mut files = store.list_file(&testdata).await.unwrap();
         while let Some(file) = files.next().await {
             let sized_file = file.unwrap().sized_file;
-            let file = sized_file.path.split('/').last().unwrap();
-            if file == "alltypes_dictionary.parquet" || file == "alltypes_plain.parquet" {
-                let (name, _) = file.split_once(".").unwrap();
+            let path = Path::new(&sized_file.path);
+            let file = path.file_name().unwrap();
+            if file == OsStr::new("alltypes_dictionary.parquet")
+                || file == OsStr::new("alltypes_plain.parquet")
+            {
+                let name = path.file_stem().unwrap().to_str().unwrap();
                 schema
                     .register_listing_table(name, &sized_file.path, None)
                     .await
@@ -291,7 +359,7 @@ mod tests {
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/{}", testdata, "alltypes_plain.parquet");
 
-        let schema = MemorySchemaProvider::new();
+        let schema = ObjectStoreSchemaProvider::new();
         let _store = schema.register_object_store("test", Arc::new(LocalFileSystem {}));
 
         schema
