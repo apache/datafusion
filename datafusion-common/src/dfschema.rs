@@ -36,6 +36,7 @@ pub type DFSchemaRef = Arc<DFSchema>;
 pub struct DFSchema {
     /// Fields
     fields: Vec<DFField>,
+    /// Additional metadata in form of key value pairs
     metadata: HashMap<String, String>,
 }
 
