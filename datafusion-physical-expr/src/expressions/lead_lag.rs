@@ -18,15 +18,15 @@
 //! Defines physical expression for `lead` and `lag` that can evaluated
 //! at runtime during query execution
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions::cast::cast_with_error;
-use crate::physical_plan::window_functions::PartitionEvaluator;
-use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
-use crate::record_batch::RecordBatch;
-use crate::scalar::ScalarValue;
+use crate::expressions::cast::cast_with_error;
+use crate::window::partition_evaluator::PartitionEvaluator;
+use crate::window::BuiltInWindowFunctionExpr;
+use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
-use arrow::compute::cast;
+use arrow::compute::{cast, concatenate};
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use std::any::Any;
 use std::borrow::Borrow;
 use std::ops::Neg;
@@ -144,8 +144,6 @@ fn shift_with_default_value(
     offset: i64,
     value: &Option<ScalarValue>,
 ) -> Result<ArrayRef> {
-    use arrow::compute::concatenate;
-
     let value_len = array.len() as i64;
     if offset == 0 {
         Ok(array.clone())
@@ -187,15 +185,16 @@ impl PartitionEvaluator for WindowShiftEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::Column;
-    use crate::record_batch::RecordBatch;
+
+    use crate::expressions::Column;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
 
     fn test_i32_result(expr: WindowShift, expected: Int32Array) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(vec![1, -2, 3, -4, 5, -6, 7, 8]));
+        let arr: ArrayRef =
+            Arc::new(Int32Array::from_slice(vec![1, -2, 3, -4, 5, -6, 7, 8]));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;

@@ -29,10 +29,9 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
-
 use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
-use arrow::compute::limit::limit;
+use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 
@@ -336,17 +335,12 @@ impl ExecutionPlan for LocalLimitExec {
             _ => Statistics::default(),
         }
     }
-
-    fn should_repartition_children(&self) -> bool {
-        // No reason to repartition children as this node is just limiting each input partition.
-        false
-    }
 }
 
 /// Truncate a RecordBatch to maximum of n rows
 pub fn truncate_batch(batch: &RecordBatch, n: usize) -> RecordBatch {
     let limited_columns: Vec<ArrayRef> = (0..batch.num_columns())
-        .map(|i| limit(batch.column(i).as_ref(), n).into())
+        .map(|i| limit::limit(batch.column(i).as_ref(), n).into())
         .collect();
 
     RecordBatch::try_new(batch.schema().clone(), limited_columns).unwrap()

@@ -27,10 +27,8 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
 use crate::record_batch::RecordBatch;
-use arrow::{
-    array::{Array, UInt64Array},
-    error::Result as ArrowResult,
-};
+use arrow::array::UInt64Array;
+use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
@@ -510,8 +508,6 @@ mod tests {
     type StringArray = Utf8Array<i32>;
 
     use super::*;
-    use crate::field_util::SchemaExt;
-    use crate::record_batch::RecordBatch;
     use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
@@ -527,6 +523,8 @@ mod tests {
     use arrow::array::{ArrayRef, Utf8Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use futures::FutureExt;
 
     #[tokio::test]

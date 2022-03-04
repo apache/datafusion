@@ -20,9 +20,7 @@ use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::Partitioning::*;
-use crate::physical_plan::{
-    empty::EmptyExec, repartition::RepartitionExec, ExecutionPlan,
-};
+use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
 use crate::{error::Result, execution::context::ExecutionConfig};
 
 /// Optimizer that introduces repartition to introduce more
@@ -236,12 +234,11 @@ impl PhysicalOptimizerRule for Repartition {
 }
 #[cfg(test)]
 mod tests {
-    use arrow::compute::SortOptions;
+    use arrow::compute::sort::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use super::*;
     use crate::datasource::PartitionedFile;
-    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
@@ -253,6 +250,7 @@ mod tests {
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, Statistics};
     use crate::test::object_store::TestObjectStore;
+    use datafusion_common::field_util::SchemaExt;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]))
@@ -278,7 +276,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let expr = vec![PhysicalSortExpr {
             expr: col("c1", &schema()).unwrap(),
-            options: arrow::compute::SortOptions::default(),
+            options: arrow::compute::sort::SortOptions::default(),
         }];
 
         Arc::new(SortPreservingMergeExec::new(expr, input))

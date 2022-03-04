@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use datafusion_common::field_util::SchemaExt;
 
 use crate::execution::context::ExecutionConfig;
 use crate::physical_plan::empty::EmptyExec;
@@ -32,7 +33,6 @@ use crate::scalar::ScalarValue;
 use super::optimizer::PhysicalOptimizerRule;
 use super::utils::optimize_children;
 use crate::error::Result;
-use crate::field_util::SchemaExt;
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default)]
@@ -279,8 +279,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int32Array::from(vec![Some(1), Some(2), None])),
-                Arc::new(Int32Array::from(vec![Some(4), None, Some(6)])),
+                Arc::new(Int32Array::from_iter(vec![Some(1), Some(2), None])),
+                Arc::new(Int32Array::from_iter(vec![Some(4), None, Some(6)])),
             ],
         )?;
 

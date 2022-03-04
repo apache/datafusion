@@ -24,7 +24,6 @@ use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{
@@ -33,7 +32,6 @@ use datafusion::physical_plan::metrics::{
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use datafusion::record_batch::RecordBatch;
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,

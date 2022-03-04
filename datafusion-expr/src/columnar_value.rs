@@ -17,17 +17,14 @@
 
 //! Columnar value module contains a set of types that represent a columnar value.
 
-use arrow::array::ArrayRef;
-use arrow::array::NullArray;
-use arrow::datatypes::DataType;
-use datafusion_common::record_batch::RecordBatch;
+use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
 use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
-use std::sync::Arc;
 
 /// Represents the result from an expression
 #[derive(Clone)]

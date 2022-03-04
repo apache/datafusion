@@ -22,8 +22,8 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
 use crate::Column;
+use crate::{DataFusionError, Result};
 
 use crate::field_util::{FieldExt, SchemaExt};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};

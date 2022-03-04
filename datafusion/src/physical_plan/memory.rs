@@ -27,10 +27,10 @@ use super::{
     common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::error::{DataFusionError, Result};
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
@@ -221,10 +221,10 @@ impl RecordBatchStream for MemoryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::{FieldExt, SchemaExt};
     use crate::physical_plan::ColumnStatistics;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
 
     fn mock_data() -> Result<(SchemaRef, RecordBatch)> {
@@ -240,7 +240,7 @@ mod tests {
             vec![
                 Arc::new(Int32Array::from_slice(&[1, 2, 3])),
                 Arc::new(Int32Array::from_slice(&[4, 5, 6])),
-                Arc::new(Int32Array::from(vec![None, None, Some(9)])),
+                Arc::new(Int32Array::from_iter(vec![None, None, Some(9)])),
                 Arc::new(Int32Array::from_slice(&[7, 8, 9])),
             ],
         )?;

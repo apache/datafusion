@@ -35,7 +35,6 @@ use crate::logical_plan::{
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
-use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident};
 use crate::{
     error::{DataFusionError, Result},
@@ -48,8 +47,9 @@ use crate::{
 };
 use arrow::datatypes::*;
 use arrow::types::days_ms;
+use datafusion_common::ScalarValue;
 
-use crate::field_util::SchemaExt;
+use datafusion_common::field_util::SchemaExt;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,

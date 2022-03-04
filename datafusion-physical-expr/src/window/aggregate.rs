@@ -17,12 +17,12 @@
 
 //! Physical exec for aggregate window function expressions.
 
-use crate::record_batch::RecordBatch;
 use crate::window::partition_evaluator::find_ranges_in_range;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
 use arrow::compute::concatenate;
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;

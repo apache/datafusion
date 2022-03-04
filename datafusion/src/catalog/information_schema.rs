@@ -24,14 +24,14 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use crate::record_batch::RecordBatch;
 use arrow::{
     array::*,
     datatypes::{DataType, Field, Schema},
 };
+use datafusion_common::record_batch::RecordBatch;
 
 use crate::datasource::{MemTable, TableProvider, TableType};
-use crate::field_util::{FieldExt, SchemaExt};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 use super::{
     catalog::{CatalogList, CatalogProvider},

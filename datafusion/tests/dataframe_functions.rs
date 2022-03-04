@@ -32,7 +32,7 @@ use datafusion::prelude::*;
 use datafusion::execution::context::ExecutionContext;
 
 use datafusion::assert_batches_eq;
-use datafusion::field_util::SchemaExt;
+use datafusion_common::field_util::SchemaExt;
 
 fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
@@ -148,26 +148,6 @@ async fn test_fn_btrim_with_chars() -> Result<()> {
     ];
 
     assert_fn_batches!(expr, expected);
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_fn_approx_percentile_cont() -> Result<()> {
-    let expr = approx_percentile_cont(col("b"), lit(0.5));
-
-    let expected = vec![
-        "+-------------------------------------------+",
-        "| APPROXPERCENTILECONT(test.b,Float64(0.5)) |",
-        "+-------------------------------------------+",
-        "| 10                                        |",
-        "+-------------------------------------------+",
-    ];
-
-    let df = create_test_table()?;
-    let batches = df.aggregate(vec![], vec![expr]).unwrap().collect().await?;
-
-    assert_batches_eq!(expected, &batches);
 
     Ok(())
 }

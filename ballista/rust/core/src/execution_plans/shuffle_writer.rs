@@ -20,9 +20,8 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
-use parking_lot::Mutex;
-use std::fs::File;
-use std::iter::{FromIterator, Iterator};
+use std::any::Any;
+use std::iter::Iterator;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -30,16 +29,11 @@ use std::time::Instant;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
-use crate::serde::scheduler::{PartitionLocation, PartitionStats};
-use arrow::chunk::Chunk;
-use arrow::io::ipc::write::WriteOptions;
+use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
 use datafusion::arrow::array::*;
-use datafusion::arrow::compute::aggregate::estimated_bytes_size;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::io::ipc::read::FileReader;
-use datafusion::arrow::io::ipc::write::FileWriter;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::field_util::SchemaExt;
@@ -56,10 +50,8 @@ use datafusion::physical_plan::{
 use datafusion::record_batch::RecordBatch;
 use futures::StreamExt;
 
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use log::{debug, info};
-use std::cell::RefCell;
-use std::io::BufWriter;
-use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each
@@ -452,6 +444,7 @@ mod tests {
     use datafusion::field_util::StructArrayExt;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
+    use std::iter::FromIterator;
 
     use datafusion::physical_plan::memory::MemoryExec;
     use tempfile::TempDir;
@@ -557,7 +550,7 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt32Array::from(vec![Some(1), Some(2)])),
+                Arc::new(UInt32Array::from_iter(vec![Some(1), Some(2)])),
                 Arc::new(Utf8Array::<i32>::from(vec![Some("hello"), Some("world")])),
             ],
         )?;

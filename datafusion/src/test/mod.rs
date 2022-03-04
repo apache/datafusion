@@ -21,15 +21,12 @@ use crate::arrow::array::UInt32Array;
 use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
-use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
-use crate::record_batch::RecordBatch;
-use array::{Array, ArrayRef};
 use arrow::array::*;
-use arrow::array::{self, DecimalBuilder, Int32Array};
-use arrow::datatypes::*;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+
+use datafusion_common::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;

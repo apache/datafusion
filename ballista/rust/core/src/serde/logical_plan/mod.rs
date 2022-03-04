@@ -38,6 +38,7 @@ use datafusion::logical_plan::{
 };
 use datafusion::prelude::ExecutionContext;
 
+use datafusion::field_util::{FieldExt, SchemaExt};
 use prost::bytes::BufMut;
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
@@ -845,22 +846,28 @@ mod roundtrip_tests {
 
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
+    use crate::serde::AsLogicalPlan;
+    use crate::serde::BallistaCodec;
     use arrow::datatypes::IntegerType;
     use core::panic;
+    use datafusion::datasource::listing::ListingTable;
+    use datafusion::datasource::object_store::{
+        FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
+    };
+    use datafusion::error::DataFusionError;
     use datafusion::field_util::SchemaExt;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
         datasource::object_store::local::LocalFileSystem,
         logical_plan::{
-            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder,
-            Partitioning, Repartition, ToDFSchema,
+            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
+            ToDFSchema,
         },
         physical_plan::{aggregates, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
         scalar::ScalarValue,
         sql::parser::FileType,
     };
-
     use std::{convert::TryInto, sync::Arc};
 
     #[derive(Debug)]
@@ -954,6 +961,7 @@ mod roundtrip_tests {
 
     #[tokio::test]
     async fn roundtrip_repartition() -> Result<()> {
+        use crate::serde::AsLogicalPlan;
         use datafusion::logical_plan::Partitioning;
 
         let test_partition_counts = [usize::MIN, usize::MAX, 43256];

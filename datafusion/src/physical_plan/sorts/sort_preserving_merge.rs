@@ -31,18 +31,19 @@ use std::task::{Context, Poll};
 
 use crate::record_batch::RecordBatch;
 use arrow::array::growable::make_growable;
-use arrow::compute::sort::SortOptions;
-use arrow::datatypes::SchemaRef;
-use arrow::error::ArrowError;
-use arrow::error::Result as ArrowResult;
+use arrow::{
+    compute::sort::SortOptions,
+    datatypes::SchemaRef,
+    error::{ArrowError, Result as ArrowResult},
+};
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::{Stream, StreamExt};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream, StreamWrapper};
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,

@@ -32,12 +32,12 @@ use crate::physical_plan::{
 };
 
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use crate::record_batch::RecordBatch;
 use arrow::compute::concatenate::concatenate;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 

@@ -17,15 +17,6 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use std::sync::Arc;
-
-use super::sorts::SortColumn;
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use crate::record_batch::RecordBatch;
-use arrow::compute::sort::SortOptions;
-
 mod approx_distinct;
 mod approx_percentile_cont;
 mod array_agg;
@@ -67,6 +58,7 @@ pub mod helpers {
 }
 
 pub use approx_distinct::ApproxDistinct;
+pub use approx_median::ApproxMedian;
 pub use approx_percentile_cont::{
     is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
 };
@@ -75,7 +67,9 @@ pub use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
 pub use binary::{binary, binary_operator_data_type, BinaryExpr};
 pub use case::{case, CaseExpr};
-pub use cast::{cast, cast_column, cast_with_options, CastExpr};
+pub use cast::{
+    cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
+};
 pub use column::{col, Column};
 pub use correlation::{
     correlation_return_type, is_correlation_support_arg_type, Correlation,
@@ -119,7 +113,7 @@ pub use crate::PhysicalSortExpr;
 #[cfg(test)]
 mod tests {
     use crate::AggregateExpr;
-    use arrow::record_batch::RecordBatch;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
     use std::sync::Arc;
@@ -133,7 +127,7 @@ mod tests {
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
             let agg = Arc::new(<$OP>::new(
-                col("a", &schema)?,
+                $crate::expressions::col("a", &schema)?,
                 "bla".to_string(),
                 $EXPECTED_DATATYPE,
             ));

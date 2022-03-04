@@ -493,7 +493,7 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, IntegerType};
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
     use datafusion_expr::Operator;

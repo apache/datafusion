@@ -19,20 +19,19 @@
 //! such as `col = 5` or `SUM(col)`. See examples on the [`Expr`] struct.
 
 pub use super::Operator;
-
-use arrow::datatypes::DataType;
-
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{DFField, DFSchema};
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::{aggregates, functions, udf::ScalarUDF};
+use arrow::datatypes::DataType;
+use datafusion_common::DataFusionError;
 pub use datafusion_common::{Column, ExprSchema};
-pub use datafusion_expr::expr_fn::col;
+pub use datafusion_expr::expr_fn::*;
 use datafusion_expr::AccumulatorFunctionImplementation;
+use datafusion_expr::BuiltinScalarFunction;
 pub use datafusion_expr::Expr;
 use datafusion_expr::StateTypeFunction;
 pub use datafusion_expr::{lit, lit_timestamp_nano, Literal};
+use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
 };
@@ -241,7 +240,7 @@ pub fn exprlist_to_fields<'a>(
 /// let expr = call_fn("sin", vec![col("x")]).unwrap().lt(lit(0.2));
 /// ```
 pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
-    match name.as_ref().parse::<functions::BuiltinScalarFunction>() {
+    match name.as_ref().parse::<BuiltinScalarFunction>() {
         Ok(fun) => Ok(Expr::ScalarFunction { fun, args }),
         Err(e) => Err(e),
     }

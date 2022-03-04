@@ -957,10 +957,8 @@ impl TryInto<Field> for &protobuf::Field {
     }
 }
 
-use crate::serde::protobuf::ColumnStats;
 use arrow::types::days_ms;
 use datafusion::field_util::SchemaExt;
-use datafusion::physical_plan::{aggregates, windows};
 use datafusion::prelude::{
     date_part, date_trunc, lower, ltrim, rtrim, sha224, sha256, sha384, sha512, trim,
     upper,

@@ -20,12 +20,12 @@
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use crate::record_batch::RecordBatch;
 use arrow::{
     array::*,
     datatypes::{DataType, Field, Schema},
 };
 use chrono::{TimeZone, Utc};
+use datafusion_common::record_batch::RecordBatch;
 use futures::{
     stream::{self},
     StreamExt, TryStreamExt,
@@ -44,7 +44,7 @@ use crate::datasource::{
     object_store::{FileMeta, ObjectStore, SizedFile},
     MemTable, PartitionedFile, PartitionedFileStream,
 };
-use crate::field_util::SchemaExt;
+use datafusion_common::field_util::SchemaExt;
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";

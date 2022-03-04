@@ -30,7 +30,7 @@ use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
 };
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
-use crate::physical_plan::sorts::{SortColumn, SortedStream};
+use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
     common, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
@@ -38,13 +38,15 @@ use crate::physical_plan::{
 };
 use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
-pub use arrow::compute::sort::SortOptions;
-use arrow::compute::sort::{lexsort_to_indices, SortColumn as ArrowSortColumn};
-use arrow::compute::take::take;
+pub use arrow::compute::sort::{
+    lexsort_to_indices, SortColumn as ArrowSortColumn, SortOptions,
+};
+use arrow::compute::take;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::io::ipc::read::{read_file_metadata, FileReader};
 use async_trait::async_trait;
+use datafusion_physical_expr::SortColumn;
 use futures::lock::Mutex;
 use futures::StreamExt;
 use log::{debug, error};
@@ -556,7 +558,7 @@ fn sort_batch(
         batch
             .columns()
             .iter()
-            .map(|column| take(column.as_ref(), &indices).map(Arc::from))
+            .map(|column| take::take(column.as_ref(), &indices).map(Arc::from))
             .collect::<ArrowResult<Vec<ArrayRef>>>()?,
     )
 }
@@ -590,7 +592,6 @@ mod tests {
     use crate::cast::{as_primitive_array, as_string_array};
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::ExecutionConfig;
-    use crate::field_util::{FieldExt, SchemaExt};
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -605,6 +606,7 @@ mod tests {
     use arrow::array::*;
     use arrow::compute::sort::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::FutureExt;
     use std::collections::BTreeMap;
 
@@ -808,7 +810,7 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Float32Array::from(vec![
+                Arc::new(Float32Array::from_iter(vec![
                     Some(f32::NAN),
                     None,
                     None,
@@ -818,7 +820,7 @@ mod tests {
                     Some(2.0_f32),
                     Some(3.0_f32),
                 ])),
-                Arc::new(Float64Array::from(vec![
+                Arc::new(Float64Array::from_iter(vec![
                     Some(200.0_f64),
                     Some(20.0_f64),
                     Some(10.0_f64),

@@ -152,7 +152,7 @@ fn create_case_context() -> Result<ExecutionContext> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(StringArray::from(vec![
+        vec![Arc::new(StringArray::from_iter(vec![
             Some("a"),
             Some("b"),
             Some("c"),
@@ -178,7 +178,7 @@ fn create_join_context(
         t1_schema.clone(),
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
@@ -197,7 +197,7 @@ fn create_join_context(
         t2_schema.clone(),
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
@@ -264,7 +264,7 @@ fn create_join_context_unbalanced(
         t1_schema.clone(),
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 33, 44, 77])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
@@ -284,7 +284,7 @@ fn create_join_context_unbalanced(
         t2_schema.clone(),
         vec![
             Arc::new(UInt32Array::from_slice(&[11, 22, 44, 55])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(vec![
                 Some("z"),
                 Some("y"),
                 Some("x"),
@@ -309,8 +309,8 @@ fn create_join_context_with_nulls() -> Result<ExecutionContext> {
     let t1_data = RecordBatch::try_new(
         t1_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 33, 44, 77, 88, 99])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(UInt32Array::from_slice(vec![11, 22, 33, 44, 77, 88, 99])),
+            Arc::new(StringArray::from_slice(vec![
                 Some("a"),
                 Some("b"),
                 Some("c"),
@@ -331,8 +331,8 @@ fn create_join_context_with_nulls() -> Result<ExecutionContext> {
     let t2_data = RecordBatch::try_new(
         t2_schema.clone(),
         vec![
-            Arc::new(UInt32Array::from(vec![11, 22, 44, 55, 99])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(UInt32Array::from_slice(vec![11, 22, 44, 55, 99])),
+            Arc::new(StringArray::from_slice(vec![
                 Some("z"),
                 None,
                 Some("x"),

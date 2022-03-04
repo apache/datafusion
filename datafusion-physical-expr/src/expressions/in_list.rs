@@ -20,33 +20,17 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::array::GenericStringArray;
 use arrow::array::{
     ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, StringOffsetSizeTrait, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Int64Array, Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow::datatypes::ArrowPrimitiveType;
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Schema};
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
-use crate::record_batch::RecordBatch;
-use crate::scalar::ScalarValue;
 use crate::PhysicalExpr;
-use arrow::array::*;
-use arrow::buffer::{Buffer, MutableBuffer};
-use arrow::{
-    array::*,
-    bitmap::Bitmap,
-    datatypes::{DataType, Schema},
-    types::NativeType,
-};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use arrow::types::NativeType;
+use arrow::{array::*, bitmap::Bitmap};
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 macro_rules! compare_op_scalar {
@@ -473,8 +457,8 @@ pub fn in_list(
 
 #[cfg(test)]
 mod tests {
-    use crate::field_util::SchemaExt;
     use arrow::{array::Utf8Array, datatypes::Field};
+    use datafusion_common::field_util::SchemaExt;
 
     type StringArray = Utf8Array<i32>;
 
@@ -499,7 +483,7 @@ mod tests {
     #[test]
     fn in_list_utf8() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-        let a = StringArray::from(vec![Some("a"), Some("d"), None]);
+        let a = StringArray::from_iter(vec![Some("a"), Some("d"), None]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
@@ -563,7 +547,7 @@ mod tests {
     #[test]
     fn in_list_int64() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
-        let a = Int64Array::from(vec![Some(0), Some(2), None]);
+        let a = Int64Array::from_iter(vec![Some(0), Some(2), None]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
@@ -627,7 +611,7 @@ mod tests {
     #[test]
     fn in_list_float64() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, true)]);
-        let a = Float64Array::from(vec![Some(0.0), Some(0.2), None]);
+        let a = Float64Array::from_iter(vec![Some(0.0), Some(0.2), None]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
@@ -691,7 +675,7 @@ mod tests {
     #[test]
     fn in_list_bool() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
-        let a = BooleanArray::from(vec![Some(true), None]);
+        let a = BooleanArray::from_iter(vec![Some(true), None]);
         let col_a = col("a", &schema)?;
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 

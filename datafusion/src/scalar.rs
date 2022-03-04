@@ -18,15 +18,15 @@
 //! ScalarValue reimported from datafusion-common
 
 pub use datafusion_common::{
-    ScalarType, ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
+    ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::struct_array_from;
     use arrow::types::days_ms;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::struct_array_from;
     use std::cmp::Ordering;
     use std::sync::Arc;
 

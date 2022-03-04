@@ -28,7 +28,7 @@ use crate::datasource::object_store::{
     FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, ReadSeek,
 };
 use crate::datasource::PartitionedFile;
-use crate::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 
 use super::{ObjectReaderStream, SizedFile};
 

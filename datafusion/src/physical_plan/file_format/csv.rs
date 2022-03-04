@@ -22,8 +22,6 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::io::csv;
@@ -32,8 +30,9 @@ use std::io::Read;
 use std::sync::Arc;
 
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::record_batch::RecordBatch;
 
 use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
@@ -266,7 +265,6 @@ impl ExecutionPlan for CsvExec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
     use crate::test_util::aggr_test_schema_with_missing_col;
     use crate::{
         assert_batches_eq,
@@ -274,6 +272,7 @@ mod tests {
         scalar::ScalarValue,
         test_util::aggr_test_schema,
     };
+    use datafusion_common::field_util::SchemaExt;
     use futures::StreamExt;
 
     #[tokio::test]

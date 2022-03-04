@@ -353,13 +353,13 @@ pub(super) fn signature(fun: &AggregateFunction) -> Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
     use crate::physical_plan::expressions::{
         ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg, Correlation,
         Count, Covariance, DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum,
         Variance,
     };
     use crate::{error::Result, scalar::ScalarValue};
+    use datafusion_common::field_util::SchemaExt;
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {

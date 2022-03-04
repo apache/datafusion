@@ -18,13 +18,14 @@
 //! Defines physical expression for `cume_dist` that can evaluated
 //! at runtime during query execution
 
-use crate::error::Result;
-use crate::physical_plan::window_functions::PartitionEvaluator;
-use crate::physical_plan::{window_functions::BuiltInWindowFunctionExpr, PhysicalExpr};
-use crate::record_batch::RecordBatch;
+use crate::window::partition_evaluator::PartitionEvaluator;
+use crate::window::BuiltInWindowFunctionExpr;
+use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::Result;
 use std::any::Any;
 use std::iter;
 use std::ops::Range;
@@ -107,8 +108,8 @@ impl PartitionEvaluator for CumeDistEvaluator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
 
     fn test_i32_result(
         expr: &CumeDist,

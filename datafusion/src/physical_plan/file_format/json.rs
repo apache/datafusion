@@ -16,20 +16,21 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
-use async_trait::async_trait;
-
+use crate::datasource::object_store::ReadSeek;
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::io::json;
+use arrow::io::ndjson;
+use arrow::io::ndjson::read::FallibleStreamingIterator;
+use async_trait::async_trait;
+use datafusion_common::record_batch::RecordBatch;
 use std::any::Any;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 
 use super::file_stream::{BatchIter, FileStream};
@@ -57,14 +58,14 @@ impl NdJsonExec {
 }
 
 // TODO: implement iterator in upstream json::Reader type
-struct JsonBatchReader<R: Read> {
+struct JsonBatchReader<R: ReadSeek> {
     reader: R,
     schema: SchemaRef,
     proj: Option<Vec<String>>,
     rows: Vec<String>,
 }
 
-impl<R: Read> JsonBatchReader<R> {
+impl<R: ReadSeek> JsonBatchReader<R> {
     fn new(
         reader: R,
         schema: SchemaRef,
@@ -80,32 +81,25 @@ impl<R: Read> JsonBatchReader<R> {
     }
 }
 
-impl<R: BufRead> Iterator for JsonBatchReader<R> {
+impl<R: BufRead + ReadSeek> Iterator for JsonBatchReader<R> {
     type Item = ArrowResult<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let data_type = ndjson::read::infer(&mut self.reader, None).ok()?;
+        self.reader.rewind().ok()?;
+
         // json::read::read_rows iterates on the empty vec and reads at most n rows
-        let read = json::read::read_rows(&mut self.reader, self.rows.as_mut_slice());
-        read.and_then(|records_read| {
-            if records_read > 0 {
-                let fields = if let Some(proj) = &self.proj {
-                    self.schema
-                        .fields
-                        .iter()
-                        .filter(|f| proj.contains(&f.name))
-                        .cloned()
-                        .collect()
-                } else {
-                    self.schema.fields.clone()
-                };
-                self.rows.truncate(records_read);
-                json::read::deserialize(&self.rows, &fields)
-                    .map(|chunk| Some(RecordBatch::new_with_chunk(&self.schema, chunk)))
-            } else {
-                Ok(None)
-            }
-        })
-        .transpose()
+        let mut reader =
+            ndjson::read::FileReader::new(&mut self.reader, self.rows.clone(), None);
+
+        let mut arrays = vec![];
+        // `next` is IO-bounded
+        while let Some(rows) = reader.next().ok()? {
+            // `deserialize` is CPU-bounded
+            let array = ndjson::read::deserialize(rows, data_type.clone()).ok()?;
+            arrays.push(array);
+        }
+        Some(RecordBatch::try_new(self.schema.clone(), arrays))
     }
 }
 
@@ -213,7 +207,7 @@ mod tests {
             local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
-    use crate::field_util::SchemaExt;
+    use datafusion_common::field_util::SchemaExt;
 
     use super::*;
 

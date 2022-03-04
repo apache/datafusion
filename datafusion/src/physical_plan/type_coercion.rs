@@ -210,12 +210,13 @@ pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
+    use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::field_util::SchemaExt;
+
     use crate::physical_plan::{
         expressions::col,
         functions::{TypeSignature, Volatility},
     };
-    use arrow::datatypes::{DataType, Field, Schema};
 
     #[test]
     fn test_maybe_data_types() {

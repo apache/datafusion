@@ -41,7 +41,7 @@ use crate::datasource::{
     datasource::TableProviderFilterPushDown, file_format::FileFormat,
     get_statistics_with_limit, object_store::ObjectStore, PartitionedFile, TableProvider,
 };
-use crate::field_util::SchemaExt;
+use datafusion_common::field_util::SchemaExt;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
@@ -397,7 +397,6 @@ mod tests {
     use arrow::datatypes::DataType;
 
     use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
-    use crate::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
     use crate::{
         datasource::{
             file_format::{avro::AvroFormat, parquet::ParquetFormat},
@@ -406,7 +405,6 @@ mod tests {
         logical_plan::{col, lit},
         test::{columns, object_store::TestObjectStore},
     };
-    use arrow::datatypes::DataType;
 
     use super::*;
 

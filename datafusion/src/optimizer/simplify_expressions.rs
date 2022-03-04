@@ -26,14 +26,14 @@ use crate::logical_plan::{
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::create_physical_expr;
-use crate::record_batch::RecordBatch;
-use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::field_util::SchemaExt;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_expr::Volatility;
 
 /// Provides simplification information based on schema and properties
 struct SimplifyContext<'a, 'b> {

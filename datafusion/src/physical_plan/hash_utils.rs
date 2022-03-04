@@ -571,7 +571,7 @@ pub use noforce_hash_collisions::create_hashes;
 
 #[cfg(test)]
 mod tests {
-    use crate::error::Result;
+
     use std::sync::Arc;
 
     use arrow::array::{Float32Array, Float64Array, Int128Vec, PrimitiveArray, TryPush};

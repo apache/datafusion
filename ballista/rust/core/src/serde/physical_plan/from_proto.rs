@@ -18,7 +18,6 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use arrow::compute::cast::CastOptions;
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
@@ -41,13 +40,11 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::window_functions::WindowFunction;
 
+use datafusion::physical_plan::expressions::{
+    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+    Literal, NegativeExpr, NotExpr, TryCastExpr,
+};
 use datafusion::physical_plan::{
-    expressions::{
-        col, Avg, BinaryExpr, BinaryExpr, CaseExpr, CaseExpr, CastExpr, CastExpr, Column,
-        Column, InListExpr, InListExpr, IsNotNullExpr, IsNotNullExpr, IsNullExpr,
-        IsNullExpr, Literal, Literal, NegativeExpr, NegativeExpr, NotExpr, NotExpr,
-        PhysicalSortExpr, TryCastExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
-    },
     functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
     Partitioning,
 };

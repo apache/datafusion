@@ -17,13 +17,12 @@
 
 use arrow::datatypes::{DataType, Schema};
 
-use arrow::record_batch::RecordBatch;
-
 use datafusion_common::Result;
 
 use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
 
+use datafusion_common::record_batch::RecordBatch;
 use std::any::Any;
 
 /// Expression that can be evaluated against a RecordBatch

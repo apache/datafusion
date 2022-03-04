@@ -17,8 +17,10 @@
 
 //! Crypto expressions
 
+use arrow::array::Utf8Array;
+use arrow::types::Offset;
 use arrow::{
-    array::{Array, BinaryArray, Offset, Utf8Array},
+    array::{Array, BinaryArray},
     datatypes::DataType,
 };
 use blake2::{Blake2b512, Blake2s256, Digest};

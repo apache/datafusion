@@ -17,66 +17,63 @@
 
 use std::{any::Any, convert::TryInto, sync::Arc};
 
-use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use arrow::compute;
 use arrow::datatypes::DataType::Decimal;
 use arrow::datatypes::{DataType, Schema};
+use arrow::scalar::Scalar;
+use arrow::types::NativeType;
 
 use crate::coercion_rule::binary_rule::coerce_types;
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use datafusion_expr::Operator;
 
-// TODO move to arrow_rs
-// https://github.com/apache/arrow-rs/issues/1312
-fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
-    arr.as_any()
-        .downcast_ref::<DecimalArray>()
-        .expect("Unable to downcast to typed array to DecimalArray")
-}
+// fn as_decimal_array(arr: &dyn Array) -> &Int128Array {
+//     arr.as_any()
+//         .downcast_ref::<Int128Array>()
+//         .expect("Unable to downcast to typed array to DecimalArray")
+// }
 
-/// create a `dyn_op` wrapper function for the specified operation
-/// that call the underlying dyn_op arrow kernel if the type is
-/// supported, and translates ArrowError to DataFusionError
-macro_rules! make_dyn_comp_op {
-    ($OP:tt) => {
-        paste::paste! {
-            /// wrapper over arrow compute kernel that maps Error types and
-            /// patches missing support in arrow
-            fn [<$OP _dyn>] (left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
-                match (left.data_type(), right.data_type()) {
-                    // Call `op_decimal` (e.g. `eq_decimal) until
-                    // arrow has native support
-                    // https://github.com/apache/arrow-rs/issues/1200
-                    (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
-                        [<$OP _decimal>](as_decimal_array(left), as_decimal_array(right))
-                    },
-                    // By default call the arrow kernel
-                    _ => {
-                    arrow::compute::kernels::comparison::[<$OP _dyn>](left, right)
-                            .map_err(|e| e.into())
-                    }
-                }
-                .map(|a| Arc::new(a) as ArrayRef)
-            }
-        }
-    };
-}
-
-// create eq_dyn, gt_dyn, wrappers etc
-make_dyn_comp_op!(eq);
-make_dyn_comp_op!(gt);
-make_dyn_comp_op!(gt_eq);
-make_dyn_comp_op!(lt);
-make_dyn_comp_op!(lt_eq);
-make_dyn_comp_op!(neq);
-
-use arrow::scalar::Scalar;
-use arrow::types::NativeType;
+// /// create a `dyn_op` wrapper function for the specified operation
+// /// that call the underlying dyn_op arrow kernel if the type is
+// /// supported, and translates ArrowError to DataFusionError
+// macro_rules! make_dyn_comp_op {
+//     ($OP:tt) => {
+//         paste::paste! {
+//             /// wrapper over arrow compute kernel that maps Error types and
+//             /// patches missing support in arrow
+//             fn [<$OP _dyn>] (left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+//                 match (left.data_type(), right.data_type()) {
+//                     // Call `op_decimal` (e.g. `eq_decimal) until
+//                     // arrow has native support
+//                     // https://github.com/apache/arrow-rs/issues/1200
+//                     (DataType::Decimal(_, _), DataType::Decimal(_, _)) => {
+//                         [<$OP _decimal>](as_decimal_array(left), as_decimal_array(right))
+//                     },
+//                     // By default call the arrow kernel
+//                     _ => {
+//                     arrow::compute::comparison::[<$OP _dyn>](left, right)
+//                             .map_err(|e| e.into())
+//                     }
+//                 }
+//                 .map(|a| Arc::new(a) as ArrayRef)
+//             }
+//         }
+//     };
+// }
+//
+// // create eq_dyn, gt_dyn, wrappers etc
+// make_dyn_comp_op!(eq);
+// make_dyn_comp_op!(gt);
+// make_dyn_comp_op!(gt_eq);
+// make_dyn_comp_op!(lt);
+// make_dyn_comp_op!(lt_eq);
+// make_dyn_comp_op!(neq);
 
 // Simple (low performance) kernels until optimized kernels are added to arrow
 // See https://github.com/apache/arrow-rs/issues/960
@@ -114,28 +111,6 @@ fn is_not_distinct_from_bool(left: &dyn Array, right: &dyn Array) -> BooleanArra
 
 /// The binary_bitwise_array_op macro only evaluates for integer types
 /// like int64, int32.
-/// It is used to do bitwise operation.
-macro_rules! binary_bitwise_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:tt, $ARRAY_TYPE:ident, $TYPE:ty) => {{
-        let len = $LEFT.len();
-        let left = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        let right = $RIGHT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        let result = (0..len)
-            .into_iter()
-            .map(|i| {
-                if left.is_null(i) || right.is_null(i) {
-                    None
-                } else {
-                    Some(left.value(i) $OP right.value(i))
-                }
-            })
-            .collect::<$ARRAY_TYPE>();
-        Ok(Arc::new(result))
-    }};
-}
-
-/// The binary_bitwise_array_op macro only evaluates for integer types
-/// like int64, int32.
 /// It is used to do bitwise operation on an array with a scalar.
 macro_rules! binary_bitwise_array_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:tt, $ARRAY_TYPE:ident, $TYPE:ty) => {{
@@ -161,28 +136,6 @@ macro_rules! binary_bitwise_array_scalar {
     }};
 }
 
-fn bitwise_and(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
-    match &left.data_type() {
-        DataType::Int8 => {
-            binary_bitwise_array_op!(left, right, &, Int8Array, i8)
-        }
-        DataType::Int16 => {
-            binary_bitwise_array_op!(left, right, &, Int16Array, i16)
-        }
-        DataType::Int32 => {
-            binary_bitwise_array_op!(left, right, &, Int32Array, i32)
-        }
-        DataType::Int64 => {
-            binary_bitwise_array_op!(left, right, &, Int64Array, i64)
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
-            other,
-            Operator::BitwiseAnd
-        ))),
-    }
-}
-
 fn bitwise_and_scalar(
     array: &dyn Array,
     scalar: ScalarValue,
@@ -231,34 +184,7 @@ macro_rules! binary_bitwise_array_op {
     }};
 }
 
-/// The binary_bitwise_array_op macro only evaluates for integer types
-/// like int64, int32.
-/// It is used to do bitwise operation on an array with a scalar.
-macro_rules! binary_bitwise_array_scalar {
-    ($LEFT:expr, $RIGHT:expr, $OP:tt, $ARRAY_TYPE:ident, $TYPE:ty) => {{
-        let len = $LEFT.len();
-        let array = $LEFT.as_any().downcast_ref::<$ARRAY_TYPE>().unwrap();
-        let scalar = $RIGHT;
-        if scalar.is_null() {
-            Ok(new_null_array(array.data_type(), len))
-        } else {
-            let right: $TYPE = scalar.try_into().unwrap();
-            let result = (0..len)
-                .into_iter()
-                .map(|i| {
-                    if array.is_null(i) {
-                        None
-                    } else {
-                        Some(array.value(i) $OP right)
-                    }
-                })
-                .collect::<$ARRAY_TYPE>();
-            Ok(Arc::new(result) as ArrayRef)
-        }
-    }};
-}
-
-fn bitwise_and(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+fn bitwise_and(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
     match &left.data_type() {
         DataType::Int8 => {
             binary_bitwise_array_op!(left, right, &, Int8Array, i8)
@@ -278,32 +204,6 @@ fn bitwise_and(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
             Operator::BitwiseAnd
         ))),
     }
-}
-
-fn bitwise_and_scalar(
-    array: &dyn Array,
-    scalar: ScalarValue,
-) -> Option<Result<ArrayRef>> {
-    let result = match array.data_type() {
-        DataType::Int8 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int8Array, i8)
-        }
-        DataType::Int16 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int16Array, i16)
-        }
-        DataType::Int32 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int32Array, i32)
-        }
-        DataType::Int64 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int64Array, i64)
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
-            other,
-            Operator::BitwiseAnd
-        ))),
-    };
-    Some(result)
 }
 
 /// Binary expression
@@ -983,12 +883,12 @@ mod tests {
     use arrow::{array::*, types::NativeType};
 
     use super::*;
-    use crate::error::Result;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::{col, lit};
+
+    use crate::expressions::{col, lit};
     use crate::test_util::create_decimal_array;
     use arrow::datatypes::{Field, SchemaRef};
     use arrow::error::ArrowError;
+    use datafusion_common::field_util::SchemaExt;
 
     // TODO add iter for decimal array
     // TODO move this to arrow-rs
@@ -1292,8 +1192,8 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
+        let a = Int32Array::from_slice(vec![1, 2, 3, 4, 5]);
+        let b = Int32Array::from_slice(vec![1, 2, 4, 8, 16]);
 
         // expression: "a < b"
         let lt = binary_simple(
@@ -1326,8 +1226,8 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let a = Int32Array::from(vec![2, 4, 6, 8, 10]);
-        let b = Int32Array::from(vec![2, 5, 4, 8, 8]);
+        let a = Int32Array::from_slice(vec![2, 4, 6, 8, 10]);
+        let b = Int32Array::from_slice(vec![2, 5, 4, 8, 8]);
 
         // expression: "a < b OR a == b"
         let expr = binary_simple(
@@ -1575,14 +1475,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]);
-        let a = Int32Array::from(vec![1, 2, 3, 4, 5]);
-        let b = Int32Array::from(vec![1, 2, 4, 8, 16]);
+        let a = Int32Array::from_slice(vec![1, 2, 3, 4, 5]);
+        let b = Int32Array::from_slice(vec![1, 2, 4, 8, 16]);
 
         apply_arithmetic::<i32>(
             Arc::new(schema),
             vec![Arc::new(a), Arc::new(b)],
             Operator::Plus,
-            Int32Array::from(vec![2, 4, 7, 12, 21]),
+            Int32Array::from_slice(vec![2, 4, 7, 12, 21]),
         )?;
 
         Ok(())
@@ -1594,14 +1494,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from(vec![1, 2, 4, 8, 16]));
-        let b = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a = Arc::new(Int32Array::from_slice(vec![1, 2, 4, 8, 16]));
+        let b = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
 
         apply_arithmetic::<i32>(
             schema.clone(),
             vec![a.clone(), b.clone()],
             Operator::Minus,
-            Int32Array::from(vec![0, 0, 1, 4, 11]),
+            Int32Array::from_slice(vec![0, 0, 1, 4, 11]),
         )?;
 
         // should handle have negative values in result (for signed)
@@ -1609,7 +1509,7 @@ mod tests {
             schema,
             vec![b, a],
             Operator::Minus,
-            Int32Array::from(vec![0, 0, -1, -4, -11]),
+            Int32Array::from_slice(vec![0, 0, -1, -4, -11]),
         )?;
 
         Ok(())
@@ -1621,14 +1521,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from(vec![4, 8, 16, 32, 64]));
-        let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32]));
+        let a = Arc::new(Int32Array::from_slice(vec![4, 8, 16, 32, 64]));
+        let b = Arc::new(Int32Array::from_slice(vec![2, 4, 8, 16, 32]));
 
         apply_arithmetic::<i32>(
             schema,
             vec![a, b],
             Operator::Multiply,
-            Int32Array::from(vec![8, 32, 128, 512, 2048]),
+            Int32Array::from_slice(vec![8, 32, 128, 512, 2048]),
         )?;
 
         Ok(())
@@ -1640,14 +1540,14 @@ mod tests {
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
         ]));
-        let a = Arc::new(Int32Array::from(vec![8, 32, 128, 512, 2048]));
-        let b = Arc::new(Int32Array::from(vec![2, 4, 8, 16, 32]));
+        let a = Arc::new(Int32Array::from_slice(vec![8, 32, 128, 512, 2048]));
+        let b = Arc::new(Int32Array::from_slice(vec![2, 4, 8, 16, 32]));
 
         apply_arithmetic::<i32>(
             schema,
             vec![a, b],
             Operator::Divide,
-            Int32Array::from(vec![4, 8, 16, 32, 64]),
+            Int32Array::from_slice(vec![4, 8, 16, 32, 64]),
         )?;
 
         Ok(())
@@ -1746,7 +1646,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Boolean, true),
         ]);
-        let a = Arc::new(BooleanArray::from(vec![
+        let a = Arc::new(BooleanArray::from_iter(vec![
             Some(true),
             Some(false),
             None,
@@ -1757,7 +1657,7 @@ mod tests {
             Some(false),
             None,
         ])) as ArrayRef;
-        let b = Arc::new(BooleanArray::from(vec![
+        let b = Arc::new(BooleanArray::from_iter(vec![
             Some(true),
             Some(true),
             Some(true),
@@ -1769,7 +1669,7 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let expected = BooleanArray::from(vec![
+        let expected = BooleanArray::from_iter(vec![
             Some(true),
             Some(false),
             None,
@@ -1791,7 +1691,7 @@ mod tests {
             Field::new("a", DataType::Boolean, true),
             Field::new("b", DataType::Boolean, true),
         ]);
-        let a = Arc::new(BooleanArray::from(vec![
+        let a = Arc::new(BooleanArray::from_iter(vec![
             Some(true),
             Some(false),
             None,
@@ -1802,7 +1702,7 @@ mod tests {
             Some(false),
             None,
         ])) as ArrayRef;
-        let b = Arc::new(BooleanArray::from(vec![
+        let b = Arc::new(BooleanArray::from_iter(vec![
             Some(true),
             Some(true),
             Some(true),
@@ -1814,7 +1714,7 @@ mod tests {
             None,
         ])) as ArrayRef;
 
-        let expected = BooleanArray::from(vec![
+        let expected = BooleanArray::from_iter(vec![
             Some(true),
             Some(true),
             Some(true),
@@ -2330,37 +2230,37 @@ mod tests {
         // eq: array = i128
         let result = eq_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            BooleanArray::from_iter(vec![Some(true), None, Some(false), Some(false)]),
             result
         );
         // neq: array != i128
         let result = neq_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            BooleanArray::from_iter(vec![Some(false), None, Some(true), Some(true)]),
             result
         );
         // lt: array < i128
         let result = lt_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            BooleanArray::from_iter(vec![Some(false), None, Some(true), Some(false)]),
             result
         );
         // lt_eq: array <= i128
         let result = lt_eq_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            BooleanArray::from_iter(vec![Some(true), None, Some(true), Some(false)]),
             result
         );
         // gt: array > i128
         let result = gt_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            BooleanArray::from_iter(vec![Some(false), None, Some(false), Some(true)]),
             result
         );
         // gt_eq: array >= i128
         let result = gt_eq_decimal_scalar(&decimal_array, value_i128)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            BooleanArray::from_iter(vec![Some(true), None, Some(false), Some(true)]),
             result
         );
 
@@ -2378,50 +2278,60 @@ mod tests {
         // eq: left == right
         let result = eq_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(false), Some(true)]),
+            BooleanArray::from_iter(vec![Some(false), None, Some(false), Some(true)]),
             result
         );
         // neq: left != right
         let result = neq_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            BooleanArray::from_iter(vec![Some(true), None, Some(true), Some(false)]),
             result
         );
         // lt: left < right
         let result = lt_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]),
+            BooleanArray::from_iter(vec![Some(false), None, Some(true), Some(false)]),
             result
         );
         // lt_eq: left <= right
         let result = lt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), None, Some(true), Some(true)]),
+            BooleanArray::from_iter(vec![Some(false), None, Some(true), Some(true)]),
             result
         );
         // gt: left > right
         let result = gt_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(false)]),
+            BooleanArray::from_iter(vec![Some(true), None, Some(false), Some(false)]),
             result
         );
         // gt_eq: left >= right
         let result = gt_eq_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            BooleanArray::from_iter(vec![Some(true), None, Some(false), Some(true)]),
             result
         );
         // is_distinct: left distinct right
         let result = is_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(true), Some(true), Some(true), Some(false)]),
+            BooleanArray::from_iter(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false)
+            ]),
             result
         );
         // is_distinct: left distinct right
         let result =
             is_not_distinct_from_decimal(&left_decimal_array, &right_decimal_array)?;
         assert_eq!(
-            BooleanArray::from(vec![Some(false), Some(false), Some(false), Some(true)]),
+            BooleanArray::from_iter(vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true)
+            ]),
             result
         );
         Ok(())
@@ -2435,39 +2345,42 @@ mod tests {
         apply_logic_op_scalar_arr(
             &schema,
             &decimal_scalar,
-            &(Arc::new(Int64Array::from(vec![Some(124), None])) as ArrayRef),
+            &(Arc::new(Int64Array::from_iter(vec![Some(124), None])) as ArrayRef),
             Operator::Eq,
-            &BooleanArray::from(vec![Some(false), None]),
+            &BooleanArray::from_iter(vec![Some(false), None]),
         )
         .unwrap();
 
         // array != scalar
         apply_logic_op_arr_scalar(
             &schema,
-            &(Arc::new(Int64Array::from(vec![Some(123), None, Some(1)])) as ArrayRef),
+            &(Arc::new(Int64Array::from_iter(vec![Some(123), None, Some(1)]))
+                as ArrayRef),
             &decimal_scalar,
             Operator::NotEq,
-            &BooleanArray::from(vec![Some(true), None, Some(true)]),
+            &BooleanArray::from_iter(vec![Some(true), None, Some(true)]),
         )
         .unwrap();
 
         // array < scalar
         apply_logic_op_arr_scalar(
             &schema,
-            &(Arc::new(Int64Array::from(vec![Some(123), None, Some(124)])) as ArrayRef),
+            &(Arc::new(Int64Array::from_iter(vec![Some(123), None, Some(124)]))
+                as ArrayRef),
             &decimal_scalar,
             Operator::Lt,
-            &BooleanArray::from(vec![Some(true), None, Some(false)]),
+            &BooleanArray::from_iter(vec![Some(true), None, Some(false)]),
         )
         .unwrap();
 
         // array > scalar
         apply_logic_op_arr_scalar(
             &schema,
-            &(Arc::new(Int64Array::from(vec![Some(123), None, Some(124)])) as ArrayRef),
+            &(Arc::new(Int64Array::from_iter(vec![Some(123), None, Some(124)]))
+                as ArrayRef),
             &decimal_scalar,
             Operator::Gt,
-            &BooleanArray::from(vec![Some(false), None, Some(true)]),
+            &BooleanArray::from_iter(vec![Some(false), None, Some(true)]),
         )
         .unwrap();
 
@@ -2476,18 +2389,21 @@ mod tests {
         // array == scalar
         apply_logic_op_arr_scalar(
             &schema,
-            &(Arc::new(Float64Array::from(vec![Some(123.456), None, Some(123.457)]))
-                as ArrayRef),
+            &(Arc::new(Float64Array::from_iter(vec![
+                Some(123.456),
+                None,
+                Some(123.457),
+            ])) as ArrayRef),
             &decimal_scalar,
             Operator::Eq,
-            &BooleanArray::from(vec![Some(true), None, Some(false)]),
+            &BooleanArray::from_iter(vec![Some(true), None, Some(false)]),
         )
         .unwrap();
 
         // array <= scalar
         apply_logic_op_arr_scalar(
             &schema,
-            &(Arc::new(Float64Array::from(vec![
+            &(Arc::new(Float64Array::from_iter(vec![
                 Some(123.456),
                 None,
                 Some(123.457),
@@ -2495,13 +2411,13 @@ mod tests {
             ])) as ArrayRef),
             &decimal_scalar,
             Operator::LtEq,
-            &BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]),
+            &BooleanArray::from_iter(vec![Some(true), None, Some(false), Some(true)]),
         )
         .unwrap();
         // array >= scalar
         apply_logic_op_arr_scalar(
             &schema,
-            &(Arc::new(Float64Array::from(vec![
+            &(Arc::new(Float64Array::from_iter(vec![
                 Some(123.456),
                 None,
                 Some(123.457),
@@ -2509,7 +2425,7 @@ mod tests {
             ])) as ArrayRef),
             &decimal_scalar,
             Operator::GtEq,
-            &BooleanArray::from(vec![Some(true), None, Some(true), Some(false)]),
+            &BooleanArray::from_iter(vec![Some(true), None, Some(true), Some(false)]),
         )
         .unwrap();
 
@@ -2532,7 +2448,7 @@ mod tests {
             0,
         )?) as ArrayRef;
 
-        let int64_array = Arc::new(Int64Array::from(vec![
+        let int64_array = Arc::new(Int64Array::from_iter(vec![
             Some(value),
             Some(value - 1),
             Some(value),
@@ -2584,7 +2500,7 @@ mod tests {
             10,
             2,
         )?) as ArrayRef;
-        let float64_array = Arc::new(Float64Array::from(vec![
+        let float64_array = Arc::new(Float64Array::from_iter(vec![
             Some(1.23),
             Some(1.22),
             Some(1.23),
@@ -2773,7 +2689,7 @@ mod tests {
             10,
             2,
         )?) as ArrayRef;
-        let int32_array = Arc::new(Int32Array::from(vec![
+        let int32_array = Arc::new(Int32Array::from_iter(vec![
             Some(123),
             Some(122),
             Some(123),
@@ -2875,9 +2791,10 @@ mod tests {
 
     #[test]
     fn bitwise_array_test() -> Result<()> {
-        let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let left =
+            Arc::new(Int32Array::from_iter(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right =
-            Arc::new(Int32Array::from(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
+            Arc::new(Int32Array::from_iter(vec![Some(1), Some(3), Some(7)])) as ArrayRef;
         let result = bitwise_and(left.as_ref(), right.as_ref())?;
         let expected = Int32Vec::from(vec![Some(0), None, Some(3)]).as_arc();
         assert_eq!(result.as_ref(), expected.as_ref());
@@ -2886,7 +2803,8 @@ mod tests {
 
     #[test]
     fn bitwise_scalar_test() -> Result<()> {
-        let left = Arc::new(Int32Array::from(vec![Some(12), None, Some(11)])) as ArrayRef;
+        let left =
+            Arc::new(Int32Array::from_iter(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3i32);
         let result = bitwise_and_scalar(left.as_ref(), right).unwrap()?;
         let expected = Int32Vec::from(vec![Some(0), None, Some(3)]).as_arc();

@@ -17,8 +17,8 @@
 
 //! Manages all available memory during query execution
 
-use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
+use datafusion_common::{DataFusionError, Result};
 use hashbrown::HashSet;
 use log::debug;
 use parking_lot::{Condvar, Mutex};

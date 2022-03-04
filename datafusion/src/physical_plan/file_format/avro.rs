@@ -18,8 +18,6 @@
 //! Execution plan for reading line-delimited Avro files
 #[cfg(feature = "avro")]
 use crate::avro_to_arrow;
-#[cfg(feature = "avro")]
-use crate::datasource::object_store::ReadSeek;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
@@ -27,6 +25,7 @@ use crate::physical_plan::{
 };
 use arrow::datatypes::SchemaRef;
 
+use crate::datasource::object_store::ReadSeek;
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use std::any::Any;
@@ -175,11 +174,11 @@ mod tests {
     use crate::datasource::object_store::local::{
         local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
     };
-    use crate::field_util::SchemaExt;
-    use crate::scalar::ScalarValue;
+    use crate::physical_plan::Statistics;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::ScalarValue;
     use futures::StreamExt;
-    use sqlparser::ast::ObjectType::Schema;
 
     use super::*;
 
@@ -242,16 +241,18 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_missing_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let actual_schema = AvroFormat {}
-            .infer_schema(local_object_reader_stream(vec![filename]))
+            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await?;
 
-        let mut fields = actual_schema.fields().clone();
+        let mut fields = actual_schema.fields().to_vec();
         fields.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(Schema::new(fields.to_vec()));
 
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
@@ -265,7 +266,10 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let mut results = avro_exec
+            .execute(0, runtime)
+            .await
+            .expect("plan execution failed");
         let batch = results
             .next()
             .await

@@ -31,8 +31,6 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use crate::error::Result;
-
 use super::{format_state_name, Literal};
 
 /// Return `true` if `arg_type` is of a [`DataType`] that the

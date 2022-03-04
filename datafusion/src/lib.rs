@@ -224,10 +224,8 @@ pub use arrow;
 pub use parquet;
 
 pub mod arrow_print;
-mod arrow_temporal_util;
-
-pub mod field_util;
 pub mod record_batch;
+pub use datafusion_common::field_util;
 
 #[cfg(feature = "row")]
 pub mod row;

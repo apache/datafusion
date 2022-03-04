@@ -31,10 +31,9 @@ use arrow::{
     datatypes::{DataType, Field, Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
 };
+use datafusion_common::field_util::SchemaExt;
 use futures::Stream;
 
-use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,

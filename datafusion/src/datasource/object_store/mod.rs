@@ -32,7 +32,7 @@ use futures::{AsyncRead, Stream, StreamExt};
 
 use local::LocalFileSystem;
 
-use crate::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 
 /// Both Read and Seek
 pub trait ReadSeek: Read + Seek {}

@@ -18,7 +18,8 @@
 use super::partition_evaluator::PartitionEvaluator;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
-use arrow::record_batch::RecordBatch;
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::Result;
 use std::any::Any;
 use std::sync::Arc;

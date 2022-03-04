@@ -30,13 +30,12 @@ use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-
 use crate::record_batch::{filter_record_batch, RecordBatch};
 use arrow::array::{Array, BooleanArray};
+use arrow::compute::boolean::{and, is_not_null};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
 
-use arrow::compute::boolean::{and, is_not_null};
 use async_trait::async_trait;
 
 use crate::execution::runtime_env::RuntimeEnv;
@@ -251,9 +250,10 @@ mod tests {
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
-    use crate::scalar::ScalarValue;
+
     use crate::test;
     use crate::test_util;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use std::iter::Iterator;
 

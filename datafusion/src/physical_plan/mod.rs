@@ -22,29 +22,22 @@ use self::metrics::MetricsSet;
 use self::{
     coalesce_partitions::CoalescePartitionsExec, display::DisplayableExecutionPlan,
 };
-use crate::field_util::SchemaExt;
 use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::record_batch::RecordBatch;
-use crate::{
-    error::{DataFusionError, Result},
-    execution::runtime_env::RuntimeEnv,
-    scalar::ScalarValue,
-};
-use arrow::array::ArrayRef;
-use arrow::compute::merge_sort::SortOptions;
-use arrow::compute::partition::lexicographical_partition_ranges;
-use arrow::compute::sort::SortColumn as ArrowSortColumn;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use crate::{error::Result, execution::runtime_env::RuntimeEnv, scalar::ScalarValue};
+use datafusion_common::record_batch::RecordBatch;
+
+use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
+
 use async_trait::async_trait;
 pub use datafusion_expr::Accumulator;
 pub use datafusion_expr::ColumnarValue;
 pub use display::DisplayFormatType;
 use futures::stream::Stream;
-use sorts::SortColumn;
 use std::fmt;
 use std::fmt::Debug;
 
+use datafusion_common::field_util::SchemaExt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
@@ -486,7 +479,7 @@ pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 /// Example:
 /// ```
 /// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
-/// use datafusion::field_util::SchemaExt;
+/// use datafusion_common::field_util::SchemaExt;
 /// use datafusion::physical_plan::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
@@ -531,6 +524,7 @@ pub mod display;
 pub mod empty;
 pub mod explain;
 pub use datafusion_physical_expr::expressions;
+
 pub mod aggregate_rule;
 pub mod file_format;
 pub mod filter;

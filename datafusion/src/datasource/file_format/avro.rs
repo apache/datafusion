@@ -30,8 +30,7 @@ use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
+use crate::physical_plan::{ExecutionPlan, Statistics};
 
 /// The default file extension of avro files
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
@@ -82,10 +81,10 @@ mod tests {
 
     use super::*;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use crate::field_util::{FieldExt, SchemaExt};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, UInt64Array,
     };
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
 
     #[tokio::test]

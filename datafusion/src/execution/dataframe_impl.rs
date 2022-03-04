@@ -30,7 +30,6 @@ use crate::logical_plan::{
     Partitioning,
 };
 use crate::record_batch::RecordBatch;
-
 use crate::scalar::ScalarValue;
 use crate::{
     dataframe::*,
@@ -39,14 +38,14 @@ use crate::{
 
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
-use crate::field_util::{FieldExt, SchemaExt};
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
 use crate::sql::utils::find_window_exprs;
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
-/// Implementation of DataFrame API
+/// The main implementation of `DataFrame`
 pub struct DataFrameImpl {
     ctx_state: Arc<Mutex<ExecutionContextState>>,
     plan: LogicalPlan,
@@ -101,7 +100,7 @@ impl TableProvider for DataFrameImpl {
                     let names = schema
                         .fields()
                         .iter()
-                        .map(|field| field.name().as_str())
+                        .map(|field| field.name())
                         .collect::<Vec<_>>();
                     self.select_columns(names.as_slice())
                 },

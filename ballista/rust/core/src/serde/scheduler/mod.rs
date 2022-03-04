@@ -18,8 +18,7 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use datafusion::arrow::array::*;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::logical_plan::LogicalPlan;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::Partitioning;
 use serde::Serialize;

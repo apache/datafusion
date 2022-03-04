@@ -17,13 +17,11 @@
 
 //! Defines the EXPLAIN operator
 
+use arrow::array::MutableUtf8Array;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::{array::*, datatypes::SchemaRef};
-use async_trait::async_trait;
-
-use super::SendableRecordBatchStream;
+use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
 use crate::record_batch::RecordBatch;
@@ -35,6 +33,8 @@ use crate::{
         Statistics,
     },
 };
+use arrow::datatypes::SchemaRef;
+use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes

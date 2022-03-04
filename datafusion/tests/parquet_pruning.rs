@@ -28,7 +28,6 @@ use arrow::{
     io::parquet::write::{Compression, Encoding, Version, WriteOptions},
 };
 use chrono::{Datelike, Duration};
-use datafusion::field_util::SchemaExt;
 use datafusion::record_batch::RecordBatch;
 use datafusion::{
     arrow_print,
@@ -41,6 +40,7 @@ use datafusion::{
     prelude::{ExecutionConfig, ExecutionContext},
     scalar::ScalarValue,
 };
+use datafusion_common::field_util::SchemaExt;
 use tempfile::NamedTempFile;
 
 #[tokio::test]

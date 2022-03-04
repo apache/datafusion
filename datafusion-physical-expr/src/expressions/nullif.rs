@@ -15,56 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
-use crate::expressions::binary::{eq_decimal, eq_decimal_scalar};
-use arrow::array::Array;
-use arrow::array::*;
-use arrow::compute::kernels::boolean::nullif;
-use arrow::compute::kernels::comparison::{
-    eq, eq_bool, eq_bool_scalar, eq_scalar, eq_utf8, eq_utf8_scalar,
-};
-use arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::ScalarValue;
+use arrow::compute::nullif;
+use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-
-/// Invoke a compute kernel on a primitive array and a Boolean Array
-macro_rules! compute_bool_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
-        let ll = $LEFT
-            .as_any()
-            .downcast_ref::<$DT>()
-            .expect("compute_op failed to downcast array");
-        let rr = $RIGHT
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .expect("compute_op failed to downcast array");
-        Ok(Arc::new($OP(&ll, &rr)?) as ArrayRef)
-    }};
-}
-
-/// Binary op between primitive and boolean arrays
-macro_rules! primitive_bool_array_op {
-    ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
-        match $LEFT.data_type() {
-            DataType::Int8 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int8Array),
-            DataType::Int16 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int16Array),
-            DataType::Int32 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int32Array),
-            DataType::Int64 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Int64Array),
-            DataType::UInt8 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt8Array),
-            DataType::UInt16 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt16Array),
-            DataType::UInt32 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt32Array),
-            DataType::UInt64 => compute_bool_array_op!($LEFT, $RIGHT, $OP, UInt64Array),
-            DataType::Float32 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Float32Array),
-            DataType::Float64 => compute_bool_array_op!($LEFT, $RIGHT, $OP, Float64Array),
-            other => Err(DataFusionError::Internal(format!(
-                "Unsupported data type {:?} for NULLIF/primitive/boolean operator",
-                other
-            ))),
-        }
-    }};
-}
 
 /// Implements NULLIF(expr1, expr2)
 /// Args: 0 - left expr is any array
@@ -115,14 +69,15 @@ pub static SUPPORTED_NULLIF_TYPES: &[DataType] = &[
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Int32Array;
     use std::sync::Arc;
 
     use super::*;
-    use datafusion_common::Result;
+    use datafusion_common::{Result, ScalarValue};
 
     #[test]
     fn nullif_int32() -> Result<()> {
-        let a = Int32Array::from(vec![
+        let a = Int32Array::from_iter(vec![
             Some(1),
             Some(2),
             None,
@@ -140,7 +95,7 @@ mod tests {
         let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0);
 
-        let expected = Int32Array::from(vec![
+        let expected = Int32Array::from_iter(vec![
             Some(1),
             None,
             None,
@@ -158,7 +113,7 @@ mod tests {
     #[test]
     // Ensure that arrays with no nulls can also invoke NULLIF() correctly
     fn nullif_int32_nonulls() -> Result<()> {
-        let a = Int32Array::from(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
+        let a = Int32Array::from_slice(vec![1, 3, 10, 7, 8, 1, 2, 4, 5]);
         let a = ColumnarValue::Array(Arc::new(a));
 
         let lit_array = ColumnarValue::Scalar(ScalarValue::Int32(Some(1i32)));
@@ -166,7 +121,7 @@ mod tests {
         let result = nullif_func(&[a, lit_array])?;
         let result = result.into_array(0);
 
-        let expected = Int32Array::from(vec![
+        let expected = Int32Array::from_iter(vec![
             None,
             Some(3),
             Some(10),

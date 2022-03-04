@@ -19,25 +19,18 @@ use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
-use super::ColumnarValue;
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::PhysicalExpr;
-use crate::record_batch::RecordBatch;
-use crate::scalar::ScalarValue;
-use crate::PhysicalExpr;
 use arrow::array::{Array, Int32Array};
-use arrow::compute;
 use arrow::compute::cast;
 use arrow::compute::cast::CastOptions;
-use arrow::compute::kernels;
 use arrow::compute::take;
-use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
-use compute::can_cast_types;
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+
+use crate::PhysicalExpr;
 
 /// provide Datafusion default cast options
 pub const DEFAULT_DATAFUSION_CAST_OPTIONS: CastOptions = CastOptions {
@@ -197,23 +190,18 @@ pub fn cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::col;
+
+    use crate::expressions::col;
     use crate::test_util::create_decimal_array_from_slice;
+    use arrow::array::{
+        Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+        UInt32Array,
+    };
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::Result;
 
     type StringArray = Utf8Array<i32>;
-    use crate::expressions::col;
-    use arrow::{
-        array::{
-            Array, DecimalArray, DecimalBuilder, Float32Array, Float64Array, Int16Array,
-            Int32Array, Int64Array, Int8Array, StringArray, Time64NanosecondArray,
-            TimestampNanosecondArray, UInt32Array,
-        },
-        datatypes::*,
-    };
-    use datafusion_common::Result;
 
     // runs an end-to-end test of physical type cast
     // 1. construct a record batch with a column "a" of type A
@@ -642,15 +630,19 @@ mod tests {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Null, false)]);
 
-        let result = cast(col("a", &schema).unwrap(), &schema, DataType::LargeBinary);
-        result.expect_err("expected Invalid CAST");
+        let result = cast_column(
+            col("a", &schema).unwrap().as_any().downcast_ref().unwrap(),
+            &DataType::LargeBinary,
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        );
+        assert!(result.is_err(), "expected Invalid CAST");
     }
 
     #[test]
     fn invalid_cast_with_options_error() -> Result<()> {
         // Ensure a useful error happens at plan time if invalid casts are used
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let a = StringArray::from(vec!["9.1"]);
+        let a = StringArray::from_slice(vec!["9.1"]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(a)])?;
         let expression = cast_with_options(
             col("a", &schema)?,

@@ -20,6 +20,7 @@
 use std::any::Any;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::vec;
 
 use ahash::RandomState;
 use futures::{
@@ -27,30 +28,30 @@ use futures::{
     Future,
 };
 
+use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use crate::scalar::ScalarValue;
 
 use crate::record_batch::RecordBatch;
+use arrow::array::UInt32Array;
+use arrow::compute::{concatenate, take};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::{
-    array::*,
-    compute::{cast, concatenate, take},
-    datatypes::{DataType, Field, Schema, SchemaRef},
+    array::Array,
     error::{ArrowError, Result as ArrowResult},
 };
+use arrow::{array::ArrayRef, compute::cast};
 use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
 
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::{FieldExt, SchemaExt};
-use crate::physical_plan::expressions::cast::cast_with_error;
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_physical_expr::expressions::DEFAULT_DATAFUSION_CAST_OPTIONS;
 
 use super::common::AbortOnDropSingle;
 use super::expressions::PhysicalSortExpr;
@@ -981,13 +982,12 @@ fn create_batch_from_map(
         .iter()
         .zip(output_schema.fields().iter())
         .map(|(col, desired_field)| {
-            cast_with_error(
+            cast::cast(
                 col.as_ref(),
                 desired_field.data_type(),
-                cast::CastOptions::default(),
+                DEFAULT_DATAFUSION_CAST_OPTIONS,
             )
-            .map_err(|e| e.into())
-            .map(Arc::from)
+            .map(|b| Arc::from(b))
         })
         .collect::<ArrowResult<Vec<_>>>()?;
 
@@ -1035,13 +1035,13 @@ fn finalize_aggregation(
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
-    use crate::assert_batches_sorted_eq;
-    use crate::physical_plan::common;
     use crate::physical_plan::expressions::{col, Avg};
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
+    use crate::{assert_batches_sorted_eq, physical_plan::common};
+    use arrow::array::{Float64Array, UInt32Array};
+    use arrow::datatypes::DataType;
     use futures::FutureExt;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;

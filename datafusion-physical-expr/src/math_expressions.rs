@@ -17,22 +17,16 @@
 
 //! Math expressions
 
-use arrow::array::{Float32Array, Float64Array};
-use arrow::datatypes::DataType;
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
 use std::iter;
 use std::sync::Arc;
 
-use arrow::array::Float32Array;
-use arrow::array::Float64Array;
+use arrow::array::{Float32Array, Float64Array};
 use arrow::compute::arity::unary;
 use arrow::datatypes::DataType;
-
-use super::{ColumnarValue, ScalarValue};
-use crate::error::{DataFusionError, Result};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::ColumnarValue;
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident, $DT: path) => {{

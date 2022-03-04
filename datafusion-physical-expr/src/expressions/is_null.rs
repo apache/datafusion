@@ -19,9 +19,9 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::record_batch::RecordBatch;
 use arrow::compute;
 use arrow::datatypes::{DataType, Schema};
+use datafusion_common::record_batch::RecordBatch;
 
 use crate::PhysicalExpr;
 use datafusion_common::Result;
@@ -88,12 +88,12 @@ pub fn is_null(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::col;
+    use crate::expressions::col;
     use arrow::{
         array::{BooleanArray, Utf8Array},
         datatypes::*,
     };
+    use datafusion_common::field_util::SchemaExt;
     use std::sync::Arc;
 
     type StringArray = Utf8Array<i32>;
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn is_null_op() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-        let a = StringArray::from(vec![Some("foo"), None]);
+        let a = StringArray::from_iter(vec![Some("foo"), None]);
 
         // expression: "a is null"
         let expr = is_null(col("a", &schema)?).unwrap();
@@ -113,7 +113,7 @@ mod tests {
             .downcast_ref::<BooleanArray>()
             .expect("failed to downcast to BooleanArray");
 
-        let expected = &BooleanArray::from(vec![false, true]);
+        let expected = &BooleanArray::from_slice(vec![false, true]);
 
         assert_eq!(expected, result);
 

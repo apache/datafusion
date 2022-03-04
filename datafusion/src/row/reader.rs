@@ -17,7 +17,6 @@
 
 //! Accessing row from raw bytes
 
-use crate::error::{DataFusionError, Result};
 #[cfg(feature = "jit")]
 use crate::reg_fn;
 #[cfg(feature = "jit")]
@@ -28,7 +27,8 @@ use crate::row::{
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
+
 use arrow::util::bit_util::{ceil, get_bit_raw};
 #[cfg(feature = "jit")]
 use datafusion_jit::api::Assembler;

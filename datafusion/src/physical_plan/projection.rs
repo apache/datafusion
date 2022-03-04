@@ -29,7 +29,6 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-
 use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
@@ -38,8 +37,8 @@ use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::{FieldExt, SchemaExt};
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -304,9 +303,9 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
-    use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
+    use datafusion_common::ScalarValue;
     use futures::future;
 
     #[tokio::test]

@@ -23,19 +23,19 @@ use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::Expr;
 use crate::physical_plan::common;
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+use crate::record_batch::RecordBatch;
 
 /// In-memory table
 pub struct MemTable {

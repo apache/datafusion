@@ -23,8 +23,8 @@ use arrow::error::ArrowError;
 use std::borrow::Borrow;
 use std::collections::BTreeMap;
 
-use crate::error::{DataFusionError, Result};
-use crate::scalar::ScalarValue;
+use crate::ScalarValue;
+use crate::{DataFusionError, Result};
 
 /// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
@@ -120,7 +120,7 @@ pub trait SchemaExt {
     ///
     /// ```
     /// use arrow::datatypes::{Field, DataType, Schema};
-    /// use datafusion::field_util::SchemaExt;
+    /// use datafusion_common::field_util::SchemaExt;
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
     ///
@@ -135,7 +135,7 @@ pub trait SchemaExt {
     /// ```
     /// use std::collections::BTreeMap;
     /// use arrow::datatypes::{Field, DataType, Schema};
-    /// use datafusion::field_util::SchemaExt;
+    /// use datafusion_common::field_util::SchemaExt;
     ///
     /// let field_a = Field::new("a", DataType::Int64, false);
     /// let field_b = Field::new("b", DataType::Boolean, false);
@@ -178,7 +178,7 @@ pub trait SchemaExt {
     ///
     /// ```
     /// use arrow::datatypes::*;
-    /// use datafusion::field_util::SchemaExt;
+    /// use datafusion_common::field_util::SchemaExt;
     ///
     /// let merged = Schema::try_merge(vec![
     ///     Schema::new(vec![

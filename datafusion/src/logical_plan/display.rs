@@ -17,8 +17,8 @@
 //! This module provides logic for displaying LogicalPlans in various styles
 
 use super::{LogicalPlan, PlanVisitor};
-use crate::field_util::{FieldExt, SchemaExt};
 use arrow::datatypes::Schema;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use std::fmt;
 
 /// Formats plans with a single line per node. For example:

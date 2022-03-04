@@ -20,22 +20,18 @@
 use std::convert::TryInto;
 use std::{any::Any, sync::Arc};
 
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::{DataType, Schema};
+use datafusion_common::record_batch::RecordBatch;
 
-use crate::arrow::array::Array;
-use crate::arrow::compute::concatenate::concatenate;
-use crate::field_util::FieldExt;
-use crate::scalar::ScalarValue;
-use crate::{
-    error::DataFusionError,
-    error::Result,
-    field_util::{get_indexed_field as get_data_type_field, StructArrayExt},
-    physical_plan::{ColumnarValue, PhysicalExpr},
+use crate::{field_util::get_indexed_field as get_data_type_field, PhysicalExpr};
+use arrow::array::{Array, ListArray, StructArray};
+use arrow::compute::concatenate::concatenate;
+use datafusion_common::field_util::FieldExt;
+use datafusion_common::{
+    field_util::StructArrayExt, DataFusionError, Result, ScalarValue,
 };
-use arrow::array::{ListArray, StructArray};
+use datafusion_expr::ColumnarValue;
 use std::fmt::Debug;
-use std::{any::Any, sync::Arc};
 
 /// expression to get a field of a struct array.
 #[derive(Debug)]
@@ -119,14 +115,14 @@ impl PhysicalExpr for GetIndexedFieldExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Result;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::{col, lit};
+
+    use crate::expressions::{col, lit};
     use arrow::array::{
         Int64Array, MutableListArray, MutableUtf8Array, StructArray, Utf8Array,
     };
     use arrow::array::{TryExtend, TryPush};
     use arrow::datatypes::Field;
+    use datafusion_common::field_util::SchemaExt;
 
     fn build_utf8_lists(list_of_lists: Vec<Vec<Option<&str>>>) -> ListArray<i32> {
         let mut array = MutableListArray::<i32, MutableUtf8Array<i32>>::new();

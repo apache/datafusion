@@ -222,12 +222,12 @@ mod tests {
 
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::field_util::SchemaExt;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{collect, common};
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::test_util;
+    use datafusion_common::field_util::SchemaExt;
 
     #[tokio::test]
     async fn merge() -> Result<()> {

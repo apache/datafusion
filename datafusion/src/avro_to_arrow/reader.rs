@@ -17,10 +17,11 @@
 
 use super::arrow_array_reader::AvroBatchReader;
 use crate::arrow::datatypes::SchemaRef;
+
 use crate::error::Result;
-use crate::record_batch::RecordBatch;
 use arrow::error::Result as ArrowResult;
 use arrow::io::avro::{read, Compression};
+use datafusion_common::record_batch::RecordBatch;
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::Arc;
 
@@ -193,9 +194,9 @@ mod tests {
     use super::*;
     use crate::arrow::array::*;
     use crate::arrow::datatypes::{DataType, Field};
-    use crate::field_util::SchemaExt;
-    use crate::record_batch::RecordBatch;
     use arrow::datatypes::TimeUnit;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use std::fs::File;
 
     fn build_reader(name: &str) -> Reader<File> {

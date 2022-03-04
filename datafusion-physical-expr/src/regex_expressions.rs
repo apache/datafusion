@@ -21,17 +21,16 @@
 
 //! Regex expressions
 
-use std::any::type_name;
-use std::sync::Arc;
-
-use crate::error::{DataFusionError, Result};
-use arrow::array::*;
-use arrow::error::ArrowError;
 use hashbrown::HashMap;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::any::type_name;
 use std::sync::Arc;
+
+use arrow::array::*;
+use arrow::error::ArrowError;
+
+use datafusion_common::{DataFusionError, Result};
 
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{
@@ -253,11 +252,12 @@ pub fn regexp_matches<O: Offset>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::*;
+
+    type StringArray = Utf8Array<i32>;
 
     #[test]
     fn test_case_sensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
+        let values = StringArray::from_slice(vec!["abc"; 5]);
         let patterns =
             StringArray::from_slice(&["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
         let expected = vec![
@@ -277,10 +277,10 @@ mod tests {
 
     #[test]
     fn test_case_insensitive_regexp_match() {
-        let values = StringArray::from(vec!["abc"; 5]);
+        let values = StringArray::from_slice(vec!["abc"; 5]);
         let patterns =
-            StringArray::from(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
-        let flags = StringArray::from(vec!["i"; 5]);
+            StringArray::from_slice(vec!["^(a)", "^(A)", "(b|d)", "(B|D)", "^(b|c)"]);
+        let flags = StringArray::from_slice(vec!["i"; 5]);
 
         let expected = vec![
             Some(vec![Some("a")]),

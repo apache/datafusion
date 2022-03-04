@@ -20,10 +20,10 @@
 // adapted from https://github.com/jorgecarleitao/arrow2/blob/ef7937dfe56033c2cc491482c67587b52cd91554/src/array/display.rs
 // see: https://github.com/jorgecarleitao/arrow2/issues/771
 
-use crate::field_util::{FieldExt, SchemaExt};
-use crate::record_batch::RecordBatch;
 use arrow::array::*;
 use comfy_table::{Cell, Table};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
 
 macro_rules! dyn_display {
     ($array:expr, $ty:ty, $expr:expr) => {{
@@ -98,7 +98,14 @@ fn df_get_array_value_display<'a>(
                 string
             })
         }
-        _ => get_display(array),
+        _ => {
+            let display_fn = get_display(array, "null");
+            Box::new(move |row: usize| {
+                let mut string = String::new();
+                display_fn(&mut string, row).unwrap();
+                string
+            })
+        }
     }
 }
 

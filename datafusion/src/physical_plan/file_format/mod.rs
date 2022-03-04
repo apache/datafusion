@@ -24,7 +24,6 @@ mod json;
 mod parquet;
 
 pub use self::parquet::ParquetExec;
-use crate::record_batch::RecordBatch;
 use arrow::{
     array::{ArrayRef, DictionaryArray},
     datatypes::{DataType, Field, Schema, SchemaRef},
@@ -32,11 +31,11 @@ use arrow::{
 };
 pub use avro::AvroExec;
 pub use csv::CsvExec;
+use datafusion_common::record_batch::RecordBatch;
 pub use json::NdJsonExec;
 use std::iter;
 
 use crate::error::DataFusionError;
-use crate::field_util::{FieldExt, SchemaExt};
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     error::Result,
@@ -45,6 +44,7 @@ use crate::{
 use arrow::array::new_null_array;
 use arrow::array::UInt8Array;
 use arrow::datatypes::IntegerType;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use lazy_static::lazy_static;
 use log::info;
 use std::{
@@ -206,7 +206,7 @@ impl SchemaAdapter {
         let mut mapped: Vec<usize> = vec![];
         for idx in projections {
             let field = self.table_schema.field(*idx);
-            if let Ok(mapped_idx) = file_schema.index_of(field.name().as_str()) {
+            if let Ok(mapped_idx) = file_schema.index_of(field.name()) {
                 if file_schema.field(mapped_idx).data_type() == field.data_type() {
                     mapped.push(mapped_idx)
                 } else {
@@ -544,61 +544,6 @@ mod tests {
             "+---+---+---+------+-----+",
         ];
         assert_batches_eq!(expected, &[projected_batch]);
-    }
-
-    #[test]
-    fn schema_adapter_adapt_projections() {
-        let table_schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int64, true),
-            Field::new("c3", DataType::Int8, true),
-        ]));
-
-        let file_schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, true),
-            Field::new("c2", DataType::Int64, true),
-        ]);
-
-        let file_schema_2 = Arc::new(Schema::new(vec![
-            Field::new("c3", DataType::Int8, true),
-            Field::new("c2", DataType::Int64, true),
-        ]));
-
-        let file_schema_3 =
-            Arc::new(Schema::new(vec![Field::new("c3", DataType::Float32, true)]));
-
-        let adapter = SchemaAdapter::new(table_schema);
-
-        let projections1: Vec<usize> = vec![0, 1, 2];
-        let projections2: Vec<usize> = vec![2];
-
-        let mapped = adapter
-            .map_projections(&file_schema, projections1.as_slice())
-            .expect("mapping projections");
-
-        assert_eq!(mapped, vec![0, 1]);
-
-        let mapped = adapter
-            .map_projections(&file_schema, projections2.as_slice())
-            .expect("mapping projections");
-
-        assert!(mapped.is_empty());
-
-        let mapped = adapter
-            .map_projections(&file_schema_2, projections1.as_slice())
-            .expect("mapping projections");
-
-        assert_eq!(mapped, vec![1, 0]);
-
-        let mapped = adapter
-            .map_projections(&file_schema_2, projections2.as_slice())
-            .expect("mapping projections");
-
-        assert_eq!(mapped, vec![0]);
-
-        let mapped = adapter.map_projections(&file_schema_3, projections1.as_slice());
-
-        assert!(mapped.is_err());
     }
 
     #[test]

@@ -19,12 +19,12 @@
 
 use std::sync::Arc;
 
-use crate::record_batch::RecordBatch;
+use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
-
-use crate::error::Result;
-use crate::field_util::{FieldExt, SchemaExt};
-use crate::physical_plan::{ColumnarValue, PhysicalExpr};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::Result;
+use datafusion_expr::ColumnarValue;
 
 /// Represents the column at a given index in a RecordBatch
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]

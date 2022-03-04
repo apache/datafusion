@@ -17,16 +17,21 @@
 
 //! Benchmarks of SQL queries again parquet data
 
-use arrow::array::{ArrayRef, DictionaryArray, PrimitiveArray, StringArray};
-use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Field, Float64Type, Int32Type, Int64Type, Schema,
-    SchemaRef,
+use arrow::array::{
+    ArrayRef, MutableArray, MutableDictionaryArray, MutableUtf8Array, PrimitiveArray,
+    TryExtend, Utf8Array,
 };
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{DataType, Field, IntegerType, Schema, SchemaRef};
+
+use arrow::io::parquet::write::RowGroupIterator;
+use arrow::types::NativeType;
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::prelude::ExecutionContext;
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::{WriterProperties, WriterVersion};
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::record_batch::RecordBatch;
+use parquet::compression::Compression;
+use parquet::encoding::Encoding;
+use parquet::write::Version;
 use rand::distributions::uniform::SampleUniform;
 use rand::distributions::Alphanumeric;
 use rand::prelude::*;
@@ -50,7 +55,7 @@ const EXPECTED_ROW_GROUPS: usize = 2;
 
 fn schema() -> SchemaRef {
     let string_dictionary_type =
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        DataType::Dictionary(IntegerType::Int32, Box::new(DataType::Utf8), false);
 
     Arc::new(Schema::new(vec![
         Field::new("dict_10_required", string_dictionary_type.clone(), false),
@@ -82,10 +87,10 @@ fn generate_batch() -> RecordBatch {
             generate_string_dictionary("prefix", 1000, len, 0.5),
             generate_strings(0..100, len, 1.0),
             generate_strings(0..100, len, 0.5),
-            generate_primitive::<Int64Type>(len, 1.0, -2000..2000),
-            generate_primitive::<Int64Type>(len, 0.5, -2000..2000),
-            generate_primitive::<Float64Type>(len, 1.0, -1000.0..1000.0),
-            generate_primitive::<Float64Type>(len, 0.5, -1000.0..1000.0),
+            generate_primitive::<i64>(len, 1.0, -2000..2000),
+            generate_primitive::<i64>(len, 0.5, -2000..2000),
+            generate_primitive::<f64>(len, 1.0, -1000.0..1000.0),
+            generate_primitive::<f64>(len, 0.5, -1000.0..1000.0),
         ],
     )
     .unwrap()
@@ -101,13 +106,13 @@ fn generate_string_dictionary(
     let strings: Vec<_> = (0..cardinality)
         .map(|x| format!("{}#{}", prefix, x))
         .collect();
-
-    Arc::new(DictionaryArray::<Int32Type>::from_iter((0..len).map(
-        |_| {
-            rng.gen_bool(valid_percent)
-                .then(|| strings[rng.gen_range(0..cardinality)].as_str())
-        },
-    )))
+    let mut dict = MutableDictionaryArray::<i32, MutableUtf8Array<i32>>::new();
+    dict.try_extend((0..len).map(|_| {
+        rng.gen_bool(valid_percent)
+            .then(|| strings[rng.gen_range(0..cardinality)].as_str())
+    }))
+    .unwrap();
+    dict.as_arc()
 }
 
 fn generate_strings(
@@ -116,7 +121,7 @@ fn generate_strings(
     valid_percent: f64,
 ) -> ArrayRef {
     let mut rng = thread_rng();
-    Arc::new(StringArray::from_iter((0..len).map(|_| {
+    Arc::new(Utf8Array::<i32>::from_iter((0..len).map(|_| {
         rng.gen_bool(valid_percent).then(|| {
             let string_len = rng.gen_range(string_length_range.clone());
             (0..string_len)
@@ -126,14 +131,9 @@ fn generate_strings(
     })))
 }
 
-fn generate_primitive<T>(
-    len: usize,
-    valid_percent: f64,
-    range: Range<T::Native>,
-) -> ArrayRef
+fn generate_primitive<T>(len: usize, valid_percent: f64, range: Range<T>) -> ArrayRef
 where
-    T: ArrowPrimitiveType,
-    T::Native: SampleUniform,
+    T: NativeType + SampleUniform + PartialOrd,
 {
     let mut rng = thread_rng();
     Arc::new(PrimitiveArray::<T>::from_iter((0..len).map(|_| {
@@ -153,20 +153,37 @@ fn generate_file() -> NamedTempFile {
     println!("Generating parquet file - {}", named_file.path().display());
     let schema = schema();
 
-    let properties = WriterProperties::builder()
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_max_row_group_size(ROW_GROUP_SIZE)
-        .build();
+    let options = arrow::io::parquet::write::WriteOptions {
+        write_statistics: true,
+        compression: Compression::Uncompressed,
+        version: Version::V2,
+    };
 
     let file = named_file.as_file().try_clone().unwrap();
-    let mut writer = ArrowWriter::try_new(file, schema, Some(properties)).unwrap();
+    let mut writer = arrow::io::parquet::write::FileWriter::try_new(
+        file,
+        schema.as_ref().clone(),
+        options,
+    )
+    .unwrap();
 
     for _ in 0..NUM_BATCHES {
         let batch = generate_batch();
-        writer.write(&batch).unwrap();
+        let iter = vec![Ok(batch.into())];
+        let row_groups = RowGroupIterator::try_new(
+            iter.into_iter(),
+            schema.as_ref(),
+            options,
+            vec![Encoding::Plain].repeat(schema.fields().len()),
+        )
+        .unwrap();
+        for rg in row_groups {
+            let (group, len) = rg.unwrap();
+            writer.write(group, len).unwrap();
+        }
     }
-
-    let metadata = writer.close().unwrap();
+    let (_total_size, mut w) = writer.end(None).unwrap();
+    let metadata = arrow::io::parquet::read::read_metadata(&mut w).unwrap();
     assert_eq!(
         metadata.num_rows as usize,
         WRITE_RECORD_BATCH_SIZE * NUM_BATCHES

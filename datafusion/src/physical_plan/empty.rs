@@ -24,7 +24,6 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
-
 use crate::record_batch::RecordBatch;
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -33,8 +32,8 @@ use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]

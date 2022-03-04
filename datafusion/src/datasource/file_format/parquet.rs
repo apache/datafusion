@@ -16,31 +16,31 @@
 // under the License.
 
 //! Parquet format abstractions
-
-use arrow::array::{BooleanArray, MutableArray, MutableUtf8Array};
-use std::any::{type_name, Any};
-use std::sync::Arc;
-
+use arrow::array::{MutableArray, MutableUtf8Array};
 use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
+use arrow::io::parquet::read::infer_schema;
 use async_trait::async_trait;
-
-use arrow::io::parquet::read::{infer_schema, read_metadata};
 use futures::TryStreamExt;
+use parquet::read::read_metadata;
+use std::any::type_name;
+use std::any::Any;
+use std::sync::Arc;
+
+use datafusion_common::field_util::SchemaExt;
 use parquet::statistics::{
-    BinaryStatistics as ParquetBinaryStatistics,
-    BooleanStatistics as ParquetBooleanStatistics,
+    BinaryStatistics as ParquetBinaryStatistics, BooleanStatistics,
     PrimitiveStatistics as ParquetPrimitiveStatistics, Statistics as ParquetStatistics,
 };
 
 use super::FileFormat;
 use super::FileScanConfig;
+use crate::arrow::array::BooleanArray;
 use crate::arrow::datatypes::{DataType, Field};
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
-use crate::field_util::SchemaExt;
 use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
@@ -171,7 +171,7 @@ fn summarize_min_max(
             if let DataType::Boolean = fields[i].data_type() {
                 let stats = stats
                     .as_any()
-                    .downcast_ref::<ParquetBooleanStatistics>()
+                    .downcast_ref::<BooleanStatistics>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(
                             "Failed to cast stats to boolean stats".to_owned(),
@@ -338,7 +338,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::field_util::FieldExt;
+    use datafusion_common::field_util::FieldExt;
 
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use arrow::array::{

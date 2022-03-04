@@ -226,17 +226,17 @@ mod tests {
         local_object_reader, local_object_reader_stream, local_unpartitioned_file,
         LocalFileSystem,
     };
-    use crate::error::Result;
+
     use crate::execution::runtime_env::RuntimeEnv;
-    use crate::physical_plan::file_format::FileScanConfig;
-    use crate::physical_plan::{collect, ExecutionPlan};
     use crate::row::reader::read_as_batch;
     #[cfg(feature = "jit")]
     use crate::row::reader::read_as_batch_jit;
     use crate::row::writer::write_batch_unchecked;
     #[cfg(feature = "jit")]
     use crate::row::writer::write_batch_unchecked_jit;
-    use arrow::record_batch::RecordBatch;
+    use datafusion_expr::file_format::FileScanConfig;
+    use datafusion_expr::{collect, ExecutionPlan};
+
     use arrow::util::bit_util::{ceil, set_bit_raw, unset_bit_raw};
     use arrow::{array::*, datatypes::*};
     #[cfg(feature = "jit")]
@@ -577,7 +577,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "supported(schema)")]
     fn test_unsupported_type_write() {
-        let a: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
+        let a: ArrayRef =
+            Arc::new(TimestampNanosecondArray::from_slice(vec![8, 7, 6, 5, 8]));
         let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
         let schema = batch.schema();
         let mut vector = vec![0; 1024];

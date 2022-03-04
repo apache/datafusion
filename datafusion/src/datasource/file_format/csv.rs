@@ -24,12 +24,12 @@ use arrow::datatypes::Schema;
 use arrow::io::csv;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use futures::StreamExt;
 
 use super::FileFormat;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
-use crate::field_util::SchemaExt;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
@@ -144,7 +144,6 @@ impl FileFormat for CsvFormat {
 mod tests {
     use super::*;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use crate::field_util::{FieldExt, SchemaExt};
     use crate::{
         datasource::{
             file_format::FileScanConfig,
@@ -156,6 +155,7 @@ mod tests {
         physical_plan::collect,
     };
     use arrow::array::Utf8Array;
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {

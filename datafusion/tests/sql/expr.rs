@@ -115,7 +115,7 @@ async fn query_not() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(BooleanArray::from(vec![
+        vec![Arc::new(BooleanArray::from_iter(vec![
             Some(false),
             None,
             Some(true),
@@ -157,7 +157,7 @@ async fn query_is_null() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float64Array::from(vec![
+        vec![Arc::new(Float64Array::from_iter(vec![
             Some(1.0),
             None,
             Some(f64::NAN),
@@ -189,7 +189,7 @@ async fn query_is_not_null() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Float64Array::from(vec![
+        vec![Arc::new(Float64Array::from_iter(vec![
             Some(1.0),
             None,
             Some(f64::NAN),
@@ -252,7 +252,7 @@ async fn query_scalar_minus_array() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![
+        vec![Arc::new(Int32Array::from_iter(vec![
             Some(0),
             Some(1),
             None,

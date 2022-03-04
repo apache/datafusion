@@ -240,7 +240,7 @@ async fn like_on_string_dictionaries() -> Result<()> {
 
 #[tokio::test]
 async fn test_regexp_is_match() -> Result<()> {
-    let input = StringArray::from(vec![
+    let input = StringArray::from_slice(vec![
         Some("foo"),
         Some("Barrr"),
         Some("Bazzz"),

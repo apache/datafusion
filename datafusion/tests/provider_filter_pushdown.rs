@@ -22,7 +22,6 @@ use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushD
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
@@ -32,6 +31,8 @@ use datafusion::physical_plan::{
 use datafusion::prelude::*;
 use datafusion::record_batch::RecordBatch;
 use datafusion::scalar::ScalarValue;
+use datafusion_common::field_util::SchemaExt;
+use datafusion_physical_expr::PhysicalSortExpr;
 use std::sync::Arc;
 
 fn create_batch(value: i32, num_rows: usize) -> Result<RecordBatch> {

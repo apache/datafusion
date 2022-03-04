@@ -594,7 +594,6 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 mod tests {
     use super::*;
     use crate::datasource::TableProvider;
-    use crate::field_util::SchemaExt;
     use crate::logical_plan::{
         lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder, Operator,
     };
@@ -603,6 +602,7 @@ mod tests {
     use crate::{logical_plan::col, prelude::JoinType};
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
+    use datafusion_common::field_util::SchemaExt;
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();

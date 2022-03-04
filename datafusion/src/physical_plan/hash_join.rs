@@ -20,6 +20,7 @@
 
 use ahash::RandomState;
 
+use arrow::array::*;
 use smallvec::{smallvec, SmallVec};
 use std::sync::Arc;
 use std::{any::Any, usize};
@@ -30,11 +31,15 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
 use crate::record_batch::RecordBatch;
-use arrow::array::*;
-use arrow::datatypes::*;
+use arrow::array::Array;
+use arrow::datatypes::DataType;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 
-use arrow::compute::take;
+use arrow::array::{
+    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array, Utf8Array,
+};
 
 use hashbrown::raw::RawTable;
 
@@ -56,11 +61,12 @@ use super::{
     SendableRecordBatchStream,
 };
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
 use arrow::bitmap::MutableBitmap;
 use arrow::buffer::Buffer;
+use arrow::compute::take;
+use datafusion_common::field_util::SchemaExt;
 use log::debug;
 use std::fmt;
 

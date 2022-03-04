@@ -21,9 +21,6 @@ use arrow::array::*;
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
-use std::sync::Arc;
-
-use super::ColumnarValue;
 
 fn array_array(arrays: &[&dyn Array]) -> Result<ArrayRef> {
     assert!(!arrays.is_empty());

@@ -24,9 +24,9 @@ use datafusion::record_batch::RecordBatch;
 use datafusion::assert_batches_eq;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
-use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::{col, Expr};
 use datafusion::{datasource::MemTable, prelude::JoinType};
+use datafusion_common::field_util::SchemaExt;
 
 #[tokio::test]
 async fn join() -> Result<()> {

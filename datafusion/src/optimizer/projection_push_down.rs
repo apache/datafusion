@@ -18,9 +18,7 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-use crate::field_util::SchemaExt;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, Join, Projection, TableScan, Window,
 };
@@ -32,6 +30,8 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::{Field, Schema};
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::{DataFusionError, Result};
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,

@@ -33,7 +33,7 @@ use datafusion::record_batch::RecordBatch;
 
 use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionContext;
-use datafusion::field_util::SchemaExt;
+use datafusion_common::field_util::SchemaExt;
 
 fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();

@@ -18,8 +18,7 @@
 //! Variable provider
 
 use crate::error::Result;
-use crate::scalar::ScalarValue;
-
+use datafusion_common::ScalarValue;
 /// Variable type, system/user defined
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VarType {

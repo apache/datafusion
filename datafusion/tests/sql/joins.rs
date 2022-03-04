@@ -699,7 +699,11 @@ async fn test_join_float32() -> Result<()> {
     let population_data = RecordBatch::try_new(
         population_schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            Arc::new(StringArray::from_slice(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+            ])),
             Arc::new(Float32Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
@@ -740,7 +744,11 @@ async fn test_join_float64() -> Result<()> {
     let population_data = RecordBatch::try_new(
         population_schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            Arc::new(StringArray::from_slice(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+            ])),
             Arc::new(Float64Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;

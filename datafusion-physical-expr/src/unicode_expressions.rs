@@ -21,18 +21,15 @@
 
 //! Unicode expressions
 
-use std::any::type_name;
-use std::cmp::Ordering;
-use std::sync::Arc;
-
-use arrow::array::*;
 use hashbrown::HashMap;
 use std::any::type_name;
 use std::cmp::Ordering;
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::error::{DataFusionError, Result};
+use arrow::array::*;
+
+use datafusion_common::{DataFusionError, Result};
 
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{

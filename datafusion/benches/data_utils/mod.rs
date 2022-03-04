@@ -20,8 +20,8 @@
 use arrow::{array::*, datatypes::*};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::field_util::SchemaExt;
 use datafusion::record_batch::RecordBatch;
+use datafusion_common::field_util::SchemaExt;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};

@@ -35,23 +35,14 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
+use datafusion::arrow::io::ipc::write::FileWriter;
 use datafusion::arrow::io::ipc::write::WriteOptions;
-use datafusion::arrow::{
-    array::*,
-    compute::aggregate::estimated_bytes_size,
-    datatypes::{DataType, Field},
-    io::ipc::read::FileReader,
-    io::ipc::write::FileWriter,
-};
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
 use datafusion::field_util::SchemaExt;
-use datafusion::logical_plan::{LogicalPlan, Operator, TableScan};
-use datafusion::physical_optimizer::coalesce_batches::CoalesceBatches;
-use datafusion::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
-use datafusion::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::common::batch_byte_size;
@@ -63,12 +54,9 @@ use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::{
-    metrics, AggregateExpr, ExecutionPlan, Metric, PhysicalExpr, RecordBatchStream,
-};
+use datafusion::physical_plan::{metrics, ExecutionPlan, RecordBatchStream};
 use datafusion::record_batch::RecordBatch;
-use futures::{future, Stream, StreamExt};
-use std::time::Instant;
+use futures::{Stream, StreamExt};
 
 /// Stream data to disk in Arrow IPC format
 

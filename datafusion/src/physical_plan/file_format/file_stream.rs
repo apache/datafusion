@@ -22,7 +22,6 @@
 //! compliant with the `SendableRecordBatchStream` trait.
 
 use crate::datasource::object_store::ReadSeek;
-use crate::record_batch::RecordBatch;
 use crate::{
     datasource::{object_store::ObjectStore, PartitionedFile},
     physical_plan::RecordBatchStream,
@@ -32,6 +31,7 @@ use arrow::{
     datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
 };
+use datafusion_common::record_batch::RecordBatch;
 use futures::Stream;
 use std::{
     iter,

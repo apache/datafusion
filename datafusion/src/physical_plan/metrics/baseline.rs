@@ -20,8 +20,8 @@
 use std::task::Poll;
 
 use super::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time, Timestamp};
-use crate::record_batch::RecordBatch;
 use arrow::error::ArrowError;
+use datafusion_common::record_batch::RecordBatch;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator

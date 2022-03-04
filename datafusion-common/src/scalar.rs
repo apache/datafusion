@@ -17,25 +17,11 @@
 
 //! This module provides ScalarValue, an enum that can be used for storage of single elements
 
-use crate::error::{DataFusionError, Result};
-use arrow::{
-    array::*,
-    compute::kernels::cast::cast,
-    datatypes::{
-        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Float32Type,
-        Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
-        TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-        TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-};
-use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
-
-use crate::error::{DataFusionError, Result};
 use crate::field_util::{FieldExt, StructArrayExt};
+use crate::{DataFusionError, Result};
 use arrow::bitmap::Bitmap;
 use arrow::buffer::Buffer;
 use arrow::compute::concatenate;
-use arrow::datatypes::DataType::Decimal;
 use arrow::{
     array::*,
     datatypes::{DataType, Field, IntegerType, IntervalUnit, TimeUnit},
@@ -283,8 +269,10 @@ impl PartialOrd for ScalarValue {
             (TimestampNanosecond(_, _), _) => None,
             (IntervalYearMonth(v1), IntervalYearMonth(v2)) => v1.partial_cmp(v2),
             (IntervalYearMonth(_), _) => None,
+            (IntervalDayTime(v1), IntervalDayTime(v2)) => v1
+                .map(|d| d.to_le_bytes())
+                .partial_cmp(&v2.map(|d| d.to_le_bytes())),
             (_, IntervalDayTime(_)) => None,
-            (IntervalDayTime(v1), IntervalDayTime(v2)) => v1.partial_cmp(v2),
             (IntervalDayTime(_), _) => None,
             (IntervalMonthDayNano(v1), IntervalMonthDayNano(v2)) => v1.partial_cmp(v2),
             (IntervalMonthDayNano(_), _) => None,
@@ -359,7 +347,7 @@ impl std::hash::Hash for ScalarValue {
 // as a reference to the dictionary values array. Returns None for the
 // index if the array is NULL at index
 #[inline]
-fn get_dict_value<K: ArrowDictionaryKeyType>(
+fn get_dict_value<K: DictionaryKey>(
     array: &ArrayRef,
     index: usize,
 ) -> Result<(&ArrayRef, Option<usize>)> {
@@ -511,32 +499,6 @@ macro_rules! build_values_list_tz {
 
         let array: ListArray<i32> = $MUTABLE_ARR.into();
         Arc::new(array)
-    }};
-}
-
-macro_rules! build_array_from_option {
-    ($DATA_TYPE:ident, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
-        match $EXPR {
-            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
-            None => new_null_array(&DataType::$DATA_TYPE, $SIZE),
-        }
-    }};
-    ($DATA_TYPE:ident, $ENUM:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
-        match $EXPR {
-            Some(value) => Arc::new($ARRAY_TYPE::from_value(*value, $SIZE)),
-            None => new_null_array(&DataType::$DATA_TYPE($ENUM), $SIZE),
-        }
-    }};
-    ($DATA_TYPE:ident, $ENUM:expr, $ENUM2:expr, $ARRAY_TYPE:ident, $EXPR:expr, $SIZE:expr) => {{
-        match $EXPR {
-            Some(value) => {
-                let array: ArrayRef = Arc::new($ARRAY_TYPE::from_value(*value, $SIZE));
-                // Need to call cast to cast to final data type with timezone/extra param
-                cast(&array, &DataType::$DATA_TYPE($ENUM, $ENUM2))
-                    .expect("cannot do temporal cast")
-            }
-            None => new_null_array(&DataType::$DATA_TYPE($ENUM, $ENUM2), $SIZE),
-        }
     }};
 }
 
@@ -696,7 +658,7 @@ impl ScalarValue {
     ///   .unwrap();
     ///
     /// let expected: Box<dyn Array> = Box::new(
-    ///   BooleanArray::from(vec![
+    ///   BooleanArray::from_slice(vec![
     ///     Some(true),
     ///     None,
     ///     Some(false)
@@ -824,76 +786,6 @@ impl ScalarValue {
                 Arc::new(array)
             }}
         }
-
-        macro_rules! build_array_list_primitive {
-      ($ARRAY_TY:ident, $SCALAR_TY:ident, $NATIVE_TYPE:ident) => {{
-        Arc::new(ListArray::from_iter_primitive::<$ARRAY_TY, _, _>(
-          scalars.into_iter().map(|x| match x {
-            ScalarValue::List(xs, _) => xs.map(|x| {
-              x.iter()
-                .map(|x| match x {
-                  ScalarValue::$SCALAR_TY(i) => *i,
-                  sv => panic!(
-                    "Inconsistent types in ScalarValue::iter_to_array. \
-                                    Expected {:?}, got {:?}",
-                    data_type, sv
-                  ),
-                })
-                .collect::<Vec<Option<$NATIVE_TYPE>>>()
-            }),
-            sv => panic!(
-              "Inconsistent types in ScalarValue::iter_to_array. \
-                        Expected {:?}, got {:?}",
-              data_type, sv
-            ),
-          }),
-        ))
-      }};
-    }
-
-        macro_rules! build_array_list_string {
-      ($BUILDER:ident, $SCALAR_TY:ident) => {{
-        let mut builder = ListBuilder::new($BUILDER::new(0));
-
-        for scalar in scalars.into_iter() {
-          match scalar {
-            ScalarValue::List(Some(xs), _) => {
-              let xs = *xs;
-              for s in xs {
-                match s {
-                  ScalarValue::$SCALAR_TY(Some(val)) => {
-                    builder.values().append_value(val)?;
-                  }
-                  ScalarValue::$SCALAR_TY(None) => {
-                    builder.values().append_null()?;
-                  }
-                  sv => {
-                    return Err(DataFusionError::Internal(format!(
-                      "Inconsistent types in ScalarValue::iter_to_array. \
-                                         Expected Utf8, got {:?}",
-                      sv
-                    )))
-                  }
-                }
-              }
-              builder.append(true)?;
-            }
-            ScalarValue::List(None, _) => {
-              builder.append(false)?;
-            }
-            sv => {
-              return Err(DataFusionError::Internal(format!(
-                "Inconsistent types in ScalarValue::iter_to_array. \
-                             Expected List, got {:?}",
-                sv
-              )))
-            }
-          }
-        }
-
-        Arc::new(builder.finish())
-      }};
-    }
 
         use DataType::*;
         let array: Arc<dyn Array> = match &data_type {
@@ -1065,7 +957,7 @@ impl ScalarValue {
 
         // build the decimal array using the Decimal Builder
         Ok(Int128Vec::from(array)
-            .to(Decimal(*precision, *scale))
+            .to(DataType::Decimal(*precision, *scale))
             .into())
     }
 
@@ -1133,11 +1025,11 @@ impl ScalarValue {
         match self {
             ScalarValue::Decimal128(e, precision, scale) => {
                 Int128Vec::from_iter(repeat(e).take(size))
-                    .to(Decimal(*precision, *scale))
+                    .to(DataType::Decimal(*precision, *scale))
                     .into_arc()
             }
             ScalarValue::Boolean(e) => {
-                Arc::new(BooleanArray::from(vec![*e; size])) as ArrayRef
+                Arc::new(BooleanArray::from_iter(vec![*e; size])) as ArrayRef
             }
             ScalarValue::Float64(e) => match e {
                 Some(value) => {
@@ -1415,7 +1307,7 @@ impl ScalarValue {
     ) -> bool {
         let array = array.as_any().downcast_ref::<Int128Array>().unwrap();
         match array.data_type() {
-            Decimal(pre, sca) => {
+            DataType::Decimal(pre, sca) => {
                 if *pre != precision || *sca != scale {
                     return false;
                 }
@@ -2013,41 +1905,5 @@ impl fmt::Debug for ScalarValue {
                 }
             }
         }
-    }
-}
-
-/// Trait used to map a NativeTime to a ScalarType.
-pub trait ScalarType<T: ArrowNativeType> {
-    /// returns a scalar from an optional T
-    fn scalar(r: Option<T>) -> ScalarValue;
-}
-
-impl ScalarType<f32> for Float32Type {
-    fn scalar(r: Option<f32>) -> ScalarValue {
-        ScalarValue::Float32(r)
-    }
-}
-
-impl ScalarType<i64> for TimestampSecondType {
-    fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampSecond(r, None)
-    }
-}
-
-impl ScalarType<i64> for TimestampMillisecondType {
-    fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampMillisecond(r, None)
-    }
-}
-
-impl ScalarType<i64> for TimestampMicrosecondType {
-    fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampMicrosecond(r, None)
-    }
-}
-
-impl ScalarType<i64> for TimestampNanosecondType {
-    fn scalar(r: Option<i64>) -> ScalarValue {
-        ScalarValue::TimestampNanosecond(r, None)
     }
 }

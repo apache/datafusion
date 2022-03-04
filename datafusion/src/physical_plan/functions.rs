@@ -34,36 +34,27 @@ use super::{
     ColumnarValue, PhysicalExpr,
 };
 use crate::execution::context::ExecutionProps;
-use crate::execution::context::ExecutionProps;
-use crate::physical_plan::array_expressions;
-use crate::physical_plan::datetime_expressions;
-use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
 use crate::physical_plan::expressions::{
     cast_column, nullif_func, SUPPORTED_NULLIF_TYPES,
 };
-use crate::physical_plan::math_expressions;
-use crate::physical_plan::string_expressions;
-use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
+use arrow::array::{Array, PrimitiveArray, Utf8Array};
+use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::types::{NativeType, Offset};
 use arrow::{
     array::ArrayRef,
-    array::ArrayRef,
-    array::*,
-    compute::kernels::length::{bit_length, length},
     compute::length::length,
     datatypes::TimeUnit,
-    datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
     datatypes::{DataType, Field, Schema},
-    error::{ArrowError, Result as ArrowResult},
-    types::NativeType,
 };
 use datafusion_expr::ScalarFunctionImplementation;
 pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
 use datafusion_physical_expr::array_expressions;
 use datafusion_physical_expr::datetime_expressions;
+use datafusion_physical_expr::expressions::DEFAULT_DATAFUSION_CAST_OPTIONS;
 use datafusion_physical_expr::math_expressions;
 use datafusion_physical_expr::string_expressions;
 use std::sync::Arc;
@@ -281,7 +272,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Nanosecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -301,7 +292,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Millisecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -321,7 +312,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Microsecond, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -341,7 +332,7 @@ pub fn create_physical_expr(
                         cast_column(
                             &col_values[0],
                             &DataType::Timestamp(TimeUnit::Second, None),
-                            &DEFAULT_DATAFUSION_CAST_OPTIONS,
+                            DEFAULT_DATAFUSION_CAST_OPTIONS,
                         )
                     }
                 }
@@ -1214,14 +1205,15 @@ pub fn create_physical_fun(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
-    use crate::record_batch::RecordBatch;
     use crate::{
         error::Result,
         physical_plan::expressions::{col, lit},
         scalar::ScalarValue,
     };
+    use arrow::array::*;
     use arrow::datatypes::Field;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
 
     type StringArray = Utf8Array<i32>;
 

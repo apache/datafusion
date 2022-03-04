@@ -24,8 +24,6 @@ use crate::datasource::{
     object_store::ObjectStore,
     MemTable, TableProvider,
 };
-use crate::error::{DataFusionError, Result};
-use crate::field_util::SchemaExt;
 use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
@@ -33,9 +31,11 @@ use crate::logical_plan::plan::{
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
-use crate::record_batch::RecordBatch;
-use crate::scalar::ScalarValue;
 use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use std::convert::TryFrom;
 use std::iter;
 use std::{

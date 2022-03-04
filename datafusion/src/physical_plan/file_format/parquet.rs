@@ -17,15 +17,13 @@
 
 //! Execution plan for reading Parquet files
 
-/// FIXME: https://github.com/apache/arrow-datafusion/issues/1058
-use fmt::Debug;
 use std::fmt;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
-use crate::field_util::SchemaExt;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
@@ -39,20 +37,22 @@ use crate::{
     },
     scalar::ScalarValue,
 };
-use arrow::error::ArrowError;
 use arrow::{
     array::ArrayRef,
-    datatypes::*,
-    error::Result as ArrowResult,
-    io::parquet::read::{self, RowGroupMetaData},
+    datatypes::{Schema, SchemaRef},
+    error::{ArrowError, Result as ArrowResult},
 };
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::Column;
+use datafusion_expr::Expr;
 use log::debug;
-
 use parquet::statistics::{
     BinaryStatistics as ParquetBinaryStatistics,
     BooleanStatistics as ParquetBooleanStatistics,
     PrimitiveStatistics as ParquetPrimitiveStatistics,
 };
+
+use fmt::Debug;
 
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
@@ -63,6 +63,7 @@ use crate::datasource::file_format::parquet::fetch_schema;
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
+use parquet::metadata::RowGroupMetaData;
 
 use super::PartitionColumnProjector;
 
@@ -491,7 +492,7 @@ fn read_partition(
         let file_schema = fetch_schema(object_reader)?;
         let adapted_projections =
             schema_adapter.map_projections(&file_schema.clone(), projection)?;
-        let mut record_reader = read::FileReader::try_new(
+        let mut record_reader = arrow::io::parquet::read::FileReader::try_new(
             reader,
             Some(&adapted_projections),
             limit,
@@ -556,11 +557,11 @@ mod tests {
             local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
-    use crate::{assert_batches_eq, assert_batches_sorted_eq};
+    use crate::{assert_batches_eq, assert_batches_sorted_eq, assert_contains};
     use arrow::array::*;
 
     use super::*;
-    use crate::field_util::FieldExt;
+    use crate::datasource::object_store::{FileMeta, SizedFile};
     use crate::physical_plan::collect;
     use ::parquet::statistics::Statistics as ParquetStatistics;
     use arrow::datatypes::{DataType, Field};
@@ -570,6 +571,7 @@ mod tests {
         to_parquet_schema, ColumnDescriptor, Compression, Encoding, FileWriter,
         RowGroupIterator, SchemaDescriptor, Version, WriteOptions,
     };
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
     use parquet_format_async_temp::RowGroup;
 
@@ -690,11 +692,11 @@ mod tests {
         );
 
         // batch2: c1(string) and c2(int64)
-        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let c2: ArrayRef = Arc::new(Int64Array::from_iter(vec![Some(1), Some(2), None]));
         let batch2 = add_to_batch(&batch1, "c2", c2);
 
         // batch3: c1(string) and c3(int8)
-        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+        let c3: ArrayRef = Arc::new(Int8Array::from_iter(vec![Some(10), Some(20), None]));
         let batch3 = add_to_batch(&batch1, "c3", c3);
 
         // read/write them files:
@@ -724,9 +726,9 @@ mod tests {
         let c1: ArrayRef =
             Arc::new(Utf8Array::<i32>::from(vec![Some("Foo"), None, Some("bar")]));
 
-        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let c2: ArrayRef = Arc::new(Int64Array::from_iter(vec![Some(1), Some(2), None]));
 
-        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+        let c3: ArrayRef = Arc::new(Int8Array::from_iter(vec![Some(10), Some(20), None]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![
@@ -762,9 +764,9 @@ mod tests {
         let c1: ArrayRef =
             Arc::new(Utf8Array::<i32>::from(vec![Some("Foo"), None, Some("bar")]));
 
-        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let c2: ArrayRef = Arc::new(Int64Array::from_iter(vec![Some(1), Some(2), None]));
 
-        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+        let c3: ArrayRef = Arc::new(Int8Array::from_iter(vec![Some(10), Some(20), None]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![("c1", c1), ("c3", c3.clone())]);
@@ -796,9 +798,9 @@ mod tests {
         let c1: ArrayRef =
             Arc::new(Utf8Array::<i32>::from(vec![Some("Foo"), None, Some("bar")]));
 
-        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let c2: ArrayRef = Arc::new(Int64Array::from_iter(vec![Some(1), Some(2), None]));
 
-        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+        let c3: ArrayRef = Arc::new(Int8Array::from_iter(vec![Some(10), Some(20), None]));
 
         let c4: ArrayRef =
             Arc::new(Utf8Array::<i32>::from(vec![Some("baz"), Some("boo"), None]));
@@ -837,12 +839,15 @@ mod tests {
         let c1: ArrayRef =
             Arc::new(Utf8Array::<i32>::from(vec![Some("Foo"), None, Some("bar")]));
 
-        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+        let c2: ArrayRef = Arc::new(Int64Array::from_iter(vec![Some(1), Some(2), None]));
 
-        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+        let c3: ArrayRef = Arc::new(Int8Array::from_iter(vec![Some(10), Some(20), None]));
 
-        let c4: ArrayRef =
-            Arc::new(Float32Array::from(vec![Some(1.0_f32), Some(2.0_f32), None]));
+        let c4: ArrayRef = Arc::new(Float32Array::from_iter(vec![
+            Some(1.0_f32),
+            Some(2.0_f32),
+            None,
+        ]));
 
         // batch1: c1(string), c2(int64), c3(int8)
         let batch1 = create_batch(vec![

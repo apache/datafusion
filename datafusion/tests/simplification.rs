@@ -18,7 +18,6 @@
 //! This program demonstrates the DataFusion expression simplification API.
 
 use arrow::datatypes::{DataType, Field, Schema};
-use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::ExprSchemable;
 use datafusion::logical_plan::ExprSimplifiable;
 use datafusion::{
@@ -27,6 +26,7 @@ use datafusion::{
     logical_plan::{DFSchema, Expr, SimplifyInfo},
     prelude::*,
 };
+use datafusion_common::field_util::SchemaExt;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.

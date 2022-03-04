@@ -24,13 +24,9 @@
 use std::any::type_name;
 use std::sync::Arc;
 
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
 use arrow::{array::*, datatypes::DataType};
-
-use super::ColumnarValue;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
 
 type StringArray = Utf8Array<i32>;
 

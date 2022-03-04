@@ -20,10 +20,10 @@
 use arrow::io::flight::deserialize_schemas;
 use arrow::io::ipc::IpcSchema;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::{collections::HashMap, pin::Pin};
 use std::{
-    convert::{TryFrom, TryInto},
+    convert::TryInto,
     task::{Context, Poll},
 };
 
@@ -34,15 +34,13 @@ use crate::serde::scheduler::Action;
 use arrow_format::flight::data::{FlightData, Ticket};
 use arrow_format::flight::service::flight_service_client::FlightServiceClient;
 use datafusion::arrow::{
-    array::{StructArray, Utf8Array},
-    datatypes::{Schema, SchemaRef},
+    datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
 };
 use datafusion::field_util::SchemaExt;
-use datafusion::physical_plan::common::collect;
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
+use datafusion::physical_plan::RecordBatchStream;
+use datafusion::physical_plan::SendableRecordBatchStream;
 use datafusion::record_batch::RecordBatch;
-use datafusion::{logical_plan::LogicalPlan, physical_plan::RecordBatchStream};
 use futures::{Stream, StreamExt};
 use log::debug;
 use prost::Message;

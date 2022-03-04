@@ -18,7 +18,6 @@
 use arrow::array::{Int32Array, PrimitiveArray, UInt64Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use datafusion::field_util::{FieldExt, SchemaExt};
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::record_batch::RecordBatch;
@@ -28,6 +27,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::DisplayFormatType,
 };
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::{

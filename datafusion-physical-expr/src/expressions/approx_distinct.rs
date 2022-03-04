@@ -19,14 +19,8 @@
 
 use super::format_state_name;
 use crate::{hyperloglog::HyperLogLog, AggregateExpr, PhysicalExpr};
-use arrow::array::{
-    ArrayRef, BinaryArray, BinaryOffsetSizeTrait, GenericBinaryArray, GenericStringArray,
-    PrimitiveArray, StringOffsetSizeTrait,
-};
-use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Field, Int16Type, Int32Type, Int64Type, Int8Type,
-    UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-};
+use arrow::array::{ArrayRef, BinaryArray, Offset, PrimitiveArray, Utf8Array};
+use arrow::datatypes::{DataType, Field};
 use arrow::types::NativeType;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};

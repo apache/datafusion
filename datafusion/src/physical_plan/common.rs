@@ -20,16 +20,16 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use crate::record_batch::RecordBatch;
 use arrow::compute::aggregate::estimated_bytes_size;
-use arrow::compute::concatenate;
+use arrow::compute::concatenate::concatenate;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::io::ipc::write::{FileWriter, WriteOptions};
+use datafusion_common::field_util::SchemaExt;
 use futures::channel::mpsc;
 use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
@@ -111,7 +111,7 @@ pub(crate) fn combine_batches(
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                concatenate::concatenate(
+                concatenate(
                     &batches
                         .iter()
                         .map(|batch| batch.column(i).as_ref())
@@ -288,11 +288,11 @@ impl<T> Drop for AbortOnDropMany<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},
     };
+    use datafusion_common::field_util::SchemaExt;
 
     #[test]
     fn test_combine_batches_empty() -> Result<()> {

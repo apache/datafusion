@@ -58,6 +58,7 @@ use ballista::prelude::{
 };
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::listing::ListingTableConfig;
 use datafusion::field_util::SchemaExt;
 use serde::Serialize;
 use structopt::StructOpt;
@@ -1098,8 +1099,9 @@ mod tests {
             }
             return format!("[{}]", r.join(","));
         }
-
-        get_display(column)(row_index)
+        let mut string = String::new();
+        get_display(column, "null")(&mut string, row_index).unwrap();
+        string
     }
 
     /// Converts the results into a 2d array of strings, `result[row][column]`

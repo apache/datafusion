@@ -30,9 +30,10 @@ use arrow::{
     datatypes::{DataType, Field},
 };
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::{AggregateExpr, PhysicalExpr};
+use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
+use datafusion_expr::Accumulator;
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct DistinctScalarValues(Vec<ScalarValue>);
@@ -362,12 +363,11 @@ impl Accumulator for DistinctArrayAggAccumulator {
 mod tests {
     use super::*;
 
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::expressions::tests::aggregate;
-
-    use crate::field_util::SchemaExt;
-    use crate::record_batch::RecordBatch;
+    use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
     use arrow::datatypes::{DataType, Schema};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
 
     macro_rules! state_to_vec {
         ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
@@ -647,12 +647,13 @@ mod tests {
 
         let zero_count_values = BooleanArray::from_slice(&[]);
 
-        let one_count_values = BooleanArray::from(vec![false, false]);
+        let one_count_values = BooleanArray::from_slice(vec![false, false]);
         let one_count_values_with_null =
-            BooleanArray::from(vec![Some(true), Some(true), None, None]);
+            BooleanArray::from_iter(vec![Some(true), Some(true), None, None]);
 
-        let two_count_values = BooleanArray::from(vec![true, false, true, false, true]);
-        let two_count_values_with_null = BooleanArray::from(vec![
+        let two_count_values =
+            BooleanArray::from_slice(vec![true, false, true, false, true]);
+        let two_count_values_with_null = BooleanArray::from_iter(vec![
             Some(true),
             Some(false),
             None,
@@ -711,8 +712,8 @@ mod tests {
 
     #[test]
     fn count_distinct_update_batch_multiple_columns() -> Result<()> {
-        let array_int8: ArrayRef = Arc::new(Int8Array::from(vec![1, 1, 2]));
-        let array_int16: ArrayRef = Arc::new(Int16Array::from(vec![3, 3, 4]));
+        let array_int8: ArrayRef = Arc::new(Int8Array::from_slice(vec![1, 1, 2]));
+        let array_int16: ArrayRef = Arc::new(Int16Array::from_slice(vec![3, 3, 4]));
         let arrays = vec![array_int8, array_int16];
 
         let (states, result) = run_update_batch(&arrays)?;

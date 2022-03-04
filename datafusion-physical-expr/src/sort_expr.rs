@@ -18,8 +18,10 @@
 //! Sort expressions
 
 use crate::PhysicalExpr;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::record_batch::RecordBatch;
+
+use arrow::array::ArrayRef;
+use arrow::compute::sort::{SortColumn as ArrowSortColumn, SortOptions};
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use std::sync::Arc;
@@ -62,6 +64,25 @@ impl PhysicalSortExpr {
         Ok(SortColumn {
             values: array_to_sort,
             options: Some(self.options),
-        })
+        }
+        .into())
+    }
+}
+
+/// One column to be used in lexicographical sort
+#[derive(Clone, Debug)]
+pub struct SortColumn {
+    /// The array to be sorted
+    pub values: ArrayRef,
+    /// The options to sort the array
+    pub options: Option<SortOptions>,
+}
+
+impl<'a> From<&'a SortColumn> for ArrowSortColumn<'a> {
+    fn from(c: &'a SortColumn) -> Self {
+        Self {
+            values: c.values.as_ref(),
+            options: c.options,
+        }
     }
 }

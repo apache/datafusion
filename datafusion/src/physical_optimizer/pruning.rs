@@ -31,16 +31,16 @@
 use std::convert::TryFrom;
 use std::{collections::HashSet, sync::Arc};
 
-use crate::record_batch::RecordBatch;
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
     compute::cast,
     datatypes::{DataType, Field, Schema, SchemaRef},
 };
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_physical_expr::expressions::DEFAULT_DATAFUSION_CAST_OPTIONS;
 
 use crate::execution::context::ExecutionProps;
-use crate::field_util::{FieldExt, SchemaExt};
-use crate::physical_plan::expressions::cast::DEFAULT_DATAFUSION_CAST_OPTIONS;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::prelude::lit;
 use crate::{
@@ -995,8 +995,8 @@ mod tests {
 
         // Note the statistics pass back i64 (not timestamp)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
-            max_values: Some(Arc::new(Int64Array::from(vec![Some(20)]))),
+            min_values: Some(Arc::new(Int64Array::from_iter(vec![Some(10)]))),
+            max_values: Some(Arc::new(Int64Array::from_iter(vec![Some(20)]))),
             num_containers: 1,
         };
 
@@ -1018,8 +1018,8 @@ mod tests {
         let required_columns = RequiredStatColumns::new();
 
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
-            max_values: Some(Arc::new(Int64Array::from(vec![Some(20)]))),
+            min_values: Some(Arc::new(Int64Array::from_iter(vec![Some(10)]))),
+            max_values: Some(Arc::new(Int64Array::from_iter(vec![Some(20)]))),
             num_containers: 1,
         };
 
@@ -1076,8 +1076,8 @@ mod tests {
 
         // Note the statistics pass back i64 (not timestamp)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
-            max_values: Some(Arc::new(Int64Array::from(vec![Some(20)]))),
+            min_values: Some(Arc::new(Int64Array::from_iter(vec![Some(10)]))),
+            max_values: Some(Arc::new(Int64Array::from_iter(vec![Some(20)]))),
             num_containers: 3,
         };
 

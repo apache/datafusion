@@ -20,20 +20,14 @@
 //! processes.
 
 use super::super::proto_error;
-use crate::serde::protobuf::integer_type::IntegerTypeEnum;
-use crate::serde::{byte_to_string, protobuf, BallistaError};
 use crate::serde::{protobuf, BallistaError};
 use arrow::datatypes::IntegerType;
 use datafusion::arrow::datatypes::{
     DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
 
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion::datasource::listing::ListingTable;
 use datafusion::field_util::{FieldExt, SchemaExt};
-use datafusion::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
-};
+
 use datafusion::logical_plan::{
     window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
     Column, Expr,

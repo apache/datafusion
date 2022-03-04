@@ -21,8 +21,6 @@
 use futures::{lock::Mutex, StreamExt};
 use std::{any::Any, sync::Arc, task::Poll};
 
-use crate::physical_plan::memory::MemoryStream;
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 
@@ -33,6 +31,7 @@ use super::{
     coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
 };
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -41,11 +40,11 @@ use async_trait::async_trait;
 use std::time::Instant;
 
 use super::{
-    coalesce_batches::concat_batches, DisplayFormatType, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream,
+    coalesce_batches::concat_batches, memory::MemoryStream, DisplayFormatType,
+    ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
+use datafusion_common::field_util::SchemaExt;
 use log::debug;
 
 /// Data of the left side

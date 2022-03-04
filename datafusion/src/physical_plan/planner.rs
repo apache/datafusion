@@ -23,7 +23,6 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::{ExecutionContextState, ExecutionProps};
-use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScan, Window,
 };
@@ -58,10 +57,11 @@ use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
 };
-use arrow::compute::cast::can_cast_types;
 use arrow::compute::sort::SortOptions;
-use arrow::datatypes::*;
+use arrow::datatypes::{Schema, SchemaRef};
+use arrow::{compute::cast::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -1435,11 +1435,12 @@ mod tests {
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
-    use crate::scalar::ScalarValue;
     use crate::{
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{DFField, DFSchemaRef, ScalarValue};
+    use datafusion_expr::{col, lit, sum};
     use fmt::Debug;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};

@@ -31,10 +31,6 @@ use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 
-use crate::error::Result;
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
-
 use super::format_state_name;
 
 /// COUNT aggregate expression
@@ -138,17 +134,16 @@ impl Accumulator for CountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::expressions::tests::aggregate;
-    use crate::record_batch::RecordBatch;
-    use crate::{error::Result, generic_test_op};
+    use crate::expressions::tests::aggregate;
+    use crate::generic_test_op;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
 
     #[test]
     fn count_elements() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -160,7 +155,7 @@ mod tests {
 
     #[test]
     fn count_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![
             Some(1),
             Some(2),
             None,
@@ -179,7 +174,7 @@ mod tests {
 
     #[test]
     fn count_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(BooleanArray::from(vec![
+        let a: ArrayRef = Arc::new(BooleanArray::from_iter(vec![
             None, None, None, None, None, None, None, None,
         ]));
         generic_test_op!(

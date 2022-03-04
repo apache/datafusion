@@ -31,7 +31,8 @@ use crate::physical_plan::{ExecutionPlan, PhysicalExpr};
 use super::optimizer::PhysicalOptimizerRule;
 use super::utils::optimize_children;
 use crate::error::Result;
-use crate::field_util::{FieldExt, SchemaExt};
+
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 /// BuildProbeOrder reorders the build and probe phase of
 /// hash joins. This uses the amount of rows that a datasource has.

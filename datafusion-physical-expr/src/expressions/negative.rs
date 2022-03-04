@@ -20,12 +20,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::record_batch::RecordBatch;
 use arrow::{
     array::*,
     compute::arithmetics::basic::negate,
     datatypes::{DataType, Schema},
 };
+use datafusion_common::record_batch::RecordBatch;
 
 use crate::coercion_rule::binary_rule::is_signed_numeric;
 use crate::PhysicalExpr;

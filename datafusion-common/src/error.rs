@@ -27,9 +27,8 @@ use arrow::error::ArrowError;
 use avro_rs::Error as AvroError;
 #[cfg(feature = "jit")]
 use cranelift_module::ModuleError;
-use parquet::error::ParquetError;
 #[cfg(feature = "parquet")]
-use parquet::errors::ParquetError;
+use parquet::error::ParquetError;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]

@@ -20,7 +20,6 @@
 use std::sync::Arc;
 use std::{any::Any, time::Instant};
 
-use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::{
@@ -29,6 +28,7 @@ use crate::{
     },
 };
 use arrow::datatypes::SchemaRef;
+use datafusion_common::record_batch::RecordBatch;
 use futures::StreamExt;
 
 use super::expressions::PhysicalSortExpr;
@@ -235,7 +235,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::FutureExt;
 
-    use crate::field_util::SchemaExt;
     use crate::{
         physical_plan::collect,
         test::{
@@ -243,6 +242,7 @@ mod tests {
             exec::{assert_strong_count_converges_to_zero, BlockingExec},
         },
     };
+    use datafusion_common::field_util::SchemaExt;
 
     use super::*;
 

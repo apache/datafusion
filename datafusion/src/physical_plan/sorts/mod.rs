@@ -22,7 +22,6 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use crate::record_batch::RecordBatch;
 use arrow::array::{ord::DynComparator, ArrayRef};
-use arrow::compute::sort::SortColumn as ArrowSortColumn;
 use arrow::compute::sort::SortOptions;
 use arrow::error::Result as ArrowResult;
 use futures::channel::mpsc;
@@ -281,24 +280,6 @@ impl FusedStream for StreamWrapper {
         match self {
             StreamWrapper::Receiver(receiver) => receiver.is_terminated(),
             StreamWrapper::Stream(stream) => stream.is_none(),
-        }
-    }
-}
-
-/// One column to be used in lexicographical sort
-#[derive(Clone, Debug)]
-pub struct SortColumn {
-    /// The array to be sorted
-    pub values: ArrayRef,
-    /// The options to sort the array
-    pub options: Option<SortOptions>,
-}
-
-impl<'a> From<&'a SortColumn> for ArrowSortColumn<'a> {
-    fn from(c: &'a SortColumn) -> Self {
-        Self {
-            values: c.values.as_ref(),
-            options: c.options,
         }
     }
 }

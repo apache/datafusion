@@ -20,9 +20,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
-use arrow::io::json;
+use arrow::datatypes::{DataType, Schema};
+use arrow::io::ndjson;
 use async_trait::async_trait;
 use futures::StreamExt;
 
@@ -30,11 +30,12 @@ use super::FileFormat;
 use super::FileScanConfig;
 use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
-use crate::field_util::SchemaExt;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+
+use datafusion_common::field_util::SchemaExt;
 
 /// The default file extension of json files
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
@@ -66,8 +67,10 @@ impl FileFormat for JsonFormat {
             let mut reader = std::io::BufReader::new(obj_reader?.sync_reader()?);
             // FIXME: return number of records read from infer_json_schema so we can enforce
             // records_to_read
-            let schema = json::read::infer(&mut reader, records_to_read)?;
-            fields.extend(schema);
+            let schema = ndjson::read::infer(&mut reader, records_to_read)?;
+            if let DataType::Struct(read_fields) = schema {
+                fields.extend(read_fields);
+            }
         }
 
         let schema = Schema::new(fields);
@@ -94,7 +97,6 @@ mod tests {
 
     use super::*;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-    use crate::field_util::FieldExt;
     use crate::{
         datasource::{
             file_format::FileScanConfig,
@@ -105,6 +107,7 @@ mod tests {
         },
         physical_plan::collect,
     };
+    use datafusion_common::field_util::FieldExt;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {

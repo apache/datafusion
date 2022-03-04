@@ -60,7 +60,7 @@ datafusion-jit = { path = "../datafusion-jit", version = "7.0.0", optional = tru
 datafusion-physical-expr = { path = "../datafusion-physical-expr", version = "7.0.0" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
-parquet = { package = "parquet2", version = "0.10", default_features = false, features = ["stream"], optional = true }
+parquet = { package = "parquet2", version = "0.10", default_features = false, features = ["stream"] }
 sqlparser = "0.14"
 paste = "^1.0"
 num_cpus = "1.13.0"

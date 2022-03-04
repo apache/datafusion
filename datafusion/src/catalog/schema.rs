@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 
 /// Represents a schema, comprising a number of named tables.
 pub trait SchemaProvider: Sync + Send {
@@ -135,7 +135,7 @@ mod tests {
 
     use crate::catalog::schema::{MemorySchemaProvider, SchemaProvider};
     use crate::datasource::empty::EmptyTable;
-    use crate::field_util::SchemaExt;
+    use datafusion_common::field_util::SchemaExt;
 
     #[tokio::test]
     async fn test_mem_provider() {

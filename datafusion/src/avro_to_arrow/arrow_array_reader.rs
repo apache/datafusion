@@ -17,13 +17,12 @@
 
 //! Avro to Arrow array readers
 
-use crate::error::Result;
 use crate::physical_plan::coalesce_batches::concat_chunks;
-use crate::record_batch::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::io::avro::read::Reader as AvroReader;
 use arrow::io::avro::{read, Compression};
+use datafusion_common::{record_batch::RecordBatch, Result};
 use std::io::Read;
 
 pub struct AvroBatchReader<R: Read> {
@@ -77,9 +76,9 @@ mod test {
     use crate::arrow::array::Array;
     use crate::arrow::datatypes::{Field, TimeUnit};
     use crate::avro_to_arrow::{Reader, ReaderBuilder};
-    use crate::field_util::SchemaExt;
     use arrow::array::{Int32Array, Int64Array, ListArray};
     use arrow::datatypes::DataType;
+    use datafusion_common::field_util::SchemaExt;
     use std::fs::File;
 
     fn build_reader(name: &str, batch_size: usize) -> Reader<File> {

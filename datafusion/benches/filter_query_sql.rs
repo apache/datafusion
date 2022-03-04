@@ -20,10 +20,10 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
 };
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::field_util::SchemaExt;
 use datafusion::prelude::ExecutionContext;
 use datafusion::record_batch::RecordBatch;
 use datafusion::{datasource::MemTable, error::Result};
+use datafusion_common::field_util::SchemaExt;
 use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::runtime::Runtime;

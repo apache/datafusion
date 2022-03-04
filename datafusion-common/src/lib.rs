@@ -21,12 +21,10 @@ mod error;
 pub mod field_util;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
-pub mod record_batch
+pub mod record_batch;
 mod scalar;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
 pub use error::{DataFusionError, Result};
-pub use scalar::{
-    ScalarType, ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
-};
+pub use scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};

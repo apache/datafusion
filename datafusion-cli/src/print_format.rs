@@ -16,11 +16,13 @@
 // under the License.
 
 //! Print format variants
-use arrow::io::json::write::{JsonArray, JsonFormat, LineDelimited};
+use arrow::io::csv::write::SerializeOptions;
+use arrow::io::ndjson::write::FallibleStreamingIterator;
 use datafusion::arrow::io::csv::write;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::field_util::SchemaExt;
 use datafusion::record_batch::RecordBatch;
+use std::io::Write;
 use std::str::FromStr;
 
 /// Allow records to be printed in different formats
@@ -41,26 +43,43 @@ impl FromStr for PrintFormat {
     }
 }
 
-fn print_batches_to_json<J: JsonFormat>(batches: &[RecordBatch]) -> Result<String> {
+fn print_batches_to_json(batches: &[RecordBatch]) -> Result<String> {
     use arrow::io::json::write as json_write;
 
     if batches.is_empty() {
         return Ok("{}".to_string());
     }
-    let mut bytes = vec![];
-    let fields = batches
-        .first()
-        .map(|b| b.schema().field_names())
-        .unwrap_or(vec![]);
-    let format = J::default();
-    let blocks = json_write::Serializer::new(
-        batches.into_iter().map(|r| Ok(r.into())),
-        fields,
-        vec![],
-        format,
-    );
-    json_write::write(&mut bytes, format, blocks)?;
 
+    let mut bytes = vec![];
+    for batch in batches {
+        let blocks = json_write::Serializer::new(
+            batch.columns().into_iter().map(|r| Ok(r)),
+            vec![],
+        );
+        json_write::write(&mut bytes, blocks)?;
+    }
+
+    let formatted = String::from_utf8(bytes)
+        .map_err(|e| DataFusionError::Execution(e.to_string()))?;
+    Ok(formatted)
+}
+
+fn print_batches_to_ndjson(batches: &[RecordBatch]) -> Result<String> {
+    use arrow::io::ndjson::write as json_write;
+
+    if batches.is_empty() {
+        return Ok("{}".to_string());
+    }
+    let mut bytes = vec![];
+    for batch in batches {
+        let mut blocks = json_write::Serializer::new(
+            batch.columns().into_iter().map(|r| Ok(r)),
+            vec![],
+        );
+        while let Some(block) = blocks.next()? {
+            bytes.write_all(block)?;
+        }
+    }
     let formatted = String::from_utf8(bytes)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     Ok(formatted)
@@ -69,18 +88,21 @@ fn print_batches_to_json<J: JsonFormat>(batches: &[RecordBatch]) -> Result<Strin
 fn print_batches_with_sep(batches: &[RecordBatch], delimiter: u8) -> Result<String> {
     let mut bytes = vec![];
     {
-        let mut writer = write::WriterBuilder::new()
-            .has_headers(true)
-            .delimiter(delimiter)
-            .from_writer(&mut bytes);
         let mut is_first = true;
         for batch in batches {
             if is_first {
-                write::write_header(&mut writer, &batches[0].schema().field_names())?;
+                write::write_header(
+                    &mut bytes,
+                    &batches[0].schema().field_names(),
+                    &SerializeOptions {
+                        delimiter,
+                        ..SerializeOptions::default()
+                    },
+                )?;
                 is_first = false;
             }
             write::write_chunk(
-                &mut writer,
+                &mut bytes,
                 &batch.into(),
                 &write::SerializeOptions::default(),
             )?;
@@ -99,10 +121,10 @@ impl PrintFormat {
             Self::Tsv => println!("{}", print_batches_with_sep(batches, b'\t')?),
             Self::Table => println!("{}", datafusion::arrow_print::write(batches)),
             Self::Json => {
-                println!("{}", print_batches_to_json::<JsonArray>(batches)?)
+                println!("{}", print_batches_to_json(batches)?)
             }
             Self::NdJson => {
-                println!("{}", print_batches_to_json::<LineDelimited>(batches)?)
+                println!("{}", print_batches_to_ndjson(batches)?)
             }
         }
         Ok(())
@@ -145,10 +167,10 @@ mod tests {
     #[test]
     fn test_print_batches_to_json_empty() -> Result<()> {
         let batches = vec![];
-        let r = print_batches_to_json::<JsonArray>(&batches)?;
+        let r = print_batches_to_json(&batches)?;
         assert_eq!("{}", r);
 
-        let r = print_batches_to_json::<LineDelimited>(&batches)?;
+        let r = print_batches_to_ndjson(&batches)?;
         assert_eq!("{}", r);
 
         let schema = Arc::new(Schema::new(vec![
@@ -168,10 +190,10 @@ mod tests {
         .unwrap();
 
         let batches = vec![batch];
-        let r = print_batches_to_json::<JsonArray>(&batches)?;
+        let r = print_batches_to_json(&batches)?;
         assert_eq!("[{\"a\":1,\"b\":4,\"c\":7},{\"a\":2,\"b\":5,\"c\":8},{\"a\":3,\"b\":6,\"c\":9}]", r);
 
-        let r = print_batches_to_json::<LineDelimited>(&batches)?;
+        let r = print_batches_to_ndjson(&batches)?;
         assert_eq!("{\"a\":1,\"b\":4,\"c\":7}\n{\"a\":2,\"b\":5,\"c\":8}\n{\"a\":3,\"b\":6,\"c\":9}\n", r);
         Ok(())
     }

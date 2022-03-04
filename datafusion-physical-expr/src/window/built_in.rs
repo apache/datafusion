@@ -17,16 +17,12 @@
 
 //! Physical exec for built-in window function expressions.
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{
-    expressions::PhysicalSortExpr, window_functions::BuiltInWindowFunctionExpr,
-    PhysicalExpr, WindowExpr,
-};
-use crate::record_batch::RecordBatch;
+use crate::window::{BuiltInWindowFunctionExpr, WindowExpr};
+use crate::{PhysicalExpr, PhysicalSortExpr};
 use arrow::compute::concatenate;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::sync::Arc;
 

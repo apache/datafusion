@@ -19,7 +19,6 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::field_util::SchemaExt;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
@@ -36,6 +35,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
 };
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use futures::stream::Stream;
 use futures::FutureExt;
 use pin_project_lite::pin_project;

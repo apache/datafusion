@@ -38,11 +38,10 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
-use arrow::array::ArrayRef;
-use arrow::chunk::Chunk;
 use log::{debug, trace};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
+use std::io::BufWriter;
 use std::path::Path;
 use std::string::String;
 use std::sync::Arc;
@@ -51,14 +50,12 @@ use std::{fs, path::PathBuf};
 use futures::{StreamExt, TryStreamExt};
 use tokio::task::{self, JoinHandle};
 
-use crate::record_batch::RecordBatch;
-use arrow::datatypes::{PhysicalType, SchemaRef};
-use arrow::error::{ArrowError, Result as ArrowResult};
-use arrow::io::csv;
-use arrow::io::parquet;
-use arrow::io::parquet::write::{
-    row_group_iter, to_parquet_schema, Encoding, WriteOptions,
-};
+use arrow::array::ArrayRef;
+use arrow::chunk::Chunk;
+use arrow::datatypes::PhysicalType;
+use arrow::error::Result as ArrowResult;
+use arrow::io::parquet::write::{row_group_iter, to_parquet_schema};
+use arrow::{datatypes::SchemaRef, io::csv};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -88,7 +85,6 @@ use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use crate::field_util::{FieldExt, SchemaExt};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
@@ -102,6 +98,10 @@ use crate::variable::{VarProvider, VarType};
 use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
+use parquet::encoding::Encoding;
+use parquet::write::WriteOptions;
 
 use super::{
     disk_manager::DiskManagerConfig,
@@ -737,17 +737,17 @@ impl ExecutionContext {
                     let filename = format!("part-{}.csv", i);
                     let path = fs_path.join(&filename);
 
-                    let mut writer = csv::write::WriterBuilder::new()
-                        .from_path(path)
-                        .map_err(ArrowError::from)?;
+                    let writer = std::fs::File::create(path)?;
+                    let mut writer = BufWriter::new(writer);
                     let mut field_names = vec![];
                     let schema = plan.schema();
                     for f in schema.fields() {
                         field_names.push(f.name());
                     }
-                    csv::write::write_header(&mut writer, &field_names)?;
 
                     let options = csv::write::SerializeOptions::default();
+
+                    csv::write::write_header(&mut writer, &field_names, &options)?;
 
                     let stream = plan.execute(i, runtime.clone()).await?;
                     let handle: JoinHandle<Result<()>> = task::spawn(async move {
@@ -835,11 +835,12 @@ impl ExecutionContext {
                                 })
                             });
 
-                        let mut writer = parquet::write::FileWriter::try_new(
+                        let mut writer = parquet::write::FileWriter::new(
                             &mut file,
-                            schema.as_ref().clone(),
+                            to_parquet_schema(&schema)?,
                             options,
-                        )?;
+                            None,
+                        );
                         writer.start()?;
                         while let Some(row_group) = row_groups.next().await {
                             let (group, len) = row_group?;
@@ -1356,9 +1357,7 @@ impl FunctionRegistry for ExecutionContextState {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
-    use crate::field_util::{FieldExt, SchemaExt};
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::collect;
     use crate::physical_plan::functions::{make_scalar_function, Volatility};
     use crate::record_batch::RecordBatch;
     use crate::test;
@@ -1368,19 +1367,12 @@ mod tests {
         logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::{empty::EmptyTable, MemTable},
-        logical_plan::create_udaf,
+        datasource::MemTable, logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
     use arrow::array::*;
-    use arrow::chunk::Chunk;
-    use arrow::compute::arithmetics::basic::add;
     use arrow::datatypes::*;
-    use arrow::io::parquet::write::{
-        Compression, Encoding, FileWriter, RowGroupIterator, Version, WriteOptions,
-    };
     use async_trait::async_trait;
-    use std::collections::BTreeMap;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
@@ -3347,7 +3339,7 @@ mod tests {
         let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
 
         let options = options.unwrap_or(WriteOptions {
-            compression: parquet::write::Compression::Uncompressed,
+            compression: parquet::compression::Compression::Uncompressed,
             write_statistics: false,
             version: parquet::write::Version::V1,
         });

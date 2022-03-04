@@ -25,9 +25,9 @@ use arrow::array::*;
 use arrow::compute::aggregate::*;
 use arrow::datatypes::*;
 
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::{Accumulator, AggregateExpr, PhysicalExpr};
-use crate::scalar::ScalarValue;
+use crate::{AggregateExpr, PhysicalExpr};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::Accumulator;
 
 type StringArray = Utf8Array<i32>;
 type LargeStringArray = Utf8Array<i64>;
@@ -551,12 +551,11 @@ impl Accumulator for MinAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
-    use crate::physical_plan::expressions::col;
-    use crate::physical_plan::expressions::tests::aggregate;
-    use crate::record_batch::RecordBatch;
-    use crate::scalar::ScalarValue::Decimal128;
-    use crate::{error::Result, generic_test_op};
+    use crate::expressions::tests::aggregate;
+    use crate::generic_test_op;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
+    use datafusion_common::ScalarValue::Decimal128;
 
     #[test]
     fn min_decimal() -> Result<()> {
@@ -584,8 +583,15 @@ mod tests {
 
         // min batch with agg
         let array: ArrayRef = Arc::new(
-            Int128Array::from(vec![None, Some(1), Some(2), Some(3), Some(4), Some(5)])
-                .to(DataType::Decimal(10, 0)),
+            Int128Array::from_iter(vec![
+                None,
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+            ])
+            .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
             array,
@@ -614,7 +620,7 @@ mod tests {
     fn min_decimal_with_nulls() -> Result<()> {
         // min batch with nulls
         let array: ArrayRef = Arc::new(
-            Int128Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)])
+            Int128Array::from_iter(vec![Some(1), None, Some(3), Some(4), Some(5)])
                 .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
@@ -655,8 +661,15 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
         // max batch with agg
         let array: ArrayRef = Arc::new(
-            Int128Array::from(vec![None, Some(1), Some(2), Some(3), Some(4), Some(5)])
-                .to(DataType::Decimal(10, 0)),
+            Int128Array::from_iter(vec![
+                None,
+                Some(1),
+                Some(2),
+                Some(3),
+                Some(4),
+                Some(5),
+            ])
+            .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
             array,
@@ -670,7 +683,7 @@ mod tests {
     #[test]
     fn max_decimal_with_nulls() -> Result<()> {
         let array: ArrayRef = Arc::new(
-            Int128Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)])
+            Int128Array::from_iter(vec![Some(1), None, Some(3), Some(4), Some(5)])
                 .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
@@ -697,7 +710,7 @@ mod tests {
 
     #[test]
     fn max_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -709,7 +722,7 @@ mod tests {
 
     #[test]
     fn min_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -721,7 +734,7 @@ mod tests {
 
     #[test]
     fn max_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(vec!["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -733,7 +746,8 @@ mod tests {
 
     #[test]
     fn max_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef =
+            Arc::new(LargeStringArray::from_slice(vec!["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -745,7 +759,7 @@ mod tests {
 
     #[test]
     fn min_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(StringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef = Arc::new(StringArray::from_slice(vec!["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::Utf8,
@@ -757,7 +771,8 @@ mod tests {
 
     #[test]
     fn min_large_utf8() -> Result<()> {
-        let a: ArrayRef = Arc::new(LargeStringArray::from(vec!["d", "a", "c", "b"]));
+        let a: ArrayRef =
+            Arc::new(LargeStringArray::from_slice(vec!["d", "a", "c", "b"]));
         generic_test_op!(
             a,
             DataType::LargeUtf8,
@@ -829,8 +844,9 @@ mod tests {
 
     #[test]
     fn max_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(vec![
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -842,8 +858,9 @@ mod tests {
 
     #[test]
     fn min_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(vec![
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -855,8 +872,9 @@ mod tests {
 
     #[test]
     fn max_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(vec![
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -868,8 +886,9 @@ mod tests {
 
     #[test]
     fn min_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(vec![
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -881,8 +900,9 @@ mod tests {
 
     #[test]
     fn max_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -894,8 +914,9 @@ mod tests {
 
     #[test]
     fn min_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,

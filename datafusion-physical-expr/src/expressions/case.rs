@@ -18,15 +18,14 @@
 use std::{any::Any, sync::Arc};
 
 use arrow::array::*;
-use arrow::compute::comparison;
-use arrow::compute::if_then_else;
+use arrow::compute::{comparison, if_then_else};
 use arrow::datatypes::{DataType, Schema};
 
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 use crate::expressions::try_cast;
-use crate::record_batch::RecordBatch;
 use crate::PhysicalExpr;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -276,15 +275,10 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::field_util::SchemaExt;
-    use crate::{
-        error::Result,
-        logical_plan::Operator,
-        physical_plan::expressions::{binary, col, lit},
-        scalar::ScalarValue,
-    };
+    use crate::expressions::{binary, col, lit};
     use arrow::array::Utf8Array;
     use arrow::datatypes::*;
+    use datafusion_common::field_util::SchemaExt;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
@@ -310,7 +304,7 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("failed to downcast to Int32Array");
 
-        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+        let expected = &Int32Array::from_iter(vec![Some(123), None, None, Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -341,7 +335,7 @@ mod tests {
             .expect("failed to downcast to Int32Array");
 
         let expected =
-            &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(456)]);
+            &Int32Array::from_iter(vec![Some(123), Some(999), Some(999), Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -376,7 +370,7 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("failed to downcast to Int32Array");
 
-        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+        let expected = &Int32Array::from_iter(vec![Some(123), None, None, Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -413,7 +407,7 @@ mod tests {
             .expect("failed to downcast to Int32Array");
 
         let expected =
-            &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(456)]);
+            &Int32Array::from_iter(vec![Some(123), Some(999), Some(999), Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -442,8 +436,12 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .expect("failed to downcast to Float64Array");
 
-        let expected =
-            &Float64Array::from(vec![Some(123.3), Some(999.0), Some(999.0), Some(999.0)]);
+        let expected = &Float64Array::from_iter(vec![
+            Some(123.3),
+            Some(999.0),
+            Some(999.0),
+            Some(999.0),
+        ]);
 
         assert_eq!(expected, result);
 
