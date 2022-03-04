@@ -69,6 +69,8 @@ pub enum Operator {
     RegexNotIMatch,
     /// Bitwise and, like `&`
     BitwiseAnd,
+    /// Bitwise or, like `|`
+    BitwiseOr,
 }
 
 impl fmt::Display for Operator {
@@ -96,6 +98,7 @@ impl fmt::Display for Operator {
             Operator::IsDistinctFrom => "IS DISTINCT FROM",
             Operator::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
             Operator::BitwiseAnd => "&",
+            Operator::BitwiseOr => "|",
         };
         write!(f, "{}", display)
     }
