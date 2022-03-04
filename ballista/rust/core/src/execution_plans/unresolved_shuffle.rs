@@ -21,7 +21,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -33,17 +33,20 @@ use datafusion::physical_plan::{
 /// is used as a signal so the scheduler knows it can't start computation until the dependent shuffle has completed.
 #[derive(Debug, Clone)]
 pub struct UnresolvedShuffleExec {
-    // The query stage ids which needs to be computed
+    /// The query stage ids which needs to be computed
     pub stage_id: usize,
 
-    // The schema this node will have once it is replaced with a ShuffleReaderExec
+    /// The schema this node will have once it is replaced with a ShuffleReaderExec
     pub schema: SchemaRef,
 
-    // The number of shuffle writer partition tasks that will produce the partitions
+    /// The number of shuffle writer partition tasks that will produce the partitions
     pub input_partition_count: usize,
 
-    // The partition count this node will have once it is replaced with a ShuffleReaderExec
+    /// The partition count this node will have once it is replaced with a ShuffleReaderExec
     pub output_partition_count: usize,
+
+    /// Session id
+    pub session_id: String,
 }
 
 impl UnresolvedShuffleExec {
@@ -53,12 +56,14 @@ impl UnresolvedShuffleExec {
         schema: SchemaRef,
         input_partition_count: usize,
         output_partition_count: usize,
+        session_id: String,
     ) -> Self {
         Self {
             stage_id,
             schema,
             input_partition_count,
             output_partition_count,
+            session_id,
         }
     }
 }
@@ -104,7 +109,7 @@ impl ExecutionPlan for UnresolvedShuffleExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Plan(
             "Ballista UnresolvedShuffleExec does not support execution".to_owned(),
@@ -127,5 +132,9 @@ impl ExecutionPlan for UnresolvedShuffleExec {
         // The full statistics are computed in the `ShuffleReaderExec` node
         // that replaces this one once the previous stage is completed.
         Statistics::default()
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
     }
 }

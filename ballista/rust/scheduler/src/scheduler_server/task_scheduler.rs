@@ -19,7 +19,7 @@ use crate::state::SchedulerState;
 use async_trait::async_trait;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
-use ballista_core::serde::protobuf::TaskDefinition;
+use ballista_core::serde::protobuf::{KeyValuePair, TaskDefinition};
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use ballista_core::serde::scheduler::ExecutorData;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
@@ -89,6 +89,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                             )));
                         };
 
+                        let session_props = self
+                            .session_context_registry
+                            .lookup_session(plan.session_id().as_str())
+                            .await
+                            .expect("SessionContext does not exist in SessionContextRegistry.")
+                            .copied_config()
+                            .to_props();
+
                         let mut buf: Vec<u8> = vec![];
                         U::try_from_physical_plan(
                             plan,
@@ -102,6 +110,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                             ))
                         })?;
 
+                        let task_props = session_props
+                            .iter()
+                            .map(|(k, v)| KeyValuePair {
+                                key: k.to_owned(),
+                                value: v.to_owned(),
+                            })
+                            .collect::<Vec<_>>();
+
                         ret[idx].push(TaskDefinition {
                             plan: buf,
                             task_id: status.task_id,
@@ -109,6 +125,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
                                 output_partitioning,
                             )
                             .map_err(|_| Status::internal("TBD".to_string()))?,
+                            session_id: plan_clone.session_id(),
+                            props: task_props,
                         });
                         executor.available_task_slots -= 1;
                         num_tasks += 1;

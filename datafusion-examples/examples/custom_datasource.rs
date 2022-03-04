@@ -21,8 +21,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::dataframe_impl::DataFrameImpl;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::{Expr, LogicalPlanBuilder};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -57,7 +57,7 @@ async fn search_accounts(
     expected_result_length: usize,
 ) -> Result<()> {
     // create local execution context
-    let ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
     // create logical plan composed of a single TableScan
     let logical_plan =
@@ -115,8 +115,14 @@ impl CustomDataSource {
         &self,
         projections: &Option<Vec<usize>>,
         schema: SchemaRef,
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(CustomExec::new(projections, schema, self.clone())))
+        Ok(Arc::new(CustomExec::new(
+            projections,
+            schema,
+            self.clone(),
+            session_id,
+        )))
     }
 
     pub(crate) fn populate_users(&self) {
@@ -171,8 +177,11 @@ impl TableProvider for CustomDataSource {
         // filters and limit can be used here to inject some push-down operations if needed
         _filters: &[Expr],
         _limit: Option<usize>,
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        return self.create_physical_plan(projection, self.schema()).await;
+        return self
+            .create_physical_plan(projection, self.schema(), session_id)
+            .await;
     }
 }
 
@@ -180,6 +189,7 @@ impl TableProvider for CustomDataSource {
 struct CustomExec {
     db: CustomDataSource,
     projected_schema: SchemaRef,
+    session_id: String,
 }
 
 impl CustomExec {
@@ -187,11 +197,13 @@ impl CustomExec {
         projections: &Option<Vec<usize>>,
         schema: SchemaRef,
         db: CustomDataSource,
+        session_id: String,
     ) -> Self {
         let projected_schema = project_schema(&schema, projections.as_ref()).unwrap();
         Self {
             db,
             projected_schema,
+            session_id,
         }
     }
 }
@@ -235,7 +247,7 @@ impl ExecutionPlan for CustomExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let users: Vec<User> = {
             let db = self.db.inner.lock().unwrap();
@@ -261,6 +273,10 @@ impl ExecutionPlan for CustomExec {
             self.schema(),
             None,
         )?));
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
     }
 
     fn statistics(&self) -> Statistics {

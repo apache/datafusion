@@ -56,9 +56,14 @@ impl TableProvider for EmptyTable {
         projection: &Option<Vec<usize>>,
         _filters: &[Expr],
         _limit: Option<usize>,
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // even though there is no data, projections apply
         let projected_schema = project_schema(&self.schema, projection.as_ref())?;
-        Ok(Arc::new(EmptyExec::new(false, projected_schema)))
+        Ok(Arc::new(EmptyExec::new(
+            false,
+            projected_schema,
+            session_id,
+        )))
     }
 }

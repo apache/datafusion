@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -37,17 +37,20 @@ pub struct NdJsonExec {
     base_config: FileScanConfig,
     projected_statistics: Statistics,
     projected_schema: SchemaRef,
+    /// Session id
+    session_id: String,
 }
 
 impl NdJsonExec {
     /// Create a new JSON reader execution plan provided base configurations
-    pub fn new(base_config: FileScanConfig) -> Self {
+    pub fn new(base_config: FileScanConfig, session_id: String) -> Self {
         let (projected_schema, projected_statistics) = base_config.project();
 
         Self {
             base_config,
             projected_schema,
             projected_statistics,
+            session_id,
         }
     }
 }
@@ -95,11 +98,11 @@ impl ExecutionPlan for NdJsonExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = runtime.batch_size();
+        let batch_size = context.session_config().batch_size;
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
@@ -142,6 +145,10 @@ impl ExecutionPlan for NdJsonExec {
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +163,7 @@ mod tests {
             local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
+    use crate::prelude::SessionContext;
 
     use super::*;
 
@@ -169,18 +177,21 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_without_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(FileScanConfig {
-            object_store: Arc::new(LocalFileSystem {}),
-            file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
-            file_schema: infer_schema(path).await?,
-            statistics: Statistics::default(),
-            projection: None,
-            limit: Some(3),
-            table_partition_cols: vec![],
-        });
+        let ctx = SessionContext::new();
+        let exec = NdJsonExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
+                file_schema: infer_schema(path).await?,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: Some(3),
+                table_partition_cols: vec![],
+            },
+            ctx.session_id.clone(),
+        );
 
         // TODO: this is not where schema inference should be tested
 
@@ -206,7 +217,8 @@ mod tests {
             &DataType::Utf8
         );
 
-        let mut it = exec.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut it = exec.execute(0, task_ctx).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -224,7 +236,6 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
 
@@ -236,17 +247,22 @@ mod tests {
 
         let file_schema = Arc::new(Schema::new(fields));
 
-        let exec = NdJsonExec::new(FileScanConfig {
-            object_store: Arc::new(LocalFileSystem {}),
-            file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
-            file_schema,
-            statistics: Statistics::default(),
-            projection: None,
-            limit: Some(3),
-            table_partition_cols: vec![],
-        });
+        let ctx = SessionContext::new();
+        let exec = NdJsonExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
+                file_schema,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: Some(3),
+                table_partition_cols: vec![],
+            },
+            ctx.session_id.clone(),
+        );
 
-        let mut it = exec.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut it = exec.execute(0, task_ctx).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -265,17 +281,20 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let path = format!("{}/1.json", TEST_DATA_BASE);
-        let exec = NdJsonExec::new(FileScanConfig {
-            object_store: Arc::new(LocalFileSystem {}),
-            file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
-            file_schema: infer_schema(path).await?,
-            statistics: Statistics::default(),
-            projection: Some(vec![0, 2]),
-            limit: None,
-            table_partition_cols: vec![],
-        });
+        let ctx = SessionContext::new();
+        let exec = NdJsonExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
+                file_schema: infer_schema(path).await?,
+                statistics: Statistics::default(),
+                projection: Some(vec![0, 2]),
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            ctx.session_id.clone(),
+        );
         let inferred_schema = exec.schema();
         assert_eq!(inferred_schema.fields().len(), 2);
 
@@ -284,7 +303,8 @@ mod tests {
         inferred_schema.field_with_name("c").unwrap();
         inferred_schema.field_with_name("d").unwrap_err();
 
-        let mut it = exec.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut it = exec.execute(0, task_ctx).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);

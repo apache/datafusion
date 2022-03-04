@@ -27,7 +27,6 @@ use std::{any::Any, convert::TryInto};
 use crate::datasource::file_format::parquet::ChunkObjectReader;
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
-use crate::execution::context::ExecutionContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
     error::{DataFusionError, Result},
@@ -68,7 +67,7 @@ use tokio::{
     task,
 };
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
 
@@ -84,6 +83,8 @@ pub struct ParquetExec {
     metrics: ExecutionPlanMetricsSet,
     /// Optional predicate for pruning row groups
     pruning_predicate: Option<PruningPredicate>,
+    /// Session id
+    session_id: String,
 }
 
 /// Stores metrics about the parquet execution for a particular parquet file
@@ -98,7 +99,11 @@ struct ParquetFileMetrics {
 impl ParquetExec {
     /// Create a new Parquet reader execution plan provided file list and schema.
     /// Even if `limit` is set, ParquetExec rounds up the number of records to the next `batch_size`.
-    pub fn new(base_config: FileScanConfig, predicate: Option<Expr>) -> Self {
+    pub fn new(
+        base_config: FileScanConfig,
+        predicate: Option<Expr>,
+        session_id: String,
+    ) -> Self {
         debug!("Creating ParquetExec, files: {:?}, projection {:?}, predicate: {:?}, limit: {:?}",
         base_config.file_groups, base_config.projection, predicate, base_config.limit);
 
@@ -128,6 +133,7 @@ impl ParquetExec {
             projected_statistics,
             metrics,
             pruning_predicate,
+            session_id,
         }
     }
 
@@ -210,7 +216,7 @@ impl ExecutionPlan for ParquetExec {
     async fn execute(
         &self,
         partition_index: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // because the parquet implementation is not thread-safe, it is necessary to execute
         // on a thread and communicate with channels
@@ -226,7 +232,7 @@ impl ExecutionPlan for ParquetExec {
             None => (0..self.base_config.file_schema.fields().len()).collect(),
         };
         let pruning_predicate = self.pruning_predicate.clone();
-        let batch_size = runtime.batch_size();
+        let batch_size = context.session_config().batch_size;
         let limit = self.base_config.limit;
         let object_store = Arc::clone(&self.base_config.object_store);
         let partition_col_proj = PartitionColumnProjector::new(
@@ -293,6 +299,10 @@ impl ExecutionPlan for ParquetExec {
 
     fn statistics(&self) -> Statistics {
         self.projected_statistics.clone()
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
     }
 }
 
@@ -528,7 +538,7 @@ fn read_partition(
 
 /// Executes a query and writes the results to a partitioned Parquet file.
 pub async fn plan_to_parquet(
-    context: &ExecutionContext,
+    state: &SessionState,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
     writer_properties: Option<WriterProperties>,
@@ -536,7 +546,6 @@ pub async fn plan_to_parquet(
     let path = path.as_ref();
     // create directory to contain the Parquet files (one per partition)
     let fs_path = Path::new(path);
-    let runtime = context.runtime_env();
     match fs::create_dir(fs_path) {
         Ok(()) => {
             let mut tasks = vec![];
@@ -550,7 +559,8 @@ pub async fn plan_to_parquet(
                     plan.schema(),
                     writer_properties.clone(),
                 )?;
-                let stream = plan.execute(i, runtime.clone()).await?;
+                let task_ctx = Arc::new(TaskContext::from(state));
+                let stream = plan.execute(i, task_ctx).await?;
                 let handle: JoinHandle<Result<()>> = task::spawn(async move {
                     stream
                         .map(|batch| writer.write(&batch?))
@@ -589,7 +599,7 @@ mod tests {
 
     use super::*;
     use crate::execution::options::CsvReadOptions;
-    use crate::prelude::ExecutionConfig;
+    use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::Float32Array;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
@@ -655,6 +665,7 @@ mod tests {
                 .expect("inferring schema"),
         };
 
+        let session_ctx = SessionContext::new();
         // prepare the scan
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
@@ -667,10 +678,10 @@ mod tests {
                 table_partition_cols: vec![],
             },
             None,
+            session_ctx.session_id.clone(),
         );
-
-        let runtime = Arc::new(RuntimeEnv::default());
-        collect(Arc::new(parquet_exec), runtime).await
+        let task_ctx = Arc::new(TaskContext::from(&session_ctx));
+        collect(Arc::new(parquet_exec), task_ctx).await
     }
 
     // Add a new column with the specified field name to the RecordBatch
@@ -887,9 +898,9 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let ctx = SessionContext::new();
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
@@ -903,10 +914,12 @@ mod tests {
                 table_partition_cols: vec![],
             },
             None,
+            ctx.session_id.clone(),
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut results = parquet_exec.execute(0, task_ctx).await?;
         let batch = results.next().await.unwrap()?;
 
         assert_eq!(8, batch.num_rows());
@@ -931,7 +944,6 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let mut partitioned_file = local_unpartitioned_file(filename.clone());
@@ -940,6 +952,7 @@ mod tests {
             ScalarValue::Utf8(Some("10".to_owned())),
             ScalarValue::Utf8(Some("26".to_owned())),
         ];
+        let ctx = SessionContext::new();
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
@@ -958,10 +971,12 @@ mod tests {
                 ],
             },
             None,
+            ctx.session_id.clone(),
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut results = parquet_exec.execute(0, task_ctx).await?;
         let batch = results.next().await.unwrap()?;
         let expected = vec![
             "+----+----------+-------------+-------+",
@@ -987,7 +1002,6 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_exec_with_error() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::parquet_test_data();
         let filename = format!("{}/alltypes_plain.parquet", testdata);
         let partitioned_file = PartitionedFile {
@@ -1001,6 +1015,7 @@ mod tests {
             partition_values: vec![],
         };
 
+        let ctx = SessionContext::new();
         let parquet_exec = ParquetExec::new(
             FileScanConfig {
                 object_store: Arc::new(LocalFileSystem {}),
@@ -1014,9 +1029,11 @@ mod tests {
                 table_partition_cols: vec![],
             },
             None,
+            ctx.session_id.clone(),
         );
 
-        let mut results = parquet_exec.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut results = parquet_exec.execute(0, task_ctx.clone()).await?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
         assert_contains!(
@@ -1318,9 +1335,8 @@ mod tests {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
         // let mut ctx = create_ctx(&tmp_dir, 4).await?;
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().with_target_partitions(8),
-        );
+        let ctx =
+            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
         let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
         // register csv file with the execution context
         ctx.register_csv(
@@ -1337,7 +1353,7 @@ mod tests {
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
-        let mut ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
 
         // register each partition as well as the top level dir
         ctx.register_parquet("part0", &format!("{}/part-0.parquet", out_dir))

@@ -153,11 +153,12 @@ fn create_built_in_window_expr(
 mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::execution::runtime_env::RuntimeEnv;
+    use crate::execution::context::TaskContext;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{collect, Statistics};
+    use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::test_util::{self, aggr_test_schema};
@@ -166,7 +167,10 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use futures::FutureExt;
 
-    fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
+    fn create_test_schema(
+        partitions: usize,
+        session_ctx: &SessionContext,
+    ) -> Result<(Arc<CsvExec>, SchemaRef)> {
         let schema = test_util::aggr_test_schema();
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
@@ -182,6 +186,7 @@ mod tests {
             },
             true,
             b',',
+            session_ctx.session_id.clone(),
         );
 
         let input = Arc::new(csv);
@@ -190,8 +195,9 @@ mod tests {
 
     #[tokio::test]
     async fn window_function() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
-        let (input, schema) = create_test_schema(1)?;
+        let session_ctx = SessionContext::new();
+        let (input, schema) = create_test_schema(1, &session_ctx)?;
+        let task_ctx = Arc::new(TaskContext::from(&session_ctx));
 
         let window_exec = Arc::new(WindowAggExec::try_new(
             vec![
@@ -227,7 +233,7 @@ mod tests {
             schema.clone(),
         )?);
 
-        let result: Vec<RecordBatch> = collect(window_exec, runtime).await?;
+        let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
         assert_eq!(result.len(), 1);
 
         let columns = result[0].columns();
@@ -251,11 +257,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let session_ctx = SessionContext::new();
+        let task_ctx = Arc::new(TaskContext::from(&session_ctx));
 
-        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
+        let blocking_exec = Arc::new(BlockingExec::new(
+            Arc::clone(&schema),
+            1,
+            session_ctx.session_id.clone(),
+        ));
         let refs = blocking_exec.refs();
         let window_agg_exec = Arc::new(WindowAggExec::try_new(
             vec![create_window_expr(
@@ -271,7 +282,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = collect(window_agg_exec, runtime);
+        let fut = collect(window_agg_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

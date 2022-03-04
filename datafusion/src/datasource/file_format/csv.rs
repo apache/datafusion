@@ -127,8 +127,9 @@ impl FileFormat for CsvFormat {
         &self,
         conf: FileScanConfig,
         _filters: &[Expr],
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = CsvExec::new(conf, self.has_header, self.delimiter);
+        let exec = CsvExec::new(conf, self.has_header, self.delimiter, session_id);
         Ok(Arc::new(exec))
     }
 }
@@ -138,7 +139,8 @@ mod tests {
     use arrow::array::StringArray;
 
     use super::*;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::execution::context::TaskContext;
+    use crate::prelude::{SessionConfig, SessionContext};
     use crate::{
         datasource::{
             file_format::FileScanConfig,
@@ -152,11 +154,13 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
+        let config = SessionConfig::new().with_batch_size(2);
+        let ctx = SessionContext::with_config(config);
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
-        let stream = exec.execute(0, runtime).await?;
+        let exec = get_exec("aggregate_test_100.csv", &projection, None, &ctx).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let stream = exec.execute(0, task_ctx).await?;
 
         let tt_batches: i32 = stream
             .map(|batch| {
@@ -178,10 +182,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0, 1, 2, 3]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, Some(1)).await?;
-        let batches = collect(exec, runtime).await?;
+        let ctx = SessionContext::new();
+        let exec = get_exec("aggregate_test_100.csv", &projection, Some(1), &ctx).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
         assert_eq!(1, batches[0].num_rows());
@@ -192,7 +197,8 @@ mod tests {
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
+        let ctx = SessionContext::new();
+        let exec = get_exec("aggregate_test_100.csv", &projection, None, &ctx).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -224,11 +230,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_char_column() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
-        let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
-
-        let batches = collect(exec, runtime).await.expect("Collect batches");
+        let ctx = SessionContext::new();
+        let exec = get_exec("aggregate_test_100.csv", &projection, None, &ctx).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -253,6 +259,7 @@ mod tests {
         file_name: &str,
         projection: &Option<Vec<usize>>,
         limit: Option<usize>,
+        session_ctx: &SessionContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/csv/{}", testdata, file_name);
@@ -278,6 +285,7 @@ mod tests {
                     table_partition_cols: vec![],
                 },
                 &[],
+                session_ctx.session_id.clone(),
             )
             .await?;
         Ok(exec)

@@ -301,6 +301,7 @@ impl TableProvider for ListingTable {
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let (partitioned_file_lists, statistics) =
             self.list_files_for_scan(filters, limit).await?;
@@ -309,7 +310,11 @@ impl TableProvider for ListingTable {
         if partitioned_file_lists.is_empty() {
             let schema = self.schema();
             let projected_schema = project_schema(&schema, projection.as_ref())?;
-            return Ok(Arc::new(EmptyExec::new(false, projected_schema)));
+            return Ok(Arc::new(EmptyExec::new(
+                false,
+                projected_schema,
+                session_id.clone(),
+            )));
         }
 
         // create the execution plan
@@ -326,6 +331,7 @@ impl TableProvider for ListingTable {
                     table_partition_cols: self.options.table_partition_cols.clone(),
                 },
                 filters,
+                session_id,
             )
             .await
     }
@@ -411,7 +417,7 @@ mod tests {
         let table = load_table("alltypes_plain.parquet").await?;
         let projection = None;
         let exec = table
-            .scan(&projection, &[], None)
+            .scan(&projection, &[], None, "sess_123".to_owned())
             .await
             .expect("Scan table");
 
@@ -437,7 +443,7 @@ mod tests {
             .with_listing_options(opt)
             .with_schema(schema);
         let table = ListingTable::try_new(config)?;
-        let exec = table.scan(&None, &[], None).await?;
+        let exec = table.scan(&None, &[], None, "sess_123".to_owned()).await?;
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
 
@@ -471,9 +477,8 @@ mod tests {
 
         // this will filter out the only file in the store
         let filter = Expr::not_eq(col("p1"), lit("v1"));
-
         let scan = table
-            .scan(&None, &[filter], None)
+            .scan(&None, &[filter], None, "sess_123".to_owned())
             .await
             .expect("Empty execution plan");
 

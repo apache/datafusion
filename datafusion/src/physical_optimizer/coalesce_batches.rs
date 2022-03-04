@@ -19,6 +19,7 @@
 //! in bigger batches to avoid overhead with small batches
 
 use super::optimizer::PhysicalOptimizerRule;
+use crate::prelude::SessionConfig;
 use crate::{
     error::Result,
     physical_plan::{
@@ -42,14 +43,14 @@ impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        config: &crate::execution::context::ExecutionConfig,
+        session_config: &SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         // wrap operators in CoalesceBatches to avoid lots of tiny batches when we have
         // highly selective filters
         let children = plan
             .children()
             .iter()
-            .map(|child| self.optimize(child.clone(), config))
+            .map(|child| self.optimize(child.clone(), session_config))
             .collect::<Result<Vec<_>>>()?;
 
         let plan_any = plan.as_any();
@@ -75,7 +76,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                 // we should do that once https://issues.apache.org/jira/browse/ARROW-11059 is
                 // implemented. For now, we choose half the configured batch size to avoid copies
                 // when a small number of rows are removed from a batch
-                let target_batch_size = config.runtime.batch_size / 2;
+                let target_batch_size = session_config.batch_size / 2;
                 Arc::new(CoalesceBatchesExec::new(plan.clone(), target_batch_size))
             } else {
                 plan.clone()

@@ -20,8 +20,8 @@ use super::*;
 #[tokio::test]
 async fn csv_query_error() -> Result<()> {
     // sin(utf8) should error
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = create_ctx()?;
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sin(c1) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql);
     assert!(plan.is_err());
@@ -31,14 +31,14 @@ async fn csv_query_error() -> Result<()> {
 #[tokio::test]
 async fn test_cast_expressions_error() -> Result<()> {
     // sin(utf8) should error
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = create_ctx()?;
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c1 AS INT) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let result = collect(plan, runtime).await;
+    let task_ctx = Arc::new(TaskContext::from(&ctx));
+    let result = collect(plan, task_ctx).await;
 
     match result {
         Ok(_) => panic!("expected error"),
@@ -54,8 +54,8 @@ async fn test_cast_expressions_error() -> Result<()> {
 
 #[tokio::test]
 async fn test_aggregation_with_bad_arguments() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(DISTINCT) FROM aggregate_test_100";
     let logical_plan = ctx.create_logical_plan(sql);
     let err = logical_plan.unwrap_err();
@@ -71,7 +71,7 @@ async fn test_aggregation_with_bad_arguments() -> Result<()> {
 
 #[tokio::test]
 async fn query_cte_incorrect() -> Result<()> {
-    let ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
     // self reference
     let sql = "WITH t AS (SELECT * FROM t) SELECT * from u";
@@ -105,7 +105,7 @@ async fn query_cte_incorrect() -> Result<()> {
 
 #[tokio::test]
 async fn test_select_wildcard_without_table() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT * ";
     let actual = ctx.sql(sql).await;
     match actual {
@@ -122,8 +122,8 @@ async fn test_select_wildcard_without_table() -> Result<()> {
 
 #[tokio::test]
 async fn invalid_qualified_table_references() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
 
     for table_ref in &[
         "nonexistentschema.aggregate_test_100",

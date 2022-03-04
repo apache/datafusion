@@ -25,23 +25,20 @@ use arrow::{
 };
 use datafusion::{
     error::Result,
-    prelude::{CsvReadOptions, ExecutionConfig, ExecutionContext},
+    prelude::{CsvReadOptions, SessionConfig, SessionContext},
 };
 use tempfile::TempDir;
 
 /// Execute SQL and return results
-async fn plan_and_collect(
-    ctx: &mut ExecutionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
+async fn plan_and_collect(ctx: SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
 
 /// Execute SQL and return results
 pub async fn execute(sql: &str, partition_count: usize) -> Result<Vec<RecordBatch>> {
     let tmp_dir = TempDir::new()?;
-    let mut ctx = create_ctx(&tmp_dir, partition_count).await?;
-    plan_and_collect(&mut ctx, sql).await
+    let ctx = create_ctx(&tmp_dir, partition_count).await?;
+    plan_and_collect(ctx, sql).await
 }
 
 /// Generate CSV partitions within the supplied directory
@@ -77,9 +74,9 @@ fn populate_csv_partitions(
 pub async fn create_ctx(
     tmp_dir: &TempDir,
     partition_count: usize,
-) -> Result<ExecutionContext> {
-    let mut ctx =
-        ExecutionContext::with_config(ExecutionConfig::new().with_target_partitions(8));
+) -> Result<SessionContext> {
+    let config = SessionConfig::new().with_target_partitions(8);
+    let ctx = SessionContext::with_config(config);
 
     let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 

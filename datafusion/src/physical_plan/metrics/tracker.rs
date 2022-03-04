@@ -22,6 +22,7 @@ use crate::execution::MemoryConsumerId;
 use crate::physical_plan::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Time,
 };
+use std::fmt;
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -32,7 +33,6 @@ use arrow::{error::ArrowError, record_batch::RecordBatch};
 ///
 /// You could use this to replace [BaselineMetrics], report the memory,
 /// and get the memory usage bookkeeping in the memory manager easily.
-#[derive(Debug)]
 pub struct MemTrackingMetrics {
     id: MemoryConsumerId,
     runtime: Option<Arc<RuntimeEnv>>,
@@ -116,6 +116,15 @@ impl MemTrackingMetrics {
         poll: Poll<Option<Result<RecordBatch, ArrowError>>>,
     ) -> Poll<Option<Result<RecordBatch, ArrowError>>> {
         self.metrics.record_poll(poll)
+    }
+}
+
+impl fmt::Debug for MemTrackingMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MemTrackingMetrics")
+            .field("id", &self.id)
+            .field("metrics", &self.metrics)
+            .finish()
     }
 }
 

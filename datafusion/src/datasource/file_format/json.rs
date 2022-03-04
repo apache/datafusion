@@ -89,8 +89,9 @@ impl FileFormat for JsonFormat {
         &self,
         conf: FileScanConfig,
         _filters: &[Expr],
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let exec = NdJsonExec::new(conf);
+        let exec = NdJsonExec::new(conf, session_id);
         Ok(Arc::new(exec))
     }
 }
@@ -100,7 +101,8 @@ mod tests {
     use arrow::array::Int64Array;
 
     use super::*;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::execution::context::TaskContext;
+    use crate::prelude::{SessionConfig, SessionContext};
     use crate::{
         datasource::{
             file_format::FileScanConfig,
@@ -114,10 +116,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
+        let config = SessionConfig::new().with_batch_size(2);
+        let ctx = SessionContext::with_config(config);
         let projection = None;
-        let exec = get_exec(&projection, None).await?;
-        let stream = exec.execute(0, runtime).await?;
+        let exec = get_exec(&projection, None, &ctx).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let stream = exec.execute(0, task_ctx).await?;
 
         let tt_batches: i32 = stream
             .map(|batch| {
@@ -139,10 +143,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let projection = None;
-        let exec = get_exec(&projection, Some(1)).await?;
-        let batches = collect(exec, runtime).await?;
+        let ctx = SessionContext::new();
+        let exec = get_exec(&projection, Some(1), &ctx).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
         assert_eq!(1, batches[0].num_rows());
@@ -153,7 +158,8 @@ mod tests {
     #[tokio::test]
     async fn infer_schema() -> Result<()> {
         let projection = None;
-        let exec = get_exec(&projection, None).await?;
+        let ctx = SessionContext::new();
+        let exec = get_exec(&projection, None, &ctx).await?;
 
         let x: Vec<String> = exec
             .schema()
@@ -168,11 +174,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_int_column() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0]);
-        let exec = get_exec(&projection, None).await?;
-
-        let batches = collect(exec, runtime).await.expect("Collect batches");
+        let ctx = SessionContext::new();
+        let exec = get_exec(&projection, None, &ctx).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());
@@ -199,6 +205,7 @@ mod tests {
     async fn get_exec(
         projection: &Option<Vec<usize>>,
         limit: Option<usize>,
+        session_ctx: &SessionContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let filename = "tests/jsons/2.json";
         let format = JsonFormat::default();
@@ -223,6 +230,7 @@ mod tests {
                     table_partition_cols: vec![],
                 },
                 &[],
+                session_ctx.session_id.clone(),
             )
             .await?;
         Ok(exec)

@@ -30,6 +30,7 @@ use datafusion::assert_batches_sorted_eq;
 use datafusion::assert_contains;
 use datafusion::assert_not_contains;
 use datafusion::datasource::TableProvider;
+use datafusion::execution::context::TaskContext;
 use datafusion::from_slice::FromSlice;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
@@ -45,7 +46,7 @@ use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::ColumnarValue,
 };
-use datafusion::{execution::context::ExecutionContext, physical_plan::displayable};
+use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -66,9 +67,9 @@ macro_rules! assert_metrics {
 
 macro_rules! test_expression {
     ($SQL:expr, $EXPECTED:expr) => {
-        let mut ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let sql = format!("SELECT {}", $SQL);
-        let actual = execute(&mut ctx, sql.as_str()).await;
+        let actual = execute(&ctx, sql.as_str()).await;
         assert_eq!(actual[0][0], $EXPECTED);
     };
 }
@@ -120,8 +121,8 @@ where
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn create_ctx() -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+fn create_ctx() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
 
     // register a custom UDF
     ctx.register_udf(create_udf(
@@ -150,8 +151,8 @@ fn custom_sqrt(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     }
 }
 
-fn create_case_context() -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+fn create_case_context() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Utf8, true)]));
     let data = RecordBatch::try_new(
         schema.clone(),
@@ -167,11 +168,8 @@ fn create_case_context() -> Result<ExecutionContext> {
     Ok(ctx)
 }
 
-fn create_join_context(
-    column_left: &str,
-    column_right: &str,
-) -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+fn create_join_context(column_left: &str, column_right: &str) -> Result<SessionContext> {
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -214,8 +212,8 @@ fn create_join_context(
     Ok(ctx)
 }
 
-fn create_join_context_qualified() -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+fn create_join_context_qualified() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::UInt32, true),
@@ -256,8 +254,8 @@ fn create_join_context_qualified() -> Result<ExecutionContext> {
 fn create_join_context_unbalanced(
     column_left: &str,
     column_right: &str,
-) -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new(column_left, DataType::UInt32, true),
@@ -302,8 +300,8 @@ fn create_join_context_unbalanced(
 }
 
 // Create memory tables with nulls
-fn create_join_context_with_nulls() -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+fn create_join_context_with_nulls() -> Result<SessionContext> {
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![
         Field::new("t1_id", DataType::UInt32, true),
@@ -405,7 +403,7 @@ fn get_tpch_table_schema(table: &str) -> Schema {
     }
 }
 
-async fn register_tpch_csv(ctx: &mut ExecutionContext, table: &str) -> Result<()> {
+async fn register_tpch_csv(ctx: &SessionContext, table: &str) -> Result<()> {
     let schema = get_tpch_table_schema(table);
 
     ctx.register_csv(
@@ -417,7 +415,7 @@ async fn register_tpch_csv(ctx: &mut ExecutionContext, table: &str) -> Result<()
     Ok(())
 }
 
-async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
+async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
 
     // TODO: The following c9 should be migrated to UInt32 and c10 should be UInt64 once
@@ -459,7 +457,7 @@ async fn register_aggregate_csv_by_sql(ctx: &mut ExecutionContext) {
 }
 
 /// Create table "t1" with two boolean columns "a" and "b"
-async fn register_boolean(ctx: &mut ExecutionContext) -> Result<()> {
+async fn register_boolean(ctx: &SessionContext) -> Result<()> {
     let a: BooleanArray = [
         Some(true),
         Some(true),
@@ -494,7 +492,7 @@ async fn register_boolean(ctx: &mut ExecutionContext) -> Result<()> {
     Ok(())
 }
 
-async fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()> {
+async fn register_aggregate_simple_csv(ctx: &SessionContext) -> Result<()> {
     // It's not possible to use aggregate_test_100, not enought similar values to test grouping on floats
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Float32, false),
@@ -511,7 +509,7 @@ async fn register_aggregate_simple_csv(ctx: &mut ExecutionContext) -> Result<()>
     Ok(())
 }
 
-async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
+async fn register_aggregate_csv(ctx: &SessionContext) -> Result<()> {
     let testdata = datafusion::test_util::arrow_test_data();
     let schema = test_util::aggr_test_schema();
     ctx.register_csv(
@@ -524,16 +522,13 @@ async fn register_aggregate_csv(ctx: &mut ExecutionContext) -> Result<()> {
 }
 
 /// Execute SQL and return results as a RecordBatch
-async fn plan_and_collect(
-    ctx: &mut ExecutionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
+async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }
 
 /// Execute query and return results as a Vec of RecordBatches
-async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<RecordBatch> {
-    let msg = format!("Creating logical plan for '{}'", sql);
+async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch> {
+    let msg = format!("Creating lexecute_to_batchesogical plan for '{}'", sql);
     let plan = ctx.create_logical_plan(sql).expect(&msg);
     let logical_schema = plan.schema();
 
@@ -545,8 +540,8 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
     let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.expect(&msg);
+    let task_ctx = Arc::new(TaskContext::from(ctx));
+    let results = collect(plan, task_ctx).await.expect(&msg);
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
     results
@@ -554,7 +549,7 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
 
 /// Execute query and return result set as 2-d table of Vecs
 /// `result[row][column]`
-async fn execute(ctx: &mut ExecutionContext, sql: &str) -> Vec<Vec<String>> {
+async fn execute(ctx: &SessionContext, sql: &str) -> Vec<Vec<String>> {
     result_vec(&execute_to_batches(ctx, sql).await)
 }
 
@@ -601,7 +596,7 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     result
 }
 
-async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
+async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &SessionContext) {
     let df = ctx
         .sql(
             "CREATE EXTERNAL TABLE aggregate_simple (
@@ -623,7 +618,7 @@ async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionCo
     );
 }
 
-async fn register_alltypes_parquet(ctx: &mut ExecutionContext) {
+async fn register_alltypes_parquet(ctx: &SessionContext) {
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "alltypes_plain",
@@ -832,7 +827,7 @@ async fn nyc() -> Result<()> {
         Field::new("total_amount", DataType::Float64, true),
     ]);
 
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_csv(
         "tripdata",
         "file.csv",

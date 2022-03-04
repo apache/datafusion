@@ -31,7 +31,7 @@ use arrow::record_batch::RecordBatch;
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 
 /// Execution plan for empty relation (produces no rows)
@@ -41,14 +41,17 @@ pub struct EmptyExec {
     produce_one_row: bool,
     /// The schema for the produced row
     schema: SchemaRef,
+    /// Session id
+    session_id: String,
 }
 
 impl EmptyExec {
     /// Create a new EmptyExec
-    pub fn new(produce_one_row: bool, schema: SchemaRef) -> Self {
+    pub fn new(produce_one_row: bool, schema: SchemaRef, session_id: String) -> Self {
         EmptyExec {
             produce_one_row,
             schema,
+            session_id,
         }
     }
 
@@ -111,6 +114,7 @@ impl ExecutionPlan for EmptyExec {
             0 => Ok(Arc::new(EmptyExec::new(
                 self.produce_one_row,
                 self.schema.clone(),
+                self.session_id(),
             ))),
             _ => Err(DataFusionError::Internal(
                 "EmptyExec wrong number of children".to_string(),
@@ -121,7 +125,7 @@ impl ExecutionPlan for EmptyExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
@@ -156,23 +160,29 @@ impl ExecutionPlan for EmptyExec {
             .expect("Create empty RecordBatch should not fail");
         common::compute_record_batch_statistics(&[batch], &self.schema, None)
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::SessionContext;
     use crate::{physical_plan::common, test_util};
 
     #[tokio::test]
     async fn empty() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
-        let empty = EmptyExec::new(false, schema.clone());
+        let ctx = SessionContext::new();
+        let empty = EmptyExec::new(false, schema.clone(), ctx.session_id.clone());
         assert_eq!(empty.schema(), schema);
 
         // we should have no results
-        let iter = empty.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let iter = empty.execute(0, task_ctx).await?;
         let batches = common::collect(iter).await?;
         assert!(batches.is_empty());
 
@@ -182,8 +192,9 @@ mod tests {
     #[test]
     fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
-        let empty = EmptyExec::new(false, schema.clone());
-        let empty_with_row = EmptyExec::new(true, schema);
+        let ctx = SessionContext::new();
+        let empty = EmptyExec::new(false, schema.clone(), ctx.session_id.clone());
+        let empty_with_row = EmptyExec::new(true, schema, ctx.session_id.clone());
 
         let empty2 = empty.with_new_children(vec![])?;
         assert_eq!(empty.schema(), empty2.schema());
@@ -201,23 +212,25 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_execute() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
-        let empty = EmptyExec::new(false, schema);
+        let ctx = SessionContext::new();
+        let empty = EmptyExec::new(false, schema, ctx.session_id.clone());
 
         // ask for the wrong partition
-        assert!(empty.execute(1, runtime.clone()).await.is_err());
-        assert!(empty.execute(20, runtime.clone()).await.is_err());
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        assert!(empty.execute(1, task_ctx).await.is_err());
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        assert!(empty.execute(20, task_ctx).await.is_err());
         Ok(())
     }
 
     #[tokio::test]
     async fn produce_one_row() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
-        let empty = EmptyExec::new(true, schema);
-
-        let iter = empty.execute(0, runtime).await?;
+        let ctx = SessionContext::new();
+        let empty = EmptyExec::new(true, schema, ctx.session_id.clone());
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let iter = empty.execute(0, task_ctx).await?;
         let batches = common::collect(iter).await?;
 
         // should have one item

@@ -59,8 +59,7 @@ fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
     let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
     let rt = Runtime::new().unwrap();
-    let rt_env = Arc::new(RuntimeEnv::default());
-    rt.block_on(collect(merge, rt_env)).unwrap();
+    rt.block_on(collect(merge)).unwrap();
 }
 
 // Produces `n` record batches of row size `m`. Each record batch will have

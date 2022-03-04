@@ -30,7 +30,7 @@ let config = BallistaConfig::builder()
     .build()?;
 
 // connect to Ballista scheduler
-let ctx = BallistaContext::remote("localhost", 50050, &config);
+let ctx = BallistaContext::remote("localhost", 50050, &config).await?;
 ```
 
 Here is a full example using the DataFrame API.
@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
         .build()?;
 
     // connect to Ballista scheduler
-    let ctx = BallistaContext::remote("localhost", 50050, &config);
+    let ctx = BallistaContext::remote("localhost", 50050, &config).await?;
 
     let testdata = datafusion::arrow::util::test_util::parquet_test_data();
 
@@ -72,7 +72,7 @@ async fn main() -> Result<()> {
         .build()?;
 
     // connect to Ballista scheduler
-    let ctx = BallistaContext::remote("localhost", 50050, &config);
+    let ctx = BallistaContext::remote("localhost", 50050, &config).await?;
 
     let testdata = datafusion::arrow::util::test_util::arrow_test_data();
 

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use crate::execution::context::ExecutionConfig;
+use crate::execution::context::SessionConfig;
 use crate::logical_plan::JoinType;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::expressions::Column;
@@ -113,9 +113,9 @@ impl PhysicalOptimizerRule for HashBuildProbeOrder {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        execution_config: &ExecutionConfig,
+        session_config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = optimize_children(self, plan, execution_config)?;
+        let plan = optimize_children(self, plan, session_config)?;
         if let Some(hash_join) = plan.as_any().downcast_ref::<HashJoinExec>() {
             let left = hash_join.left();
             let right = hash_join.right();
@@ -174,6 +174,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
 
     fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
+        let session_id = "sess_123";
         let big = Arc::new(StatisticsExec::new(
             Statistics {
                 num_rows: Some(10),
@@ -181,6 +182,7 @@ mod tests {
                 ..Default::default()
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
+            session_id.to_owned(),
         ));
 
         let small = Arc::new(StatisticsExec::new(
@@ -190,6 +192,7 @@ mod tests {
                 ..Default::default()
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
+            session_id.to_owned(),
         ));
         (big, small)
     }
@@ -212,7 +215,7 @@ mod tests {
         .unwrap();
 
         let optimized_join = HashBuildProbeOrder::new()
-            .optimize(Arc::new(join), &ExecutionConfig::new())
+            .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
         let swapping_projection = optimized_join
@@ -259,7 +262,7 @@ mod tests {
         .unwrap();
 
         let optimized_join = HashBuildProbeOrder::new()
-            .optimize(Arc::new(join), &ExecutionConfig::new())
+            .optimize(Arc::new(join), &SessionConfig::new())
             .unwrap();
 
         let swapped_join = optimized_join

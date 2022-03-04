@@ -35,6 +35,7 @@ use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::PartitionedFile;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::physical_plan::aggregates::create_aggregate_expr;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -56,7 +57,6 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion::prelude::ExecutionContext;
 use prost::bytes::BufMut;
 use prost::Message;
 use std::convert::TryInto;
@@ -87,8 +87,9 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &ExecutionContext,
+        session_id: String,
         extension_codec: &dyn PhysicalExtensionCodec,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
             proto_error(format!(
@@ -98,8 +99,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })?;
         match plan {
             PhysicalPlanType::Projection(projection) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(projection.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    projection.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 let exprs = projection
                     .expr
                     .iter()
@@ -110,8 +115,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(filter.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    filter.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 let predicate = filter
                     .expr
                     .as_ref()
@@ -125,9 +134,10 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), runtime)?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
+                session_id,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
                 let predicate = scan
@@ -136,29 +146,43 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .map(|expr| expr.try_into())
                     .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
-                    decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
+                    decode_scan_config(scan.base_conf.as_ref().unwrap(), runtime)?,
                     predicate,
+                    session_id,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), runtime)?,
+                session_id,
             ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(coalesce_batches.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    coalesce_batches.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
                     coalesce_batches.target_batch_size as usize,
                 )))
             }
             PhysicalPlanType::Merge(merge) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    merge.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(repart.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    repart.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
                         let expr = hash_part
@@ -197,18 +221,30 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 }
             }
             PhysicalPlanType::GlobalLimit(limit) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    limit.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 Ok(Arc::new(GlobalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::LocalLimit(limit) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    limit.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(window_agg.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    window_agg.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 let input_schema = window_agg
                     .input_schema
                     .as_ref()
@@ -254,8 +290,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::HashAggregate(hash_agg) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hash_agg.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    hash_agg.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(|| {
                     proto_error(format!(
                         "Received a HashAggregateNode message with unknown AggregateMode {}",
@@ -339,10 +379,18 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
-                let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.left, ctx, extension_codec)?;
-                let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.right, ctx, extension_codec)?;
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    hashjoin.left,
+                    session_id.clone(),
+                    extension_codec,
+                    runtime.clone()
+                )?;
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    hashjoin.right,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
                     .iter()
@@ -382,15 +430,27 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
-                let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.left, ctx, extension_codec)?;
-                let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.right, ctx, extension_codec)?;
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    crossjoin.left,
+                    session_id.clone(),
+                    extension_codec,
+                    runtime.clone()
+                )?;
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    crossjoin.right,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
             }
             PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(shuffle_writer.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    shuffle_writer.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
 
                 let output_partitioning = parse_protobuf_hash_partitioning(
                     shuffle_writer.output_partitioning.as_ref(),
@@ -417,16 +477,24 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, BallistaError>>()?;
                 let shuffle_reader =
-                    ShuffleReaderExec::try_new(partition_location, schema)?;
+                    ShuffleReaderExec::try_new(partition_location, schema, session_id)?;
                 Ok(Arc::new(shuffle_reader))
             }
             PhysicalPlanType::Empty(empty) => {
                 let schema = Arc::new(convert_required!(empty.schema)?);
-                Ok(Arc::new(EmptyExec::new(empty.produce_one_row, schema)))
+                Ok(Arc::new(EmptyExec::new(
+                    empty.produce_one_row,
+                    schema,
+                    session_id,
+                )))
             }
             PhysicalPlanType::Sort(sort) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    sort.input,
+                    session_id,
+                    extension_codec,
+                    runtime
+                )?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -474,13 +542,20 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         as usize,
                     output_partition_count: unresolved_shuffle.output_partition_count
                         as usize,
+                    session_id,
                 }))
             }
             PhysicalPlanType::Extension(extension) => {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
                     .inputs
                     .iter()
-                    .map(|i| i.try_into_physical_plan(ctx, extension_codec))
+                    .map(|i| {
+                        i.try_into_physical_plan(
+                            session_id.clone(),
+                            extension_codec,
+                            runtime.clone(),
+                        )
+                    })
                     .collect::<Result<_, BallistaError>>()?;
 
                 let extension_node =
@@ -883,7 +958,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
 fn decode_scan_config(
     proto: &protobuf::FileScanExecConf,
-    ctx: &ExecutionContext,
+    runtime: Arc<RuntimeEnv>,
 ) -> Result<FileScanConfig, BallistaError> {
     let schema = Arc::new(convert_required!(proto.schema)?);
     let projection = proto
@@ -905,7 +980,7 @@ fn decode_scan_config(
         .collect::<Result<Vec<_>, _>>()?;
 
     let object_store = if let Some(file) = file_groups.get(0).and_then(|h| h.get(0)) {
-        ctx.object_store(file.file_meta.path())?.0
+        runtime.object_store(file.file_meta.path())?.0
     } else {
         Arc::new(LocalFileSystem {})
     };
@@ -923,9 +998,11 @@ fn decode_scan_config(
 
 #[macro_export]
 macro_rules! into_physical_plan {
-    ($PB:expr, $CTX:expr, $CODEC:expr) => {{
+    ($PB:expr, $SESS_ID:expr, $CODEC:expr,  $RUNTIME:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_physical_plan(&$CTX, $CODEC)
+            field
+                .as_ref()
+                .try_into_physical_plan($SESS_ID, $CODEC, $RUNTIME)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -939,8 +1016,8 @@ mod roundtrip_tests {
     use crate::serde::{AsExecutionPlan, BallistaCodec};
     use datafusion::datasource::object_store::local::LocalFileSystem;
     use datafusion::datasource::PartitionedFile;
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::physical_plan::sorts::sort::SortExec;
-    use datafusion::prelude::ExecutionContext;
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
@@ -969,7 +1046,7 @@ mod roundtrip_tests {
     use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
-        let ctx = ExecutionContext::new();
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =
@@ -979,7 +1056,11 @@ mod roundtrip_tests {
             )
             .expect("to proto");
         let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-            .try_into_physical_plan(&ctx, codec.physical_extension_codec())
+            .try_into_physical_plan(
+                "sess_123".to_owned(),
+                codec.physical_extension_codec(),
+                runtime,
+            )
             .expect("from proto");
         assert_eq!(
             format!("{:?}", exec_plan),
@@ -990,13 +1071,21 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_empty() -> Result<()> {
-        roundtrip_test(Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))))
+        roundtrip_test(Arc::new(EmptyExec::new(
+            false,
+            Arc::new(Schema::empty()),
+            "sess_123".to_owned(),
+        )))
     }
 
     #[test]
     fn roundtrip_local_limit() -> Result<()> {
         roundtrip_test(Arc::new(LocalLimitExec::new(
-            Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+            Arc::new(EmptyExec::new(
+                false,
+                Arc::new(Schema::empty()),
+                "sess_123".to_owned(),
+            )),
             25,
         )))
     }
@@ -1004,7 +1093,11 @@ mod roundtrip_tests {
     #[test]
     fn roundtrip_global_limit() -> Result<()> {
         roundtrip_test(Arc::new(GlobalLimitExec::new(
-            Arc::new(EmptyExec::new(false, Arc::new(Schema::empty()))),
+            Arc::new(EmptyExec::new(
+                false,
+                Arc::new(Schema::empty()),
+                "sess_123".to_owned(),
+            )),
             25,
         )))
     }
@@ -1033,8 +1126,16 @@ mod roundtrip_tests {
                 &[PartitionMode::Partitioned, PartitionMode::CollectLeft]
             {
                 roundtrip_test(Arc::new(HashJoinExec::try_new(
-                    Arc::new(EmptyExec::new(false, schema_left.clone())),
-                    Arc::new(EmptyExec::new(false, schema_right.clone())),
+                    Arc::new(EmptyExec::new(
+                        false,
+                        schema_left.clone(),
+                        "sess_123".to_owned(),
+                    )),
+                    Arc::new(EmptyExec::new(
+                        false,
+                        schema_right.clone(),
+                        "sess_123".to_owned(),
+                    )),
                     on.clone(),
                     join_type,
                     *partition_mode,
@@ -1064,7 +1165,7 @@ mod roundtrip_tests {
             AggregateMode::Final,
             groups.clone(),
             aggregates.clone(),
-            Arc::new(EmptyExec::new(false, schema.clone())),
+            Arc::new(EmptyExec::new(false, schema.clone(), "sess_123".to_owned())),
             schema,
         )?))
     }
@@ -1085,9 +1186,10 @@ mod roundtrip_tests {
             false,
         ));
         let and = binary(not, Operator::And, in_list, &schema)?;
+        let session_id = "sess_123";
         roundtrip_test(Arc::new(FilterExec::try_new(
             and,
-            Arc::new(EmptyExec::new(false, schema.clone())),
+            Arc::new(EmptyExec::new(false, schema.clone(), session_id.to_owned())),
         )?))
     }
 
@@ -1114,7 +1216,7 @@ mod roundtrip_tests {
         ];
         roundtrip_test(Arc::new(SortExec::try_new(
             sort_exprs,
-            Arc::new(EmptyExec::new(false, schema)),
+            Arc::new(EmptyExec::new(false, schema, "sess_123".to_owned())),
         )?))
     }
 
@@ -1127,7 +1229,7 @@ mod roundtrip_tests {
         roundtrip_test(Arc::new(ShuffleWriterExec::try_new(
             "job123".to_string(),
             123,
-            Arc::new(EmptyExec::new(false, schema)),
+            Arc::new(EmptyExec::new(false, schema, "sess_123".to_owned())),
             "".to_string(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 4)),
         )?))
@@ -1158,6 +1260,10 @@ mod roundtrip_tests {
         };
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
-        roundtrip_test(Arc::new(ParquetExec::new(scan_config, Some(predicate))))
+        roundtrip_test(Arc::new(ParquetExec::new(
+            scan_config,
+            Some(predicate),
+            "sess_123".to_owned(),
+        )))
     }
 }

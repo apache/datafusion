@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use crate::execution::context::ExecutionConfig;
+use crate::execution::context::SessionConfig;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::projection::ProjectionExec;
@@ -48,7 +48,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        execution_config: &ExecutionConfig,
+        session_config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -81,13 +81,17 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 // input can be entirely removed
                 Ok(Arc::new(ProjectionExec::try_new(
                     projections,
-                    Arc::new(EmptyExec::new(true, Arc::new(Schema::empty()))),
+                    Arc::new(EmptyExec::new(
+                        true,
+                        Arc::new(Schema::empty()),
+                        plan.session_id(),
+                    )),
                 )?))
             } else {
-                optimize_children(self, plan, execution_config)
+                optimize_children(self, plan, session_config)
             }
         } else {
-            optimize_children(self, plan, execution_config)
+            optimize_children(self, plan, session_config)
         }
     }
 
@@ -259,7 +263,7 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use crate::error::Result;
-    use crate::execution::runtime_env::RuntimeEnv;
+    use crate::execution::context::TaskContext;
     use crate::logical_plan::Operator;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
@@ -267,9 +271,10 @@ mod tests {
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::hash_aggregate::HashAggregateExec;
     use crate::physical_plan::memory::MemoryExec;
+    use crate::prelude::SessionContext;
 
     /// Mock data using a MemoryExec which has an exact count statistic
-    fn mock_data() -> Result<Arc<MemoryExec>> {
+    fn mock_data(session_ctx: &SessionContext) -> Result<Arc<MemoryExec>> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Int32, false),
@@ -287,6 +292,7 @@ mod tests {
             &[vec![batch]],
             Arc::clone(&schema),
             None,
+            session_ctx.session_id.clone(),
         )?))
     }
 
@@ -294,9 +300,9 @@ mod tests {
     async fn assert_count_optim_success(
         plan: HashAggregateExec,
         nulls: bool,
+        session_ctx: &SessionContext,
     ) -> Result<()> {
-        let conf = ExecutionConfig::new();
-        let runtime = Arc::new(RuntimeEnv::default());
+        let conf = session_ctx.copied_config();
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
         let (col, count) = match nulls {
@@ -306,7 +312,8 @@ mod tests {
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
-        let result = common::collect(optimized.execute(0, runtime).await?).await?;
+        let task_ctx = Arc::new(TaskContext::from(session_ctx));
+        let result = common::collect(optimized.execute(0, task_ctx).await?).await?;
         assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
         assert_eq!(
             result[0]
@@ -332,7 +339,8 @@ mod tests {
     #[tokio::test]
     async fn test_count_partial_direct_child() -> Result<()> {
         // basic test case with the aggregation applied on a source with exact statistics
-        let source = mock_data()?;
+        let session_ctx = SessionContext::new();
+        let source = mock_data(&session_ctx)?;
         let schema = source.schema();
 
         let partial_agg = HashAggregateExec::try_new(
@@ -351,7 +359,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, false).await?;
+        assert_count_optim_success(final_agg, false, &session_ctx).await?;
 
         Ok(())
     }
@@ -359,7 +367,8 @@ mod tests {
     #[tokio::test]
     async fn test_count_partial_with_nulls_direct_child() -> Result<()> {
         // basic test case with the aggregation applied on a source with exact statistics
-        let source = mock_data()?;
+        let session_ctx = SessionContext::new();
+        let source = mock_data(&session_ctx)?;
         let schema = source.schema();
 
         let partial_agg = HashAggregateExec::try_new(
@@ -378,14 +387,15 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, true).await?;
+        assert_count_optim_success(final_agg, true, &session_ctx).await?;
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_count_partial_indirect_child() -> Result<()> {
-        let source = mock_data()?;
+        let session_ctx = SessionContext::new();
+        let source = mock_data(&session_ctx)?;
         let schema = source.schema();
 
         let partial_agg = HashAggregateExec::try_new(
@@ -407,14 +417,15 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, false).await?;
+        assert_count_optim_success(final_agg, false, &session_ctx).await?;
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_count_partial_with_nulls_indirect_child() -> Result<()> {
-        let source = mock_data()?;
+        let session_ctx = SessionContext::new();
+        let source = mock_data(&session_ctx)?;
         let schema = source.schema();
 
         let partial_agg = HashAggregateExec::try_new(
@@ -436,14 +447,15 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        assert_count_optim_success(final_agg, true).await?;
+        assert_count_optim_success(final_agg, true, &session_ctx).await?;
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_count_inexact_stat() -> Result<()> {
-        let source = mock_data()?;
+        let session_ctx = SessionContext::new();
+        let source = mock_data(&session_ctx)?;
         let schema = source.schema();
 
         // adding a filter makes the statistics inexact
@@ -473,7 +485,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let conf = ExecutionConfig::new();
+        let conf = session_ctx.copied_config();
         let optimized =
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
@@ -485,7 +497,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_count_with_nulls_inexact_stat() -> Result<()> {
-        let source = mock_data()?;
+        let session_ctx = SessionContext::new();
+        let source = mock_data(&session_ctx)?;
         let schema = source.schema();
 
         // adding a filter makes the statistics inexact
@@ -515,7 +528,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let conf = ExecutionConfig::new();
+        let conf = session_ctx.copied_config();
         let optimized =
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 

@@ -19,6 +19,7 @@
 //! with more than one partition, to coalesce them into one partition
 //! when the node needs a single partition
 use super::optimizer::PhysicalOptimizerRule;
+use crate::prelude::SessionConfig;
 use crate::{
     error::Result,
     physical_plan::{coalesce_partitions::CoalescePartitionsExec, Distribution},
@@ -40,7 +41,7 @@ impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        config: &crate::execution::context::ExecutionConfig,
+        session_config: &SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         if plan.children().is_empty() {
             // leaf node, children cannot be replaced
@@ -49,7 +50,7 @@ impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
             let children = plan
                 .children()
                 .iter()
-                .map(|child| self.optimize(child.clone(), config))
+                .map(|child| self.optimize(child.clone(), session_config))
                 .collect::<Result<Vec<_>>>()?;
             match plan.required_child_distribution() {
                 Distribution::UnspecifiedDistribution => plan.with_new_children(children),

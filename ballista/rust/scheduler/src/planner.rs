@@ -119,6 +119,7 @@ impl DistributedPlanner {
                         .unwrap_or_else(|| {
                             shuffle_writer.output_partitioning().partition_count()
                         }),
+                    shuffle_writer.session_id(),
                 ));
                 stages.push(shuffle_writer);
                 Ok((
@@ -146,6 +147,7 @@ impl DistributedPlanner {
                                 .unwrap_or_else(|| {
                                     shuffle_writer.output_partitioning().partition_count()
                                 }),
+                            shuffle_writer.session_id(),
                         ));
                         stages.push(shuffle_writer);
                         Ok((unresolved_shuffle, stages))
@@ -218,6 +220,7 @@ pub fn remove_unresolved_shuffles(
             new_children.push(Arc::new(ShuffleReaderExec::try_new(
                 relevant_locations,
                 unresolved_shuffle.schema().clone(),
+                child.session_id(),
             )?))
         } else {
             new_children.push(remove_unresolved_shuffles(
@@ -238,7 +241,7 @@ fn create_shuffle_writer(
     Ok(Arc::new(ShuffleWriterExec::try_new(
         job_id.to_owned(),
         stage_id,
-        plan,
+        plan.clone(),
         "".to_owned(), // executor will decide on the work_dir path
         partitioning,
     )?))
@@ -259,9 +262,9 @@ mod test {
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use datafusion::prelude::ExecutionContext;
 
     use ballista_core::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -273,7 +276,7 @@ mod test {
 
     #[tokio::test]
     async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata").await?;
+        let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
         let df = ctx
@@ -360,7 +363,7 @@ mod test {
 
     #[tokio::test]
     async fn distributed_join_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata").await?;
+        let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 12
         let df = ctx
@@ -535,7 +538,7 @@ order by
 
     #[tokio::test]
     async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata").await?;
+        let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
         let df = ctx
@@ -574,7 +577,7 @@ order by
     fn roundtrip_operator(
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
-        let ctx = ExecutionContext::new();
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =
@@ -582,8 +585,11 @@ order by
                 plan.clone(),
                 codec.physical_extension_codec(),
             )?;
-        let result_exec_plan: Arc<dyn ExecutionPlan> =
-            (&proto).try_into_physical_plan(&ctx, codec.physical_extension_codec())?;
+        let result_exec_plan: Arc<dyn ExecutionPlan> = (&proto).try_into_physical_plan(
+            plan.session_id(),
+            codec.physical_extension_codec(),
+            runtime,
+        )?;
         Ok(result_exec_plan)
     }
 }

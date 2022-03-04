@@ -89,8 +89,8 @@ impl FlightService for FlightServiceImpl {
             Ok(sql) => {
                 println!("do_get: {}", sql);
 
-                // create local execution context
-                let mut ctx = ExecutionContext::new();
+                // create local session context
+                let ctx = SessionContext::new();
 
                 let testdata = datafusion::arrow::util::test_util::parquet_test_data();
 

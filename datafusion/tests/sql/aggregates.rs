@@ -20,14 +20,14 @@ use datafusion::scalar::ScalarValue;
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.unwrap();
+    let task_ctx = Arc::new(TaskContext::from(&ctx));
+    let results = collect(plan, task_ctx).await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
     let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
@@ -41,10 +41,10 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_avg() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.5089725099127211"]];
     assert_float_eq(&expected, &actual);
@@ -53,10 +53,10 @@ async fn csv_query_avg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_covariance_1() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT covar_pop(c2, c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["-0.07916932235380847"]];
     assert_float_eq(&expected, &actual);
@@ -65,10 +65,10 @@ async fn csv_query_covariance_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_covariance_2() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT covar(c2, c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["-0.07996901247859442"]];
     assert_float_eq(&expected, &actual);
@@ -77,10 +77,10 @@ async fn csv_query_covariance_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_correlation() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT corr(c2, c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["-0.19064544190576607"]];
     assert_float_eq(&expected, &actual);
@@ -89,10 +89,10 @@ async fn csv_query_correlation() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_1() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_pop(c2) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.8675"]];
     assert_float_eq(&expected, &actual);
@@ -101,10 +101,10 @@ async fn csv_query_variance_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_2() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_pop(c6) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["26156334342021890000000000000000000000"]];
     assert_float_eq(&expected, &actual);
@@ -113,10 +113,10 @@ async fn csv_query_variance_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_3() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_pop(c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.09234223721582163"]];
     assert_float_eq(&expected, &actual);
@@ -125,10 +125,10 @@ async fn csv_query_variance_3() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_4() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var(c2) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.8863636363636365"]];
     assert_float_eq(&expected, &actual);
@@ -137,10 +137,10 @@ async fn csv_query_variance_4() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_variance_5() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT var_samp(c2) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.8863636363636365"]];
     assert_float_eq(&expected, &actual);
@@ -149,10 +149,10 @@ async fn csv_query_variance_5() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_1() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_pop(c2) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["1.3665650368716449"]];
     assert_float_eq(&expected, &actual);
@@ -161,10 +161,10 @@ async fn csv_query_stddev_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_2() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_pop(c6) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["5114326382039172000"]];
     assert_float_eq(&expected, &actual);
@@ -173,10 +173,10 @@ async fn csv_query_stddev_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_3() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_pop(c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.30387865541334363"]];
     assert_float_eq(&expected, &actual);
@@ -185,10 +185,10 @@ async fn csv_query_stddev_3() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_4() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev(c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.3054095399405338"]];
     assert_float_eq(&expected, &actual);
@@ -197,10 +197,10 @@ async fn csv_query_stddev_4() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_5() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT stddev_samp(c12) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.3054095399405338"]];
     assert_float_eq(&expected, &actual);
@@ -209,10 +209,10 @@ async fn csv_query_stddev_5() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_stddev_6() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "select stddev(sq.column1) from (values (1.1), (2.0), (3.0)) as sq";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.9504384952922168"]];
     assert_float_eq(&expected, &actual);
@@ -221,10 +221,10 @@ async fn csv_query_stddev_6() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_median_1() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c2) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["3"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -232,10 +232,10 @@ async fn csv_query_median_1() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_median_2() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c6) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["1146409980542786560"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -243,10 +243,10 @@ async fn csv_query_median_2() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_median_3() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_median(c12) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0.5550065410522981"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -254,10 +254,10 @@ async fn csv_query_median_3() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_external_table_count() {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(c12) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------------------------------+",
         "| COUNT(aggregate_test_100.c12) |",
@@ -271,12 +271,12 @@ async fn csv_query_external_table_count() {
 
 #[tokio::test]
 async fn csv_query_external_table_sum() {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     // cast smallint and int to bigint to avoid overflow during calculation
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql =
         "SELECT SUM(CAST(c7 AS BIGINT)), SUM(CAST(c8 AS BIGINT)) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------------------------------------------+-------------------------------------------+",
         "| SUM(CAST(aggregate_test_100.c7 AS Int64)) | SUM(CAST(aggregate_test_100.c8 AS Int64)) |",
@@ -289,10 +289,10 @@ async fn csv_query_external_table_sum() {
 
 #[tokio::test]
 async fn csv_query_count() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(c12) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------------------------------+",
         "| COUNT(aggregate_test_100.c12) |",
@@ -306,10 +306,10 @@ async fn csv_query_count() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_count_distinct() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(distinct c2) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------------+",
         "| COUNT(DISTINCT aggregate_test_100.c2) |",
@@ -323,10 +323,10 @@ async fn csv_query_count_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_count_distinct_expr() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT count(distinct c2 % 2) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------------------------------------------------+",
         "| COUNT(DISTINCT aggregate_test_100.c2 % Int64(2)) |",
@@ -340,10 +340,10 @@ async fn csv_query_count_distinct_expr() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_count_star() {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(*) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
         "| COUNT(UInt8(1)) |",
@@ -356,10 +356,10 @@ async fn csv_query_count_star() {
 
 #[tokio::test]
 async fn csv_query_count_one() {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
         "| COUNT(UInt8(1)) |",
@@ -372,10 +372,10 @@ async fn csv_query_count_one() {
 
 #[tokio::test]
 async fn csv_query_approx_count() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------+--------------+",
         "| count_c9 | count_c9_str |",
@@ -412,15 +412,15 @@ async fn csv_query_approx_count() -> Result<()> {
 // float values.
 #[tokio::test]
 async fn csv_query_approx_percentile_cont() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
 
     // Generate an assertion that the estimated $percentile value for $column is
     // within 5% of the $actual percentile value.
     macro_rules! percentile_test {
         ($ctx:ident, column=$column:literal, percentile=$percentile:literal, actual=$actual:literal) => {
             let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
-            let actual = execute_to_batches(&mut ctx, &sql).await;
+            let actual = execute_to_batches(&ctx, &sql).await;
             //
             //   "+------+",
             //   "| q    |",
@@ -478,10 +478,10 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_sum_crossjoin() {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+----+-----------+",
         "| c1 | c1 | SUM(a.c2) |",
@@ -518,9 +518,9 @@ async fn csv_query_sum_crossjoin() {
 
 #[tokio::test]
 async fn query_count_without_from() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT count(1 + 1)";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------------------------+",
         "| COUNT(Int64(1) + Int64(1)) |",
@@ -534,11 +534,11 @@ async fn query_count_without_from() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 2) test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+------------------------------------------------------------------+",
         "| ARRAYAGG(test.c13)                                               |",
@@ -552,11 +552,11 @@ async fn csv_query_array_agg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_empty() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 LIMIT 0) test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------------------+",
         "| ARRAYAGG(test.c13) |",
@@ -570,11 +570,11 @@ async fn csv_query_array_agg_empty() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_one() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT array_agg(c13) FROM (SELECT * FROM aggregate_test_100 ORDER BY c13 LIMIT 1) test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------------------------------+",
         "| ARRAYAGG(test.c13)               |",
@@ -588,10 +588,10 @@ async fn csv_query_array_agg_one() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT array_agg(distinct c2) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     // The results for this query should be something like the following:
     //    +------------------------------------------+
@@ -638,11 +638,11 @@ async fn csv_query_array_agg_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_sum() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = plan_and_collect(
-        &mut ctx,
+        &ctx,
         "SELECT sum(nanos), sum(micros), sum(millis), sum(secs) FROM t",
     )
     .await
@@ -655,11 +655,11 @@ async fn aggregate_timestamps_sum() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_count() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = execute_to_batches(
-        &mut ctx,
+        &ctx,
         "SELECT count(nanos), count(micros), count(millis), count(secs) FROM t",
     )
     .await;
@@ -678,11 +678,11 @@ async fn aggregate_timestamps_count() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_min() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = execute_to_batches(
-        &mut ctx,
+        &ctx,
         "SELECT min(nanos), min(micros), min(millis), min(secs) FROM t",
     )
     .await;
@@ -701,11 +701,11 @@ async fn aggregate_timestamps_min() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_max() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = execute_to_batches(
-        &mut ctx,
+        &ctx,
         "SELECT max(nanos), max(micros), max(millis), max(secs) FROM t",
     )
     .await;
@@ -724,11 +724,11 @@ async fn aggregate_timestamps_max() -> Result<()> {
 
 #[tokio::test]
 async fn aggregate_timestamps_avg() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let results = plan_and_collect(
-        &mut ctx,
+        &ctx,
         "SELECT avg(nanos), avg(micros), avg(millis), avg(secs) FROM t",
     )
     .await

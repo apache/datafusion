@@ -32,7 +32,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -46,6 +46,8 @@ pub struct MemoryExec {
     projected_schema: SchemaRef,
     /// Optional projection
     projection: Option<Vec<usize>>,
+    /// Session id
+    session_id: String,
 }
 
 impl fmt::Debug for MemoryExec {
@@ -99,7 +101,7 @@ impl ExecutionPlan for MemoryExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
@@ -135,6 +137,10 @@ impl ExecutionPlan for MemoryExec {
             self.projection.clone(),
         )
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
 impl MemoryExec {
@@ -144,6 +150,7 @@ impl MemoryExec {
         partitions: &[Vec<RecordBatch>],
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
+        session_id: String,
     ) -> Result<Self> {
         let projected_schema = project_schema(&schema, projection.as_ref())?;
         Ok(Self {
@@ -151,6 +158,7 @@ impl MemoryExec {
             schema,
             projected_schema,
             projection,
+            session_id,
         })
     }
 }
@@ -223,6 +231,7 @@ mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
     use crate::physical_plan::ColumnStatistics;
+    use crate::prelude::SessionContext;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
@@ -250,10 +259,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let (schema, batch) = mock_data()?;
 
-        let executor = MemoryExec::try_new(&[vec![batch]], schema, Some(vec![2, 1]))?;
+        let ctx = SessionContext::new();
+        let executor = MemoryExec::try_new(
+            &[vec![batch]],
+            schema,
+            Some(vec![2, 1]),
+            ctx.session_id.clone(),
+        )?;
         let statistics = executor.statistics();
 
         assert_eq!(statistics.num_rows, Some(3));
@@ -276,7 +290,8 @@ mod tests {
         );
 
         // scan with projection
-        let mut it = executor.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut it = executor.execute(0, task_ctx).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -288,10 +303,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_without_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let (schema, batch) = mock_data()?;
 
-        let executor = MemoryExec::try_new(&[vec![batch]], schema, None)?;
+        let ctx = SessionContext::new();
+        let executor =
+            MemoryExec::try_new(&[vec![batch]], schema, None, ctx.session_id.clone())?;
         let statistics = executor.statistics();
 
         assert_eq!(statistics.num_rows, Some(3));
@@ -324,8 +340,8 @@ mod tests {
                 },
             ])
         );
-
-        let mut it = executor.execute(0, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let mut it = executor.execute(0, task_ctx).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(4, batch1.schema().fields().len());
         assert_eq!(4, batch1.num_columns());

@@ -33,6 +33,8 @@ use arrow::{
 };
 use futures::Stream;
 
+use crate::execution::context::TaskContext;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -40,9 +42,6 @@ use crate::physical_plan::{
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::stream::RecordBatchReceiverStream,
-};
-use crate::{
-    execution::runtime_env::RuntimeEnv, physical_plan::expressions::PhysicalSortExpr,
 };
 
 /// Index into the data that has been returned so far
@@ -172,7 +171,7 @@ impl ExecutionPlan for MockExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
@@ -235,6 +234,10 @@ impl ExecutionPlan for MockExec {
 
         common::compute_record_batch_statistics(&[data], &self.schema, None)
     }
+
+    fn session_id(&self) -> String {
+        "mock_session".to_owned()
+    }
 }
 
 fn clone_error(e: &ArrowError) -> ArrowError {
@@ -256,17 +259,24 @@ pub struct BarrierExec {
 
     /// all streams wait on this barrier to produce
     barrier: Arc<Barrier>,
+    /// Session id
+    session_id: String,
 }
 
 impl BarrierExec {
     /// Create a new exec with some number of partitions.
-    pub fn new(data: Vec<Vec<RecordBatch>>, schema: SchemaRef) -> Self {
+    pub fn new(
+        data: Vec<Vec<RecordBatch>>,
+        schema: SchemaRef,
+        session_id: String,
+    ) -> Self {
         // wait for all streams and the input
         let barrier = Arc::new(Barrier::new(data.len() + 1));
         Self {
             data,
             schema,
             barrier,
+            session_id,
         }
     }
 
@@ -311,7 +321,7 @@ impl ExecutionPlan for BarrierExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
@@ -354,28 +364,28 @@ impl ExecutionPlan for BarrierExec {
     fn statistics(&self) -> Statistics {
         common::compute_record_batch_statistics(&self.data, &self.schema, None)
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
 /// A mock execution plan that errors on a call to execute
 #[derive(Debug)]
 pub struct ErrorExec {
     schema: SchemaRef,
-}
-
-impl Default for ErrorExec {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// Session id
+    session_id: String,
 }
 
 impl ErrorExec {
-    pub fn new() -> Self {
+    pub fn new(session_id: String) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "dummy",
             DataType::Int64,
             true,
         )]));
-        Self { schema }
+        Self { schema, session_id }
     }
 }
 
@@ -412,7 +422,7 @@ impl ExecutionPlan for ErrorExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Internal(format!(
             "ErrorExec, unsurprisingly, errored in partition {}",
@@ -435,6 +445,10 @@ impl ExecutionPlan for ErrorExec {
     fn statistics(&self) -> Statistics {
         Statistics::default()
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
 /// A mock execution plan that simply returns the provided statistics
@@ -442,9 +456,11 @@ impl ExecutionPlan for ErrorExec {
 pub struct StatisticsExec {
     stats: Statistics,
     schema: Arc<Schema>,
+    /// Session id
+    session_id: String,
 }
 impl StatisticsExec {
-    pub fn new(stats: Statistics, schema: Schema) -> Self {
+    pub fn new(stats: Statistics, schema: Schema, session_id: String) -> Self {
         assert!(
             stats
                 .column_statistics
@@ -456,6 +472,7 @@ impl StatisticsExec {
         Self {
             stats,
             schema: Arc::new(schema),
+            session_id,
         }
     }
 }
@@ -497,7 +514,7 @@ impl ExecutionPlan for StatisticsExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
@@ -522,6 +539,10 @@ impl ExecutionPlan for StatisticsExec {
             }
         }
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
 /// Execution plan that emits streams that block forever.
@@ -537,15 +558,19 @@ pub struct BlockingExec {
 
     /// Ref-counting helper to check if the plan and the produced stream are still in memory.
     refs: Arc<()>,
+
+    /// Session id
+    session_id: String,
 }
 
 impl BlockingExec {
     /// Create new [`BlockingExec`] with a give schema and number of partitions.
-    pub fn new(schema: SchemaRef, n_partitions: usize) -> Self {
+    pub fn new(schema: SchemaRef, n_partitions: usize, session_id: String) -> Self {
         Self {
             schema,
             n_partitions,
             refs: Default::default(),
+            session_id,
         }
     }
 
@@ -595,7 +620,7 @@ impl ExecutionPlan for BlockingExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(BlockingStream {
             schema: Arc::clone(&self.schema),
@@ -617,6 +642,10 @@ impl ExecutionPlan for BlockingExec {
 
     fn statistics(&self) -> Statistics {
         unimplemented!()
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
     }
 }
 

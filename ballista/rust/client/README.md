@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
        .build()?;
 
    // connect to Ballista scheduler
-   let ctx = BallistaContext::remote("localhost", 50050, &config);
+   let ctx = BallistaContext::remote("localhost", 50050, &config).await?;
 
    // register csv file with the execution context
    ctx.register_csv(

@@ -40,13 +40,11 @@ use ballista_scheduler::state::EtcdClient;
 #[cfg(feature = "sled")]
 use ballista_scheduler::state::StandaloneClient;
 
-use ballista_scheduler::scheduler_server::SchedulerServer;
-use ballista_scheduler::state::{ConfigBackend, ConfigBackendClient};
-
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::BallistaCodec;
+use ballista_scheduler::scheduler_server::SchedulerServer;
+use ballista_scheduler::state::{ConfigBackend, ConfigBackendClient};
 use log::info;
-use tokio::sync::RwLock;
 
 #[macro_use]
 extern crate configure_me;
@@ -62,7 +60,7 @@ mod config {
 }
 
 use config::prelude::*;
-use datafusion::prelude::ExecutionContext;
+use datafusion::execution::context::default_session_builder;
 
 async fn start_server(
     config_backend: Arc<dyn ConfigBackendClient>,
@@ -85,13 +83,12 @@ async fn start_server(
                 config_backend.clone(),
                 namespace.clone(),
                 policy,
-                Arc::new(RwLock::new(ExecutionContext::new())),
                 BallistaCodec::default(),
+                default_session_builder,
             ),
             _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
-                Arc::new(RwLock::new(ExecutionContext::new())),
                 BallistaCodec::default(),
             ),
         };

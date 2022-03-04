@@ -17,7 +17,7 @@
 
 use super::*;
 
-async fn register_alltypes_avro(ctx: &mut ExecutionContext) {
+async fn register_alltypes_avro(ctx: &SessionContext) {
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
         "alltypes_plain",
@@ -30,12 +30,12 @@ async fn register_alltypes_avro(ctx: &mut ExecutionContext) {
 
 #[tokio::test]
 async fn avro_query() {
-    let mut ctx = ExecutionContext::new();
-    register_alltypes_avro(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_avro(&ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+-----------------------------------------+",
         "| id | CAST(alltypes_plain.string_col AS Utf8) |",
@@ -71,7 +71,7 @@ async fn avro_query_multiple_files() {
     )
     .unwrap();
 
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_avro(
         "alltypes_plain",
         table_path.display().to_string().as_str(),
@@ -82,7 +82,7 @@ async fn avro_query_multiple_files() {
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+-----------------------------------------+",
         "| id | CAST(alltypes_plain.string_col AS Utf8) |",
@@ -111,7 +111,7 @@ async fn avro_query_multiple_files() {
 
 #[tokio::test]
 async fn avro_single_nan_schema() {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let testdata = datafusion::test_util::arrow_test_data();
     ctx.register_avro(
         "single_nan",
@@ -124,8 +124,7 @@ async fn avro_single_nan_schema() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.unwrap();
+    let results = collect(plan).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -134,11 +133,11 @@ async fn avro_single_nan_schema() {
 
 #[tokio::test]
 async fn avro_explain() {
-    let mut ctx = ExecutionContext::new();
-    register_alltypes_avro(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_avro(&ctx).await;
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
     let expected = vec![
         vec![

@@ -29,12 +29,12 @@ use datafusion::{
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
         Statistics,
     },
-    prelude::ExecutionContext,
     scalar::ScalarValue,
 };
 
 use async_trait::async_trait;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::TaskContext;
+use datafusion::prelude::SessionContext;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -42,10 +42,12 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 struct StatisticsValidation {
     stats: Statistics,
     schema: Arc<Schema>,
+    /// Session id
+    session_id: String,
 }
 
 impl StatisticsValidation {
-    fn new(stats: Statistics, schema: SchemaRef) -> Self {
+    fn new(stats: Statistics, schema: SchemaRef, session_id: String) -> Self {
         assert!(
             stats
                 .column_statistics
@@ -54,7 +56,11 @@ impl StatisticsValidation {
                 .unwrap_or(true),
             "if defined, the column statistics vector length should be the number of fields"
         );
-        Self { stats, schema }
+        Self {
+            stats,
+            schema,
+            session_id,
+        }
     }
 }
 
@@ -74,6 +80,7 @@ impl TableProvider for StatisticsValidation {
         filters: &[Expr],
         // limit is ignored because it is not mandatory for a `TableProvider` to honor it
         _limit: Option<usize>,
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Filters should not be pushed down as they are marked as unsupported by default.
         assert_eq!(
@@ -102,6 +109,7 @@ impl TableProvider for StatisticsValidation {
                 total_byte_size: None,
             },
             projected_schema,
+            session_id,
         )))
     }
 }
@@ -144,7 +152,7 @@ impl ExecutionPlan for StatisticsValidation {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
@@ -169,12 +177,19 @@ impl ExecutionPlan for StatisticsValidation {
             }
         }
     }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
 }
 
-fn init_ctx(stats: Statistics, schema: Schema) -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
-    let provider: Arc<dyn TableProvider> =
-        Arc::new(StatisticsValidation::new(stats, Arc::new(schema)));
+fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    let provider: Arc<dyn TableProvider> = Arc::new(StatisticsValidation::new(
+        stats,
+        Arc::new(schema),
+        ctx.session_id.clone(),
+    ));
     ctx.register_table("stats_table", provider)?;
     Ok(ctx)
 }
@@ -210,7 +225,7 @@ fn fully_defined() -> (Statistics, Schema) {
 #[tokio::test]
 async fn sql_basic() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * from stats_table").await.unwrap();
 
@@ -228,7 +243,7 @@ async fn sql_basic() -> Result<()> {
 #[tokio::test]
 async fn sql_filter() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats, schema)?;
+    let ctx = init_ctx(stats, schema)?;
 
     let df = ctx
         .sql("SELECT * FROM stats_table WHERE c1 = 5")
@@ -249,7 +264,7 @@ async fn sql_filter() -> Result<()> {
 #[tokio::test]
 async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = ctx
@@ -284,7 +299,7 @@ async fn sql_limit() -> Result<()> {
 #[tokio::test]
 async fn sql_window() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx
         .sql("SELECT c2, sum(c1) over (partition by c2) FROM stats_table")

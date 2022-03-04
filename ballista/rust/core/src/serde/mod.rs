@@ -28,9 +28,10 @@ use datafusion::logical_plan::{JoinConstraint, JoinType, LogicalPlan, Operator};
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Extension;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 use prost::Message;
 
 // include the generated protobuf source as a submodule
@@ -67,7 +68,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &ExecutionContext,
+        ctx: Arc<SessionContext>,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan, BallistaError>;
 
@@ -130,8 +131,9 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &ExecutionContext,
+        session_id: String,
         extension_codec: &dyn PhysicalExtensionCodec,
+        runtime: Arc<RuntimeEnv>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
 
     fn try_from_physical_plan(
@@ -345,8 +347,7 @@ mod tests {
     use datafusion::arrow::datatypes::SchemaRef;
     use datafusion::datasource::object_store::local::LocalFileSystem;
     use datafusion::error::DataFusionError;
-    use datafusion::execution::context::{ExecutionContextState, QueryPlanner};
-    use datafusion::execution::runtime_env::RuntimeEnv;
+    use datafusion::execution::context::{QueryPlanner, SessionState, TaskContext};
     use datafusion::logical_plan::plan::Extension;
     use datafusion::logical_plan::{
         col, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
@@ -357,10 +358,11 @@ mod tests {
         DisplayFormatType, Distribution, ExecutionPlan, Partitioning, PhysicalPlanner,
         SendableRecordBatchStream, Statistics,
     };
-    use datafusion::prelude::{CsvReadOptions, ExecutionConfig, ExecutionContext};
+    use datafusion::prelude::{CsvReadOptions, SessionConfig, SessionContext};
     use prost::Message;
     use std::any::Any;
 
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use std::convert::TryInto;
     use std::fmt;
     use std::fmt::{Debug, Formatter};
@@ -512,7 +514,7 @@ mod tests {
         async fn execute(
             &self,
             _partition: usize,
-            _runtime: Arc<RuntimeEnv>,
+            _context: Arc<TaskContext>,
         ) -> datafusion::error::Result<SendableRecordBatchStream> {
             Err(DataFusionError::NotImplemented(
                 "not implemented".to_string(),
@@ -536,6 +538,10 @@ mod tests {
             // better statistics inference could be provided
             Statistics::default()
         }
+
+        fn session_id(&self) -> String {
+            self.input.session_id()
+        }
     }
 
     struct TopKPlanner {}
@@ -548,7 +554,7 @@ mod tests {
             node: &dyn UserDefinedLogicalNode,
             logical_inputs: &[&LogicalPlan],
             physical_inputs: &[Arc<dyn ExecutionPlan>],
-            _ctx_state: &ExecutionContextState,
+            _session_state: &SessionState,
         ) -> datafusion::error::Result<Option<Arc<dyn ExecutionPlan>>> {
             Ok(
                 if let Some(topk_node) = node.as_any().downcast_ref::<TopKPlanNode>() {
@@ -575,7 +581,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            ctx_state: &ExecutionContextState,
+            session_state: &SessionState,
         ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
             // Teach the default physical planner how to plan TopK nodes.
             let physical_planner =
@@ -584,7 +590,7 @@ mod tests {
                 )]);
             // Delegate most work of physical planning to the default physical planner
             physical_planner
-                .create_physical_plan(logical_plan, ctx_state)
+                .create_physical_plan(logical_plan, session_state)
                 .await
         }
     }
@@ -693,10 +699,10 @@ mod tests {
     #[tokio::test]
     async fn test_extension_plan() -> crate::error::Result<()> {
         let store = Arc::new(LocalFileSystem {});
-        let config =
-            ExecutionConfig::new().with_query_planner(Arc::new(TopKQueryPlanner {}));
-
-        let ctx = ExecutionContext::with_config(config);
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let state = SessionState::with_config(SessionConfig::new(), runtime.clone())
+            .with_query_planner(Arc::new(TopKQueryPlanner {}));
+        let ctx = Arc::new(SessionContext::with_state(state));
 
         let scan = LogicalPlanBuilder::scan_csv(
             store,
@@ -717,7 +723,8 @@ mod tests {
         let extension_codec = TopKExtensionCodec {};
 
         let proto = LogicalPlanNode::try_from_logical_plan(&topk_plan, &extension_codec)?;
-        let logical_round_trip = proto.try_into_logical_plan(&ctx, &extension_codec)?;
+        let logical_round_trip =
+            proto.try_into_logical_plan(ctx.clone(), &extension_codec)?;
 
         assert_eq!(
             format!("{:?}", topk_plan),
@@ -728,7 +735,11 @@ mod tests {
             topk_exec.clone(),
             &extension_codec,
         )?;
-        let physical_round_trip = proto.try_into_physical_plan(&ctx, &extension_codec)?;
+        let physical_round_trip = proto.try_into_physical_plan(
+            ctx.session_id.clone(),
+            &extension_codec,
+            runtime,
+        )?;
 
         assert_eq!(
             format!("{:?}", topk_exec),

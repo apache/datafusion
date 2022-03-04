@@ -37,7 +37,7 @@ use ballista_core::serde::scheduler::{
     ExecutorData, ExecutorMetadata, PartitionId, PartitionStats,
 };
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
-use datafusion::prelude::ExecutionContext;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
 use super::planner::remove_unresolved_shuffles;
 
@@ -46,6 +46,7 @@ mod etcd;
 #[cfg(feature = "sled")]
 mod standalone;
 
+use crate::scheduler_server::SessionContextRegistry;
 use clap::ArgEnum;
 #[cfg(feature = "etcd")]
 pub use etcd::EtcdClient;
@@ -263,20 +264,23 @@ impl VolatileSchedulerState {
     }
 }
 
+// StageKey is job_id + stage_id
 type StageKey = (String, u32);
 
 #[derive(Clone)]
 struct StableSchedulerState<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
-    // for db
+    /// for db
     config_client: Arc<dyn ConfigBackendClient>,
     namespace: String,
     codec: BallistaCodec<T, U>,
 
-    // for in-memory cache
+    /// for in-memory cache
     executors_metadata: Arc<RwLock<HashMap<String, ExecutorMetadata>>>,
 
     jobs: Arc<RwLock<HashMap<String, JobStatus>>>,
     stages: Arc<RwLock<HashMap<StageKey, Arc<dyn ExecutionPlan>>>>,
+    /// Runtime environment for Scheduler
+    runtime: Arc<RuntimeEnv>,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
@@ -294,14 +298,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             executors_metadata: Arc::new(RwLock::new(HashMap::new())),
             jobs: Arc::new(RwLock::new(HashMap::new())),
             stages: Arc::new(RwLock::new(HashMap::new())),
+            runtime: Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap()),
         }
     }
 
     /// Load the state stored in storage into memory
-    async fn init(&self, ctx: &ExecutionContext) -> Result<()> {
+    async fn init(&self) -> Result<()> {
         self.init_executors_metadata_from_storage().await?;
         self.init_jobs_from_storage().await?;
-        self.init_stages_from_storage(ctx).await?;
+        self.init_stages_from_storage().await?;
 
         Ok(())
     }
@@ -339,7 +344,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         Ok(())
     }
 
-    async fn init_stages_from_storage(&self, ctx: &ExecutionContext) -> Result<()> {
+    async fn init_stages_from_storage(&self) -> Result<()> {
         let entries = self
             .config_client
             .get_from_prefix(&get_stage_prefix(&self.namespace))
@@ -347,10 +352,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
         let mut stages = self.stages.write();
         for (key, entry) in entries {
-            let (job_id, stage_id) = extract_stage_id_from_stage_key(&key).unwrap();
+            let (session_id, job_id, stage_id) =
+                extract_stage_id_from_stage_key(&key).unwrap();
             let value = U::try_decode(&entry)?;
-            let plan = value
-                .try_into_physical_plan(ctx, self.codec.physical_extension_codec())?;
+            let plan = value.try_into_physical_plan(
+                session_id.clone(),
+                self.codec.physical_extension_codec(),
+                self.runtime.clone(),
+            )?;
 
             stages.insert((job_id, stage_id), plan);
         }
@@ -422,8 +431,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<()> {
         {
+            let session_id = plan.session_id();
             // Save in db
-            let key = get_stage_plan_key(&self.namespace, job_id, stage_id as u32);
+            let key = get_stage_plan_key(
+                &self.namespace,
+                session_id.as_str(),
+                job_id,
+                stage_id as u32,
+            );
             let value = {
                 let mut buf: Vec<u8> = vec![];
                 let proto = U::try_from_physical_plan(
@@ -485,8 +500,19 @@ fn get_stage_prefix(namespace: &str) -> String {
     format!("/ballista/{}/stages", namespace,)
 }
 
-fn get_stage_plan_key(namespace: &str, job_id: &str, stage_id: u32) -> String {
-    format!("{}/{}/{}", get_stage_prefix(namespace), job_id, stage_id,)
+fn get_stage_plan_key(
+    namespace: &str,
+    session_id: &str,
+    job_id: &str,
+    stage_id: u32,
+) -> String {
+    format!(
+        "{}/{}/{}/{}",
+        get_stage_prefix(namespace),
+        session_id,
+        job_id,
+        stage_id
+    )
 }
 
 fn extract_job_id_from_job_key(job_key: &str) -> Result<&str> {
@@ -495,9 +521,9 @@ fn extract_job_id_from_job_key(job_key: &str) -> Result<&str> {
     })
 }
 
-fn extract_stage_id_from_stage_key(stage_key: &str) -> Result<StageKey> {
+fn extract_stage_id_from_stage_key(stage_key: &str) -> Result<(String, String, u32)> {
     let splits: Vec<&str> = stage_key.split('/').collect();
-    if splits.len() < 4 {
+    if splits.len() < 5 {
         Err(BallistaError::Internal(format!(
             "Unexpected stage key: {}",
             stage_key
@@ -505,7 +531,8 @@ fn extract_stage_id_from_stage_key(stage_key: &str) -> Result<StageKey> {
     } else {
         Ok((
             splits.get(2).unwrap().to_string(),
-            splits.get(3).unwrap().parse::<u32>().unwrap(),
+            splits.get(3).unwrap().to_string(),
+            splits.get(4).unwrap().parse::<u32>().unwrap(),
         ))
     }
 }
@@ -593,6 +620,8 @@ pub(super) struct SchedulerState<T: 'static + AsLogicalPlan, U: 'static + AsExec
     stable_state: StableSchedulerState<T, U>,
     volatile_state: VolatileSchedulerState,
     listener: SchedulerStateWatcher,
+    /// DataFusion session contexts that are registered within the SchedulerServer
+    pub(crate) session_context_registry: Arc<SessionContextRegistry>,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T, U> {
@@ -607,6 +636,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             stable_state: StableSchedulerState::new(config_client, namespace, codec),
             volatile_state: VolatileSchedulerState::new(),
             listener: SchedulerStateWatcher { tx_task },
+            session_context_registry: Arc::new(SessionContextRegistry::default()),
         };
         ret.listener
             .synchronize_job_status_loop(ret.clone(), rx_task);
@@ -614,8 +644,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         ret
     }
 
-    pub async fn init(&self, ctx: &ExecutionContext) -> Result<()> {
-        self.stable_state.init(ctx).await?;
+    pub async fn init(&self) -> Result<()> {
+        self.stable_state.init().await?;
 
         Ok(())
     }

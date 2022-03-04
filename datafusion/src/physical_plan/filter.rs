@@ -38,7 +38,7 @@ use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use futures::stream::{Stream, StreamExt};
 
 /// FilterExec evaluates a boolean predicate against all input batches to determine which rows to
@@ -136,14 +136,14 @@ impl ExecutionPlan for FilterExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema().clone(),
             predicate: self.predicate.clone(),
-            input: self.input.execute(partition, runtime).await?,
+            input: self.input.execute(partition, context).await?,
             baseline_metrics,
         }))
     }
@@ -167,6 +167,10 @@ impl ExecutionPlan for FilterExec {
     /// The output statistics of a filtering operation are unknown
     fn statistics(&self) -> Statistics {
         Statistics::default()
+    }
+
+    fn session_id(&self) -> String {
+        self.input.session_id()
     }
 }
 
@@ -246,6 +250,7 @@ mod tests {
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
+    use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test;
     use crate::test_util;
@@ -254,12 +259,12 @@ mod tests {
 
     #[tokio::test]
     async fn simple_predicate() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let schema = test_util::aggr_test_schema();
 
         let partitions = 4;
         let (_, files) =
             test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let ctx = SessionContext::new();
 
         let csv = CsvExec::new(
             FileScanConfig {
@@ -273,6 +278,7 @@ mod tests {
             },
             true,
             b',',
+            ctx.session_id.clone(),
         );
 
         let predicate: Arc<dyn PhysicalExpr> = binary(
@@ -295,7 +301,8 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, Arc::new(csv))?);
 
-        let results = collect(filter, runtime).await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let results = collect(filter, task_ctx).await?;
 
         results
             .iter()

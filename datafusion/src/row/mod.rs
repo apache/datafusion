@@ -556,12 +556,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_parquet() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
         let schema = exec.schema().clone();
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec).await?;
         assert_eq!(1, batches.len());
         let batch = &batches[0];
 

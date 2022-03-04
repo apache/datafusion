@@ -83,6 +83,7 @@ pub trait TableProvider: Sync + Send {
         // If set, it contains the amount of rows needed by the `LogicalPlan`,
         // The datasource should return *at least* this number of rows if available.
         limit: Option<usize>,
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// Tests whether the table provider can make use of a filter expression

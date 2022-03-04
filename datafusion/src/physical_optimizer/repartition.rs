@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::Partitioning::*;
 use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
-use crate::{error::Result, execution::context::ExecutionConfig};
+use crate::{error::Result, execution::context::SessionConfig};
 
 /// Optimizer that introduces repartition to introduce more
 /// parallelism in the plan
@@ -154,7 +154,6 @@ fn optimize_partitions(
 ) -> Result<Arc<dyn ExecutionPlan>> {
     // Recurse into children bottom-up (attempt to repartition as
     // early as possible)
-
     let new_plan = if plan.children().is_empty() {
         // leaf node - don't replace children
         plan
@@ -218,13 +217,13 @@ impl PhysicalOptimizerRule for Repartition {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ExecutionConfig,
+        session_config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Don't run optimizer if target_partitions == 1
-        if config.target_partitions == 1 {
+        if session_config.target_partitions == 1 {
             Ok(plan)
         } else {
-            optimize_partitions(config.target_partitions, plan, false, false)
+            optimize_partitions(session_config.target_partitions, plan, false, false)
         }
     }
 
@@ -267,6 +266,7 @@ mod tests {
                 table_partition_cols: vec![],
             },
             None,
+            "sess_123".to_owned(),
         ))
     }
 
@@ -343,7 +343,7 @@ mod tests {
             // run optimizer
             let optimizer = Repartition {};
             let optimized = optimizer
-                .optimize($PLAN, &ExecutionConfig::new().with_target_partitions(10))?;
+                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();

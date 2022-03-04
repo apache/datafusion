@@ -1384,6 +1384,7 @@ mod tests {
             _: &Option<Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,
+            _: String,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }

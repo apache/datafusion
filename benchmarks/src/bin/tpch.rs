@@ -30,7 +30,9 @@ use std::{
 };
 
 use ballista::context::BallistaContext;
-use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
+use ballista::prelude::{
+    BallistaConfig, BALLISTA_DEFAULT_BATCH_SIZE, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
+};
 
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
@@ -58,6 +60,7 @@ use datafusion::{
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::execution::context::TaskContext;
 use serde::Serialize;
 use structopt::StructOpt;
 
@@ -83,9 +86,10 @@ struct BallistaBenchmarkOpt {
     #[structopt(short = "i", long = "iterations", default_value = "3")]
     iterations: usize,
 
-    // /// Batch size when reading CSV or Parquet files
-    // #[structopt(short = "s", long = "batch-size", default_value = "8192")]
-    // batch_size: usize,
+    /// Batch size when reading CSV or Parquet files
+    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    batch_size: usize,
+
     /// Path to data files
     #[structopt(parse(from_os_str), required = true, short = "p", long = "path")]
     path: PathBuf,
@@ -174,6 +178,10 @@ struct BallistaLoadtestOpt {
     #[structopt(short = "n", long = "partitions", default_value = "2")]
     partitions: usize,
 
+    /// Batch size when reading CSV or Parquet files
+    #[structopt(short = "s", long = "batch-size", default_value = "8192")]
+    batch_size: usize,
+
     /// Path to data files
     #[structopt(parse(from_os_str), required = true, short = "p", long = "data-path")]
     path: PathBuf,
@@ -256,6 +264,7 @@ async fn main() -> Result<()> {
     use LoadtestOpt::*;
 
     env_logger::init();
+
     match TpchOpt::from_args() {
         TpchOpt::Benchmark(BallistaBenchmark(opt)) => {
             benchmark_ballista(opt).await.map(|_| ())
@@ -273,11 +282,10 @@ async fn main() -> Result<()> {
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let mut benchmark_run = BenchmarkRun::new(opt.query);
-    let config = ExecutionConfig::new()
+    let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
-    let mut ctx = ExecutionContext::with_config(config);
-    let runtime = ctx.state.lock().runtime_env.clone();
+    let ctx = SessionContext::with_config(config);
 
     // register tables
     for table in TABLES {
@@ -290,10 +298,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
-
+            let task_ctx = Arc::new(TaskContext::from(&ctx));
             let memtable =
-                MemTable::load(table_provider, Some(opt.partitions), runtime.clone())
-                    .await?;
+                MemTable::load(table_provider, Some(opt.partitions), task_ctx).await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
                 table,
@@ -310,8 +317,8 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     let mut result: Vec<RecordBatch> = Vec::with_capacity(1);
     for i in 0..opt.iterations {
         let start = Instant::now();
-        let plan = create_logical_plan(&mut ctx, opt.query)?;
-        result = execute_query(&mut ctx, &plan, opt.debug).await?;
+        let plan = create_logical_plan(&ctx, opt.query)?;
+        result = execute_query(&ctx, &plan, opt.debug).await?;
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         millis.push(elapsed as f64);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
@@ -341,11 +348,13 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
             BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
             &format!("{}", opt.partitions),
         )
+        .set(BALLISTA_DEFAULT_BATCH_SIZE, &format!("{}", opt.batch_size))
         .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
     let ctx =
-        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config);
+        BallistaContext::remote(opt.host.unwrap().as_str(), opt.port.unwrap(), &config)
+            .await?;
 
     // register tables with Ballista context
     let path = opt.path.to_str().unwrap();
@@ -421,6 +430,7 @@ async fn loadtest_ballista(opt: BallistaLoadtestOpt) -> Result<()> {
             BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
             &format!("{}", opt.partitions),
         )
+        .set(BALLISTA_DEFAULT_BATCH_SIZE, &format!("{}", opt.batch_size))
         .build()
         .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
@@ -429,11 +439,14 @@ async fn loadtest_ballista(opt: BallistaLoadtestOpt) -> Result<()> {
     let mut clients = vec![];
 
     for _num in 0..concurrency {
-        clients.push(BallistaContext::remote(
-            opt.host.clone().unwrap().as_str(),
-            opt.port.unwrap(),
-            &config,
-        ));
+        clients.push(
+            BallistaContext::remote(
+                opt.host.clone().unwrap().as_str(),
+                opt.port.unwrap(),
+                &config,
+            )
+            .await?,
+        );
     }
 
     // register tables with Ballista context
@@ -584,13 +597,13 @@ fn get_query_sql(query: usize) -> Result<String> {
     }
 }
 
-fn create_logical_plan(ctx: &mut ExecutionContext, query: usize) -> Result<LogicalPlan> {
+fn create_logical_plan(ctx: &SessionContext, query: usize) -> Result<LogicalPlan> {
     let sql = get_query_sql(query)?;
     ctx.create_logical_plan(&sql)
 }
 
 async fn execute_query(
-    ctx: &mut ExecutionContext,
+    ctx: &SessionContext,
     plan: &LogicalPlan,
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
@@ -608,8 +621,8 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let result = collect(physical_plan.clone(), runtime).await?;
+    let task_ctx = Arc::new(TaskContext::from(ctx));
+    let result = collect(physical_plan.clone(), task_ctx).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -632,8 +645,8 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
             .delimiter(b'|')
             .file_extension(".tbl");
 
-        let config = ExecutionConfig::new().with_batch_size(opt.batch_size);
-        let mut ctx = ExecutionContext::with_config(config);
+        let config = SessionConfig::new().with_batch_size(opt.batch_size);
+        let ctx = SessionContext::with_config(config);
 
         // build plan to read the TBL file
         let mut csv = ctx.read_csv(&input_path, options).await?;
@@ -1281,11 +1294,10 @@ mod tests {
 
     async fn run_query(n: usize) -> Result<()> {
         // Tests running query with empty tables, to see whether they run succesfully.
-
-        let config = ExecutionConfig::new()
+        let config = SessionConfig::new()
             .with_target_partitions(1)
             .with_batch_size(10);
-        let mut ctx = ExecutionContext::with_config(config);
+        let ctx = SessionContext::with_config(config);
 
         for &table in TABLES {
             let schema = get_schema(table);
@@ -1296,8 +1308,8 @@ mod tests {
             ctx.register_table(table, Arc::new(provider))?;
         }
 
-        let plan = create_logical_plan(&mut ctx, n)?;
-        execute_query(&mut ctx, &plan, false).await?;
+        let plan = create_logical_plan(&ctx, n)?;
+        execute_query(&ctx, &plan, false).await?;
 
         Ok(())
     }
@@ -1307,7 +1319,7 @@ mod tests {
             // load expected answers from tpch-dbgen
             // read csv as all strings, trim and cast to expected type as the csv string
             // to value parser does not handle data with leading/trailing spaces
-            let mut ctx = ExecutionContext::new();
+            let ctx = SessionContext::new();
             let schema = string_schema(get_answer_schema(n));
             let options = CsvReadOptions::new()
                 .schema(&schema)
@@ -1376,13 +1388,15 @@ mod tests {
         use ballista_core::serde::{
             protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec,
         };
+        use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
         use datafusion::physical_plan::ExecutionPlan;
 
         async fn round_trip_query(n: usize) -> Result<()> {
-            let config = ExecutionConfig::new()
+            let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+            let config = SessionConfig::new()
                 .with_target_partitions(1)
                 .with_batch_size(10);
-            let mut ctx = ExecutionContext::with_config(config);
+            let ctx = SessionContext::with_config_rt(config, runtime.clone());
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
                 protobuf::PhysicalPlanNode,
@@ -1412,15 +1426,16 @@ mod tests {
             }
 
             // test logical plan round trip
-            let plan = create_logical_plan(&mut ctx, n)?;
+            let plan = create_logical_plan(&ctx, n)?;
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &plan,
                     codec.logical_extension_codec(),
                 )
                 .unwrap();
+            let ref_ctx = Arc::new(ctx);
             let round_trip: LogicalPlan = (&proto)
-                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
+                .try_into_logical_plan(ref_ctx.clone(), codec.logical_extension_codec())
                 .unwrap();
             assert_eq!(
                 format!("{:?}", plan),
@@ -1429,7 +1444,7 @@ mod tests {
             );
 
             // test optimized logical plan round trip
-            let plan = ctx.optimize(&plan)?;
+            let plan = ref_ctx.optimize(&plan)?;
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &plan,
@@ -1437,7 +1452,7 @@ mod tests {
                 )
                 .unwrap();
             let round_trip: LogicalPlan = (&proto)
-                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
+                .try_into_logical_plan(ref_ctx.clone(), codec.logical_extension_codec())
                 .unwrap();
             assert_eq!(
                 format!("{:?}", plan),
@@ -1447,7 +1462,7 @@ mod tests {
 
             // test physical plan roundtrip
             if env::var("TPCH_DATA").is_ok() {
-                let physical_plan = ctx.create_physical_plan(&plan).await?;
+                let physical_plan = ref_ctx.create_physical_plan(&plan).await?;
                 let proto: protobuf::PhysicalPlanNode =
                     protobuf::PhysicalPlanNode::try_from_physical_plan(
                         physical_plan.clone(),
@@ -1455,7 +1470,11 @@ mod tests {
                     )
                     .unwrap();
                 let round_trip: Arc<dyn ExecutionPlan> = (&proto)
-                    .try_into_physical_plan(&ctx, codec.physical_extension_codec())
+                    .try_into_physical_plan(
+                        ref_ctx.session_id.clone(),
+                        codec.physical_extension_codec(),
+                        runtime,
+                    )
                     .unwrap();
                 assert_eq!(
                     format!("{:?}", physical_plan),

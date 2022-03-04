@@ -27,7 +27,7 @@ use datafusion::arrow::{
     datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -41,11 +41,13 @@ use futures::Stream;
 #[derive(Debug, Clone)]
 pub struct CollectExec {
     plan: Arc<dyn ExecutionPlan>,
+    /// Session id
+    session_id: String,
 }
 
 impl CollectExec {
-    pub fn new(plan: Arc<dyn ExecutionPlan>) -> Self {
-        Self { plan }
+    pub fn new(plan: Arc<dyn ExecutionPlan>, session_id: String) -> Self {
+        Self { plan, session_id }
     }
 }
 
@@ -81,12 +83,12 @@ impl ExecutionPlan for CollectExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(0, partition);
         let num_partitions = self.plan.output_partitioning().partition_count();
 
-        let futures = (0..num_partitions).map(|i| self.plan.execute(i, runtime.clone()));
+        let futures = (0..num_partitions).map(|i| self.plan.execute(i, context.clone()));
         let streams = futures::future::join_all(futures)
             .await
             .into_iter()
@@ -113,6 +115,10 @@ impl ExecutionPlan for CollectExec {
 
     fn statistics(&self) -> Statistics {
         self.plan.statistics()
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
     }
 }
 

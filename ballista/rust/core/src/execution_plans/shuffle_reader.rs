@@ -24,8 +24,6 @@ use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -39,6 +37,7 @@ use datafusion::{
 };
 use futures::{future, StreamExt};
 
+use datafusion::execution::context::TaskContext;
 use log::info;
 
 /// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
@@ -50,6 +49,8 @@ pub struct ShuffleReaderExec {
     pub(crate) schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Session id
+    session_id: String,
 }
 
 impl ShuffleReaderExec {
@@ -57,11 +58,13 @@ impl ShuffleReaderExec {
     pub fn try_new(
         partition: Vec<Vec<PartitionLocation>>,
         schema: SchemaRef,
+        session_id: String,
     ) -> Result<Self> {
         Ok(Self {
             partition,
             schema,
             metrics: ExecutionPlanMetricsSet::new(),
+            session_id,
         })
     }
 }
@@ -106,7 +109,7 @@ impl ExecutionPlan for ShuffleReaderExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         info!("ShuffleReaderExec::execute({})", partition);
 
@@ -173,6 +176,10 @@ impl ExecutionPlan for ShuffleReaderExec {
                 .flatten()
                 .map(|loc| loc.partition_stats),
         )
+    }
+
+    fn session_id(&self) -> String {
+        self.session_id.clone()
     }
 }
 

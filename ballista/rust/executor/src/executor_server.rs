@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -36,6 +37,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::scheduler::ExecutorState;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::as_task_status;
@@ -175,15 +177,28 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             "{}/{}/{}",
             task_id.job_id, task_id.stage_id, task_id.partition_id
         );
-        info!("Start to run task {}", task_id_log);
+        info!("Start to run task {}", task_id_log.clone());
+        let runtime = self.executor.runtime.clone();
+        let session_id = task.session_id;
+        let mut task_props = HashMap::new();
+        for kv_pair in task.props {
+            task_props.insert(kv_pair.key, kv_pair.value);
+        }
+        let task_context = Arc::new(TaskContext::new(
+            task_id_log.clone(),
+            session_id.clone(),
+            task_props,
+            runtime.clone(),
+        ));
 
         let encoded_plan = &task.plan.as_slice();
 
         let plan: Arc<dyn ExecutionPlan> =
             U::try_decode(encoded_plan).and_then(|proto| {
                 proto.try_into_physical_plan(
-                    self.executor.ctx.as_ref(),
+                    session_id,
                     self.codec.physical_extension_codec(),
+                    runtime,
                 )
             })?;
 
@@ -197,6 +212,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                task_context,
                 shuffle_output_partitioning,
             )
             .await;

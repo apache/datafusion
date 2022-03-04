@@ -61,5 +61,6 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
         &self,
         conf: FileScanConfig,
         filters: &[Expr],
+        session_id: String,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }

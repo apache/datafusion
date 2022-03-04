@@ -163,7 +163,7 @@ pub trait ObjectStore: Sync + Send + Debug {
 
 static LOCAL_SCHEME: &str = "file";
 
-/// A Registry holds all the object stores at runtime with a scheme for each store.
+/// A Registry holds all the object stores at Runtime with a scheme for each store.
 /// This allows the user to extend DataFusion with different storage systems such as S3 or HDFS
 /// and query data inside these systems.
 pub struct ObjectStoreRegistry {

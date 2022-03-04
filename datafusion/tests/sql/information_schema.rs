@@ -29,9 +29,9 @@ use super::*;
 
 #[tokio::test]
 async fn information_schema_tables_not_exist_by_default() {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
-    let err = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let err = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap_err();
     assert_eq!(
@@ -42,11 +42,10 @@ async fn information_schema_tables_not_exist_by_default() {
 
 #[tokio::test]
 async fn information_schema_tables_no_tables() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
-    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -63,15 +62,14 @@ async fn information_schema_tables_no_tables() {
 
 #[tokio::test]
 async fn information_schema_tables_tables_default_catalog() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     // Now, register an empty table
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -90,7 +88,7 @@ async fn information_schema_tables_tables_default_catalog() {
     ctx.register_table("t2", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -109,9 +107,9 @@ async fn information_schema_tables_tables_default_catalog() {
 
 #[tokio::test]
 async fn information_schema_tables_tables_with_multiple_catalogs() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
     schema
@@ -131,7 +129,7 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     catalog.register_schema("my_other_schema", Arc::new(schema));
     ctx.register_catalog("my_other_catalog", Arc::new(catalog));
 
-    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -176,14 +174,14 @@ async fn information_schema_tables_table_types() {
             _: &Option<Vec<usize>>,
             _: &[Expr],
             _: Option<usize>,
+            _: String,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!()
         }
     }
 
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("physical", Arc::new(TestTable(TableType::Base)))
         .unwrap();
@@ -192,7 +190,7 @@ async fn information_schema_tables_table_types() {
     ctx.register_table("temp", Arc::new(TestTable(TableType::Temporary)))
         .unwrap();
 
-    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
+    let result = plan_and_collect(&ctx, "SELECT * from information_schema.tables")
         .await
         .unwrap();
 
@@ -212,28 +210,27 @@ async fn information_schema_tables_table_types() {
 
 #[tokio::test]
 async fn information_schema_show_tables_no_information_schema() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let ctx = SessionContext::new();
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     // use show tables alias
-    let err = plan_and_collect(&mut ctx, "SHOW TABLES").await.unwrap_err();
+    let err = plan_and_collect(&ctx, "SHOW TABLES").await.unwrap_err();
 
     assert_eq!(err.to_string(), "Error during planning: SHOW TABLES is not supported unless information_schema is enabled");
 }
 
 #[tokio::test]
 async fn information_schema_show_tables() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
     // use show tables alias
-    let result = plan_and_collect(&mut ctx, "SHOW TABLES").await.unwrap();
+    let result = plan_and_collect(&ctx, "SHOW TABLES").await.unwrap();
 
     let expected = vec![
         "+---------------+--------------------+------------+------------+",
@@ -246,19 +243,19 @@ async fn information_schema_show_tables() {
     ];
     assert_batches_sorted_eq!(expected, &result);
 
-    let result = plan_and_collect(&mut ctx, "SHOW tables").await.unwrap();
+    let result = plan_and_collect(&ctx, "SHOW tables").await.unwrap();
 
     assert_batches_sorted_eq!(expected, &result);
 }
 
 #[tokio::test]
 async fn information_schema_show_columns_no_information_schema() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let ctx = SessionContext::new();
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let err = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t")
+    let err = plan_and_collect(&ctx, "SHOW COLUMNS FROM t")
         .await
         .unwrap_err();
 
@@ -267,7 +264,7 @@ async fn information_schema_show_columns_no_information_schema() {
 
 #[tokio::test]
 async fn information_schema_show_columns_like_where() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let ctx = SessionContext::new();
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -275,12 +272,12 @@ async fn information_schema_show_columns_like_where() {
     let expected =
         "Error during planning: SHOW COLUMNS with WHERE or LIKE is not supported";
 
-    let err = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t LIKE 'f'")
+    let err = plan_and_collect(&ctx, "SHOW COLUMNS FROM t LIKE 'f'")
         .await
         .unwrap_err();
     assert_eq!(err.to_string(), expected);
 
-    let err = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t WHERE column_name = 'bar'")
+    let err = plan_and_collect(&ctx, "SHOW COLUMNS FROM t WHERE column_name = 'bar'")
         .await
         .unwrap_err();
     assert_eq!(err.to_string(), expected);
@@ -288,16 +285,13 @@ async fn information_schema_show_columns_like_where() {
 
 #[tokio::test]
 async fn information_schema_show_columns() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM t")
-        .await
-        .unwrap();
+    let result = plan_and_collect(&ctx, "SHOW COLUMNS FROM t").await.unwrap();
 
     let expected = vec![
         "+---------------+--------------+------------+-------------+-----------+-------------+",
@@ -308,13 +302,11 @@ async fn information_schema_show_columns() {
     ];
     assert_batches_sorted_eq!(expected, &result);
 
-    let result = plan_and_collect(&mut ctx, "SHOW columns from t")
-        .await
-        .unwrap();
+    let result = plan_and_collect(&ctx, "SHOW columns from t").await.unwrap();
     assert_batches_sorted_eq!(expected, &result);
 
     // This isn't ideal but it is consistent behavior for `SELECT * from T`
-    let err = plan_and_collect(&mut ctx, "SHOW columns from T")
+    let err = plan_and_collect(&ctx, "SHOW columns from T")
         .await
         .unwrap_err();
     assert_eq!(
@@ -326,14 +318,13 @@ async fn information_schema_show_columns() {
 // test errors with WHERE and LIKE
 #[tokio::test]
 async fn information_schema_show_columns_full_extended() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result = plan_and_collect(&mut ctx, "SHOW FULL COLUMNS FROM t")
+    let result = plan_and_collect(&ctx, "SHOW FULL COLUMNS FROM t")
         .await
         .unwrap();
     let expected = vec![
@@ -345,7 +336,7 @@ async fn information_schema_show_columns_full_extended() {
     ];
     assert_batches_sorted_eq!(expected, &result);
 
-    let result = plan_and_collect(&mut ctx, "SHOW EXTENDED COLUMNS FROM t")
+    let result = plan_and_collect(&ctx, "SHOW EXTENDED COLUMNS FROM t")
         .await
         .unwrap();
     assert_batches_sorted_eq!(expected, &result);
@@ -353,14 +344,13 @@ async fn information_schema_show_columns_full_extended() {
 
 #[tokio::test]
 async fn information_schema_show_table_table_names() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
 
-    let result = plan_and_collect(&mut ctx, "SHOW COLUMNS FROM public.t")
+    let result = plan_and_collect(&ctx, "SHOW COLUMNS FROM public.t")
         .await
         .unwrap();
 
@@ -373,12 +363,12 @@ async fn information_schema_show_table_table_names() {
     ];
     assert_batches_sorted_eq!(expected, &result);
 
-    let result = plan_and_collect(&mut ctx, "SHOW columns from datafusion.public.t")
+    let result = plan_and_collect(&ctx, "SHOW columns from datafusion.public.t")
         .await
         .unwrap();
     assert_batches_sorted_eq!(expected, &result);
 
-    let err = plan_and_collect(&mut ctx, "SHOW columns from t2")
+    let err = plan_and_collect(&ctx, "SHOW columns from t2")
         .await
         .unwrap_err();
     assert_eq!(
@@ -386,7 +376,7 @@ async fn information_schema_show_table_table_names() {
         "Error during planning: Unknown relation for SHOW COLUMNS: t2"
     );
 
-    let err = plan_and_collect(&mut ctx, "SHOW columns from datafusion.public.t2")
+    let err = plan_and_collect(&ctx, "SHOW columns from datafusion.public.t2")
         .await
         .unwrap_err();
     assert_eq!(
@@ -397,9 +387,9 @@ async fn information_schema_show_table_table_names() {
 
 #[tokio::test]
 async fn show_unsupported() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let ctx = SessionContext::new();
 
-    let err = plan_and_collect(&mut ctx, "SHOW SOMETHING_UNKNOWN")
+    let err = plan_and_collect(&ctx, "SHOW SOMETHING_UNKNOWN")
         .await
         .unwrap_err();
 
@@ -408,9 +398,9 @@ async fn show_unsupported() {
 
 #[tokio::test]
 async fn information_schema_columns_not_exist_by_default() {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
-    let err = plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
+    let err = plan_and_collect(&ctx, "SELECT * from information_schema.columns")
         .await
         .unwrap_err();
     assert_eq!(
@@ -456,9 +446,9 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
 
 #[tokio::test]
 async fn information_schema_columns() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
 
@@ -472,7 +462,7 @@ async fn information_schema_columns() {
     catalog.register_schema("my_schema", Arc::new(schema));
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
-    let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
+    let result = plan_and_collect(&ctx, "SELECT * from information_schema.columns")
         .await
         .unwrap();
 
@@ -494,9 +484,6 @@ async fn information_schema_columns() {
 }
 
 /// Execute SQL and return results
-async fn plan_and_collect(
-    ctx: &mut ExecutionContext,
-    sql: &str,
-) -> Result<Vec<RecordBatch>> {
+async fn plan_and_collect(ctx: &SessionContext, sql: &str) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await
 }

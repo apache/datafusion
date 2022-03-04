@@ -21,11 +21,9 @@ use ballista_core::{
     error::Result, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
     BALLISTA_VERSION,
 };
-use datafusion::prelude::ExecutionContext;
 use log::info;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
 use tonic::transport::Server;
 
 use crate::{scheduler_server::SchedulerServer, state::StandaloneClient};
@@ -37,7 +35,6 @@ pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
         SchedulerServer::new(
             Arc::new(client),
             "ballista".to_string(),
-            Arc::new(RwLock::new(ExecutionContext::new())),
             BallistaCodec::default(),
         );
     scheduler_server.init().await?;

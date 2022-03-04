@@ -37,7 +37,7 @@ use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use futures::stream::Stream;
 use futures::StreamExt;
 use hashbrown::HashMap;
@@ -177,7 +177,7 @@ impl ExecutionPlan for RepartitionExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // lock mutexes
         let mut state = self.state.lock().await;
@@ -221,7 +221,7 @@ impl ExecutionPlan for RepartitionExec {
                         txs.clone(),
                         self.partitioning.clone(),
                         r_metrics,
-                        runtime.clone(),
+                        context.clone(),
                     ));
 
                 // In a separate task, wait for each input to be done
@@ -268,6 +268,10 @@ impl ExecutionPlan for RepartitionExec {
     fn statistics(&self) -> Statistics {
         self.input.statistics()
     }
+
+    fn session_id(&self) -> String {
+        self.input.session_id()
+    }
 }
 
 impl RepartitionExec {
@@ -300,13 +304,13 @@ impl RepartitionExec {
         mut txs: HashMap<usize, UnboundedSender<Option<ArrowResult<RecordBatch>>>>,
         partitioning: Partitioning,
         r_metrics: RepartitionMetrics,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<()> {
         let num_output_partitions = txs.len();
 
         // execute the child operator
         let timer = r_metrics.fetch_time.timer();
-        let mut stream = input.execute(i, runtime).await?;
+        let mut stream = input.execute(i, context).await?;
         timer.done();
 
         let mut counter = 0;
@@ -503,6 +507,7 @@ impl RecordBatchStream for RepartitionStream {
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
+    use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
@@ -616,16 +621,22 @@ mod tests {
         input_partitions: Vec<Vec<RecordBatch>>,
         partitioning: Partitioning,
     ) -> Result<Vec<Vec<RecordBatch>>> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
         // create physical plan
-        let exec = MemoryExec::try_new(&input_partitions, schema.clone(), None)?;
+        let exec = MemoryExec::try_new(
+            &input_partitions,
+            schema.clone(),
+            None,
+            session_ctx.session_id.clone(),
+        )?;
         let exec = RepartitionExec::try_new(Arc::new(exec), partitioning)?;
 
         // execute and collect results
         let mut output_partitions = vec![];
         for i in 0..exec.partitioning.partition_count() {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i, runtime.clone()).await?;
+            let task_ctx = Arc::new(TaskContext::from(&session_ctx));
+            let mut stream = exec.execute(i, task_ctx).await?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);
@@ -665,7 +676,6 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_partitioning() {
-        let runtime = Arc::new(RuntimeEnv::default());
         // have to send at least one batch through to provoke error
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
@@ -680,7 +690,9 @@ mod tests {
         // returned and no results produced
         let partitioning = Partitioning::UnknownPartitioning(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream = exec.execute(0, runtime).await.unwrap();
+        let ctx = SessionContext::new();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream = exec.execute(0, task_ctx).await.unwrap();
 
         // Expect that an error is returned
         let result_string = crate::physical_plan::common::collect(output_stream)
@@ -700,14 +712,15 @@ mod tests {
         // This generates an error on a call to execute. The error
         // should be returned and no results produced.
 
-        let runtime = Arc::new(RuntimeEnv::default());
-        let input = ErrorExec::new();
+        let ctx = SessionContext::new();
+        let input = ErrorExec::new(ctx.session_id.clone());
         let partitioning = Partitioning::RoundRobinBatch(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, runtime).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream = exec.execute(0, task_ctx).await.unwrap();
 
         // Expect that an error is returned
         let result_string = crate::physical_plan::common::collect(output_stream)
@@ -723,7 +736,6 @@ mod tests {
 
     #[tokio::test]
     async fn repartition_with_error_in_stream() {
-        let runtime = Arc::new(RuntimeEnv::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
             Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
@@ -741,7 +753,9 @@ mod tests {
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, runtime).await.unwrap();
+        let ctx = SessionContext::new();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream = exec.execute(0, task_ctx).await.unwrap();
 
         // Expect that an error is returned
         let result_string = crate::physical_plan::common::collect(output_stream)
@@ -757,7 +771,6 @@ mod tests {
 
     #[tokio::test]
     async fn repartition_with_delayed_stream() {
-        let runtime = Arc::new(RuntimeEnv::default());
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
             Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
@@ -792,7 +805,9 @@ mod tests {
 
         assert_batches_sorted_eq!(&expected, &expected_batches);
 
-        let output_stream = exec.execute(0, runtime).await.unwrap();
+        let ctx = SessionContext::new();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream = exec.execute(0, task_ctx).await.unwrap();
         let batches = crate::physical_plan::common::collect(output_stream)
             .await
             .unwrap();
@@ -802,17 +817,19 @@ mod tests {
 
     #[tokio::test]
     async fn robin_repartition_with_dropping_output_stream() {
-        let runtime = Arc::new(RuntimeEnv::default());
         let partitioning = Partitioning::RoundRobinBatch(2);
         // The barrier exec waits to be pinged
         // requires the input to wait at least once)
-        let input = Arc::new(make_barrier_exec());
+        let ctx = SessionContext::new();
+        let input = Arc::new(make_barrier_exec(&ctx));
 
         // partition into two output streams
         let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
 
-        let output_stream0 = exec.execute(0, runtime.clone()).await.unwrap();
-        let output_stream1 = exec.execute(1, runtime.clone()).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream0 = exec.execute(0, task_ctx).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream1 = exec.execute(1, task_ctx).await.unwrap();
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
@@ -845,7 +862,6 @@ mod tests {
     // wiht different compilers, we will compare the same execution with
     // and without droping the output stream.
     async fn hash_repartition_with_dropping_output_stream() {
-        let runtime = Arc::new(RuntimeEnv::default());
         let partitioning = Partitioning::Hash(
             vec![Arc::new(crate::physical_plan::expressions::Column::new(
                 "my_awesome_field",
@@ -855,9 +871,11 @@ mod tests {
         );
 
         // We first collect the results without droping the output stream.
-        let input = Arc::new(make_barrier_exec());
+        let ctx = SessionContext::new();
+        let input = Arc::new(make_barrier_exec(&ctx));
         let exec = RepartitionExec::try_new(input.clone(), partitioning.clone()).unwrap();
-        let output_stream1 = exec.execute(1, runtime.clone()).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream1 = exec.execute(1, task_ctx).await.unwrap();
         input.wait().await;
         let batches_without_drop = crate::physical_plan::common::collect(output_stream1)
             .await
@@ -875,10 +893,12 @@ mod tests {
         assert_eq!(items_set.difference(&source_str_set).count(), 0);
 
         // Now do the same but dropping the stream before waiting for the barrier
-        let input = Arc::new(make_barrier_exec());
+        let input = Arc::new(make_barrier_exec(&ctx));
         let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, runtime.clone()).await.unwrap();
-        let output_stream1 = exec.execute(1, runtime.clone()).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream0 = exec.execute(0, task_ctx).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream1 = exec.execute(1, task_ctx).await.unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
         std::mem::drop(output_stream0);
@@ -910,7 +930,7 @@ mod tests {
     }
 
     /// Create a BarrierExec that returns two partitions of two batches each
-    fn make_barrier_exec() -> BarrierExec {
+    fn make_barrier_exec(ctx: &SessionContext) -> BarrierExec {
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
             Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
@@ -938,23 +958,32 @@ mod tests {
         // The barrier exec waits to be pinged
         // requires the input to wait at least once)
         let schema = batch1.schema();
-        BarrierExec::new(vec![vec![batch1, batch2], vec![batch3, batch4]], schema)
+        BarrierExec::new(
+            vec![vec![batch1, batch2], vec![batch3, batch4]],
+            schema,
+            ctx.session_id.clone(),
+        )
     }
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
-        let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 2));
+        let session_ctx = SessionContext::new();
+        let blocking_exec = Arc::new(BlockingExec::new(
+            Arc::clone(&schema),
+            2,
+            session_ctx.session_id.clone(),
+        ));
         let refs = blocking_exec.refs();
         let repartition_exec = Arc::new(RepartitionExec::try_new(
             blocking_exec,
             Partitioning::UnknownPartitioning(1),
         )?);
 
-        let fut = collect(repartition_exec, runtime);
+        let task_ctx = Arc::new(TaskContext::from(&session_ctx));
+        let fut = collect(repartition_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -966,7 +995,6 @@ mod tests {
 
     #[tokio::test]
     async fn hash_repartition_avoid_empty_batch() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "a",
             Arc::new(StringArray::from_slice(&["foo"])) as ArrayRef,
@@ -981,11 +1009,14 @@ mod tests {
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch)], schema);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, runtime.clone()).await.unwrap();
+        let ctx = SessionContext::new();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream0 = exec.execute(0, task_ctx).await.unwrap();
         let batch0 = crate::physical_plan::common::collect(output_stream0)
             .await
             .unwrap();
-        let output_stream1 = exec.execute(1, runtime.clone()).await.unwrap();
+        let task_ctx = Arc::new(TaskContext::from(&ctx));
+        let output_stream1 = exec.execute(1, task_ctx).await.unwrap();
         let batch1 = crate::physical_plan::common::collect(output_stream1)
             .await
             .unwrap();
