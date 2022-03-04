@@ -180,7 +180,7 @@ impl ExecutionPlan for CsvExec {
     }
 }
 
-pub(crate) async fn plan_to_csv(
+pub async fn plan_to_csv(
     context: &ExecutionContext,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
@@ -230,6 +230,8 @@ mod tests {
     };
     use arrow::datatypes::*;
     use futures::StreamExt;
+    use std::fs::File;
+    use std::io::Write;
     use tempfile::TempDir;
 
     #[tokio::test]
