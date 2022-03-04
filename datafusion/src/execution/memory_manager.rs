@@ -19,6 +19,7 @@
 
 use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
+use core::time::Duration;
 use hashbrown::HashSet;
 use log::debug;
 use parking_lot::{Condvar, Mutex};
@@ -340,7 +341,13 @@ impl MemoryManager {
             } else if current < min_per_rqt {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
                 // to spill instead spill self frequently with limited total mem
-                self.cv.wait(&mut rqt_current_used);
+                let timeout = self
+                    .cv
+                    .wait_for(&mut rqt_current_used, Duration::from_secs(5));
+                if timeout.timed_out() {
+                    granted = false;
+                    break;
+                }
             } else {
                 granted = false;
                 break;
