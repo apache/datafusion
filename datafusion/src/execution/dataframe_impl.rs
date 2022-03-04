@@ -39,6 +39,7 @@ use crate::{
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
+use crate::physical_plan::file_format::plan_to_csv;
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
@@ -66,6 +67,13 @@ impl DataFrameImpl {
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
         let plan = ctx.optimize(&self.plan)?;
         ctx.create_physical_plan(&plan).await
+    }
+
+    async fn write_csv(&self, path: impl AsRef<str>) -> Result<()> {
+        let plan = self.create_physical_plan().await?;
+        let state = self.ctx_state.lock().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        plan_to_csv(&ctx, plan, path).await
     }
 }
 

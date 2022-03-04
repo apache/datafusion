@@ -32,7 +32,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 pub use avro::AvroExec;
-pub use csv::CsvExec;
+pub use csv::{plan_to_csv, CsvExec};
 pub use json::NdJsonExec;
 
 use crate::error::DataFusionError;
