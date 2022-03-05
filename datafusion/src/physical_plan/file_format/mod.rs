@@ -25,9 +25,9 @@ mod parquet;
 
 pub use self::parquet::ParquetExec;
 use arrow::{
-    array::{ArrayData, ArrayRef, DictionaryArray, UInt8BufferBuilder},
+    array::{ArrayData, ArrayRef, DictionaryArray},
     buffer::Buffer,
-    datatypes::{DataType, Field, Schema, SchemaRef, UInt8Type},
+    datatypes::{DataType, Field, Schema, SchemaRef, UInt16Type},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
@@ -41,7 +41,7 @@ use crate::{
     error::Result,
     scalar::ScalarValue,
 };
-use arrow::array::new_null_array;
+use arrow::array::{new_null_array, UInt16BufferBuilder};
 use lazy_static::lazy_static;
 use log::info;
 use std::{
@@ -55,7 +55,7 @@ use super::{ColumnStatistics, Statistics};
 
 lazy_static! {
     /// The datatype used for all partitioning columns for now
-    pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType = DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8));
+    pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType = DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8));
 }
 
 /// The base configurations to provide when creating a physical plan for
@@ -336,17 +336,17 @@ fn create_dict_array(
 
     // build keys array
     let sliced_key_buffer = match key_buffer_cache {
-        Some(buf) if buf.len() >= len => buf.slice(buf.len() - len),
+        Some(buf) if buf.len() >= len * 2 => buf.slice(buf.len() - len * 2),
         _ => {
-            let mut key_buffer_builder = UInt8BufferBuilder::new(len);
-            key_buffer_builder.advance(len); // keys are all 0
+            let mut key_buffer_builder = UInt16BufferBuilder::new(len * 2);
+            key_buffer_builder.advance(len * 2); // keys are all 0
             key_buffer_cache.insert(key_buffer_builder.finish()).clone()
         }
     };
 
     // create data type
     let data_type =
-        DataType::Dictionary(Box::new(DataType::UInt8), Box::new(val.get_datatype()));
+        DataType::Dictionary(Box::new(DataType::UInt16), Box::new(val.get_datatype()));
 
     debug_assert_eq!(data_type, *DEFAULT_PARTITION_COLUMN_DATATYPE);
 
@@ -355,7 +355,9 @@ fn create_dict_array(
         .len(len)
         .add_buffer(sliced_key_buffer);
     builder = builder.add_child_data(dict_vals.data().clone());
-    Arc::new(DictionaryArray::<UInt8Type>::from(builder.build().unwrap()))
+    Arc::new(DictionaryArray::<UInt16Type>::from(
+        builder.build().unwrap(),
+    ))
 }
 
 #[cfg(test)]
