@@ -4,27 +4,59 @@ use datafusion::{
     arrow::datatypes::{Schema, SchemaRef},
     datasource::empty::EmptyTable,
     error::{DataFusionError, Result},
-    logical_plan::{plan::Projection, DFSchema, LogicalPlan, TableScan},
+    logical_plan::{plan::Projection, DFSchema, Expr, LogicalPlan, TableScan},
 };
 
 use substrait::protobuf::{
+    expression::{
+        mask_expression::{StructItem, StructSelect},
+        FieldReference, MaskExpression, RexType,
+    },
     read_rel::{NamedTable, ReadType},
     rel::RelType,
-    ProjectRel, ReadRel, Rel,
+    Expression, ProjectRel, ReadRel, Rel,
 };
-
-//TODO refactor to use Into or From
+//
+// pub fn to_substrait_rex(expr: &Expr) -> Result<Box<Expression>> {
+//     match expr {
+//         Expr::Column(col) => {
+//             Ok(Box::new(Expression {
+//                 rex_type: Some(RexType::Selection(Box::new(FieldReference {
+//                     reference_type: None,
+//                     root_type: None,
+//                 })))
+//             }))
+//         }
+//         _ => Err(DataFusionError::NotImplemented(
+//             "Unsupported logical plan expression".to_string(),
+//         )),
+//     }
+// }
 
 pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
     match plan {
         LogicalPlan::TableScan(scan) => {
+            let projection = scan.projection.as_ref().map(|p| {
+                p.iter()
+                    .map(|i| StructItem {
+                        field: *i as i32,
+                        child: None,
+                    })
+                    .collect()
+            });
+
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Read(Box::new(ReadRel {
-                    common: None,             //<RelCommon>,
-                    base_schema: None,        //<NamedStruct>,
-                    filter: None,             //<Box<Expression>>,
-                    projection: None,         //<MaskExpression>,
-                    advanced_extension: None, //<AdvancedExtension>,
+                    common: None,
+                    base_schema: None,
+                    filter: None,
+                    projection: Some(MaskExpression {
+                        select: Some(StructSelect {
+                            struct_items: projection.unwrap(),
+                        }),
+                        maintain_singular_struct: false,
+                    }),
+                    advanced_extension: None,
                     read_type: Some(ReadType::NamedTable(NamedTable {
                         names: vec![scan.table_name.clone()],
                         advanced_extension: None,
@@ -32,16 +64,14 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
                 }))),
             }))
         }
-        LogicalPlan::Projection(p) => {
-            Ok(Box::new(Rel {
-                rel_type: Some(RelType::Project(Box::new(ProjectRel {
-                    common: None,                                     //<RelCommon>,
-                    input: Some(to_substrait_rel(p.input.as_ref())?), //<Box<Rel>>,
-                    expressions: vec![],                              // Vec<Expression>,
-                    advanced_extension: None,                         //<AdvancedExtension>,
-                }))),
-            }))
-        }
+        LogicalPlan::Projection(p) => Ok(Box::new(Rel {
+            rel_type: Some(RelType::Project(Box::new(ProjectRel {
+                common: None,
+                input: Some(to_substrait_rel(p.input.as_ref())?),
+                expressions: vec![],
+                advanced_extension: None,
+            }))),
+        })),
         _ => Err(DataFusionError::NotImplemented(
             "Unsupported logical plan operator".to_string(),
         )),
@@ -56,14 +86,21 @@ pub fn from_substrait(proto: &Rel) -> Result<LogicalPlan> {
             schema: Arc::new(DFSchema::empty()),
             alias: None,
         })),
-        Some(RelType::Read(_read)) => Ok(LogicalPlan::TableScan(TableScan {
-            table_name: "".to_string(),
-            source: Arc::new(EmptyTable::new(SchemaRef::new(Schema::empty()))),
-            projection: None,
-            projected_schema: Arc::new(DFSchema::empty()),
-            filters: vec![],
-            limit: None,
-        })),
+        Some(RelType::Read(read)) => {
+            let projection = &read.projection.as_ref().map(|mask| match &mask.select {
+                Some(x) => x.struct_items.iter().map(|i| i.field as usize).collect(),
+                None => unimplemented!(),
+            });
+
+            Ok(LogicalPlan::TableScan(TableScan {
+                table_name: "".to_string(),
+                source: Arc::new(EmptyTable::new(SchemaRef::new(Schema::empty()))),
+                projection: projection.to_owned(),
+                projected_schema: Arc::new(DFSchema::empty()),
+                filters: vec![],
+                limit: None,
+            }))
+        }
         _ => Err(DataFusionError::NotImplemented(format!(
             "{:?}",
             proto.rel_type
