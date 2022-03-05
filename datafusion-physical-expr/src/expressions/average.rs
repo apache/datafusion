@@ -28,8 +28,8 @@ use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
-use datafusion_common::{DataFusionError, Result};
 use datafusion_common::ScalarValue;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
 use super::{format_state_name, sum};

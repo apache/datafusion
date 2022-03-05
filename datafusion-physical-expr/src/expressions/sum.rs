@@ -31,7 +31,7 @@ use arrow::{
     },
     datatypes::Field,
 };
-use datafusion_common::{ScalarValue, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use super::format_state_name;
