@@ -124,9 +124,14 @@ pub fn from_substrait_rel(rel: &Rel) -> Result<LogicalPlan> {
                                     //TODO remove unwrap
                                     let xx = &mask.select.as_ref().unwrap().struct_items;
                                     assert!(xx.len() == 1);
-                                    Ok(Expr::Column(Column::from_name(
-                                        input.schema().field(xx[0].field as usize).name(),
-                                    )))
+                                    Ok(Expr::Column(Column {
+                                        relation: Some("data".to_string()), // TODO remove hard-coded relation name
+                                        name: input
+                                            .schema()
+                                            .field(xx[0].field as usize)
+                                            .name()
+                                            .to_string(),
+                                    }))
                                 }
                                 _ => Err(DataFusionError::NotImplemented(
                                     "unsupported field ref type".to_string(),
@@ -165,7 +170,10 @@ pub fn from_substrait_rel(rel: &Rel) -> Result<LogicalPlan> {
             };
 
             Ok(LogicalPlan::TableScan(TableScan {
-                table_name: "".to_string(),
+                table_name: match &read.as_ref().read_type {
+                    Some(ReadType::NamedTable(nt)) => nt.names[0].to_owned(),
+                    _ => unimplemented!(),
+                },
                 source: Arc::new(EmptyTable::new(SchemaRef::new(schema.clone()))),
                 projection: projection.to_owned(),
                 projected_schema: Arc::new(DFSchema::try_from(schema)?),
