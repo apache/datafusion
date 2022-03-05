@@ -1,7 +1,7 @@
 # datafusion-substrait
 
-Experimental support for serializing DataFusion plans using substrait.
+Experimental support for serializing and deserializing DataFusion logical plans using [Substrait](https://substrait.io/).
 
-Status:
+## Status
 
-- [ ] Get one simple round-trip working for a `SELECT * FROM csv` query
+- [x] Get one simple round-trip working for a `SELECT * FROM csv` query
