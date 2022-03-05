@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::SchedulerServer;
+use crate::scheduler_server::SchedulerServer;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use ballista_core::BALLISTA_VERSION;
 use warp::Rejection;

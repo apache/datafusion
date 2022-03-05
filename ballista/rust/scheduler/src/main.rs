@@ -18,7 +18,7 @@
 //! Ballista Rust scheduler binary.
 
 use anyhow::{Context, Result};
-use ballista_scheduler::externalscaler::external_scaler_server::ExternalScalerServer;
+use ballista_scheduler::scheduler_server::externalscaler::external_scaler_server::ExternalScalerServer;
 use futures::future::{self, Either, TryFutureExt};
 use hyper::{server::conn::AddrStream, service::make_service_fn, Server};
 use std::convert::Infallible;
@@ -39,10 +39,11 @@ use ballista_scheduler::api::{get_routes, EitherBody, Error};
 use ballista_scheduler::state::EtcdClient;
 #[cfg(feature = "sled")]
 use ballista_scheduler::state::StandaloneClient;
-use ballista_scheduler::{
-    state::ConfigBackendClient, ConfigBackend, SchedulerEnv, SchedulerServer,
-    TaskScheduler,
+
+use ballista_scheduler::scheduler_server::{
+    SchedulerEnv, SchedulerServer, TaskScheduler,
 };
+use ballista_scheduler::state::{ConfigBackend, ConfigBackendClient};
 
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::BallistaCodec;
