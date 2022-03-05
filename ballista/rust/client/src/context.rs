@@ -75,7 +75,7 @@ impl BallistaContextState {
 
         log::info!("Running in local mode. Scheduler will be run in-proc");
 
-        let addr = ballista_scheduler::new_standalone_scheduler().await?;
+        let addr = ballista_scheduler::standalone::new_standalone_scheduler().await?;
 
         let scheduler = loop {
             match SchedulerGrpcClient::connect(format!(
