@@ -17,3 +17,5 @@
 # under the License.
 set -e
 
+SRC_DATANAME=G1_1e7_1e2_0_0 python3 datafusion/groupby-datafusion.py
+SRC_DATANAME=J1_1e7_NA_0_0 python3 datafusion/join-datafusion.py
