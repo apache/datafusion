@@ -502,7 +502,7 @@ mod tests {
 
         assert_eq!(part0[0].schema(), allparts[0].schema());
 
-        assert_eq!(allparts_count, 40);
+        assert_eq!(allparts_count, 80);
 
         Ok(())
     }

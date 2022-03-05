@@ -315,7 +315,7 @@ impl DataFrame for DataFrameImpl {
         )))
     }
 
-    async fn write_csv(&self, path: impl AsRef<str>) -> Result<()> {
+    async fn write_csv(&self, path: &str) -> Result<()> {
         let plan = self.create_physical_plan().await?;
         let state = self.ctx_state.lock().clone();
         let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));

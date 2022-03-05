@@ -718,7 +718,7 @@ impl ExecutionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        plan_to_csv(&self, plan, path).await
+        plan_to_csv(self, plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
