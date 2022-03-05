@@ -89,6 +89,6 @@ There is no formal document describing DataFusion's architecture yet, but the fo
 
 Please see [User Guide](https://arrow.apache.org/datafusion/) for more information about DataFusion.
 
-## Developer's guide
+## Contribution Guide
 
-Please see [Developers Guide](DEVELOPERS.md) for information about developing DataFusion.
+Please see [Contribution Guide](CONTRIBUTING.md) for information about contributing to DataFusion.

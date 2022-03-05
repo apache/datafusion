@@ -69,6 +69,6 @@ jobs:
             '{ballista,datafusion,datafusion-examples,docs,python}/**/*.md' \
             '!{ballista,datafusion,python}/CHANGELOG.md' \
             README.md \
-            DEVELOPERS.md \
+            CONTRIBUTING.md \
             'ballista/**/*.{ts,tsx}'
           git diff --exit-code
