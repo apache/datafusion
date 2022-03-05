@@ -7,3 +7,4 @@ edition = "2021"
 datafusion = "7.0"
 substrait = { path = "../substrait-rs" }
 tokio = "1.17"
+async-recursion = "1.0"

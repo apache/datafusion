@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field};
+use async_recursion::async_recursion;
+
+use datafusion::prelude::{CsvReadOptions, DataFrame, ExecutionContext};
 use datafusion::{
-    arrow::datatypes::{Schema, SchemaRef},
-    datasource::empty::EmptyTable,
+    arrow::datatypes::{DataType, Field, Schema},
     error::{DataFusionError, Result},
-    logical_plan::{plan::Projection, DFSchema, DFSchemaRef, Expr, LogicalPlan, TableScan},
+    logical_plan::{DFSchemaRef, Expr, LogicalPlan},
     prelude::Column,
 };
 
@@ -108,12 +109,16 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
 // pub fn from_substrait_rex(rex: &Expression) -> Result<Expr> {
 // }
 
-/// Convert Substrait Rel to DataFusion LogicalPlan
-pub fn from_substrait_rel(rel: &Rel) -> Result<LogicalPlan> {
+/// Convert Substrait Rel to DataFusion DataFrame
+#[async_recursion]
+pub async fn from_substrait_rel(
+    ctx: &mut ExecutionContext,
+    rel: &Rel,
+) -> Result<Arc<dyn DataFrame>> {
     match &rel.rel_type {
         Some(RelType::Project(p)) => {
-            let input = from_substrait_rel(p.input.as_ref().unwrap())?;
-            let z: Vec<Expr> = p
+            let input = from_substrait_rel(ctx, p.input.as_ref().unwrap()).await?;
+            let exprs: Vec<Expr> = p
                 .expressions
                 .iter()
                 .map(|e| {
@@ -125,7 +130,7 @@ pub fn from_substrait_rel(rel: &Rel) -> Result<LogicalPlan> {
                                     let xx = &mask.select.as_ref().unwrap().struct_items;
                                     assert!(xx.len() == 1);
                                     Ok(Expr::Column(Column {
-                                        relation: Some("data".to_string()), // TODO remove hard-coded relation name
+                                        relation: None,
                                         name: input
                                             .schema()
                                             .field(xx[0].field as usize)
@@ -145,19 +150,9 @@ pub fn from_substrait_rel(rel: &Rel) -> Result<LogicalPlan> {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            Ok(LogicalPlan::Projection(Projection {
-                expr: z,
-                input: Arc::new(input),
-                schema: Arc::new(DFSchema::empty()),
-                alias: None,
-            }))
+            input.select(exprs)
         }
         Some(RelType::Read(read)) => {
-            let projection = &read.projection.as_ref().map(|mask| match &mask.select {
-                Some(x) => x.struct_items.iter().map(|i| i.field as usize).collect(),
-                None => unimplemented!(),
-            });
-
             let schema = match &read.base_schema {
                 Some(named_struct) => Schema::new(
                     named_struct
@@ -169,17 +164,14 @@ pub fn from_substrait_rel(rel: &Rel) -> Result<LogicalPlan> {
                 _ => unimplemented!(),
             };
 
-            Ok(LogicalPlan::TableScan(TableScan {
-                table_name: match &read.as_ref().read_type {
-                    Some(ReadType::NamedTable(nt)) => nt.names[0].to_owned(),
-                    _ => unimplemented!(),
-                },
-                source: Arc::new(EmptyTable::new(SchemaRef::new(schema.clone()))),
-                projection: projection.to_owned(),
-                projected_schema: Arc::new(DFSchema::try_from(schema)?),
-                filters: vec![],
-                limit: None,
-            }))
+            let table_name = match &read.as_ref().read_type {
+                Some(ReadType::NamedTable(nt)) => nt.names[0].to_owned(),
+                _ => unimplemented!(),
+            };
+
+            //TODO assumes csv for now
+            let options = CsvReadOptions::new().has_header(true).schema(&schema);
+            ctx.read_csv(table_name, options).await
         }
         _ => Err(DataFusionError::NotImplemented(format!(
             "{:?}",
@@ -207,7 +199,9 @@ mod tests {
         let df = ctx.sql(sql).await?;
         let plan = df.to_logical_plan();
         let proto = to_substrait_rel(&plan)?;
-        let plan2 = from_substrait_rel(&proto)?;
+        let df = from_substrait_rel(&mut ctx, &proto).await?;
+        let plan2 = df.to_logical_plan();
+        let plan2 = ctx.optimize(&plan2)?;
         let plan1str = format!("{:?}", plan);
         let plan2str = format!("{:?}", plan2);
         assert_eq!(plan1str, plan2str);
