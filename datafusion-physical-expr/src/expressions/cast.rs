@@ -324,7 +324,6 @@ mod tests {
         let array = vec![Some(1), Some(2), Some(3), Some(4), Some(5), None];
         // decimal to i8
         let decimal_array = array
-            .clone()
             .iter()
             .collect::<DecimalArray>()
             .with_precision_and_scale(10, 0)?;
