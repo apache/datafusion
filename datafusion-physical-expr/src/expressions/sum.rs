@@ -374,9 +374,8 @@ impl Accumulator for SumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
-    use crate::physical_plan::expressions::col;
-    use crate::{error::Result, generic_test_op};
+    use crate::expressions::col;
+    use crate::generic_test_op;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
