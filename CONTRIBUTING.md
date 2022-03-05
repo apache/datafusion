@@ -17,6 +17,20 @@
   under the License.
 -->
 
+# Introduction
+
+We welcome and encourage contributions of all kinds, such as:
+
+1. Tickets with issue reports of feature requests
+2. Documentation improvements
+3. Code (PR or PR Review)
+
+In addition to submitting new PRs, we have a healthy tradition of community members helping review each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+
+You can find a curated
+[good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+list to help you get started.
+
 # Developer's guide
 
 This section describes how you can get started at developing DataFusion.

@@ -49,10 +49,18 @@ impl HashBuildProbeOrder {
 }
 
 fn should_swap_join_order(left: &dyn ExecutionPlan, right: &dyn ExecutionPlan) -> bool {
-    let left_rows = left.statistics().num_rows;
-    let right_rows = right.statistics().num_rows;
+    // Get the left and right table's total bytes
+    // If both the left and right tables contain total_byte_size statistics,
+    // use `total_byte_size` to determine `should_swap_join_order`, else use `num_rows`
+    let (left_size, right_size) = match (
+        left.statistics().total_byte_size,
+        right.statistics().total_byte_size,
+    ) {
+        (Some(l), Some(r)) => (Some(l), Some(r)),
+        _ => (left.statistics().num_rows, right.statistics().num_rows),
+    };
 
-    match (left_rows, right_rows) {
+    match (left_size, right_size) {
         (Some(l), Some(r)) => l > r,
         _ => false,
     }
@@ -168,7 +176,8 @@ mod tests {
     fn create_big_and_small() -> (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) {
         let big = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(100000),
+                num_rows: Some(10),
+                total_byte_size: Some(100000),
                 ..Default::default()
             },
             Schema::new(vec![Field::new("big_col", DataType::Int32, false)]),
@@ -176,7 +185,8 @@ mod tests {
 
         let small = Arc::new(StatisticsExec::new(
             Statistics {
-                num_rows: Some(10),
+                num_rows: Some(100000),
+                total_byte_size: Some(10),
                 ..Default::default()
             },
             Schema::new(vec![Field::new("small_col", DataType::Int32, false)]),
@@ -224,8 +234,11 @@ mod tests {
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
-        assert_eq!(swapped_join.left().statistics().num_rows, Some(10));
-        assert_eq!(swapped_join.right().statistics().num_rows, Some(100000));
+        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
+        assert_eq!(
+            swapped_join.right().statistics().total_byte_size,
+            Some(100000)
+        );
     }
 
     #[tokio::test]
@@ -254,8 +267,11 @@ mod tests {
             .downcast_ref::<HashJoinExec>()
             .expect("The type of the plan should not be changed");
 
-        assert_eq!(swapped_join.left().statistics().num_rows, Some(10));
-        assert_eq!(swapped_join.right().statistics().num_rows, Some(100000));
+        assert_eq!(swapped_join.left().statistics().total_byte_size, Some(10));
+        assert_eq!(
+            swapped_join.right().statistics().total_byte_size,
+            Some(100000)
+        );
     }
 
     #[tokio::test]
