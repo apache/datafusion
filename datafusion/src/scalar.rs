@@ -17,9 +17,7 @@
 
 //! ScalarValue reimported from datafusion-common
 
-pub use datafusion_common::{
-    ScalarType, ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
-};
+pub use datafusion_common::{ScalarType, ScalarValue};
 
 #[cfg(test)]
 mod tests {
