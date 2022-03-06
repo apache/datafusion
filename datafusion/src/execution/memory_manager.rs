@@ -340,6 +340,9 @@ impl MemoryManager {
             } else if current < min_per_rqt {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
                 // to spill instead spill self frequently with limited total mem
+                debug!(
+                    "Cannot acquire minimum amount of memory {}, waiting for others to spill ...",
+                    human_readable_size(min_per_rqt));
                 self.cv.wait(&mut rqt_current_used);
             } else {
                 granted = false;
