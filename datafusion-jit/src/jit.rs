@@ -42,8 +42,31 @@ pub struct JIT {
 }
 
 impl Default for JIT {
+    #[cfg(target_arch = "x86_64")]
     fn default() -> Self {
         let builder = JITBuilder::new(cranelift_module::default_libcall_names());
+        let module = JITModule::new(builder);
+        Self {
+            builder_context: FunctionBuilderContext::new(),
+            ctx: module.make_context(),
+            module,
+        }
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn default() -> Self {
+        let mut flag_builder = settings::builder();
+        // On at least AArch64, "colocated" calls use shorter-range relocations,
+        // which might not reach all definitions; we can't handle that here, so
+        // we require long-range relocation types.
+        flag_builder.set("use_colocated_libcalls", "false").unwrap();
+        flag_builder.set("is_pic", "false").unwrap();
+        let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
+            panic!("host machine is not supported: {}", msg);
+        });
+        let isa = isa_builder.finish(settings::Flags::new(flag_builder));
+        let builder =
+            JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         let module = JITModule::new(builder);
         Self {
             builder_context: FunctionBuilderContext::new(),
@@ -62,7 +85,13 @@ impl JIT {
     {
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
+
+        #[cfg(target_arch = "x86_64")]
         flag_builder.set("is_pic", "true").unwrap();
+
+        #[cfg(target_arch = "aarch64")]
+        flag_builder.set("is_pic", "false").unwrap();
+
         flag_builder.set("opt_level", "speed").unwrap();
         flag_builder.set("enable_simd", "true").unwrap();
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
