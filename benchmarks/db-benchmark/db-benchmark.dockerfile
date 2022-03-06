@@ -47,7 +47,7 @@ RUN git clone https://github.com/datafusion-contrib/datafusion-python \
 # Copy local arrow-datafusion
 COPY . arrow-datafusion
 
-# 1. datafusion-python that builds from datafusion version 7
+# 1. datafusion-python that builds from datafusion version referenced datafusion-python
 RUN cd datafusion-python \
     && maturin build --release \
     && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_aarch64.whl \
