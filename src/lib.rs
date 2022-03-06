@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 
-use datafusion::prelude::{CsvReadOptions, DataFrame, ExecutionContext};
+use datafusion::prelude::{DataFrame, ExecutionContext};
 use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema},
     error::{DataFusionError, Result},
     logical_plan::{DFSchemaRef, Expr, LogicalPlan},
     prelude::Column,
@@ -67,7 +66,7 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
                             .iter()
                             .map(|f| f.name().to_owned())
                             .collect(),
-                        r#struct: None, // TODO
+                        r#struct: None,
                     }),
                     filter: None,
                     projection: Some(MaskExpression {
@@ -105,10 +104,6 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
     }
 }
 
-/// Convert Substrait Rex to DataFusion Expr
-// pub fn from_substrait_rex(rex: &Expression) -> Result<Expr> {
-// }
-
 /// Convert Substrait Rel to DataFusion DataFrame
 #[async_recursion]
 pub async fn from_substrait_rel(
@@ -121,60 +116,44 @@ pub async fn from_substrait_rel(
             let exprs: Vec<Expr> = p
                 .expressions
                 .iter()
-                .map(|e| {
-                    match &e.rex_type {
-                        Some(RexType::Selection(field_ref)) => {
-                            match &field_ref.reference_type {
-                                Some(MaskedReference(mask)) => {
-                                    //TODO remove unwrap
-                                    let xx = &mask.select.as_ref().unwrap().struct_items;
-                                    assert!(xx.len() == 1);
-                                    Ok(Expr::Column(Column {
-                                        relation: None,
-                                        name: input
-                                            .schema()
-                                            .field(xx[0].field as usize)
-                                            .name()
-                                            .to_string(),
-                                    }))
-                                }
-                                _ => Err(DataFusionError::NotImplemented(
-                                    "unsupported field ref type".to_string(),
-                                )),
-                            }
-                        }
+                .map(|e| match &e.rex_type {
+                    Some(RexType::Selection(field_ref)) => match &field_ref.reference_type {
+                        Some(MaskedReference(mask)) => match &mask.select.as_ref() {
+                            Some(x) if x.struct_items.len() == 1 => Ok(Expr::Column(Column {
+                                relation: None,
+                                name: input
+                                    .schema()
+                                    .field(x.struct_items[0].field as usize)
+                                    .name()
+                                    .to_string(),
+                            })),
+                            _ => Err(DataFusionError::NotImplemented(
+                                "invalid field reference".to_string(),
+                            )),
+                        },
                         _ => Err(DataFusionError::NotImplemented(
-                            "unsupported rex_type in projection".to_string(),
+                            "unsupported field ref type".to_string(),
                         )),
-                    }
+                    },
+                    _ => Err(DataFusionError::NotImplemented(
+                        "unsupported rex_type in projection".to_string(),
+                    )),
                 })
                 .collect::<Result<Vec<_>>>()?;
 
             input.select(exprs)
         }
-        Some(RelType::Read(read)) => {
-            let schema = match &read.base_schema {
-                Some(named_struct) => Schema::new(
-                    named_struct
-                        .names
-                        .iter()
-                        .map(|n| Field::new(n, DataType::Utf8, false))
-                        .collect(),
-                ),
-                _ => unimplemented!(),
-            };
-
-            let table_name = match &read.as_ref().read_type {
-                Some(ReadType::NamedTable(nt)) => nt.names[0].to_owned(),
-                _ => unimplemented!(),
-            };
-
-            //TODO assumes csv for now
-            let options = CsvReadOptions::new().has_header(true).schema(&schema);
-            ctx.read_csv(table_name, options).await
-        }
+        Some(RelType::Read(read)) => match &read.as_ref().read_type {
+            Some(ReadType::NamedTable(nt)) => {
+                let table_name: String = nt.names[0].clone();
+                ctx.table(&*table_name)
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                "Only NamedTable reads are supported".to_string(),
+            )),
+        },
         _ => Err(DataFusionError::NotImplemented(format!(
-            "{:?}",
+            "Unsupported RelType: {:?}",
             rel.rel_type
         ))),
     }
