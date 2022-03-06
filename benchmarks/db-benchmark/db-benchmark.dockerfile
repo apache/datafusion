@@ -61,7 +61,3 @@ WORKDIR /db-benchmark
 RUN ls && ls -al data/
 
 ENTRYPOINT ./run-bench.sh
-
-
-
-
