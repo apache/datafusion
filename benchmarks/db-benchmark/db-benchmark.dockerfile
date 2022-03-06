@@ -41,13 +41,27 @@ RUN git clone https://github.com/datafusion-contrib/datafusion-python \
     && cd datafusion-python && git reset --hard 368b50ed9662d5e93c70b539f94cceace685265e \
     && python3 -m pip install pip \
     && python3 -m pip install pandas \
-    && python3 -m pip install -r requirements.txt \ 
-    && maturin build --release \
-    && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_aarch64.whl \
+    && python3 -m pip install -r requirements.txt \
     && cd ..
 
 # Copy local arrow-datafusion
 COPY . arrow-datafusion
+
+# 1. datafusion-python that builds from datafusion version 7
+RUN cd datafusion-python \
+    && maturin build --release \
+    && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_aarch64.whl \
+    && cd ..
+
+# 2. datafusion-python that builds from local datafusion.  use this when making local changes to datafusion.
+# Currently, as of March 5th 2022, this done not build (i think) because datafusion is being split into multiple crates
+# and datafusion-python has not yet been updated to reflect this.
+# RUN cd datafusion-python \
+#     && sed -i '/datafusion =/c\datafusion = { path = "../arrow-datafusion/datafusion", features = ["pyarrow"] }' Cargo.toml \
+#     && sed -i '/fuzz-utils/d' ../arrow-datafusion/datafusion/Cargo.toml \
+#     && maturin build --release \
+#     && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_aarch64.whl \
+#     && cd ..
 
 # Make datafusion directory in db-benchmark
 RUN mkdir db-benchmark/datafusion \
