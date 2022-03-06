@@ -5,6 +5,6 @@ edition = "2021"
 
 [dependencies]
 datafusion = "7.0"
-substrait = { path = "../substrait-rs" }
+substrait = { git = "https://github.com/andygrove/substrait", branch = "rust-bindings"}
 tokio = "1.17"
 async-recursion = "1.0"
