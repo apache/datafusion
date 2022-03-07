@@ -958,6 +958,11 @@ mod roundtrip_tests {
         },
         scalar::ScalarValue,
     };
+    use datafusion::datasource::object_store::local::LocalFileSystem;
+    use datafusion::datasource::PartitionedFile;
+    
+    use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
+    use datafusion::physical_plan::Statistics;
 
     use super::super::super::error::Result;
     use super::super::protobuf;
@@ -1127,5 +1132,26 @@ mod roundtrip_tests {
             "".to_string(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 4)),
         )?))
+    }
+
+    #[test]
+    fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
+        let scan_config = FileScanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_schema: Arc::new(Schema::new(vec![Field::new("col",DataType::Utf8,false)])),
+            file_groups: vec![vec![PartitionedFile::new("/path/to/file.parquet".to_string(), 1024)]],
+            statistics: Statistics {
+                num_rows: Some(100),
+                total_byte_size: Some(1024),
+                column_statistics: None,
+                is_exact: false
+            },
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![]
+        };
+
+        let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
+        roundtrip_test(Arc::new(ParquetExec::new(scan_config, Some(predicate))))
     }
 }
