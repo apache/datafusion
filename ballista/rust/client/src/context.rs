@@ -542,4 +542,24 @@ mod tests {
         let results = df.collect().await.unwrap();
         pretty::print_batches(&results);
     }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_empty_exec_with_one_row() {
+        use crate::context::BallistaContext;
+        use ballista_core::config::{
+            BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+        };
+
+        let config = BallistaConfigBuilder::default()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
+            .build()
+            .unwrap();
+        let context = BallistaContext::standalone(&config, 1).await.unwrap();
+
+        let sql = "select EXTRACT(year FROM to_timestamp('2020-09-08T12:13:14+00:00'));";
+
+        let df = context.sql(sql).await.unwrap();
+        assert!(!df.collect().await.unwrap().is_empty());
+    }
 }
