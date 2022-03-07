@@ -20,6 +20,7 @@
 use crate::error::Result;
 use crate::scalar::ScalarValue;
 use crate::variable::VarProvider;
+use arrow::datatypes::DataType;
 
 /// System variable
 #[derive(Default)]
@@ -37,6 +38,10 @@ impl VarProvider for SystemVar {
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue> {
         let s = format!("{}-{}", "system-var", var_names.concat());
         Ok(ScalarValue::Utf8(Some(s)))
+    }
+
+    fn get_type(&self, _: &[String]) -> Option<DataType> {
+        Some(DataType::Utf8)
     }
 }
 
@@ -56,5 +61,9 @@ impl VarProvider for UserDefinedVar {
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue> {
         let s = format!("{}-{}", "user-defined-var", var_names.concat());
         Ok(ScalarValue::Utf8(Some(s)))
+    }
+
+    fn get_type(&self, _: &[String]) -> Option<DataType> {
+        Some(DataType::Utf8)
     }
 }

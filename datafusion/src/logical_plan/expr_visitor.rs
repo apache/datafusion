@@ -104,7 +104,7 @@ impl ExprVisitable for Expr {
             | Expr::Sort { expr, .. }
             | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
             Expr::Column(_)
-            | Expr::ScalarVariable(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
             | Expr::Wildcard => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {

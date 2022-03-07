@@ -97,7 +97,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             }
         }
         Expr::Alias(_, name) => Ok(name.clone()),
-        Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
+        Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {
             let left = create_physical_name(left, false)?;
@@ -883,7 +883,7 @@ pub fn create_physical_expr(
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-        Expr::ScalarVariable(variable_names) => {
+        Expr::ScalarVariable(_, variable_names) => {
             if &variable_names[0][0..2] == "@@" {
                 match execution_props.get_var_provider(VarType::System) {
                     Some(provider) => {
