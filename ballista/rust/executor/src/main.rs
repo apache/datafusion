@@ -119,8 +119,7 @@ async fn main() -> Result<()> {
     let cleanup_ttl = opt.executor_cleanup_ttl;
 
     if opt.executor_cleanup_enable {
-        let interval = opt.executor_cleanup_interval;
-        let mut interval_time = time::interval(Core_Duration::from_secs(interval));
+        let mut interval_time = time::interval(Core_Duration::from_secs(opt.executor_cleanup_interval));
         tokio::spawn(async move {
             loop {
                 interval_time.tick().await;
