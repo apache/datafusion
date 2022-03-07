@@ -193,7 +193,7 @@ async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
                 }
             }
         } else {
-            error!("can not get meta from file{:?}", child)
+            error!("Can not get metadata from file: {:?}", child)
         }
     }
     info!(
