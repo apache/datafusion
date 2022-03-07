@@ -197,7 +197,7 @@ async fn clean_shuffle_data_loop(work_dir: &str, seconds: i64) -> Result<()> {
         }
     }
     info!(
-        "Executor work_dir {:?} not modified in {:?} seconds will be deleted ",
+        "The work_dir {:?} that have not been modified for {:?} seconds will be deleted",
         &to_deleted, seconds
     );
     for del in to_deleted {
