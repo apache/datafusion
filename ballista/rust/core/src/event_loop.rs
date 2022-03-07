@@ -70,20 +70,24 @@ impl<E: Send + 'static> EventLoop<E> {
         tokio::spawn(async move {
             info!("Starting the event loop {}", name);
             while !stopped.load(Ordering::SeqCst) {
-                let event = rx_event.recv().await.unwrap();
-                match action.on_receive(event).await {
-                    Ok(Some(event)) => {
-                        if let Err(e) = tx_event.send(event).await {
-                            let msg = format!("Fail to send event due to {}", e);
-                            error!("{}", msg);
-                            action.on_error(BallistaError::General(msg));
+                if let Some(event) = rx_event.recv().await {
+                    match action.on_receive(event).await {
+                        Ok(Some(event)) => {
+                            if let Err(e) = tx_event.send(event).await {
+                                let msg = format!("Fail to send event due to {}", e);
+                                error!("{}", msg);
+                                action.on_error(BallistaError::General(msg));
+                            }
                         }
+                        Err(e) => {
+                            error!("Fail to process event due to {}", e);
+                            action.on_error(e);
+                        }
+                        _ => {}
                     }
-                    Err(e) => {
-                        error!("Fail to process event due to {}", e);
-                        action.on_error(e);
-                    }
-                    _ => {}
+                } else {
+                    info!("Event Channel closed, shutting down");
+                    break;
                 }
             }
             info!("The event loop {} has been stopped", name);
