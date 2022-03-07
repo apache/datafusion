@@ -57,7 +57,6 @@ use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion::prelude::ExecutionContext;
-use futures::StreamExt;
 use prost::bytes::BufMut;
 use prost::Message;
 use std::convert::TryInto;
@@ -938,6 +937,8 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
+    use datafusion::datasource::object_store::local::LocalFileSystem;
+    use datafusion::datasource::PartitionedFile;
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::prelude::ExecutionContext;
     use datafusion::{
@@ -958,9 +959,7 @@ mod roundtrip_tests {
         },
         scalar::ScalarValue,
     };
-    use datafusion::datasource::object_store::local::LocalFileSystem;
-    use datafusion::datasource::PartitionedFile;
-    
+
     use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use datafusion::physical_plan::Statistics;
 
@@ -1138,17 +1137,24 @@ mod roundtrip_tests {
     fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
         let scan_config = FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
-            file_schema: Arc::new(Schema::new(vec![Field::new("col",DataType::Utf8,false)])),
-            file_groups: vec![vec![PartitionedFile::new("/path/to/file.parquet".to_string(), 1024)]],
+            file_schema: Arc::new(Schema::new(vec![Field::new(
+                "col",
+                DataType::Utf8,
+                false,
+            )])),
+            file_groups: vec![vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )]],
             statistics: Statistics {
                 num_rows: Some(100),
                 total_byte_size: Some(1024),
                 column_statistics: None,
-                is_exact: false
+                is_exact: false,
             },
             projection: None,
             limit: None,
-            table_partition_cols: vec![]
+            table_partition_cols: vec![],
         };
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
