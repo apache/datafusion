@@ -119,11 +119,14 @@ async fn main() -> Result<()> {
     let cleanup_ttl = opt.executor_cleanup_ttl;
 
     if opt.executor_cleanup_enable {
-        let mut interval_time = time::interval(Core_Duration::from_secs(opt.executor_cleanup_interval));
+        let mut interval_time =
+            time::interval(Core_Duration::from_secs(opt.executor_cleanup_interval));
         tokio::spawn(async move {
             loop {
                 interval_time.tick().await;
-                if let Err(e) = clean_shuffle_data_loop(&work_dir, cleanup_ttl).await {
+                if let Err(e) =
+                    clean_shuffle_data_loop(&work_dir, cleanup_ttl as i64).await
+                {
                     error!("Ballista executor fail to clean_shuffle_data {:?}", e)
                 }
             }
