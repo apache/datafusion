@@ -183,7 +183,7 @@ mod tests {
     fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(false, schema.clone());
-        let empty_with_row = EmptyExec::new(true, schema.clone());
+        let empty_with_row = EmptyExec::new(true, schema);
 
         let empty2 = empty.with_new_children(vec![])?;
         assert_eq!(empty.schema(), empty2.schema());
