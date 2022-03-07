@@ -27,15 +27,13 @@ use ballista_core::error::Result;
 use ballista_core::event_loop::EventLoop;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 
+use crate::scheduler_server::event::{QueryStageSchedulerEvent, SchedulerServerEvent};
+use ballista_core::serde::protobuf::TaskStatus;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::prelude::{SessionConfig, SessionContext};
 
-use crate::scheduler_server::event_loop::{
-    SchedulerServerEvent, SchedulerServerEventAction,
-};
-use crate::scheduler_server::query_stage_scheduler::{
-    QueryStageScheduler, QueryStageSchedulerEvent,
-};
+use crate::scheduler_server::event_loop::SchedulerServerEventAction;
+use crate::scheduler_server::query_stage_scheduler::QueryStageScheduler;
 use crate::state::backend::StateBackendClient;
 use crate::state::SchedulerState;
 
@@ -45,6 +43,7 @@ pub mod externalscaler {
     include!(concat!(env!("OUT_DIR"), "/externalscaler.rs"));
 }
 
+pub mod event;
 mod event_loop;
 mod external_scaler;
 mod grpc;
@@ -152,7 +151,29 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         Ok(())
     }
 
-    async fn post_event(&self, event: QueryStageSchedulerEvent) -> Result<()> {
+    pub(crate) async fn update_task_status(
+        &self,
+        tasks_status: Vec<TaskStatus>,
+    ) -> Result<()> {
+        let num_tasks_status = tasks_status.len() as u32;
+        let stage_events = self.state.stage_manager.update_tasks_status(tasks_status);
+        if stage_events.is_empty() {
+            if let Some(event_loop) = self.event_loop.as_ref() {
+                event_loop
+                    .get_sender()?
+                    .post_event(SchedulerServerEvent::ReviveOffers(num_tasks_status))
+                    .await?;
+            }
+        } else {
+            for stage_event in stage_events {
+                self.post_stage_event(stage_event).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn post_stage_event(&self, event: QueryStageSchedulerEvent) -> Result<()> {
         self.query_stage_event_loop
             .get_sender()?
             .post_event(event)

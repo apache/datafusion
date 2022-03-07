@@ -15,68 +15,119 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::state::stage_manager::StageKey;
 use crate::state::SchedulerState;
 use async_trait::async_trait;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
-use ballista_core::serde::protobuf::TaskDefinition;
+use ballista_core::serde::protobuf::{
+    job_status, task_status, FailedJob, RunningTask, TaskDefinition, TaskStatus,
+};
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::scheduler::ExecutorData;
+use ballista_core::serde::scheduler::{ExecutorData, PartitionId};
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
-use log::{error, info};
-use tonic::Status;
+use log::{debug, info};
 
 #[async_trait]
 pub trait TaskScheduler {
-    async fn fetch_tasks(
+    // For each round, it will fetch tasks from one stage
+    async fn fetch_schedulable_tasks(
         &self,
         available_executors: &mut [ExecutorData],
-        job_id: &str,
+        n_round: u32,
     ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError>;
+}
+
+pub trait StageScheduler {
+    fn fetch_schedulable_stage<F>(&self, cond: F) -> Option<StageKey>
+    where
+        F: Fn(&StageKey) -> bool;
 }
 
 #[async_trait]
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
     for SchedulerState<T, U>
 {
-    async fn fetch_tasks(
+    async fn fetch_schedulable_tasks(
         &self,
         available_executors: &mut [ExecutorData],
-        job_id: &str,
+        n_round: u32,
     ) -> Result<(Vec<Vec<TaskDefinition>>, usize), BallistaError> {
         let mut ret: Vec<Vec<TaskDefinition>> =
             Vec::with_capacity(available_executors.len());
-        for _idx in 0..available_executors.len() {
+        let mut max_task_num = 0u32;
+        for executor in available_executors.iter() {
             ret.push(Vec::new());
+            max_task_num += executor.available_task_slots;
         }
-        let mut num_tasks = 0;
-        loop {
-            info!("Go inside fetching task loop");
-            let mut has_tasks = true;
-            for (idx, executor) in available_executors.iter_mut().enumerate() {
-                if executor.available_task_slots == 0 {
-                    break;
-                }
-                let plan = self
-                    .assign_next_schedulable_job_task(&executor.executor_id, job_id)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Error finding next assignable task: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    })?;
-                if let Some((task, _plan)) = &plan {
-                    let task_id = task.task_id.as_ref().unwrap();
-                    info!(
-                        "Sending new task to {}: {}/{}/{}",
-                        executor.executor_id,
-                        task_id.job_id,
-                        task_id.stage_id,
-                        task_id.partition_id
-                    );
-                }
-                match plan {
-                    Some((status, plan)) => {
+
+        let mut tasks_status = vec![];
+        let mut has_resources = true;
+        for i in 0..n_round {
+            if !has_resources {
+                break;
+            }
+            let mut num_tasks = 0;
+            // For each round, it will fetch tasks from one stage
+            if let Some((job_id, stage_id, tasks)) =
+                self.stage_manager.fetch_pending_tasks(
+                    max_task_num as usize - tasks_status.len(),
+                    |stage_key| {
+                        // Don't scheduler stages for jobs with error status
+                        if let Some(job_meta) = self.get_job_metadata(&stage_key.0) {
+                            if !matches!(
+                                &job_meta.status,
+                                Some(job_status::Status::Failed(FailedJob { error: _ }))
+                            ) {
+                                true
+                            } else {
+                                info!("Stage {}/{} not to be scheduled due to its job failed", stage_key.0, stage_key.1);
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    },
+                )
+            {
+                let plan =
+                    self.get_stage_plan(&job_id, stage_id as usize)
+                        .ok_or_else(|| {
+                            BallistaError::General(format!(
+                                "Fail to find execution plan for stage {}/{}",
+                                job_id, stage_id
+                            ))
+                        })?;
+                loop {
+                    debug!("Go inside fetching task loop for stage {}/{}", job_id, stage_id);
+
+                    let mut has_tasks = true;
+                    for (idx, executor) in available_executors.iter_mut().enumerate() {
+                        if executor.available_task_slots == 0 {
+                            has_resources = false;
+                            break;
+                        }
+
+                        if num_tasks >= tasks.len() {
+                            has_tasks = false;
+                            break;
+                        }
+
+                        let task_id = PartitionId {
+                            job_id: job_id.clone(),
+                            stage_id: stage_id as usize,
+                            partition_id: tasks[num_tasks] as usize,
+                        };
+
+                        let task_id = Some(task_id.into());
+                        let running_task = TaskStatus {
+                            task_id: task_id.clone(),
+                            status: Some(task_status::Status::Running(RunningTask {
+                                executor_id: executor.executor_id.to_owned(),
+                            })),
+                        };
+                        tasks_status.push(running_task);
+
                         let plan_clone = plan.clone();
                         let output_partitioning = if let Some(shuffle_writer) =
                             plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
@@ -91,12 +142,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
 
                         let mut buf: Vec<u8> = vec![];
                         U::try_from_physical_plan(
-                            plan,
+                            plan.clone(),
                             self.get_codec().physical_extension_codec(),
                         )
                         .and_then(|m| m.try_encode(&mut buf))
                         .map_err(|e| {
-                            Status::internal(format!(
+                            tonic::Status::internal(format!(
                                 "error serializing execution plan: {:?}",
                                 e
                             ))
@@ -104,31 +155,38 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
 
                         ret[idx].push(TaskDefinition {
                             plan: buf,
-                            task_id: status.task_id,
+                            task_id,
                             output_partitioning: hash_partitioning_to_proto(
                                 output_partitioning,
                             )
-                            .map_err(|_| Status::internal("TBD".to_string()))?,
+                            .map_err(|_| tonic::Status::internal("TBD".to_string()))?,
                         });
                         executor.available_task_slots -= 1;
                         num_tasks += 1;
                     }
-                    _ => {
-                        // Indicate there's no more tasks to be scheduled
-                        has_tasks = false;
+                    if !has_tasks {
+                        break;
+                    }
+                    if !has_resources {
                         break;
                     }
                 }
             }
-            if !has_tasks {
-                break;
-            }
-            let has_executors =
-                available_executors.get(0).unwrap().available_task_slots > 0;
-            if !has_executors {
+            if !has_resources {
+                info!(
+                    "Not enough resource for task running. Stopped at round {}",
+                    i
+                );
                 break;
             }
         }
-        Ok((ret, num_tasks))
+
+        let total_task_num = tasks_status.len();
+        info!("{} tasks to be scheduled", total_task_num);
+
+        // No need to deal with the stage event, since the task status is changing from pending to running
+        self.stage_manager.update_tasks_status(tasks_status);
+
+        Ok((ret, total_task_num))
     }
 }
