@@ -40,5 +40,5 @@ datafusion-common = { path = "../datafusion-common", version = "7.0.0", features
 cranelift = "0.81.1"
 cranelift-module = "0.81.1"
 cranelift-jit = "0.81.1"
-cranelift-native = "0.81.1"
+cranelift-native = "0.82.0"
 parking_lot = "0.12"
