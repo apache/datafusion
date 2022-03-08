@@ -122,8 +122,8 @@ impl FileFormat for ParquetFormat {
 }
 
 fn summarize_min_max(
-    max_values: &mut Vec<Option<MaxAccumulator>>,
-    min_values: &mut Vec<Option<MinAccumulator>>,
+    max_values: &mut [Option<MaxAccumulator>],
+    min_values: &mut [Option<MinAccumulator>],
     fields: &[Field],
     i: usize,
     stat: &ParquetStatistics,

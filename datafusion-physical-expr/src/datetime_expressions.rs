@@ -351,6 +351,8 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arr = match date_part.to_lowercase().as_str() {
         "hour" => extract_date_part!(array, temporal::hour),
         "year" => extract_date_part!(array, temporal::year),
+        "minute" => extract_date_part!(array, temporal::minute),
+        "second" => extract_date_part!(array, temporal::second),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{}' not supported",
             date_part

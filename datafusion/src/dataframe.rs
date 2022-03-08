@@ -405,4 +405,7 @@ pub trait DataFrame: Send + Sync {
     /// # }
     /// ```
     fn except(&self, dataframe: Arc<dyn DataFrame>) -> Result<Arc<dyn DataFrame>>;
+
+    /// Write a `DataFrame` to a CSV file.
+    async fn write_csv(&self, path: &str) -> Result<()>;
 }

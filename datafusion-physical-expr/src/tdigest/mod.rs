@@ -357,7 +357,7 @@ impl TDigest {
     }
 
     fn external_merge(
-        centroids: &mut Vec<Centroid>,
+        centroids: &mut [Centroid],
         first: usize,
         middle: usize,
         last: usize,

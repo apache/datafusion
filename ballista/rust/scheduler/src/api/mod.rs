@@ -12,7 +12,7 @@
 
 mod handlers;
 
-use crate::SchedulerServer;
+use crate::scheduler_server::SchedulerServer;
 use anyhow::Result;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use std::{

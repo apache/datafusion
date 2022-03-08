@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tonic::transport::Server;
 
-use crate::{state::StandaloneClient, SchedulerServer};
+use crate::{scheduler_server::SchedulerServer, state::StandaloneClient};
 
 pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;

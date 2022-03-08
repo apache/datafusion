@@ -73,9 +73,10 @@ We will send a summary of all sync ups to the dev@arrow.apache.org mailing list.
 ## Contributing
 
 Our source code is hosted on
-[GitHub](https://github.com/apache/arrow-datafusion). For developers new to
-the project, we have curated a
-[good-first-issue](https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+[GitHub](https://github.com/apache/arrow-datafusion). More information on contributing is in
+the [Contribution Guide](https://github.com/apache/arrow-datafusion/blob/master/CONTRIBUTING.md)
+, and we have curated a [good-first-issue]
+(https://github.com/apache/arrow-datafusion/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 list to help you get started. You can find datafusion's major designs in docs/source/specification.
 
 We use GitHub issues for maintaining a queue of development work and as the

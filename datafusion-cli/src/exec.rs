@@ -72,6 +72,21 @@ pub async fn exec_from_lines(
     }
 }
 
+pub async fn exec_from_files(
+    files: Vec<String>,
+    ctx: &mut Context,
+    print_options: &PrintOptions,
+) {
+    let files = files
+        .into_iter()
+        .map(|file_path| File::open(file_path).unwrap())
+        .collect::<Vec<_>>();
+    for file in files {
+        let mut reader = BufReader::new(file);
+        exec_from_lines(ctx, &mut reader, print_options).await;
+    }
+}
+
 /// run and execute SQL statements and commands against a context with the given print options
 pub async fn exec_from_repl(ctx: &mut Context, print_options: &mut PrintOptions) {
     let mut rl = Editor::<CliHelper>::new();

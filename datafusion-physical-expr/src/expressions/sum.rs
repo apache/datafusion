@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -31,8 +31,7 @@ use arrow::{
     },
     datatypes::Field,
 };
-use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
 use super::format_state_name;
@@ -63,7 +62,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Decimal(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+10), s)
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 10);
+            let new_precision = DECIMAL_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal(new_precision, *scale))
         }
         other => Err(DataFusionError::Plan(format!(
@@ -377,7 +376,6 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::generic_test_op;
-    use arrow::array::DecimalBuilder;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
@@ -419,20 +417,22 @@ mod tests {
         );
 
         // test sum batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
 
         generic_test_op!(
             array,
@@ -452,28 +452,22 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(123), 10, 2), result);
 
         // test with batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 35, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(35, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(35, 0),
@@ -492,20 +486,16 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(None, 10, 2), result);
 
         // test with batch
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(6)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),

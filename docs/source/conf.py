@@ -36,7 +36,7 @@ import datafusion
 # -- Project information -----------------------------------------------------
 
 project = 'Arrow Datafusion'
-copyright = '2021, Apache Software Foundation'
+copyright = '2022, Apache Software Foundation'
 author = 'Arrow Datafusion Authors'
 
 

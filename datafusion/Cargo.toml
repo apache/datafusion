@@ -31,7 +31,7 @@ include = [
     "Cargo.toml",
 ]
 edition = "2021"
-rust-version = "1.58"
+rust-version = "1.59"
 
 [lib]
 name = "datafusion"
