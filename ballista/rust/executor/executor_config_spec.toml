@@ -78,3 +78,21 @@ name = "task_scheduling_policy"
 type = "ballista_core::config::TaskSchedulingPolicy"
 doc = "The task scheduing policy for the scheduler, see TaskSchedulingPolicy::variants() for options. Default: PullStaged"
 default = "ballista_core::config::TaskSchedulingPolicy::PullStaged"
+
+[[param]]
+name = "executor_cleanup_enable"
+type = "bool"
+doc = "Enable periodic cleanup of work_dir directories."
+default = "false"
+
+[[param]]
+name = "executor_cleanup_interval"
+type = "u64"
+doc = "Controls the interval in seconds , which the worker cleans up old job dirs on the local machine."
+default = "1800"
+
+[[param]]
+name = "executor_cleanup_ttl"
+type = "u64"
+doc = "The number of seconds to retain job directories on each worker 604800 (7 days, 7 * 24 * 3600), In other words, after job done, how long the resulting data is retained"
+default = "604800"
