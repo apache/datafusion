@@ -19,10 +19,8 @@ fn main() -> Result<(), String> {
     // for use in docker build where file changes can be wonky
     println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
 
-    println!("cargo:rerun-if-changed=proto/ballista.proto");
     println!("cargo:rerun-if-changed=proto/datafusion.proto");
     tonic_build::configure()
-        .extern_path(".datafusion", "::datafusion_proto::protobuf")
-        .compile(&["proto/ballista.proto"], &["proto"])
+        .compile(&["proto/datafusion.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))
 }

@@ -24,6 +24,7 @@ members = [
     "datafusion-physical-expr",
     "datafusion-cli",
     "datafusion-examples",
+    "datafusion-proto",
     "benchmarks",
     "ballista/rust/client",
     "ballista/rust/core",

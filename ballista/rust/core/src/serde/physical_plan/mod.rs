@@ -298,7 +298,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         match expr_type {
                             ExprType::AggregateExpr(agg_node) => {
                                 let aggr_function =
-                                    protobuf::AggregateFunction::from_i32(
+                                    datafusion_proto::protobuf::AggregateFunction::from_i32(
                                         agg_node.aggr_function,
                                     )
                                         .ok_or_else(
