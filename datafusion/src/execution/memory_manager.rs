@@ -20,12 +20,13 @@
 use crate::error::{DataFusionError, Result};
 use async_trait::async_trait;
 use hashbrown::HashSet;
-use log::debug;
+use log::{debug, warn};
 use parking_lot::{Condvar, Mutex};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 static CONSUMER_ID: AtomicUsize = AtomicUsize::new(0);
 
@@ -340,7 +341,15 @@ impl MemoryManager {
             } else if current < min_per_rqt {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
                 // to spill instead spill self frequently with limited total mem
+                debug!(
+                    "Cannot acquire minimum amount of memory {} on memory manager {}, waiting for others to spill ...",
+                    human_readable_size(min_per_rqt), self);
+                let now = Instant::now();
                 self.cv.wait(&mut rqt_current_used);
+                let elapsed = now.elapsed();
+                if elapsed > Duration::from_secs(10) {
+                    warn!("Elapsed on waiting for spilling: {:.2?}", elapsed);
+                }
             } else {
                 granted = false;
                 break;
