@@ -243,7 +243,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     Some(cte.alias.name.value.clone()),
                     &mut ctes.clone(),
                 )?;
-                ctes.insert(cte.alias.name.value.clone(), logical_plan);
+                ctes.insert(cte.alias.name.value, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(set_expr, alias, ctes)?;
@@ -436,7 +436,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut joins = t.joins.into_iter();
                 let mut left =
                     self.parse_relation_join(left, joins.next().unwrap(), ctes)?;
-                while let Some(join) = joins.next() {
+                for join in joins {
                     left = self.parse_relation_join(left, join, ctes)?;
                 }
                 Ok(left)
@@ -704,7 +704,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .iter()
                             .zip(columns_alias.iter())
                             .map(|(field, ident)| col(field.name()).alias(&ident.value)),
-                        Some(alias.clone().name.value),
+                        Some(alias.name.value),
                     )?
                     .build()?)
             }
@@ -849,10 +849,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         // process `from` clause
         let plans = self.plan_from_tables(select.from, ctes)?;
-        let empty_from = match plans.first() {
-            Some(LogicalPlan::EmptyRelation(_)) => true,
-            _ => false,
-        };
+        let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
 
         // process `where` clause
         let plan = self.plan_selection(select.selection, plans)?;
