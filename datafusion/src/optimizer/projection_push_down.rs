@@ -185,12 +185,12 @@ fn optimize_plan(
                 // no need for an expression at all
                 Ok(new_input)
             } else {
+                let metadata = new_input.schema().metadata().clone();
                 Ok(LogicalPlan::Projection(Projection {
                     expr: new_expr,
                     input: Arc::new(new_input),
                     schema: DFSchemaRef::new(DFSchema::new_with_metadata(
-                        new_fields,
-                        new_input.schema().metadata().clone(),
+                        new_fields, metadata,
                     )?),
                     alias: alias.clone(),
                 }))

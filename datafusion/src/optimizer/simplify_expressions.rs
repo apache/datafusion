@@ -729,6 +729,7 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int32Array};
