@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
+use datafusion::arrow::array::{UInt64Array, UInt8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
@@ -56,19 +56,13 @@ fn create_memtable() -> Result<MemTable> {
 }
 
 fn create_record_batch() -> Result<RecordBatch> {
-    let mut id_array = UInt8Builder::new(1);
-    let mut account_array = UInt64Builder::new(1);
-
-    id_array.append_value(1)?;
-    account_array.append_value(9000)?;
+    let id_array = UInt8Array::from(vec![1]);
+    let account_array = UInt64Array::from(vec![9000]);
 
     Result::Ok(
         RecordBatch::try_new(
             get_schema(),
-            vec![
-                Arc::new(id_array.finish()),
-                Arc::new(account_array.finish()),
-            ],
+            vec![Arc::new(id_array), Arc::new(account_array)],
         )
         .unwrap(),
     )
