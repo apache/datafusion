@@ -35,10 +35,12 @@ use crate::{
     dataframe::*,
     physical_plan::{collect, collect_partitioned},
 };
+use parquet::file::properties::WriterProperties;
 
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
+use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
@@ -312,6 +314,24 @@ impl DataFrame for DataFrameImpl {
             self.ctx_state.clone(),
             &LogicalPlanBuilder::except(left_plan, right_plan, true)?,
         )))
+    }
+
+    async fn write_csv(&self, path: &str) -> Result<()> {
+        let plan = self.create_physical_plan().await?;
+        let state = self.ctx_state.lock().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        plan_to_csv(&ctx, plan, path).await
+    }
+
+    async fn write_parquet(
+        &self,
+        path: &str,
+        writer_properties: Option<WriterProperties>,
+    ) -> Result<()> {
+        let plan = self.create_physical_plan().await?;
+        let state = self.ctx_state.lock().clone();
+        let ctx = ExecutionContext::from(Arc::new(Mutex::new(state)));
+        plan_to_parquet(&ctx, plan, path, writer_properties).await
     }
 }
 

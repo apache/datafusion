@@ -26,6 +26,7 @@ use arrow::{
         Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, TimeUnit,
         TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
         TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+        DECIMAL_MAX_PRECISION,
     },
 };
 use ordered_float::OrderedFloat;
@@ -33,11 +34,6 @@ use std::cmp::Ordering;
 use std::convert::{Infallible, TryInto};
 use std::str::FromStr;
 use std::{convert::TryFrom, fmt, iter::repeat, sync::Arc};
-
-// TODO may need to be moved to arrow-rs
-/// The max precision and scale for decimal128
-pub const MAX_PRECISION_FOR_DECIMAL128: usize = 38;
-pub const MAX_SCALE_FOR_DECIMAL128: usize = 38;
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
@@ -542,7 +538,7 @@ impl ScalarValue {
         scale: usize,
     ) -> Result<Self> {
         // make sure the precision and scale is valid
-        if precision <= MAX_PRECISION_FOR_DECIMAL128 && scale <= precision {
+        if precision <= DECIMAL_MAX_PRECISION && scale <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
         return Err(DataFusionError::Internal(format!(
@@ -985,26 +981,15 @@ impl ScalarValue {
         precision: &usize,
         scale: &usize,
     ) -> Result<DecimalArray> {
-        // collect the value as Option<i128>
         let array = scalars
             .into_iter()
             .map(|element: ScalarValue| match element {
                 ScalarValue::Decimal128(v1, _, _) => v1,
                 _ => unreachable!(),
             })
-            .collect::<Vec<Option<i128>>>();
-
-        // build the decimal array using the Decimal Builder
-        let mut builder = DecimalBuilder::new(array.len(), *precision, *scale);
-        array.iter().for_each(|element| match element {
-            None => {
-                builder.append_null().unwrap();
-            }
-            Some(v) => {
-                builder.append_value(*v).unwrap();
-            }
-        });
-        Ok(builder.finish())
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)?;
+        Ok(array)
     }
 
     fn iter_to_array_list(
@@ -1080,21 +1065,11 @@ impl ScalarValue {
         scale: &usize,
         size: usize,
     ) -> DecimalArray {
-        let mut builder = DecimalBuilder::new(size, *precision, *scale);
-        match value {
-            None => {
-                for _i in 0..size {
-                    builder.append_null().unwrap();
-                }
-            }
-            Some(v) => {
-                let v = *v;
-                for _i in 0..size {
-                    builder.append_value(v).unwrap();
-                }
-            }
-        };
-        builder.finish()
+        std::iter::repeat(value)
+            .take(size)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(*precision, *scale)
+            .unwrap()
     }
 
     /// Converts a scalar value into an array of `size` rows.

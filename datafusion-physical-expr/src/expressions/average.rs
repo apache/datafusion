@@ -23,15 +23,13 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
 };
+use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{
-    ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128,
-};
 use datafusion_expr::Accumulator;
 
 use super::{format_state_name, sum};
@@ -50,8 +48,8 @@ pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Decimal(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
-            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 4);
-            let new_scale = MAX_SCALE_FOR_DECIMAL128.min(*scale + 4);
+            let new_precision = DECIMAL_MAX_PRECISION.min(*precision + 4);
+            let new_scale = DECIMAL_MAX_SCALE.min(*scale + 4);
             Ok(DataType::Decimal(new_precision, new_scale))
         }
         DataType::Int8
@@ -237,11 +235,12 @@ mod tests {
     #[test]
     fn avg_decimal() -> Result<()> {
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(6, 10, 0);
-        for i in 1..7 {
-            decimal_builder.append_value(i as i128)?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..7)
+                .map(Some)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
 
         generic_test_op!(
             array,
@@ -254,15 +253,12 @@ mod tests {
 
     #[test]
     fn avg_decimal_with_nulls() -> Result<()> {
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for i in 1..6 {
-            if i == 2 {
-                decimal_builder.append_null()?;
-            } else {
-                decimal_builder.append_value(i)?;
-            }
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            (1..6)
+                .map(|i| if i == 2 { None } else { Some(i) })
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -275,11 +271,12 @@ mod tests {
     #[test]
     fn avg_decimal_all_nulls() -> Result<()> {
         // test agg
-        let mut decimal_builder = DecimalBuilder::new(5, 10, 0);
-        for _i in 1..6 {
-            decimal_builder.append_null()?;
-        }
-        let array: ArrayRef = Arc::new(decimal_builder.finish());
+        let array: ArrayRef = Arc::new(
+            std::iter::repeat(None)
+                .take(6)
+                .collect::<DecimalArray>()
+                .with_precision_and_scale(10, 0)?,
+        );
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),

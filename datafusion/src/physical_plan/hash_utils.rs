@@ -564,7 +564,6 @@ pub fn create_hashes<'a>(
 #[cfg(test)]
 mod tests {
     use crate::from_slice::FromSlice;
-    use arrow::array::DecimalBuilder;
     use arrow::{array::DictionaryArray, datatypes::Int8Type};
     use std::sync::Arc;
 
@@ -572,14 +571,15 @@ mod tests {
 
     #[test]
     fn create_hashes_for_decimal_array() -> Result<()> {
-        let mut builder = DecimalBuilder::new(4, 20, 3);
-        let array: Vec<i128> = vec![1, 2, 3, 4];
-        for value in &array {
-            builder.append_value(*value)?;
-        }
-        let array_ref = Arc::new(builder.finish());
+        let array = vec![1, 2, 3, 4]
+            .into_iter()
+            .map(Some)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(20, 3)
+            .unwrap();
+        let array_ref = Arc::new(array);
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; array.len()];
+        let hashes_buff = &mut vec![0; array_ref.len()];
         let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4);
         Ok(())

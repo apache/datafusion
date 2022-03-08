@@ -47,6 +47,7 @@ tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
 hyper = "0.14.4"
 parking_lot = "0.12"
+chrono = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 

@@ -15,17 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![doc = include_str ! ("../README.md")]
+fn main() -> Result<(), String> {
+    // for use in docker build where file changes can be wonky
+    println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
 
-pub mod api;
-pub mod planner;
-pub mod scheduler_server;
-#[cfg(feature = "sled")]
-pub mod standalone;
-pub mod state;
-
-#[cfg(test)]
-pub mod test_utils;
-
-#[cfg(feature = "sled")]
-extern crate sled_package as sled;
+    println!("cargo:rerun-if-changed=proto/datafusion.proto");
+    tonic_build::configure()
+        .compile(&["proto/datafusion.proto"], &["proto"])
+        .map_err(|e| format!("protobuf compilation failed: {}", e))
+}
