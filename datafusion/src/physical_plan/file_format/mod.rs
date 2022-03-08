@@ -23,6 +23,7 @@ mod file_stream;
 mod json;
 mod parquet;
 
+pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::ParquetExec;
 use arrow::{
     array::{ArrayData, ArrayRef, DictionaryArray},
