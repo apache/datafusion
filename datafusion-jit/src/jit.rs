@@ -44,7 +44,7 @@ pub struct JIT {
 impl Default for JIT {
     #[cfg(target_arch = "x86_64")]
     fn default() -> Self {
-        let builder = JITBuilder::new(cranelift_module::default_libcall_names());
+        let builder = JITBuilder::new(cranelift_module::default_libcall_names()).unwrap();
         let module = JITModule::new(builder);
         Self {
             builder_context: FunctionBuilderContext::new(),
@@ -97,7 +97,9 @@ impl JIT {
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {}", msg);
         });
-        let isa = isa_builder.finish(settings::Flags::new(flag_builder));
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
+            .unwrap();
         let mut builder =
             JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         builder.symbols(symbols);
