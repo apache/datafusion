@@ -138,6 +138,11 @@ impl ParquetExec {
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
     }
+
+    /// Optional reference to this parquet scan's pruning predicate
+    pub fn pruning_predicate(&self) -> Option<&PruningPredicate> {
+        self.pruning_predicate.as_ref()
+    }
 }
 
 impl ParquetFileMetrics {
