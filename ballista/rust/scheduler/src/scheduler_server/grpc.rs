@@ -304,6 +304,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         if let Some(event_loop) = self.event_loop.as_ref() {
             for job_id in jobs {
                 event_loop
+                    .get_sender()
+                    .map_err(|e| tonic::Status::internal(format!("{}", e)))?
                     .post_event(SchedulerServerEvent::JobSubmitted(job_id.clone()))
                     .await
                     .map_err(|e| {
@@ -565,6 +567,7 @@ async fn create_job<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     if let Some(event_loop) = scheduler_server.event_loop.as_ref() {
         // Send job_id to the scheduler channel
         event_loop
+            .get_sender()?
             .post_event(SchedulerServerEvent::JobSubmitted(job_id))
             .await
             .unwrap();

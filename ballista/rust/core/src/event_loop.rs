@@ -19,7 +19,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use log::{error, info, warn};
+use log::{error, info};
 use tokio::sync::mpsc;
 
 use crate::error::{BallistaError, Result};
@@ -35,6 +35,7 @@ pub trait EventAction<E>: Send + Sync {
     fn on_error(&self, error: BallistaError);
 }
 
+#[derive(Clone)]
 pub struct EventLoop<E> {
     name: String,
     stopped: Arc<AtomicBool>,
@@ -118,15 +119,23 @@ impl<E: Send + 'static> EventLoop<E> {
         }
     }
 
-    pub async fn post_event(&self, event: E) -> Result<()> {
-        if let Some(tx_event) = self.tx_event.as_ref() {
-            tx_event.send(event).await.map_err(|e| {
-                BallistaError::General(format!("Fail to send event due to {}", e))
-            })?
-        } else {
-            warn!("Event sender not exist!!!");
-        }
+    pub fn get_sender(&self) -> Result<EventSender<E>> {
+        Ok(EventSender {
+            tx_event: self.tx_event.as_ref().cloned().ok_or_else(|| {
+                BallistaError::General("Event sender not exist!!!".to_string())
+            })?,
+        })
+    }
+}
 
-        Ok(())
+pub struct EventSender<E> {
+    tx_event: mpsc::Sender<E>,
+}
+
+impl<E> EventSender<E> {
+    pub async fn post_event(&self, event: E) -> Result<()> {
+        Ok(self.tx_event.send(event).await.map_err(|e| {
+            BallistaError::General(format!("Fail to send event due to {}", e))
+        })?)
     }
 }

@@ -54,7 +54,7 @@ pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     pub start_time: u128,
     policy: TaskSchedulingPolicy,
     executors_client: Option<ExecutorsClient>,
-    event_loop: Option<Arc<EventLoop<SchedulerServerEvent>>>,
+    event_loop: Option<EventLoop<SchedulerServerEvent>>,
     ctx: Arc<RwLock<ExecutionContext>>,
     codec: BallistaCodec<T, U>,
 }
@@ -93,7 +93,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                         executors_client.clone(),
                     ));
                 let event_loop =
-                    Arc::new(EventLoop::new("scheduler".to_owned(), 10000, event_action));
+                    EventLoop::new("scheduler".to_owned(), 10000, event_action);
                 (Some(executors_client), Some(event_loop))
             } else {
                 (None, None)
@@ -121,12 +121,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 
         {
             if let Some(event_loop) = self.event_loop.as_mut() {
-                // It's OK here, since we are sure the mutable reference only be used in the initialization
-                unsafe {
-                    let event_loop_ptr =
-                        Arc::as_ptr(event_loop) as *mut EventLoop<SchedulerServerEvent>;
-                    (*event_loop_ptr).start()?;
-                }
+                event_loop.start()?;
             }
         }
 

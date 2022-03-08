@@ -31,6 +31,7 @@ use crate::scheduler_server::task_scheduler::TaskScheduler;
 use crate::scheduler_server::ExecutorsClient;
 use crate::state::SchedulerState;
 
+#[derive(Clone)]
 pub(crate) enum SchedulerServerEvent {
     JobSubmitted(String),
 }
@@ -91,7 +92,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 let executor_data = &executors[idx_executor];
                 debug!(
                     "Start to launch tasks {:?} to executor {:?}",
-                    tasks, executor_data.executor_id
+                    tasks
+                        .iter()
+                        .map(|task| {
+                            if let Some(task_id) = task.task_id.as_ref() {
+                                format!(
+                                    "{}/{}/{}",
+                                    task_id.job_id,
+                                    task_id.stage_id,
+                                    task_id.partition_id
+                                )
+                            } else {
+                                "".to_string()
+                            }
+                        })
+                        .collect::<Vec<String>>(),
+                    executor_data.executor_id
                 );
                 let mut client = {
                     let clients = self.executors_client.read().await;
