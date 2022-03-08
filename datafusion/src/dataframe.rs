@@ -22,6 +22,7 @@ use crate::error::Result;
 use crate::logical_plan::{
     DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, Partitioning,
 };
+use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 
 use crate::physical_plan::SendableRecordBatchStream;
@@ -408,4 +409,11 @@ pub trait DataFrame: Send + Sync {
 
     /// Write a `DataFrame` to a CSV file.
     async fn write_csv(&self, path: &str) -> Result<()>;
+
+    /// Write a `DataFrame` to a Parquet file.
+    async fn write_parquet(
+        &self,
+        path: &str,
+        writer_properties: Option<WriterProperties>,
+    ) -> Result<()>;
 }
