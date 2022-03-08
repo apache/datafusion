@@ -78,7 +78,7 @@ smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
-pyo3 = { version = "0.15", optional = true }
+pyo3 = { version = "0.16", optional = true }
 tempfile = "3"
 parking_lot = "0.12"
 

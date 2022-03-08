@@ -41,7 +41,7 @@ jit = ["cranelift-module"]
 arrow = { version = "9.1", features = ["prettyprint"] }
 parquet = { version = "9.1", features = ["arrow"], optional = true }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
-pyo3 = { version = "0.15", optional = true }
+pyo3 = { version = "0.16", optional = true }
 sqlparser = "0.14"
 ordered-float = "2.10"
 cranelift-module = { version = "0.82.0", optional = true }
