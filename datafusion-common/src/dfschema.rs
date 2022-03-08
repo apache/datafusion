@@ -422,7 +422,7 @@ impl Display for DFSchema {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "fields:{}, metadata:{:?}",
+            "fields:[{}], metadata:{:?}",
             self.fields
                 .iter()
                 .map(|field| field.qualified_name())
@@ -587,14 +587,14 @@ mod tests {
     #[test]
     fn from_unqualified_schema() -> Result<()> {
         let schema = DFSchema::try_from(test_schema_1())?;
-        assert_eq!("c0, c1", schema.to_string());
+        assert_eq!("fields:[c0, c1], metadata:{}", schema.to_string());
         Ok(())
     }
 
     #[test]
     fn from_qualified_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        assert_eq!("t1.c0, t1.c1", schema.to_string());
+        assert_eq!("fields:[t1.c0, t1.c1], metadata:{}", schema.to_string());
         Ok(())
     }
 
@@ -613,7 +613,10 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from_qualified_schema("t2", &test_schema_1())?;
         let join = left.join(&right)?;
-        assert_eq!("t1.c0, t1.c1, t2.c0, t2.c1", join.to_string());
+        assert_eq!(
+            "fields:[t1.c0, t1.c1, t2.c0, t2.c1], metadata:{}",
+            join.to_string()
+        );
         // test valid access
         assert!(join.field_with_qualified_name("t1", "c0").is_ok());
         assert!(join.field_with_qualified_name("t2", "c0").is_ok());
@@ -657,7 +660,10 @@ mod tests {
         let left = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let right = DFSchema::try_from(test_schema_2())?;
         let join = left.join(&right)?;
-        assert_eq!("t1.c0, t1.c1, c100, c101", join.to_string());
+        assert_eq!(
+            "fields:[t1.c0, t1.c1, c100, c101], metadata:{}",
+            join.to_string()
+        );
         // test valid access
         assert!(join.field_with_qualified_name("t1", "c0").is_ok());
         assert!(join.field_with_unqualified_name("c0").is_ok());

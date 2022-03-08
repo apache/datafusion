@@ -1629,7 +1629,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: None } }\
-        ] }, \
+        ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
