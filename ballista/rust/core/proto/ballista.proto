@@ -399,6 +399,7 @@ message FileScanExecConf {
 
 message ParquetScanExecNode {
   FileScanExecConf base_conf = 1;
+  LogicalExprNode pruning_predicate = 2;
 }
 
 message CsvScanExecNode {
