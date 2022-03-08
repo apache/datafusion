@@ -284,7 +284,7 @@ impl DFSchema {
         }
     }
 
-    /// Get comma-seperated list of field names for use in error messages
+    /// Get comma-separated list of field names for use in error messages
     fn get_field_names(&self) -> String {
         self.fields
             .iter()

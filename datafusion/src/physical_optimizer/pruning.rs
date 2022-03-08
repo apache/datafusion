@@ -97,6 +97,8 @@ pub struct PruningPredicate {
     predicate_expr: Arc<dyn PhysicalExpr>,
     /// The statistics required to evaluate this predicate
     required_columns: RequiredStatColumns,
+    /// Logical predicate from which this predicate expr is derived (required for serialization)
+    logical_expr: Expr,
 }
 
 impl PruningPredicate {
@@ -143,6 +145,7 @@ impl PruningPredicate {
             schema,
             predicate_expr,
             required_columns,
+            logical_expr: expr.clone(),
         })
     }
 
@@ -201,6 +204,11 @@ impl PruningPredicate {
     /// Return a reference to the input schema
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    /// Returns a reference to the logical expr used to construct this pruning predicate
+    pub fn logical_expr(&self) -> &Expr {
+        &self.logical_expr
     }
 }
 
