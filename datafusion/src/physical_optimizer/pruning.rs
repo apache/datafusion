@@ -121,11 +121,11 @@ impl PruningPredicate {
     /// For example, the filter expression `(column / 2) = 4` becomes
     /// the pruning predicate
     /// `(column_min / 2) <= 4 && 4 <= (column_max / 2))`
-    pub fn try_new(expr: &Expr, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(expr: Expr, schema: SchemaRef) -> Result<Self> {
         // build predicate expression once
         let mut required_columns = RequiredStatColumns::new();
         let logical_predicate_expr =
-            build_predicate_expression(expr, schema.as_ref(), &mut required_columns)?;
+            build_predicate_expression(&expr, schema.as_ref(), &mut required_columns)?;
         let stat_fields = required_columns
             .iter()
             .map(|(_, _, f)| f.clone())
@@ -145,7 +145,7 @@ impl PruningPredicate {
             schema,
             predicate_expr,
             required_columns,
-            logical_expr: expr.clone(),
+            logical_expr: expr,
         })
     }
 
@@ -1358,7 +1358,7 @@ mod tests {
         // No stats for s2 ==> some rows could pass
         // s2 [3, None] (null max) ==> some rows could pass
 
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         let expected = vec![false, true, true, true];
 
@@ -1387,7 +1387,7 @@ mod tests {
         // No stats for s2 ==> some rows could pass
         // s2 [3, None] (null max) ==> some rows could pass
 
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         let expected = vec![true, true, true, false, true, true];
         assert_eq!(result, expected);
@@ -1431,7 +1431,7 @@ mod tests {
 
         // b1
         let expr = col("b1");
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_true);
     }
@@ -1442,7 +1442,7 @@ mod tests {
 
         // !b1
         let expr = col("b1").not();
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_false);
     }
@@ -1453,7 +1453,7 @@ mod tests {
 
         // b1 = true
         let expr = col("b1").eq(lit(true));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_true);
     }
@@ -1464,7 +1464,7 @@ mod tests {
 
         // !b1 = true
         let expr = col("b1").not().eq(lit(true));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_false);
     }
@@ -1497,13 +1497,13 @@ mod tests {
 
         // i > 0
         let expr = col("i").gt(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
 
         // -i < 0
         let expr = Expr::Negative(Box::new(col("i"))).lt(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
@@ -1522,13 +1522,13 @@ mod tests {
 
         // i <= 0
         let expr = col("i").lt_eq(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
 
         // -i >= 0
         let expr = Expr::Negative(Box::new(col("i"))).gt_eq(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
@@ -1547,7 +1547,7 @@ mod tests {
 
         // i = 0
         let expr = col("i").eq(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
@@ -1566,13 +1566,13 @@ mod tests {
 
         // i > -1
         let expr = col("i").gt(lit(-1));
-        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
 
         // -i < 1
         let expr = Expr::Negative(Box::new(col("i"))).lt(lit(1));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
