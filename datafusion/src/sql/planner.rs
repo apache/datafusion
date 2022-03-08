@@ -166,6 +166,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 without_rowid: _without_row_id,
                 engine: _engine,
                 default_charset: _default_charset,
+                collation: _collation,
             } if columns.is_empty()
                 && constraints.is_empty()
                 && table_properties.is_empty()
