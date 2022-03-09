@@ -111,13 +111,19 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             }))
         }
         LogicalPlan::Filter(Filter { predicate, input }) => {
-            let schemas = plan.all_schemas();
-            let all_schema =
-                schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
-                    lhs.merge(rhs);
-                    lhs
-                });
-            let data_type = predicate.get_type(&all_schema)?;
+            let schema = plan.schema().as_ref().clone();
+            let data_type = if let Ok(data_type) = predicate.get_type(&schema) {
+                data_type
+            } else {
+                // predicate type could not be resolved in schema, fall back to all schemas
+                let schemas = plan.all_schemas();
+                let all_schema =
+                    schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
+                        lhs.merge(rhs);
+                        lhs
+                    });
+                predicate.get_type(&all_schema)?
+            };
 
             let mut id_array = vec![];
             expr_to_identifier(predicate, &mut expr_set, &mut id_array, data_type)?;
