@@ -108,15 +108,12 @@ impl ParquetExec {
 
         let pruning_predicate = predicate.and_then(|predicate_expr| {
             match PruningPredicate::try_new(
-                &predicate_expr,
+                predicate_expr,
                 base_config.file_schema.clone(),
             ) {
                 Ok(pruning_predicate) => Some(pruning_predicate),
                 Err(e) => {
-                    debug!(
-                        "Could not create pruning predicate for {:?}: {}",
-                        predicate_expr, e
-                    );
+                    debug!("Could not create pruning predicate for: {}", e);
                     predicate_creation_errors.add(1);
                     None
                 }
@@ -1042,7 +1039,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let pruning_predicate = PruningPredicate::try_new(&expr, Arc::new(schema))?;
+        let pruning_predicate = PruningPredicate::try_new(expr, Arc::new(schema))?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -1075,7 +1072,7 @@ mod tests {
         // int > 1 => c1_max > 1
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
-        let pruning_predicate = PruningPredicate::try_new(&expr, Arc::new(schema))?;
+        let pruning_predicate = PruningPredicate::try_new(expr, Arc::new(schema))?;
 
         let schema_descr = get_test_schema_descr(vec![("c1", PhysicalType::INT32)]);
         let rgm1 = get_row_group_meta_data(
@@ -1114,7 +1111,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema.clone())?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
 
         let schema_descr = get_test_schema_descr(vec![
             ("c1", PhysicalType::INT32),
@@ -1152,7 +1149,7 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let row_group_predicate = build_row_group_predicate(
             &pruning_predicate,
             parquet_file_metrics(),
@@ -1199,7 +1196,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
 
         let row_group_predicate = build_row_group_predicate(
@@ -1231,7 +1228,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
 
         let row_group_predicate = build_row_group_predicate(
