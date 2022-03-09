@@ -50,6 +50,7 @@ use arrow::{
 use datafusion_expr::ScalarFunctionImplementation;
 pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
 use datafusion_physical_expr::array_expressions;
+use datafusion_physical_expr::conditional_expressions;
 use datafusion_physical_expr::datetime_expressions;
 use datafusion_physical_expr::math_expressions;
 use datafusion_physical_expr::string_expressions;
@@ -111,6 +112,11 @@ pub fn return_type(
             utf8_to_int_type(&input_expr_types[0], "character_length")
         }
         BuiltinScalarFunction::Chr => Ok(DataType::Utf8),
+        BuiltinScalarFunction::Coalesce => {
+            // COALESCE has multiple args and they might get coerced, get a preview of this
+            let coerced_types = data_types(input_expr_types, &signature(fun));
+            coerced_types.map(|types| types[0].clone())
+        }
         BuiltinScalarFunction::Concat => Ok(DataType::Utf8),
         BuiltinScalarFunction::ConcatWithSeparator => Ok(DataType::Utf8),
         BuiltinScalarFunction::DatePart => Ok(DataType::Int32),
@@ -363,7 +369,9 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
             array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
             fun.volatility(),
         ),
-        BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
+        BuiltinScalarFunction::Concat
+        | BuiltinScalarFunction::ConcatWithSeparator
+        | BuiltinScalarFunction::Coalesce => {
             Signature::variadic(vec![DataType::Utf8], fun.volatility())
         }
         BuiltinScalarFunction::Ascii
@@ -817,6 +825,7 @@ pub fn create_physical_fun(
         BuiltinScalarFunction::Chr => {
             Arc::new(|args| make_scalar_function(string_expressions::chr)(args))
         }
+        BuiltinScalarFunction::Coalesce => Arc::new(conditional_expressions::coalesce),
         BuiltinScalarFunction::Concat => Arc::new(string_expressions::concat),
         BuiltinScalarFunction::ConcatWithSeparator => {
             Arc::new(|args| make_scalar_function(string_expressions::concat_ws)(args))

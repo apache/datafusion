@@ -174,3 +174,135 @@ async fn query_count_distinct() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn coalesce_plan() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "select COALESCE('', 'test')";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------+",
+        "| coalesce(Utf8(\"\"),Utf8(\"test\")) |",
+        "+---------------------------------+",
+        "|                                 |",
+        "+---------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn coalesce_result() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(0), None, Some(1), None, None])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(1),
+                None,
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT COALESCE(c1, c2) FROM test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------------+",
+        "| coalesce(test.c1,test.c2) |",
+        "+---------------------------+",
+        "| 0                         |",
+        "| 1                         |",
+        "| 1                         |",
+        "| 1                         |",
+        "|                           |",
+        "+---------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn coalesce_static_empty_value() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT COALESCE('', 'test')";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------+",
+        "| coalesce(Utf8(\"\"),Utf8(\"test\")) |",
+        "+---------------------------------+",
+        "|                                 |",
+        "+---------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn coalesce_static_value_with_null() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    let sql = "SELECT COALESCE(NULL, 'test')";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------+",
+        "| coalesce(Utf8(NULL),Utf8(\"test\")) |",
+        "+-----------------------------------+",
+        "| test                              |",
+        "+-----------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn coalesce_result_with_default_value() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(0), None, Some(1), None, None])),
+            Arc::new(Int32Array::from(vec![
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(1),
+                None,
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT COALESCE(c1, c2, '-1') FROM test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+--------------------------------------+",
+        "| coalesce(test.c1,test.c2,Utf8(\"-1\")) |",
+        "+--------------------------------------+",
+        "| 0                                    |",
+        "| 1                                    |",
+        "| 1                                    |",
+        "| 1                                    |",
+        "| -1                                   |",
+        "+--------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
