@@ -50,10 +50,9 @@ use arrow::datatypes::*;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
-    FunctionArgExpr, HiveDistributionStyle, Ident, Join, JoinConstraint, JoinOperator,
-    ObjectName, Query, Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter,
-    TableFactor, TableWithJoins, TrimWhereField, UnaryOperator, Value,
-    Values as SQLValues,
+    FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
+    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
+    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
@@ -150,22 +149,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Statement::CreateTable {
                 query: Some(query),
                 name,
-                or_replace: false,
                 columns,
                 constraints,
-                hive_distribution: HiveDistributionStyle::NONE,
-                hive_formats: _hive_formats,
                 table_properties,
                 with_options,
-                file_format: None,
-                location: None,
-                like: None,
-                temporary: _temporary,
-                external: false,
-                if_not_exists: false,
-                without_rowid: _without_row_id,
-                engine: _engine,
-                default_charset: _default_charset,
+                ..
             } if columns.is_empty()
                 && constraints.is_empty()
                 && table_properties.is_empty()
@@ -194,7 +182,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             {
                 Ok(LogicalPlan::DropTable(DropTable {
                     name: names.get(0).unwrap().to_string(),
-                    if_exist: *if_exists,
+                    if_exists: *if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 }))
             }

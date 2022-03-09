@@ -271,9 +271,11 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
+            LogicalPlan::DropTable(DropTable {
+                name, if_exists, ..
+            }) => {
                 let returned = self.deregister_table(name.as_str())?;
-                if !if_exist && returned.is_none() {
+                if !if_exists && returned.is_none() {
                     Err(DataFusionError::Execution(format!(
                         "Memory table {:?} doesn't exist.",
                         name
