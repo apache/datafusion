@@ -33,7 +33,7 @@ use crate::{scheduler_server::SchedulerServer, state::StandaloneClient};
 pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
-    let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+    let mut scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         SchedulerServer::new(
             Arc::new(client),
             "ballista".to_string(),
@@ -41,7 +41,7 @@ pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
             BallistaCodec::default(),
         );
     scheduler_server.init().await?;
-    let server = SchedulerGrpcServer::new(scheduler_server);
+    let server = SchedulerGrpcServer::new(scheduler_server.clone());
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;

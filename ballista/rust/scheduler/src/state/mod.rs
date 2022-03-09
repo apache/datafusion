@@ -620,6 +620,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         Ok(())
     }
 
+    pub fn get_codec(&self) -> &BallistaCodec<T, U> {
+        &self.stable_state.codec
+    }
+
     pub async fn get_executors_metadata(
         &self,
     ) -> Result<Vec<(ExecutorMetadata, Duration)>> {
