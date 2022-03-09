@@ -59,8 +59,8 @@ use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateExternalTable, CreateMemoryTable, DropTable, FunctionRegistry, LogicalPlan,
-    LogicalPlanBuilder, UNNAMED_TABLE,
+    CreateCatalogSchema, CreateExternalTable, CreateMemoryTable, DropTable,
+    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -165,7 +165,7 @@ impl ExecutionContext {
             let default_catalog = MemoryCatalogProvider::new();
 
             default_catalog.register_schema(
-                config.default_schema.clone(),
+                config.default_schema.as_str(),
                 Arc::new(MemorySchemaProvider::new()),
             );
 
@@ -284,6 +284,34 @@ impl ExecutionContext {
                 } else {
                     let plan = LogicalPlanBuilder::empty(false).build()?;
                     Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                }
+            }
+            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                schema_name,
+                if_not_exists,
+                ..
+            }) => {
+                // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
+                // so for now, we default to "public" schema
+                let catalog = self.catalog("public");
+                match catalog {
+                    Some(c) => {
+                        if if_not_exists {}
+                        if let Some(s) = c.schema(&schema_name) {
+                            Err(DataFusionError::Execution(format!(
+                                "Schema {:?} already exists",
+                                schema_name
+                            )))
+                        };
+
+                        let schema = Arc::new(MemorySchemaProvider::new());
+                        c.register_schema(&schema_name, schema);
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                    }
+                    None => Err(DataFusionError::Execution(String::from(
+                        "'public' catalog does not exist",
+                    ))),
                 }
             }
 

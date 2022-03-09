@@ -108,6 +108,14 @@ pub trait CatalogProvider: Sync + Send {
 
     /// Retrieves a specific schema from the catalog by name, provided it exists.
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>>;
+
+    /// Adds a new schema to this catalog.
+    /// If a schema of the same name existed before, it is replaced in the catalog and returned.
+    fn register_schema(
+        &self,
+        name: &str,
+        schema: Arc<dyn SchemaProvider>,
+    ) -> Option<Arc<dyn SchemaProvider>>;
 }
 
 /// Simple in-memory implementation of a catalog.
@@ -121,17 +129,6 @@ impl MemoryCatalogProvider {
         Self {
             schemas: RwLock::new(HashMap::new()),
         }
-    }
-
-    /// Adds a new schema to this catalog.
-    /// If a schema of the same name existed before, it is replaced in the catalog and returned.
-    pub fn register_schema(
-        &self,
-        name: impl Into<String>,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Option<Arc<dyn SchemaProvider>> {
-        let mut schemas = self.schemas.write();
-        schemas.insert(name.into(), schema)
     }
 }
 
@@ -148,5 +145,14 @@ impl CatalogProvider for MemoryCatalogProvider {
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         let schemas = self.schemas.read();
         schemas.get(name).cloned()
+    }
+
+    fn register_schema(
+        &self,
+        name: &str,
+        schema: Arc<dyn SchemaProvider>,
+    ) -> Option<Arc<dyn SchemaProvider>> {
+        let mut schemas = self.schemas.write();
+        schemas.insert(name.into(), schema)
     }
 }

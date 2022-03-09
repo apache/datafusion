@@ -245,6 +245,7 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use crate::assert_batches_eq;
+    use crate::catalog::catalog::CatalogProvider;
     use crate::catalog::catalog::MemoryCatalogProvider;
     use crate::catalog::schema::{
         MemorySchemaProvider, ObjectStoreSchemaProvider, SchemaProvider,
