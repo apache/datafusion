@@ -724,7 +724,7 @@ mod tests {
 
         let df_schema = DFSchema::new_with_metadata(
             vec![DFField::new(None, "c0", DataType::Int64, true)],
-            metadata.clone(),
+            metadata,
         )
         .unwrap();
         let df_schema_ref = Arc::new(df_schema.clone());
