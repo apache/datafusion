@@ -138,6 +138,18 @@ impl From<tokio::task::JoinError> for BallistaError {
     }
 }
 
+impl From<datafusion_proto::from_proto::Error> for BallistaError {
+    fn from(e: datafusion_proto::from_proto::Error) -> Self {
+        BallistaError::General(e.to_string())
+    }
+}
+
+impl From<datafusion_proto::to_proto::Error> for BallistaError {
+    fn from(e: datafusion_proto::to_proto::Error) -> Self {
+        BallistaError::General(e.to_string())
+    }
+}
+
 impl Display for BallistaError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {

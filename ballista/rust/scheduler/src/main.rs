@@ -40,15 +40,13 @@ use ballista_scheduler::state::EtcdClient;
 #[cfg(feature = "sled")]
 use ballista_scheduler::state::StandaloneClient;
 
-use ballista_scheduler::scheduler_server::{
-    SchedulerEnv, SchedulerServer, TaskScheduler,
-};
+use ballista_scheduler::scheduler_server::SchedulerServer;
 use ballista_scheduler::state::{ConfigBackend, ConfigBackendClient};
 
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::BallistaCodec;
 use log::info;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 
 #[macro_use]
 extern crate configure_me;
@@ -81,24 +79,15 @@ async fn start_server(
         "Starting Scheduler grpc server with task scheduling policy of {:?}",
         policy
     );
-    let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+    let mut scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         match policy {
-            TaskSchedulingPolicy::PushStaged => {
-                // TODO make the buffer size configurable
-                let (tx_job, rx_job) = mpsc::channel::<String>(10000);
-                let scheduler_server = SchedulerServer::new_with_policy(
-                    config_backend.clone(),
-                    namespace.clone(),
-                    policy,
-                    Some(SchedulerEnv { tx_job }),
-                    Arc::new(RwLock::new(ExecutionContext::new())),
-                    BallistaCodec::default(),
-                );
-                let task_scheduler =
-                    TaskScheduler::new(Arc::new(scheduler_server.clone()));
-                task_scheduler.start(rx_job);
-                scheduler_server
-            }
+            TaskSchedulingPolicy::PushStaged => SchedulerServer::new_with_policy(
+                config_backend.clone(),
+                namespace.clone(),
+                policy,
+                Arc::new(RwLock::new(ExecutionContext::new())),
+                BallistaCodec::default(),
+            ),
             _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
@@ -106,6 +95,8 @@ async fn start_server(
                 BallistaCodec::default(),
             ),
         };
+
+    scheduler_server.init().await?;
 
     Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {

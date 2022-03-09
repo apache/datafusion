@@ -191,7 +191,7 @@ pub struct DropTable {
     /// The table name
     pub name: String,
     /// If the table exists
-    pub if_exist: bool,
+    pub if_exists: bool,
     /// Dummy schema
     pub schema: DFSchemaRef,
 }
@@ -1002,8 +1002,10 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
-                    LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
-                        write!(f, "DropTable: {:?} if not exist:={}", name, if_exist)
+                    LogicalPlan::DropTable(DropTable {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),

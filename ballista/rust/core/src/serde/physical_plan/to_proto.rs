@@ -51,16 +51,17 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<protobuf::PhysicalExprNode, Self::Error> {
+        use datafusion_proto::protobuf::AggregateFunction;
         let aggr_function = if self.as_any().downcast_ref::<Avg>().is_some() {
-            Ok(protobuf::AggregateFunction::Avg.into())
+            Ok(AggregateFunction::Avg.into())
         } else if self.as_any().downcast_ref::<Sum>().is_some() {
-            Ok(protobuf::AggregateFunction::Sum.into())
+            Ok(AggregateFunction::Sum.into())
         } else if self.as_any().downcast_ref::<Count>().is_some() {
-            Ok(protobuf::AggregateFunction::Count.into())
+            Ok(AggregateFunction::Count.into())
         } else if self.as_any().downcast_ref::<Min>().is_some() {
-            Ok(protobuf::AggregateFunction::Min.into())
+            Ok(AggregateFunction::Min.into())
         } else if self.as_any().downcast_ref::<Max>().is_some() {
-            Ok(protobuf::AggregateFunction::Max.into())
+            Ok(AggregateFunction::Max.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",
@@ -220,7 +221,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
         } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
             let fun: BuiltinScalarFunction =
                 BuiltinScalarFunction::from_str(expr.name())?;
-            let fun: protobuf::ScalarFunction = (&fun).try_into()?;
+            let fun: datafusion_proto::protobuf::ScalarFunction = (&fun).try_into()?;
             let args: Vec<protobuf::PhysicalExprNode> = expr
                 .args()
                 .iter()
