@@ -194,7 +194,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             {
                 Ok(LogicalPlan::DropTable(DropTable {
                     name: names.get(0).unwrap().to_string(),
-                    if_exist: if_exists,
+                    if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 }))
             }
