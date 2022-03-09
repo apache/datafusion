@@ -50,14 +50,14 @@ OUTPUT_PATH="${PROJECT}/CHANGELOG.md"
 pushd ${SOURCE_TOP_DIR}
 
 # reset content in changelog
-git co "${SINCE_TAG}" "${OUTPUT_PATH}"
+git checkout "${SINCE_TAG}" "${OUTPUT_PATH}"
 # remove license header so github-changelog-generator has a clean base to append
-sed -i '1,18d' "${OUTPUT_PATH}"
+sed -i.bak '1,18d' "${OUTPUT_PATH}"
 
 docker run -it --rm \
     -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN \
     -v "$(pwd)":/usr/local/src/your-app \
-    githubchangeloggenerator/github-changelog-generator:1.16.2 \
+    githubchangeloggenerator/github-changelog-generator \
     --user apache \
     --project arrow-datafusion \
     --since-tag "${SINCE_TAG}" \
@@ -66,7 +66,7 @@ docker run -it --rm \
     --output "${OUTPUT_PATH}" \
     "$@"
 
-sed -i "s/\\\n/\n\n/" "${OUTPUT_PATH}"
+sed -i.bak "s/\\\n/\n\n/" "${OUTPUT_PATH}"
 
 echo '<!---
   Licensed to the Apache Software Foundation (ASF) under one

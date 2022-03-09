@@ -27,6 +27,7 @@ use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
 
 use super::{
+    expressions::PhysicalSortExpr,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -83,6 +84,14 @@ impl ExecutionPlan for UnionExec {
         // TODO: this loses partitioning info in case of same partitioning scheme (for example `Partitioning::Hash`)
         // https://issues.apache.org/jira/browse/ARROW-11991
         Partitioning::UnknownPartitioning(num_partitions)
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn with_new_children(
@@ -143,6 +152,10 @@ impl ExecutionPlan for UnionExec {
             .reduce(stats_union)
             .unwrap_or_default()
     }
+
+    fn benefits_from_input_partitioning(&self) -> bool {
+        false
+    }
 }
 
 /// Stream wrapper that records `BaselineMetrics` for a particular
@@ -188,14 +201,12 @@ fn col_stats_union(
         .min_value
         .zip(right.min_value)
         .map(|(a, b)| expressions::helpers::min(&a, &b))
-        .map(Result::ok)
-        .flatten();
+        .and_then(Result::ok);
     left.max_value = left
         .max_value
         .zip(right.max_value)
         .map(|(a, b)| expressions::helpers::max(&a, &b))
-        .map(Result::ok)
-        .flatten();
+        .and_then(Result::ok);
     left.null_count = left.null_count.zip(right.null_count).map(|(a, b)| a + b);
 
     left

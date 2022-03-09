@@ -20,7 +20,7 @@
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::physical_plan::metrics::BaselineMetrics;
+use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use arrow::compute::concat;
 use arrow::datatypes::{Schema, SchemaRef};
@@ -43,7 +43,7 @@ pub struct SizedRecordBatchStream {
     schema: SchemaRef,
     batches: Vec<Arc<RecordBatch>>,
     index: usize,
-    baseline_metrics: BaselineMetrics,
+    metrics: MemTrackingMetrics,
 }
 
 impl SizedRecordBatchStream {
@@ -51,13 +51,15 @@ impl SizedRecordBatchStream {
     pub fn new(
         schema: SchemaRef,
         batches: Vec<Arc<RecordBatch>>,
-        baseline_metrics: BaselineMetrics,
+        metrics: MemTrackingMetrics,
     ) -> Self {
+        let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
+        metrics.init_mem_used(size);
         SizedRecordBatchStream {
             schema,
             index: 0,
             batches,
-            baseline_metrics,
+            metrics,
         }
     }
 }
@@ -75,7 +77,7 @@ impl Stream for SizedRecordBatchStream {
         } else {
             None
         });
-        self.baseline_metrics.record_poll(poll)
+        self.metrics.record_poll(poll)
     }
 }
 

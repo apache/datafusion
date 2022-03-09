@@ -23,8 +23,8 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, Date32Array, Date64Array, DecimalArray,
     DictionaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
     Int8Array, LargeStringArray, StringArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Int16Type, Int32Type, Int64Type,
@@ -42,7 +42,7 @@ fn combine_hashes(l: u64, r: u64) -> u64 {
 fn hash_decimal128<'a>(
     array: &ArrayRef,
     random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
+    hashes_buffer: &'a mut [u64],
     mul_col: bool,
 ) {
     let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
@@ -207,7 +207,7 @@ macro_rules! hash_array_float {
 fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     array: &ArrayRef,
     random_state: &RandomState,
-    hashes_buffer: &mut Vec<u64>,
+    hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
     let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
@@ -387,6 +387,16 @@ pub fn create_hashes<'a>(
                     multi_col
                 );
             }
+            DataType::Timestamp(TimeUnit::Second, None) => {
+                hash_array_primitive!(
+                    TimestampSecondArray,
+                    col,
+                    i64,
+                    hashes_buffer,
+                    random_state,
+                    multi_col
+                );
+            }
             DataType::Timestamp(TimeUnit::Millisecond, None) => {
                 hash_array_primitive!(
                     TimestampMillisecondArray,
@@ -554,7 +564,6 @@ pub fn create_hashes<'a>(
 #[cfg(test)]
 mod tests {
     use crate::from_slice::FromSlice;
-    use arrow::array::DecimalBuilder;
     use arrow::{array::DictionaryArray, datatypes::Int8Type};
     use std::sync::Arc;
 
@@ -562,14 +571,15 @@ mod tests {
 
     #[test]
     fn create_hashes_for_decimal_array() -> Result<()> {
-        let mut builder = DecimalBuilder::new(4, 20, 3);
-        let array: Vec<i128> = vec![1, 2, 3, 4];
-        for value in &array {
-            builder.append_value(*value)?;
-        }
-        let array_ref = Arc::new(builder.finish());
+        let array = vec![1, 2, 3, 4]
+            .into_iter()
+            .map(Some)
+            .collect::<DecimalArray>()
+            .with_precision_and_scale(20, 3)
+            .unwrap();
+        let array_ref = Arc::new(array);
         let random_state = RandomState::with_seeds(0, 0, 0, 0);
-        let hashes_buff = &mut vec![0; array.len()];
+        let hashes_buff = &mut vec![0; array_ref.len()];
         let hashes = create_hashes(&[array_ref], &random_state, hashes_buff)?;
         assert_eq!(hashes.len(), 4);
         Ok(())

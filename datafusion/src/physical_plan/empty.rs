@@ -28,6 +28,7 @@ use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 
+use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
 use crate::execution::runtime_env::RuntimeEnv;
@@ -98,12 +99,19 @@ impl ExecutionPlan for EmptyExec {
         Partitioning::UnknownPartitioning(1)
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match children.len() {
-            0 => Ok(Arc::new(EmptyExec::new(false, self.schema.clone()))),
+            0 => Ok(Arc::new(EmptyExec::new(
+                self.produce_one_row,
+                self.schema.clone(),
+            ))),
             _ => Err(DataFusionError::Internal(
                 "EmptyExec wrong number of children".to_string(),
             )),
@@ -174,10 +182,14 @@ mod tests {
     #[test]
     fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
-        let empty = EmptyExec::new(false, schema);
+        let empty = EmptyExec::new(false, schema.clone());
+        let empty_with_row = EmptyExec::new(true, schema);
 
         let empty2 = empty.with_new_children(vec![])?;
         assert_eq!(empty.schema(), empty2.schema());
+
+        let empty_with_row_2 = empty_with_row.with_new_children(vec![])?;
+        assert_eq!(empty_with_row.schema(), empty_with_row_2.schema());
 
         let too_many_kids = vec![empty2];
         assert!(

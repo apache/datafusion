@@ -26,7 +26,7 @@ async fn csv_query_avg_multi_batch() -> Result<()> {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.unwrap();
     let batch = &results[0];
     let column = batch.column(0);
@@ -220,6 +220,39 @@ async fn csv_query_stddev_6() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_median_1() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT approx_median(c2) FROM aggregate_test_100";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["3"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_2() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT approx_median(c6) FROM aggregate_test_100";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["1146409980542786560"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_median_3() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+    let sql = "SELECT approx_median(c12) FROM aggregate_test_100";
+    let actual = execute(&mut ctx, sql).await;
+    let expected = vec![vec!["0.5550065410522981"]];
+    assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_external_table_count() {
     let mut ctx = ExecutionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
@@ -352,6 +385,135 @@ async fn csv_query_approx_count() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
+}
+
+// This test executes the APPROX_PERCENTILE_CONT aggregation against the test
+// data, asserting the estimated quantiles are ±5% their actual values.
+//
+// Actual quantiles calculated with:
+//
+// ```r
+// read_csv("./testing/data/csv/aggregate_test_100.csv") |>
+//     select_if(is.numeric) |>
+//     summarise_all(~ quantile(., c(0.1, 0.5, 0.9)))
+// ```
+//
+// Giving:
+//
+// ```text
+//      c2    c3      c4           c5       c6    c7     c8          c9     c10   c11    c12
+//   <dbl> <dbl>   <dbl>        <dbl>    <dbl> <dbl>  <dbl>       <dbl>   <dbl> <dbl>  <dbl>
+// 1     1 -95.3 -22925. -1882606710  -7.25e18  18.9  2671.  472608672. 1.83e18 0.109 0.0714
+// 2     3  15.5   4599    377164262   1.13e18 134.  30634  2365817608. 9.30e18 0.491 0.551
+// 3     5 102.   25334.  1991374996.  7.37e18 231   57518. 3776538487. 1.61e19 0.834 0.946
+// ```
+//
+// Column `c12` is omitted due to a large relative error (~10%) due to the small
+// float values.
+#[tokio::test]
+async fn csv_query_approx_percentile_cont() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv(&mut ctx).await?;
+
+    // Generate an assertion that the estimated $percentile value for $column is
+    // within 5% of the $actual percentile value.
+    macro_rules! percentile_test {
+        ($ctx:ident, column=$column:literal, percentile=$percentile:literal, actual=$actual:literal) => {
+            let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
+            let actual = execute_to_batches(&mut ctx, &sql).await;
+            //
+            //   "+------+",
+            //   "| q    |",
+            //   "+------+",
+            //   "| true |",
+            //   "+------+",
+            //
+            let want = ["+------+", "| q    |", "+------+", "| true |", "+------+"];
+            assert_batches_eq!(want, &actual);
+        };
+    }
+
+    percentile_test!(ctx, column = "c2", percentile = 0.1, actual = 1.0);
+    percentile_test!(ctx, column = "c2", percentile = 0.5, actual = 3.0);
+    percentile_test!(ctx, column = "c2", percentile = 0.9, actual = 5.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c3", percentile = 0.1, actual = -95.3);
+    percentile_test!(ctx, column = "c3", percentile = 0.5, actual = 15.5);
+    percentile_test!(ctx, column = "c3", percentile = 0.9, actual = 102.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c4", percentile = 0.1, actual = -22925.0);
+    percentile_test!(ctx, column = "c4", percentile = 0.5, actual = 4599.0);
+    percentile_test!(ctx, column = "c4", percentile = 0.9, actual = 25334.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c5", percentile = 0.1, actual = -1882606710.0);
+    percentile_test!(ctx, column = "c5", percentile = 0.5, actual = 377164262.0);
+    percentile_test!(ctx, column = "c5", percentile = 0.9, actual = 1991374996.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c6", percentile = 0.1, actual = -7.25e18);
+    percentile_test!(ctx, column = "c6", percentile = 0.5, actual = 1.13e18);
+    percentile_test!(ctx, column = "c6", percentile = 0.9, actual = 7.37e18);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c7", percentile = 0.1, actual = 18.9);
+    percentile_test!(ctx, column = "c7", percentile = 0.5, actual = 134.0);
+    percentile_test!(ctx, column = "c7", percentile = 0.9, actual = 231.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c8", percentile = 0.1, actual = 2671.0);
+    percentile_test!(ctx, column = "c8", percentile = 0.5, actual = 30634.0);
+    percentile_test!(ctx, column = "c8", percentile = 0.9, actual = 57518.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c9", percentile = 0.1, actual = 472608672.0);
+    percentile_test!(ctx, column = "c9", percentile = 0.5, actual = 2365817608.0);
+    percentile_test!(ctx, column = "c9", percentile = 0.9, actual = 3776538487.0);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c10", percentile = 0.1, actual = 1.83e18);
+    percentile_test!(ctx, column = "c10", percentile = 0.5, actual = 9.30e18);
+    percentile_test!(ctx, column = "c10", percentile = 0.9, actual = 1.61e19);
+    ////////////////////////////////////
+    percentile_test!(ctx, column = "c11", percentile = 0.1, actual = 0.109);
+    percentile_test!(ctx, column = "c11", percentile = 0.5, actual = 0.491);
+    percentile_test!(ctx, column = "c11", percentile = 0.9, actual = 0.834);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_query_sum_crossjoin() {
+    let mut ctx = ExecutionContext::new();
+    register_aggregate_csv_by_sql(&mut ctx).await;
+    let sql = "SELECT a.c1, b.c1, SUM(a.c2) FROM aggregate_test_100 as a CROSS JOIN aggregate_test_100 as b GROUP BY a.c1, b.c1 ORDER BY a.c1, b.c1";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+----+----+-----------+",
+        "| c1 | c1 | SUM(a.c2) |",
+        "+----+----+-----------+",
+        "| a  | a  | 1260      |",
+        "| a  | b  | 1140      |",
+        "| a  | c  | 1260      |",
+        "| a  | d  | 1080      |",
+        "| a  | e  | 1260      |",
+        "| b  | a  | 1302      |",
+        "| b  | b  | 1178      |",
+        "| b  | c  | 1302      |",
+        "| b  | d  | 1116      |",
+        "| b  | e  | 1302      |",
+        "| c  | a  | 1176      |",
+        "| c  | b  | 1064      |",
+        "| c  | c  | 1176      |",
+        "| c  | d  | 1008      |",
+        "| c  | e  | 1176      |",
+        "| d  | a  | 924       |",
+        "| d  | b  | 836       |",
+        "| d  | c  | 924       |",
+        "| d  | d  | 792       |",
+        "| d  | e  | 924       |",
+        "| e  | a  | 1323      |",
+        "| e  | b  | 1197      |",
+        "| e  | c  | 1323      |",
+        "| e  | d  | 1134      |",
+        "| e  | e  | 1323      |",
+        "+----+----+-----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]

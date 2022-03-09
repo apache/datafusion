@@ -17,6 +17,7 @@
 
 //! Common unit test utility methods
 
+use crate::arrow::array::UInt32Array;
 use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
@@ -210,6 +211,25 @@ pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send 
     let poll = fut.poll_unpin(&mut cx);
 
     assert!(poll.is_pending());
+}
+
+/// Create vector batches
+pub fn create_vec_batches(schema: &Arc<Schema>, n: usize) -> Vec<RecordBatch> {
+    let batch = create_batch(schema);
+    let mut vec = Vec::with_capacity(n);
+    for _ in 0..n {
+        vec.push(batch.clone());
+    }
+    vec
+}
+
+/// Create batch
+fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
+    RecordBatch::try_new(
+        schema.clone(),
+        vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
+    )
+    .unwrap()
 }
 
 pub mod exec;

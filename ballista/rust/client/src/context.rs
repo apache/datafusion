@@ -17,13 +17,15 @@
 
 //! Distributed execution context.
 
+use parking_lot::Mutex;
 use sqlparser::ast::Statement;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
+use ballista_core::serde::protobuf::LogicalPlanNode;
 use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
 
 use datafusion::catalog::TableReference;
@@ -68,10 +70,12 @@ impl BallistaContextState {
         concurrent_tasks: usize,
     ) -> ballista_core::error::Result<Self> {
         use ballista_core::serde::protobuf::scheduler_grpc_client::SchedulerGrpcClient;
+        use ballista_core::serde::protobuf::PhysicalPlanNode;
+        use ballista_core::serde::BallistaCodec;
 
         log::info!("Running in local mode. Scheduler will be run in-proc");
 
-        let addr = ballista_scheduler::new_standalone_scheduler().await?;
+        let addr = ballista_scheduler::standalone::new_standalone_scheduler().await?;
 
         let scheduler = loop {
             match SchedulerGrpcClient::connect(format!(
@@ -88,7 +92,16 @@ impl BallistaContextState {
             }
         };
 
-        ballista_executor::new_standalone_executor(scheduler, concurrent_tasks).await?;
+        let default_codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+            BallistaCodec::default();
+
+        ballista_executor::new_standalone_executor(
+            scheduler,
+            concurrent_tasks,
+            default_codec,
+        )
+        .await?;
+
         Ok(Self {
             config: config.clone(),
             scheduler_host: "localhost".to_string(),
@@ -142,8 +155,8 @@ impl BallistaContext {
 
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
-            let guard = self.state.lock().unwrap();
-            create_df_ctx_with_ballista_query_planner(
+            let guard = self.state.lock();
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -162,8 +175,8 @@ impl BallistaContext {
 
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
-            let guard = self.state.lock().unwrap();
-            create_df_ctx_with_ballista_query_planner(
+            let guard = self.state.lock();
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -186,8 +199,8 @@ impl BallistaContext {
 
         // use local DataFusion context for now but later this might call the scheduler
         let mut ctx = {
-            let guard = self.state.lock().unwrap();
-            create_df_ctx_with_ballista_query_planner(
+            let guard = self.state.lock();
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &guard.scheduler_host,
                 guard.scheduler_port,
                 guard.config(),
@@ -203,7 +216,7 @@ impl BallistaContext {
         name: &str,
         table: Arc<dyn TableProvider>,
     ) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         state.tables.insert(name.to_owned(), table);
         Ok(())
     }
@@ -280,8 +293,8 @@ impl BallistaContext {
     /// might require the schema to be inferred.
     pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
         let mut ctx = {
-            let state = self.state.lock().unwrap();
-            create_df_ctx_with_ballista_query_planner(
+            let state = self.state.lock();
+            create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
                 &state.scheduler_host,
                 state.scheduler_port,
                 state.config(),
@@ -291,7 +304,7 @@ impl BallistaContext {
         let is_show = self.is_show_statement(sql).await?;
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             ctx = ExecutionContext::with_config(
                 ExecutionConfig::new().with_information_schema(
                     state.config.default_with_information_schema(),
@@ -301,7 +314,7 @@ impl BallistaContext {
 
         // register tables with DataFusion context
         {
-            let state = self.state.lock().unwrap();
+            let state = self.state.lock();
             for (name, prov) in &state.tables {
                 ctx.register_table(
                     TableReference::Bare { table: name },
@@ -456,13 +469,17 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "standalone")]
+    #[ignore]
+    // Tracking: https://github.com/apache/arrow-datafusion/issues/1840
     async fn test_task_stuck_when_referenced_task_failed() {
         use super::*;
         use datafusion::arrow::datatypes::Schema;
         use datafusion::arrow::util::pretty;
         use datafusion::datasource::file_format::csv::CsvFormat;
         use datafusion::datasource::file_format::parquet::ParquetFormat;
-        use datafusion::datasource::listing::{ListingOptions, ListingTable};
+        use datafusion::datasource::listing::{
+            ListingOptions, ListingTable, ListingTableConfig,
+        };
 
         use ballista_core::config::{
             BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
@@ -483,7 +500,7 @@ mod tests {
             .unwrap();
 
         {
-            let mut guard = context.state.lock().unwrap();
+            let mut guard = context.state.lock();
             let csv_table = guard.tables.get("single_nan");
 
             if let Some(table_provide) = csv_table {
@@ -500,12 +517,16 @@ mod tests {
                         collect_stat: x.collect_stat,
                         target_partitions: x.target_partitions,
                     };
-                    let error_table = ListingTable::new(
+
+                    let config = ListingTableConfig::new(
                         listing_table.object_store().clone(),
                         listing_table.table_path().to_string(),
-                        Arc::new(Schema::new(vec![])),
-                        error_options,
-                    );
+                    )
+                    .with_schema(Arc::new(Schema::new(vec![])))
+                    .with_listing_options(error_options);
+
+                    let error_table = ListingTable::try_new(config).unwrap();
+
                     // change the table to an error table
                     guard
                         .tables
@@ -520,5 +541,25 @@ mod tests {
             .unwrap();
         let results = df.collect().await.unwrap();
         pretty::print_batches(&results);
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_empty_exec_with_one_row() {
+        use crate::context::BallistaContext;
+        use ballista_core::config::{
+            BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+        };
+
+        let config = BallistaConfigBuilder::default()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
+            .build()
+            .unwrap();
+        let context = BallistaContext::standalone(&config, 1).await.unwrap();
+
+        let sql = "select EXTRACT(year FROM to_timestamp('2020-09-08T12:13:14+00:00'));";
+
+        let df = context.sql(sql).await.unwrap();
+        assert!(!df.collect().await.unwrap().is_empty());
     }
 }

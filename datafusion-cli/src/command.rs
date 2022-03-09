@@ -20,7 +20,8 @@
 use crate::context::Context;
 use crate::functions::{display_all_functions, Function};
 use crate::print_format::PrintFormat;
-use crate::print_options::{self, PrintOptions};
+use crate::print_options::PrintOptions;
+use clap::ArgEnum;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -206,10 +207,14 @@ impl OutputFormat {
             Self::ChangeFormat(format) => {
                 if let Ok(format) = format.parse::<PrintFormat>() {
                     print_options.format = format;
-                    println!("Output format is {}.", print_options.format);
+                    println!("Output format is {:?}.", print_options.format);
                     Ok(())
                 } else {
-                    Err(DataFusionError::Execution(format!("{} is not a valid format type [possible values: csv, tsv, table, json, ndjson]", format)))
+                    Err(DataFusionError::Execution(format!(
+                        "{:?} is not a valid format type [possible values: {:?}]",
+                        format,
+                        PrintFormat::value_variants()
+                    )))
                 }
             }
         }

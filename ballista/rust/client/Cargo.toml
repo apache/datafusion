@@ -24,7 +24,7 @@ homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
-rust-version = "1.58"
+rust-version = "1.59"
 
 [dependencies]
 ballista-core = { path = "../core", version = "0.6.0" }
@@ -34,9 +34,10 @@ futures = "0.3"
 log = "0.4"
 tokio = "1.0"
 tempfile = "3"
-sqlparser = "0.13"
+sqlparser = "0.14"
+parking_lot = "0.12"
 
-datafusion = { path = "../../../datafusion", version = "6.0.0" }
+datafusion = { path = "../../../datafusion", version = "7.0.0" }
 
 [features]
 default = []

@@ -10,7 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::SchedulerServer;
+use crate::scheduler_server::SchedulerServer;
+use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use ballista_core::BALLISTA_VERSION;
 use warp::Rejection;
 
@@ -29,8 +30,8 @@ pub struct ExecutorMetaResponse {
     pub last_seen: u128,
 }
 
-pub(crate) async fn scheduler_state(
-    data_server: SchedulerServer,
+pub(crate) async fn scheduler_state<T: AsLogicalPlan, U: AsExecutionPlan>(
+    data_server: SchedulerServer<T, U>,
 ) -> Result<impl warp::Reply, Rejection> {
     // TODO: Display last seen information in UI
     let executors: Vec<ExecutorMetaResponse> = data_server

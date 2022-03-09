@@ -34,6 +34,8 @@ use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
 
+/// The default file extension of avro files
+pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
 /// Avro `FileFormat` implementation.
 #[derive(Default, Debug)]
 pub struct AvroFormat;

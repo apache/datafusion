@@ -22,6 +22,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
@@ -112,6 +113,9 @@ impl ExecutionPlan for CustomExecutionPlan {
     }
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
+    }
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
@@ -242,7 +246,7 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let batches = collect(physical_plan, runtime).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
@@ -289,7 +293,7 @@ async fn optimizers_catch_all_statistics() {
     )
     .unwrap();
 
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let actual = collect(physical_plan, runtime).await.unwrap();
 
     assert_eq!(actual.len(), 1);

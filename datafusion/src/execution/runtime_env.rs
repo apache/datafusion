@@ -22,9 +22,7 @@ use crate::{
     error::Result,
     execution::{
         disk_manager::{DiskManager, DiskManagerConfig},
-        memory_manager::{
-            MemoryConsumer, MemoryConsumerId, MemoryManager, MemoryManagerConfig,
-        },
+        memory_manager::{MemoryConsumerId, MemoryManager, MemoryManagerConfig},
     },
 };
 
@@ -71,13 +69,23 @@ impl RuntimeEnv {
     }
 
     /// Register the consumer to get it tracked
-    pub fn register_consumer(&self, memory_consumer: &Arc<dyn MemoryConsumer>) {
-        self.memory_manager.register_consumer(memory_consumer);
+    pub fn register_requester(&self, id: &MemoryConsumerId) {
+        self.memory_manager.register_requester(id);
     }
 
-    /// Drop the consumer from get tracked
-    pub fn drop_consumer(&self, id: &MemoryConsumerId) {
-        self.memory_manager.drop_consumer(id)
+    /// Drop the consumer from get tracked, reclaim memory
+    pub fn drop_consumer(&self, id: &MemoryConsumerId, mem_used: usize) {
+        self.memory_manager.drop_consumer(id, mem_used)
+    }
+
+    /// Grow tracker memory of `delta`
+    pub fn grow_tracker_usage(&self, delta: usize) {
+        self.memory_manager.grow_tracker_usage(delta)
+    }
+
+    /// Shrink tracker memory of `delta`
+    pub fn shrink_tracker_usage(&self, delta: usize) {
+        self.memory_manager.shrink_tracker_usage(delta)
     }
 }
 

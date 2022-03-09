@@ -20,6 +20,7 @@ use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -63,6 +64,14 @@ impl ExecutionPlan for NdJsonExec {
 
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(self.base_config.file_groups.len())
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -137,6 +146,8 @@ impl ExecutionPlan for NdJsonExec {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::Array;
+    use arrow::datatypes::{Field, Schema};
     use futures::StreamExt;
 
     use crate::datasource::{
@@ -207,6 +218,47 @@ mod tests {
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nd_json_exec_file_with_missing_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+        use arrow::datatypes::DataType;
+        let path = format!("{}/1.json", TEST_DATA_BASE);
+
+        let actual_schema = infer_schema(path.clone()).await?;
+
+        let mut fields = actual_schema.fields().clone();
+        fields.push(Field::new("missing_col", DataType::Int32, true));
+        let missing_field_idx = fields.len() - 1;
+
+        let file_schema = Arc::new(Schema::new(fields));
+
+        let exec = NdJsonExec::new(FileScanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_groups: vec![vec![local_unpartitioned_file(path.clone())]],
+            file_schema,
+            statistics: Statistics::default(),
+            projection: None,
+            limit: Some(3),
+            table_partition_cols: vec![],
+        });
+
+        let mut it = exec.execute(0, runtime).await?;
+        let batch = it.next().await.unwrap()?;
+
+        assert_eq!(batch.num_rows(), 3);
+        let values = batch
+            .column(missing_field_idx)
+            .as_any()
+            .downcast_ref::<arrow::array::Int32Array>()
+            .unwrap();
+        assert_eq!(values.len(), 3);
+        assert!(values.is_null(0));
+        assert!(values.is_null(1));
+        assert!(values.is_null(2));
 
         Ok(())
     }

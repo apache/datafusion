@@ -27,6 +27,7 @@ use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
+use super::expressions::PhysicalSortExpr;
 use super::{
     coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
@@ -137,6 +138,14 @@ impl ExecutionPlan for CrossJoinExec {
         self.right.output_partitioning()
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     async fn execute(
         &self,
         partition: usize,
@@ -192,7 +201,7 @@ impl ExecutionPlan for CrossJoinExec {
             schema: self.schema.clone(),
             left_data,
             right: stream,
-            right_batch: Arc::new(std::sync::Mutex::new(None)),
+            right_batch: Arc::new(parking_lot::Mutex::new(None)),
             left_index: 0,
             num_input_batches: 0,
             num_input_rows: 0,
@@ -299,7 +308,7 @@ struct CrossJoinStream {
     /// Current value on the left
     left_index: usize,
     /// Current batch being processed from the right side
-    right_batch: Arc<std::sync::Mutex<Option<RecordBatch>>>,
+    right_batch: Arc<parking_lot::Mutex<Option<RecordBatch>>>,
     /// number of input batches
     num_input_batches: usize,
     /// number of input rows
@@ -354,7 +363,7 @@ impl Stream for CrossJoinStream {
         if self.left_index > 0 && self.left_index < self.left_data.num_rows() {
             let start = Instant::now();
             let right_batch = {
-                let right_batch = self.right_batch.lock().unwrap();
+                let right_batch = self.right_batch.lock();
                 right_batch.clone().unwrap()
             };
             let result =
@@ -389,7 +398,7 @@ impl Stream for CrossJoinStream {
                     }
                     self.left_index = 1;
 
-                    let mut right_batch = self.right_batch.lock().unwrap();
+                    let mut right_batch = self.right_batch.lock();
                     *right_batch = Some(batch);
 
                     Some(result)

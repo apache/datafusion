@@ -17,6 +17,7 @@
 
 //! Values execution plan
 
+use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
@@ -119,6 +120,14 @@ impl ExecutionPlan for ValuesExec {
         Partitioning::UnknownPartitioning(1)
     }
 
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
+    }
+
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -181,7 +190,7 @@ mod tests {
     async fn values_empty_case() -> Result<()> {
         let schema = test_util::aggr_test_schema();
         let empty = ValuesExec::try_new(schema, vec![]);
-        assert!(!empty.is_ok());
+        assert!(empty.is_err());
         Ok(())
     }
 }

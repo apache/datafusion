@@ -18,8 +18,13 @@
 [workspace]
 members = [
     "datafusion",
+    "datafusion-common",
+    "datafusion-expr",
+    "datafusion-jit",
+    "datafusion-physical-expr",
     "datafusion-cli",
     "datafusion-examples",
+    "datafusion-proto",
     "benchmarks",
     "ballista/rust/client",
     "ballista/rust/core",
@@ -31,9 +36,3 @@ members = [
 [profile.release]
 lto = true
 codegen-units = 1
-
-[patch.crates-io]
-# TODO: TEMPORARY
-arrow = { git = "https://github.com/tustvold/arrow-rs", rev = "078b37cd76d134a6788c2e3bb2db1a35106d9c59" }
-arrow-flight = { git = "https://github.com/tustvold/arrow-rs", rev = "078b37cd76d134a6788c2e3bb2db1a35106d9c59" }
-parquet = { git = "https://github.com/tustvold/arrow-rs", rev = "078b37cd76d134a6788c2e3bb2db1a35106d9c59" }

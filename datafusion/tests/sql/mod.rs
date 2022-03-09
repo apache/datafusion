@@ -96,8 +96,10 @@ pub mod udf;
 pub mod union;
 pub mod window;
 
+mod explain;
 pub mod information_schema;
-#[cfg_attr(not(feature = "unicode_expressions"), ignore)]
+mod partitioned_csv;
+#[cfg(feature = "unicode_expressions")]
 pub mod unicode;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
@@ -543,7 +545,7 @@ async fn execute_to_batches(ctx: &mut ExecutionContext, sql: &str) -> Vec<Record
     let plan = ctx.create_physical_plan(&plan).await.expect(&msg);
 
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().unwrap().runtime_env.clone();
+    let runtime = ctx.state.lock().runtime_env.clone();
     let results = collect(plan, runtime).await.expect(&msg);
 
     assert_eq!(logical_schema.as_ref(), optimized_logical_schema.as_ref());
@@ -597,27 +599,6 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
         }
     }
     result
-}
-
-async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
-    datatype: DataType,
-) -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", datatype, false)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(T::from(vec!["", "a", "aa", "aaa"]))],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
-    let mut ctx = ExecutionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
-    let sql = "SELECT length(c1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
-    let expected = vec![vec!["0"], vec!["1"], vec!["2"], vec!["3"]];
-    assert_eq!(expected, actual);
-    Ok(())
 }
 
 async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &mut ExecutionContext) {
@@ -881,7 +862,7 @@ async fn nyc() -> Result<()> {
             },
             _ => unreachable!(),
         },
-        _ => unreachable!(false),
+        _ => unreachable!(),
     }
 
     Ok(())

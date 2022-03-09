@@ -20,7 +20,9 @@ fn main() -> Result<(), String> {
     println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
 
     println!("cargo:rerun-if-changed=proto/ballista.proto");
+    println!("cargo:rerun-if-changed=proto/datafusion.proto");
     tonic_build::configure()
+        .extern_path(".datafusion", "::datafusion_proto::protobuf")
         .compile(&["proto/ballista.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))
 }

@@ -25,7 +25,7 @@
 //! nothing in the row group can match.
 //!
 //! This code is currently specific to Parquet, but soon (TM), via
-//! https://github.com/apache/arrow-datafusion/issues/363 it will
+//! <https://github.com/apache/arrow-datafusion/issues/363> it will
 //! be genericized.
 
 use std::convert::TryFrom;
@@ -37,16 +37,17 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
+use crate::execution::context::ExecutionProps;
+use crate::physical_plan::planner::create_physical_expr;
 use crate::prelude::lit;
 use crate::{
     error::{DataFusionError, Result},
-    execution::context::ExecutionContextState,
     logical_plan::{Column, DFSchema, Expr, Operator},
     optimizer::utils,
-    physical_plan::{planner::DefaultPhysicalPlanner, ColumnarValue, PhysicalExpr},
+    physical_plan::{ColumnarValue, PhysicalExpr},
 };
 
-/// Interface to pass statistics information to [`PruningPredicates`]
+/// Interface to pass statistics information to [`PruningPredicate`]
 ///
 /// Returns statistics for containers / files of data in Arrays.
 ///
@@ -87,7 +88,7 @@ pub trait PruningStatistics {
 /// Evaluates filter expressions on statistics in order to
 /// prune data containers (e.g. parquet row group)
 ///
-/// See [`try_new`] for more information.
+/// See [`PruningPredicate::try_new`] for more information.
 #[derive(Debug, Clone)]
 pub struct PruningPredicate {
     /// The input schema against which the predicate will be evaluated
@@ -96,6 +97,8 @@ pub struct PruningPredicate {
     predicate_expr: Arc<dyn PhysicalExpr>,
     /// The statistics required to evaluate this predicate
     required_columns: RequiredStatColumns,
+    /// Logical predicate from which this predicate expr is derived (required for serialization)
+    logical_expr: Expr,
 }
 
 impl PruningPredicate {
@@ -118,28 +121,31 @@ impl PruningPredicate {
     /// For example, the filter expression `(column / 2) = 4` becomes
     /// the pruning predicate
     /// `(column_min / 2) <= 4 && 4 <= (column_max / 2))`
-    pub fn try_new(expr: &Expr, schema: SchemaRef) -> Result<Self> {
+    pub fn try_new(expr: Expr, schema: SchemaRef) -> Result<Self> {
         // build predicate expression once
         let mut required_columns = RequiredStatColumns::new();
         let logical_predicate_expr =
-            build_predicate_expression(expr, schema.as_ref(), &mut required_columns)?;
+            build_predicate_expression(&expr, schema.as_ref(), &mut required_columns)?;
         let stat_fields = required_columns
             .iter()
             .map(|(_, _, f)| f.clone())
             .collect::<Vec<_>>();
         let stat_schema = Schema::new(stat_fields);
         let stat_dfschema = DFSchema::try_from(stat_schema.clone())?;
-        let execution_context_state = ExecutionContextState::new();
-        let predicate_expr = DefaultPhysicalPlanner::default().create_physical_expr(
+
+        // TODO allow these properties to be passed in
+        let execution_props = ExecutionProps::new();
+        let predicate_expr = create_physical_expr(
             &logical_predicate_expr,
             &stat_dfschema,
             &stat_schema,
-            &execution_context_state,
+            &execution_props,
         )?;
         Ok(Self {
             schema,
             predicate_expr,
             required_columns,
+            logical_expr: expr,
         })
     }
 
@@ -198,6 +204,11 @@ impl PruningPredicate {
     /// Return a reference to the input schema
     pub fn schema(&self) -> &SchemaRef {
         &self.schema
+    }
+
+    /// Returns a reference to the logical expr used to construct this pruning predicate
+    pub fn logical_expr(&self) -> &Expr {
+        &self.logical_expr
     }
 }
 
@@ -1347,7 +1358,7 @@ mod tests {
         // No stats for s2 ==> some rows could pass
         // s2 [3, None] (null max) ==> some rows could pass
 
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         let expected = vec![false, true, true, true];
 
@@ -1376,7 +1387,7 @@ mod tests {
         // No stats for s2 ==> some rows could pass
         // s2 [3, None] (null max) ==> some rows could pass
 
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         let expected = vec![true, true, true, false, true, true];
         assert_eq!(result, expected);
@@ -1420,7 +1431,7 @@ mod tests {
 
         // b1
         let expr = col("b1");
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_true);
     }
@@ -1431,7 +1442,7 @@ mod tests {
 
         // !b1
         let expr = col("b1").not();
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_false);
     }
@@ -1442,7 +1453,7 @@ mod tests {
 
         // b1 = true
         let expr = col("b1").eq(lit(true));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_true);
     }
@@ -1453,7 +1464,7 @@ mod tests {
 
         // !b1 = true
         let expr = col("b1").not().eq(lit(true));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_false);
     }
@@ -1486,13 +1497,13 @@ mod tests {
 
         // i > 0
         let expr = col("i").gt(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
 
         // -i < 0
         let expr = Expr::Negative(Box::new(col("i"))).lt(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
@@ -1511,13 +1522,13 @@ mod tests {
 
         // i <= 0
         let expr = col("i").lt_eq(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
 
         // -i >= 0
         let expr = Expr::Negative(Box::new(col("i"))).gt_eq(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
@@ -1536,7 +1547,7 @@ mod tests {
 
         // i = 0
         let expr = col("i").eq(lit(0));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }
@@ -1555,13 +1566,13 @@ mod tests {
 
         // i > -1
         let expr = col("i").gt(lit(-1));
-        let p = PruningPredicate::try_new(&expr, schema.clone()).unwrap();
+        let p = PruningPredicate::try_new(expr, schema.clone()).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
 
         // -i < 1
         let expr = Expr::Negative(Box::new(col("i"))).lt(lit(1));
-        let p = PruningPredicate::try_new(&expr, schema).unwrap();
+        let p = PruningPredicate::try_new(expr, schema).unwrap();
         let result = p.prune(&statistics).unwrap();
         assert_eq!(result, expected_ret);
     }

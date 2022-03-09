@@ -32,6 +32,7 @@ use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::common::{AbortOnDropMany, AbortOnDropSingle};
+use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
 use async_trait::async_trait;
@@ -146,6 +147,10 @@ impl ExecutionPlan for RepartitionExec {
         vec![self.input.clone()]
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        false
+    }
+
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -163,6 +168,10 @@ impl ExecutionPlan for RepartitionExec {
 
     fn output_partitioning(&self) -> Partitioning {
         self.partitioning.clone()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        None
     }
 
     async fn execute(
@@ -447,7 +456,7 @@ struct RepartitionStream {
     /// Number of input partitions that have finished sending batches to this output channel
     num_input_partitions_processed: usize,
 
-    /// Schema
+    /// Schema wrapped by Arc
     schema: SchemaRef,
 
     /// channel containing the repartitioned batches
@@ -494,6 +503,7 @@ impl RecordBatchStream for RepartitionStream {
 mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
+    use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
         physical_plan::{collect, expressions::col, memory::MemoryExec},
@@ -508,7 +518,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow::{
-        array::{ArrayRef, StringArray, UInt32Array},
+        array::{ArrayRef, StringArray},
         error::ArrowError,
     };
     use futures::FutureExt;
@@ -599,23 +609,6 @@ mod tests {
 
     fn test_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]))
-    }
-
-    fn create_vec_batches(schema: &Arc<Schema>, n: usize) -> Vec<RecordBatch> {
-        let batch = create_batch(schema);
-        let mut vec = Vec::with_capacity(n);
-        for _ in 0..n {
-            vec.push(batch.clone());
-        }
-        vec
-    }
-
-    fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
-        RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
-        )
-        .unwrap()
     }
 
     async fn repartition(
