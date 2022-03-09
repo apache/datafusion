@@ -1989,7 +1989,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             if self.has_table("information_schema", "tables") {
                 let mut rewrite =
                     DFParser::parse_sql("SELECT * FROM information_schema.tables;")?;
-                self.statement_to_plan(rewrite.remove(0))
+                assert_eq!(rewrite.len(), 1);
+                self.statement_to_plan(rewrite.pop().unwrap())
             } else {
                 Err(DataFusionError::Plan(
                     "SHOW TABLES is not supported unless information_schema is enabled"
@@ -2059,7 +2060,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         );
 
         let mut rewrite = DFParser::parse_sql(&query)?;
-        self.statement_to_plan(rewrite.remove(0))
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop().unwrap())
     }
 
     /// Return true if there is a table provider available for "schema.table"

@@ -311,7 +311,7 @@ impl ExecutionContext {
         // create a query planner
         let state = self.state.lock().clone();
         let query_planner = SqlToRel::new(&state);
-        query_planner.statement_to_plan(statements.remove(0))
+        query_planner.statement_to_plan(statements.pop().unwrap())
     }
 
     /// Registers a variable provider within this context.
