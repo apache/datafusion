@@ -55,6 +55,7 @@ Projects that adapt to or serve as plugins to DataFusion:
 - [datafusion-java](https://github.com/datafusion-contrib/datafusion-java)
 - [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
 - [datafusion-hdfs-native](https://github.com/datafusion-contrib/datafusion-hdfs-native)
+- [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 
 Here are some of the projects known to use DataFusion:
 
