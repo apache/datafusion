@@ -18,7 +18,7 @@
 //! A table that uses the `ObjectStore` listing capability
 //! to get the list of files to process.
 
-mod helpers;
-mod table;
+pub mod helpers;
+pub mod table;
 
 pub use table::{ListingOptions, ListingTable, ListingTableConfig};

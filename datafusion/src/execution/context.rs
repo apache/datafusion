@@ -29,6 +29,7 @@ use crate::{
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
+        hybrid_table::HybridTable,
         MemTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
@@ -38,6 +39,8 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
+
+use arrow::record_batch::RecordBatch;
 use log::{debug, trace};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
@@ -435,6 +438,32 @@ impl ExecutionContext {
             self.state.clone(),
             &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
         )))
+    }
+
+    pub async fn register_hybrid_table<'a>(
+        &'a mut self,
+        name: &'a str,
+        uri: &'a str,
+        options: ListingOptions,
+        memory_partitions: &[Vec<RecordBatch>],
+        provided_schema: Option<SchemaRef>,
+    ) -> Result<()> {
+        let (object_store, path) = self.object_store(uri)?;
+        let resolved_schema = match provided_schema {
+            None => {
+                options
+                    .infer_schema(Arc::clone(&object_store), path)
+                    .await?
+            }
+            Some(s) => s,
+        };
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(options)
+            .with_schema(resolved_schema.clone());
+        let table =
+            HybridTable::try_new(config, resolved_schema.clone(), memory_partitions)?;
+        self.register_table(name, Arc::new(table))?;
+        Ok(())
     }
 
     /// Registers a table that uses the listing feature of the object store to

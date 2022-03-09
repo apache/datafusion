@@ -21,6 +21,7 @@
 pub mod datasource;
 pub mod empty;
 pub mod file_format;
+pub mod hybrid_table;
 pub mod listing;
 pub mod memory;
 pub mod object_store;
