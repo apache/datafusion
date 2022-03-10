@@ -297,7 +297,7 @@ impl ExecutionContext {
     ///
     /// This function is intended for internal use and should not be called directly.
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        let statements = DFParser::parse_sql(sql)?;
+        let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
             return Err(DataFusionError::NotImplemented(
@@ -308,7 +308,7 @@ impl ExecutionContext {
         // create a query planner
         let state = self.state.lock().clone();
         let query_planner = SqlToRel::new(&state);
-        query_planner.statement_to_plan(&statements[0])
+        query_planner.statement_to_plan(statements.pop().unwrap())
     }
 
     /// Registers a variable provider within this context.

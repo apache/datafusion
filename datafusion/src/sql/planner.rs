@@ -128,24 +128,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logical plan from an DataFusion SQL statement
-    pub fn statement_to_plan(&self, statement: &DFStatement) -> Result<LogicalPlan> {
+    pub fn statement_to_plan(&self, statement: DFStatement) -> Result<LogicalPlan> {
         match statement {
             DFStatement::CreateExternalTable(s) => self.external_table_to_plan(s),
-            DFStatement::Statement(s) => self.sql_statement_to_plan(s),
+            DFStatement::Statement(s) => self.sql_statement_to_plan(*s),
         }
     }
 
     /// Generate a logical plan from an SQL statement
-    pub fn sql_statement_to_plan(&self, sql: &Statement) -> Result<LogicalPlan> {
+    pub fn sql_statement_to_plan(&self, sql: Statement) -> Result<LogicalPlan> {
         match sql {
             Statement::Explain {
                 verbose,
                 statement,
                 analyze,
                 describe_alias: _,
-            } => self.explain_statement_to_plan(*verbose, *analyze, statement),
-            Statement::Query(query) => self.query_to_plan(query),
-            Statement::ShowVariable { variable } => self.show_variable_to_plan(variable),
+            } => self.explain_statement_to_plan(verbose, analyze, *statement),
+            Statement::Query(query) => self.query_to_plan(*query),
+            Statement::ShowVariable { variable } => self.show_variable_to_plan(&variable),
             Statement::CreateTable {
                 query: Some(query),
                 name,
@@ -159,7 +159,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 && table_properties.is_empty()
                 && with_options.is_empty() =>
             {
-                let plan = self.query_to_plan(query)?;
+                let plan = self.query_to_plan(*query)?;
 
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),
@@ -182,7 +182,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             {
                 Ok(LogicalPlan::DropTable(DropTable {
                     name: names.get(0).unwrap().to_string(),
-                    if_exists: *if_exists,
+                    if_exists,
                     schema: DFSchemaRef::new(DFSchema::empty()),
                 }))
             }
@@ -192,7 +192,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 full,
                 table_name,
                 filter,
-            } => self.show_columns_to_plan(*extended, *full, table_name, filter.as_ref()),
+            } => self.show_columns_to_plan(extended, full, &table_name, filter.as_ref()),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL statement: {:?}",
                 sql
@@ -201,22 +201,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a logic plan from an SQL query
-    pub fn query_to_plan(&self, query: &Query) -> Result<LogicalPlan> {
+    pub fn query_to_plan(&self, query: Query) -> Result<LogicalPlan> {
         self.query_to_plan_with_alias(query, None, &mut HashMap::new())
     }
 
     /// Generate a logic plan from an SQL query with optional alias
     pub fn query_to_plan_with_alias(
         &self,
-        query: &Query,
+        query: Query,
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        let set_expr = &query.body;
-        if let Some(with) = &query.with {
+        let set_expr = query.body;
+        if let Some(with) = query.with {
             // Process CTEs from top to bottom
             // do not allow self-references
-            for cte in &with.cte_tables {
+            for cte in with.cte_tables {
                 // A `WITH` block can't use the same name for many times
                 let cte_name: &str = cte.alias.name.value.as_ref();
                 if ctes.contains_key(cte_name) {
@@ -227,11 +227,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 }
                 // create logical plan & pass backreferencing CTEs
                 let logical_plan = self.query_to_plan_with_alias(
-                    &cte.query,
+                    cte.query,
                     Some(cte.alias.name.value.clone()),
                     &mut ctes.clone(),
                 )?;
-                ctes.insert(cte.alias.name.value.clone(), logical_plan);
+                ctes.insert(cte.alias.name.value, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(set_expr, alias, ctes)?;
@@ -243,12 +243,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn set_expr_to_plan(
         &self,
-        set_expr: &SetExpr,
+        set_expr: SetExpr,
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
         match set_expr {
-            SetExpr::Select(s) => self.select_to_plan(s.as_ref(), ctes, alias),
+            SetExpr::Select(s) => self.select_to_plan(*s, ctes, alias),
             SetExpr::Values(v) => self.sql_values_to_plan(v),
             SetExpr::SetOperation {
                 op,
@@ -256,8 +256,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right,
                 all,
             } => {
-                let left_plan = self.set_expr_to_plan(left.as_ref(), None, ctes)?;
-                let right_plan = self.set_expr_to_plan(right.as_ref(), None, ctes)?;
+                let left_plan = self.set_expr_to_plan(*left, None, ctes)?;
+                let right_plan = self.set_expr_to_plan(*right, None, ctes)?;
                 match (op, all) {
                     (SetOperator::Union, true) => {
                         union_with_alias(left_plan, right_plan, alias)
@@ -290,7 +290,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logical plan from a CREATE EXTERNAL TABLE statement
     pub fn external_table_to_plan(
         &self,
-        statement: &CreateExternalTable,
+        statement: CreateExternalTable,
     ) -> Result<LogicalPlan> {
         let CreateExternalTable {
             name,
@@ -301,7 +301,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         } = statement;
 
         // semantic checks
-        match *file_type {
+        match file_type {
             FileType::CSV => {}
             FileType::Parquet => {
                 if !columns.is_empty() {
@@ -319,10 +319,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         Ok(LogicalPlan::CreateExternalTable(PlanCreateExternalTable {
             schema: schema.to_dfschema_ref()?,
-            name: name.clone(),
-            location: location.clone(),
-            file_type: *file_type,
-            has_header: *has_header,
+            name,
+            location,
+            file_type,
+            has_header,
         }))
     }
 
@@ -332,7 +332,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         verbose: bool,
         analyze: bool,
-        statement: &Statement,
+        statement: Statement,
     ) -> Result<LogicalPlan> {
         let plan = self.sql_statement_to_plan(statement)?;
         let plan = Arc::new(plan);
@@ -357,8 +357,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn build_schema(&self, columns: &[SQLColumnDef]) -> Result<Schema> {
-        let mut fields = Vec::new();
+    fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
+        let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
             let data_type = self.make_data_type(&column.data_type)?;
@@ -400,13 +400,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn plan_from_tables(
         &self,
-        from: &[TableWithJoins],
+        from: Vec<TableWithJoins>,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<Vec<LogicalPlan>> {
         match from.len() {
             0 => Ok(vec![LogicalPlanBuilder::empty(true).build()?]),
             _ => from
-                .iter()
+                .into_iter()
                 .map(|t| self.plan_table_with_joins(t, ctes))
                 .collect::<Result<Vec<_>>>(),
         }
@@ -414,16 +414,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn plan_table_with_joins(
         &self,
-        t: &TableWithJoins,
+        t: TableWithJoins,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        let left = self.create_relation(&t.relation, ctes)?;
+        let left = self.create_relation(t.relation, ctes)?;
         match t.joins.len() {
             0 => Ok(left),
-            n => {
-                let mut left = self.parse_relation_join(left, &t.joins[0], ctes)?;
-                for i in 1..n {
-                    left = self.parse_relation_join(left, &t.joins[i], ctes)?;
+            _ => {
+                let mut joins = t.joins.into_iter();
+                let mut left =
+                    self.parse_relation_join(left, joins.next().unwrap(), ctes)?;
+                for join in joins {
+                    left = self.parse_relation_join(left, join, ctes)?;
                 }
                 Ok(left)
             }
@@ -433,11 +435,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn parse_relation_join(
         &self,
         left: LogicalPlan,
-        join: &Join,
+        join: Join,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        let right = self.create_relation(&join.relation, ctes)?;
-        match &join.join_operator {
+        let right = self.create_relation(join.relation, ctes)?;
+        match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left)
             }
@@ -457,6 +459,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))),
         }
     }
+
     fn parse_cross_join(
         &self,
         left: LogicalPlan,
@@ -469,7 +472,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         left: LogicalPlan,
         right: LogicalPlan,
-        constraint: &JoinConstraint,
+        constraint: JoinConstraint,
         join_type: JoinType,
     ) -> Result<LogicalPlan> {
         match constraint {
@@ -478,13 +481,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let join_schema = left.schema().join(right.schema())?;
 
                 // parse ON expression
-                let expr = self.sql_to_rex(sql_expr, &join_schema)?;
+                let expr = self.sql_to_rex(&sql_expr, &join_schema)?;
 
                 // expression that didn't match equi-join pattern
                 let mut filter = vec![];
 
                 // extract join keys
-                extract_join_keys(&expr, &mut keys, &mut filter);
+                extract_join_keys(expr, &mut keys, &mut filter);
 
                 let mut cols = HashSet::new();
                 exprlist_to_columns(&filter, &mut cols)?;
@@ -506,11 +509,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         join_type,
                         (left_keys, right_keys),
                     )?;
+                    let join_filter_init = filter.remove(0);
                     join.filter(
                         filter
-                            .iter()
-                            .skip(1)
-                            .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
+                            .into_iter()
+                            .fold(join_filter_init, |acc, e| acc.and(e)),
                     )?
                     .build()
                 }
@@ -530,16 +533,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         },
                     )
                 {
+                    let join_filter_init = filter.remove(0);
                     LogicalPlanBuilder::from(left)
                         .join(
                             &LogicalPlanBuilder::from(right)
                                 .filter(
                                     filter
-                                        .iter()
-                                        .skip(1)
-                                        .fold(filter[0].clone(), |acc, e| {
-                                            acc.and(e.clone())
-                                        }),
+                                        .into_iter()
+                                        .fold(join_filter_init, |acc, e| acc.and(e)),
                                 )?
                                 .build()?,
                             join_type,
@@ -562,12 +563,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         },
                     )
                 {
+                    let join_filter_init = filter.remove(0);
                     LogicalPlanBuilder::from(left)
                         .filter(
                             filter
-                                .iter()
-                                .skip(1)
-                                .fold(filter[0].clone(), |acc, e| acc.and(e.clone())),
+                                .into_iter()
+                                .fold(join_filter_init, |acc, e| acc.and(e)),
                         )?
                         .join(&right, join_type, (left_keys, right_keys))?
                         .build()
@@ -580,8 +581,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
-                    .iter()
-                    .map(|x| Column::from_name(x.value.clone()))
+                    .into_iter()
+                    .map(|x| Column::from_name(x.value))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -601,11 +602,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn create_relation(
         &self,
-        relation: &TableFactor,
+        relation: TableFactor,
         ctes: &mut HashMap<String, LogicalPlan>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
-            TableFactor::Table { name, alias, .. } => {
+            TableFactor::Table {
+                ref name, alias, ..
+            } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
                 (
@@ -642,7 +645,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     ));
                 }
                 let logical_plan = self.query_to_plan_with_alias(
-                    subquery,
+                    *subquery,
                     alias.as_ref().map(|a| a.name.value.to_string()),
                     ctes,
                 )?;
@@ -660,7 +663,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             TableFactor::NestedJoin(table_with_joins) => {
-                (self.plan_table_with_joins(table_with_joins, ctes)?, &None)
+                (self.plan_table_with_joins(*table_with_joins, ctes)?, None)
             }
             // @todo Support TableFactory::TableFunction?
             _ => {
@@ -689,7 +692,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .iter()
                             .zip(columns_alias.iter())
                             .map(|(field, ident)| col(field.name()).alias(&ident.value)),
-                        Some(alias.clone().name.value),
+                        Some(alias.name.value),
                     )?
                     .build()?)
             }
@@ -702,10 +705,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Related PR: <https://github.com/apache/arrow-datafusion/pull/1566>
     fn plan_selection(
         &self,
-        select: &Select,
+        selection: Option<SQLExpr>,
         plans: Vec<LogicalPlan>,
     ) -> Result<LogicalPlan> {
-        let plan = match &select.selection {
+        let plan = match &selection {
             Some(predicate_expr) => {
                 // build join schema
                 let mut fields = vec![];
@@ -828,18 +831,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Generate a logic plan from an SQL select
     fn select_to_plan(
         &self,
-        select: &Select,
+        select: Select,
         ctes: &mut HashMap<String, LogicalPlan>,
         alias: Option<String>,
     ) -> Result<LogicalPlan> {
         // process `from` clause
-        let plans = self.plan_from_tables(&select.from, ctes)?;
+        let plans = self.plan_from_tables(select.from, ctes)?;
+        let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
 
         // process `where` clause
-        let plan = self.plan_selection(select, plans)?;
+        let plan = self.plan_selection(select.selection, plans)?;
 
         // process the SELECT expressions, with wildcards expanded.
-        let select_exprs = self.prepare_select_exprs(&plan, select)?;
+        let select_exprs =
+            self.prepare_select_exprs(&plan, select.projection, empty_from)?;
 
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
@@ -975,10 +980,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
-        select: &Select,
+        projection: Vec<SelectItem>,
+        empty_from: bool,
     ) -> Result<Vec<Expr>> {
         let input_schema = plan.schema();
-        let projection = &select.projection;
         projection
             .iter()
             .map(|expr| self.sql_select_to_rex(expr, input_schema))
@@ -987,7 +992,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|expr| {
                 Ok(match expr {
                     Expr::Wildcard => {
-                        if select.from.is_empty() {
+                        if empty_from {
                             return Err(DataFusionError::Plan(
                                 "SELECT * with no tables specified is not valid"
                                     .to_string(),
@@ -1337,7 +1342,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    fn sql_values_to_plan(&self, values: &SQLValues) -> Result<LogicalPlan> {
+    fn sql_values_to_plan(&self, values: SQLValues) -> Result<LogicalPlan> {
         // values should not be based on any other schema
         let schema = DFSchema::empty();
         let values = values
@@ -1970,9 +1975,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let variable = ObjectName(variable.to_vec()).to_string();
         if variable.as_str().eq_ignore_ascii_case("tables") {
             if self.has_table("information_schema", "tables") {
-                let rewrite =
+                let mut rewrite =
                     DFParser::parse_sql("SELECT * FROM information_schema.tables;")?;
-                self.statement_to_plan(&rewrite[0])
+                assert_eq!(rewrite.len(), 1);
+                self.statement_to_plan(rewrite.pop().unwrap())
             } else {
                 Err(DataFusionError::Plan(
                     "SHOW TABLES is not supported unless information_schema is enabled"
@@ -2041,8 +2047,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             select_list, where_clause
         );
 
-        let rewrite = DFParser::parse_sql(&query)?;
-        self.statement_to_plan(&rewrite[0])
+        let mut rewrite = DFParser::parse_sql(&query)?;
+        assert_eq!(rewrite.len(), 1);
+        self.statement_to_plan(rewrite.pop().unwrap())
     }
 
     /// Return true if there is a table provider available for "schema.table"
@@ -2099,37 +2106,41 @@ fn remove_join_expressions(
 /// foo = bar AND baz > 1 => accum=[(foo, bar)] accum_filter=[baz > 1]
 /// ```
 fn extract_join_keys(
-    expr: &Expr,
+    expr: Expr,
     accum: &mut Vec<(Column, Column)>,
     accum_filter: &mut Vec<Expr>,
 ) {
-    match expr {
+    match &expr {
         Expr::BinaryExpr { left, op, right } => match op {
             Operator::Eq => match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(l), Expr::Column(r)) => {
                     accum.push((l.clone(), r.clone()));
                 }
                 _other => {
-                    accum_filter.push(expr.clone());
+                    accum_filter.push(expr);
                 }
             },
             Operator::And => {
-                extract_join_keys(left, accum, accum_filter);
-                extract_join_keys(right, accum, accum_filter);
+                if let Expr::BinaryExpr { left, op: _, right } = expr {
+                    extract_join_keys(*left, accum, accum_filter);
+                    extract_join_keys(*right, accum, accum_filter);
+                }
             }
             _other
                 if matches!(**left, Expr::Column(_))
                     || matches!(**right, Expr::Column(_)) =>
             {
-                accum_filter.push(expr.clone());
+                accum_filter.push(expr);
             }
             _other => {
-                extract_join_keys(left, accum, accum_filter);
-                extract_join_keys(right, accum, accum_filter);
+                if let Expr::BinaryExpr { left, op: _, right } = expr {
+                    extract_join_keys(*left, accum, accum_filter);
+                    extract_join_keys(*right, accum, accum_filter);
+                }
             }
         },
         _other => {
-            accum_filter.push(expr.clone());
+            accum_filter.push(expr);
         }
     }
 }
@@ -3840,8 +3851,8 @@ mod tests {
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(sql);
-        let ast = result.unwrap();
-        planner.statement_to_plan(&ast[0])
+        let mut ast = result.unwrap();
+        planner.statement_to_plan(ast.remove(0))
     }
 
     /// Create logical plan, write with formatter, compare to expected output
