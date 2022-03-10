@@ -1444,6 +1444,7 @@ mod tests {
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
     use fmt::Debug;
+    use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};
 
@@ -1628,7 +1629,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: None } }\
-        ] }, \
+        ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -1816,8 +1817,11 @@ mod tests {
         fn default() -> Self {
             Self {
                 schema: DFSchemaRef::new(
-                    DFSchema::new(vec![DFField::new(None, "a", DataType::Int32, false)])
-                        .unwrap(),
+                    DFSchema::new_with_metadata(
+                        vec![DFField::new(None, "a", DataType::Int32, false)],
+                        HashMap::new(),
+                    )
+                    .unwrap(),
                 ),
             }
         }

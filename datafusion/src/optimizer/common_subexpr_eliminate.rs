@@ -277,7 +277,7 @@ fn build_project_plan(
         project_exprs.push(Expr::Column(field.qualified_column()));
     });
 
-    let mut schema = DFSchema::new(fields)?;
+    let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
     schema.merge(input.schema());
 
     Ok(LogicalPlan::Projection(Projection {
