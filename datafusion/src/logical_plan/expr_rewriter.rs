@@ -503,17 +503,20 @@ mod test {
         let expr = col("a") + col("b") + col("c");
 
         // Schemas with some matching and some non matching cols
-        let schema_a =
-            DFSchema::new(vec![make_field("tableA", "a"), make_field("tableA", "aa")])
-                .unwrap();
-        let schema_c =
-            DFSchema::new(vec![make_field("tableC", "cc"), make_field("tableC", "c")])
-                .unwrap();
-        let schema_b = DFSchema::new(vec![make_field("tableB", "b")]).unwrap();
+        let schema_a = make_schema_with_empty_metadata(vec![
+            make_field("tableA", "a"),
+            make_field("tableA", "aa"),
+        ]);
+        let schema_c = make_schema_with_empty_metadata(vec![
+            make_field("tableC", "cc"),
+            make_field("tableC", "c"),
+        ]);
+        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
         // non matching
-        let schema_f =
-            DFSchema::new(vec![make_field("tableC", "f"), make_field("tableC", "ff")])
-                .unwrap();
+        let schema_f = make_schema_with_empty_metadata(vec![
+            make_field("tableC", "f"),
+            make_field("tableC", "ff"),
+        ]);
         let schemas = vec![schema_c, schema_f, schema_b, schema_a]
             .into_iter()
             .map(Arc::new)
@@ -531,9 +534,9 @@ mod test {
     fn normalize_cols_priority() {
         let expr = col("a") + col("b");
         // Schemas with multiple matches for column a, first takes priority
-        let schema_a = DFSchema::new(vec![make_field("tableA", "a")]).unwrap();
-        let schema_b = DFSchema::new(vec![make_field("tableB", "b")]).unwrap();
-        let schema_a2 = DFSchema::new(vec![make_field("tableA2", "a")]).unwrap();
+        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
+        let schema_b = make_schema_with_empty_metadata(vec![make_field("tableB", "b")]);
+        let schema_a2 = make_schema_with_empty_metadata(vec![make_field("tableA2", "a")]);
         let schemas = vec![schema_a2, schema_b, schema_a]
             .into_iter()
             .map(Arc::new)
@@ -548,7 +551,7 @@ mod test {
     fn normalize_cols_non_exist() {
         // test normalizing columns when the name doesn't exist
         let expr = col("a") + col("b");
-        let schema_a = DFSchema::new(vec![make_field("tableA", "a")]).unwrap();
+        let schema_a = make_schema_with_empty_metadata(vec![make_field("tableA", "a")]);
         let schemas = vec![schema_a].into_iter().map(Arc::new).collect::<Vec<_>>();
         let schemas = schemas.iter().collect::<Vec<_>>();
 
@@ -566,6 +569,10 @@ mod test {
         let expr = col("tableA.a") + col("tableB.b");
         let unnormalized_expr = unnormalize_col(expr);
         assert_eq!(unnormalized_expr, col("a") + col("b"));
+    }
+
+    fn make_schema_with_empty_metadata(fields: Vec<DFField>) -> DFSchema {
+        DFSchema::new_with_metadata(fields, HashMap::new()).unwrap()
     }
 
     fn make_field(relation: &str, column: &str) -> DFField {

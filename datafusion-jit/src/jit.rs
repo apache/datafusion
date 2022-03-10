@@ -64,7 +64,11 @@ impl Default for JIT {
         let isa_builder = cranelift_native::builder().unwrap_or_else(|msg| {
             panic!("host machine is not supported: {}", msg);
         });
-        let isa = isa_builder.finish(settings::Flags::new(flag_builder));
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
+            .unwrap_or_else(|msg| {
+                panic!("host machine is not supported: {}", msg);
+            });
         let builder =
             JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
         let module = JITModule::new(builder);

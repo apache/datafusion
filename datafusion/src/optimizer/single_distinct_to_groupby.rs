@@ -91,7 +91,11 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     .map(|expr| expr.to_field(input.schema()).unwrap())
                     .collect::<Vec<_>>();
 
-                let grouped_schema = DFSchema::new(all_field).unwrap();
+                let grouped_schema = DFSchema::new_with_metadata(
+                    all_field,
+                    input.schema().metadata().clone(),
+                )
+                .unwrap();
                 let grouped_agg = LogicalPlan::Aggregate(Aggregate {
                     input: input.clone(),
                     group_expr: all_group_args,
@@ -100,12 +104,13 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                 });
                 let grouped_agg = optimize_children(&grouped_agg);
                 let final_agg_schema = Arc::new(
-                    DFSchema::new(
+                    DFSchema::new_with_metadata(
                         group_expr
                             .iter()
                             .chain(new_aggr_expr.iter())
                             .map(|expr| expr.to_field(&grouped_schema).unwrap())
                             .collect::<Vec<_>>(),
+                        input.schema().metadata().clone(),
                     )
                     .unwrap(),
                 );
