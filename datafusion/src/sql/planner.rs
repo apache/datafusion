@@ -712,10 +712,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             Some(predicate_expr) => {
                 // build join schema
                 let mut fields = vec![];
+                let mut metadata = std::collections::HashMap::new();
                 for plan in &plans {
                     fields.extend_from_slice(plan.schema().fields());
+                    metadata.extend(plan.schema().metadata().clone());
                 }
-                let join_schema = DFSchema::new(fields)?;
+                let join_schema = DFSchema::new_with_metadata(fields, metadata)?;
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema)?;
 
