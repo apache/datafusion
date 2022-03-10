@@ -619,7 +619,7 @@ mod test {
         let job_id = "job";
         let stage_id = 1u32;
 
-        stage_manager.add_running_stage(&job_id, stage_id, num_partitions);
+        stage_manager.add_running_stage(job_id, stage_id, num_partitions);
 
         let task_id = PartitionId {
             job_id: job_id.to_owned(),
@@ -685,7 +685,7 @@ mod test {
         let job_id = "job";
         let stage_id = 1u32;
 
-        stage_manager.add_running_stage(&job_id, stage_id, num_partitions);
+        stage_manager.add_running_stage(job_id, stage_id, num_partitions);
 
         let task_id = PartitionId {
             job_id: job_id.to_owned(),
@@ -733,7 +733,7 @@ mod test {
         let stage_id = 1u32;
 
         // Valid transformation from Running to Completed
-        stage_manager.add_running_stage(&job_id, stage_id, num_partitions);
+        stage_manager.add_running_stage(job_id, stage_id, num_partitions);
         assert!(stage_manager.is_running_stage(job_id, stage_id));
         for partition_id in 0..num_partitions {
             task_from_pending_to_completed(

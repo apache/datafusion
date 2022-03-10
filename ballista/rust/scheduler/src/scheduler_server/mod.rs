@@ -396,19 +396,13 @@ mod test {
                 .is_completed_stage(job_id, final_stage_id));
             let waiting_time_ms = test_waiting_async(|| {
                 let job_status = scheduler.state.get_job_metadata(job_id).unwrap();
-                match job_status.status {
-                    Some(job_status::Status::Completed(_)) => true,
-                    _ => false,
-                }
+                matches!(job_status.status, Some(job_status::Status::Completed(_)))
             })
             .await;
 
             let job_status = scheduler.state.get_job_metadata(job_id).unwrap();
             assert!(
-                match job_status.status {
-                    Some(job_status::Status::Completed(_)) => true,
-                    _ => false,
-                },
+                matches!(job_status.status, Some(job_status::Status::Completed(_))),
                 "Fail to update job state machine within {}ms",
                 waiting_time_ms
             );
@@ -497,20 +491,15 @@ mod test {
     ) -> Vec<u32> {
         let mut ret = vec![0, 1];
         let mut stage_id = 1;
-        loop {
-            if let Some(stage_plan) = scheduler.state.get_stage_plan(job_id, stage_id) {
-                if let Some(shuffle_writer) =
-                    stage_plan.as_any().downcast_ref::<ShuffleWriterExec>()
-                {
-                    if let Some(partitions) = shuffle_writer.shuffle_output_partitioning()
-                    {
-                        ret.push(partitions.partition_count() as u32)
-                    }
+        while let Some(stage_plan) = scheduler.state.get_stage_plan(job_id, stage_id) {
+            if let Some(shuffle_writer) =
+                stage_plan.as_any().downcast_ref::<ShuffleWriterExec>()
+            {
+                if let Some(partitions) = shuffle_writer.shuffle_output_partitioning() {
+                    ret.push(partitions.partition_count() as u32)
                 }
-                stage_id += 1;
-            } else {
-                break;
             }
+            stage_id += 1;
         }
 
         ret
