@@ -130,4 +130,11 @@ impl ExecutorManager {
         res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
         res
     }
+
+    pub(crate) fn get_available_executors_data_for_test(&self) -> Vec<ExecutorData> {
+        let mut res: Vec<ExecutorData> =
+            self.executors_data.read().values().cloned().collect();
+        res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
+        res
+    }
 }
