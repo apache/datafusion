@@ -1666,19 +1666,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    let id = function.name.0.pop().expect("one element in ident");
-                    normalize_ident(id)
+                    normalize_ident(function.name.0[0].clone())
                 };
 
                 // first, scalar built-in
                 if let Ok(fun) = functions::BuiltinScalarFunction::from_str(&name) {
-                    let args = self.function_args_to_expr(function, schema)?;
+                    let args = self.function_args_to_expr(function.args, schema)?;
 
                     return Ok(Expr::ScalarFunction { fun, args });
                 };
 
                 // then, window function
-                if let Some(window) = function.over {
+                if let Some(window) = function.over.take() {
                     let partition_by = window
                         .partition_by
                         .into_iter()
@@ -1730,7 +1729,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 fun: window_functions::WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
-                                args: self.function_args_to_expr(function, schema)?,
+                                args: self.function_args_to_expr(function.args, schema)?,
                                 partition_by,
                                 order_by,
                                 window_frame,
@@ -1741,10 +1740,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // next, aggregate built-ins
                 if let Ok(fun) = aggregates::AggregateFunction::from_str(&name) {
-                    let args = self.aggregate_fn_to_expr(fun, function, schema)?;
+                    let distinct = function.distinct;
+                    let args = self.aggregate_fn_to_expr(fun.clone(), function, schema)?;
                     return Ok(Expr::AggregateFunction {
                         fun,
-                        distinct: function.distinct,
+                        distinct,
                         args,
                     });
                 };
@@ -1752,13 +1752,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // finally, user-defined functions (UDF) and UDAF
                 match self.schema_provider.get_function_meta(&name) {
                     Some(fm) => {
-                        let args = self.function_args_to_expr(function, schema)?;
+                        let args = self.function_args_to_expr(function.args, schema)?;
 
                         Ok(Expr::ScalarUDF { fun: fm, args })
                     }
                     None => match self.schema_provider.get_aggregate_meta(&name) {
                         Some(fm) => {
-                            let args = self.function_args_to_expr(function, schema)?;
+                            let args = self.function_args_to_expr(function.args, schema)?;
                             Ok(Expr::AggregateUDF { fun: fm, args })
                         }
                         _ => Err(DataFusionError::Plan(format!(
@@ -1780,12 +1780,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn function_args_to_expr(
         &self,
-        function: sqlparser::ast::Function,
+        args: Vec<FunctionArg>,
         schema: &DFSchema,
     ) -> Result<Vec<Expr>> {
-        function
-            .args
-            .into_iter()
+        args.into_iter()
             .map(|a| self.sql_fn_arg_to_logical_expr(a, schema))
             .collect::<Result<Vec<Expr>>>()
     }
@@ -1809,7 +1807,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 })
                 .collect::<Result<Vec<Expr>>>()
         } else {
-            self.function_args_to_expr(function, schema)
+            self.function_args_to_expr(function.args, schema)
         }
     }
 
