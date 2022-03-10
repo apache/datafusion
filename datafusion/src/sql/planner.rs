@@ -1349,18 +1349,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let schema = DFSchema::empty();
         let values = values
             .0
-            .iter()
+            .into_iter()
             .map(|row| {
-                row.iter()
+                row.into_iter()
                     .map(|v| match v {
-                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(n),
-                        SQLExpr::Value(Value::SingleQuotedString(ref s)) => {
-                            Ok(lit(s.clone()))
-                        }
+                        SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
+                        SQLExpr::Value(Value::SingleQuotedString(s)) => Ok(lit(s)),
                         SQLExpr::Value(Value::Null) => {
                             Ok(Expr::Literal(ScalarValue::Utf8(None)))
                         }
-                        SQLExpr::Value(Value::Boolean(n)) => Ok(lit(*n)),
+                        SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
                         SQLExpr::UnaryOp { ref op, ref expr } => {
                             self.parse_sql_unary_op(op, expr, &schema)
                         }
