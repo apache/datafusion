@@ -250,7 +250,6 @@ impl ExecutionContext {
                 } else {
                     Some(Arc::new(schema.as_ref().to_owned().into()))
                 };
-
                 self.register_listing_table(name, location, options, provided_schema)
                     .await?;
                 let plan = LogicalPlanBuilder::empty(false).build()?;
@@ -292,25 +291,52 @@ impl ExecutionContext {
                 ..
             }) => {
                 // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
-                // so for now, we default to "public" schema
-                let catalog = self.catalog("public");
-                match catalog {
-                    Some(c) => {
-                        if if_not_exists {}
-                        if let Some(s) = c.schema(&schema_name) {
-                            Err(DataFusionError::Execution(format!(
-                                "Schema {:?} already exists",
-                                schema_name
-                            )))
-                        };
+                // so for now, we default to "datafusion" catalog
+                let default_catalog = "datafusion";
+                let catalog = self.catalog(default_catalog).ok_or_else(|| {
+                    DataFusionError::Execution(String::from(
+                        "Missing 'datafusion' catalog",
+                    ))
+                })?;
 
-                        let schema = Arc::new(MemorySchemaProvider::new());
-                        c.register_schema(&schema_name, schema);
+                let schema = catalog.schema(&schema_name);
+
+                match (if_not_exists, schema) {
+                    //
+                    (true, Some(_)) => {
+                        println!("Schema '{:?}' already exists", &schema_name);
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                     }
-                    None => Err(DataFusionError::Execution(String::from(
-                        "'public' catalog does not exist",
+                    (true, None) | (false, None) => {
+                        println!("Creating schema {:?}", schema_name);
+                        let schema = Arc::new(MemorySchemaProvider::new());
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        schema.register_table(
+                            "test".into(),
+                            Arc::new(DataFrameImpl::new(self.state.clone(), &plan)),
+                        )?;
+                        let schem_reg_res = catalog.register_schema(&schema_name, schema);
+                        match schem_reg_res {
+                            Some(_) => {
+                                println!("Existing schema with name")
+                            }
+                            None => {
+                                println!("Succesfully registerd")
+                            }
+                        };
+                        // println!("Schemas pre reg: {:?}", catalog.schema_names);
+                        self.register_catalog(default_catalog, catalog);
+                        println!(
+                            "Schema names: {:?}",
+                            self.catalog(default_catalog).unwrap().schema_names()
+                        );
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                    }
+                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                        "Schema '{:?}' already exists",
+                        schema_name
                     ))),
                 }
             }
@@ -563,10 +589,18 @@ impl ExecutionContext {
 
         let state = self.state.lock();
         let catalog = if state.config.information_schema {
-            Arc::new(CatalogWithInformationSchema::new(
-                Arc::downgrade(&state.catalog_list),
-                catalog,
-            ))
+            let is = state
+                .catalog_list
+                .catalog("datafusion")
+                .unwrap()
+                .schema("information_schema");
+            match is {
+                Some(_) => catalog,
+                None => Arc::new(CatalogWithInformationSchema::new(
+                    Arc::downgrade(&state.catalog_list),
+                    catalog,
+                )),
+            }
         } else {
             catalog
         };
@@ -1184,6 +1218,10 @@ impl ExecutionContextState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref.into());
+        println!(
+            "Resolved ref: {:?}:{:?}:{:?}",
+            resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+        );
 
         self.catalog_list
             .catalog(resolved_ref.catalog)

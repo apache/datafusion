@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use datafusion::{
     catalog::{
-        catalog::MemoryCatalogProvider,
+        catalog::{CatalogProvider, MemoryCatalogProvider},
         schema::{MemorySchemaProvider, SchemaProvider},
     },
     datasource::{TableProvider, TableType},
