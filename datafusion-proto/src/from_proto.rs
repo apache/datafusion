@@ -155,6 +155,7 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
             .iter()
             .map(|c| c.try_into())
             .collect::<Result<Vec<DFField>, _>>()?;
+        #[allow(deprecated)]
         Ok(DFSchema::new(fields)?)
     }
 }
