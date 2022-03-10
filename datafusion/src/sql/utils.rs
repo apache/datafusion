@@ -535,9 +535,9 @@ pub(crate) fn make_decimal_type(
 }
 
 // Normalize an identifer to a lowercase string unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: &Ident) -> String {
+pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
-        Some(_) => id.value.clone(),
+        Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),
     }
 }
