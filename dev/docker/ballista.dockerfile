@@ -28,17 +28,17 @@ RUN apt-get -y install cmake
 RUN cargo install cargo-chef --version 0.1.23
 
 FROM base as planner
-RUN mkdir /tmp/ballista/ballista
-RUN mkdir /tmp/ballista/ballista-examples
-RUN mkdir /tmp/ballista/benchmarks
-RUN mkdir /tmp/ballista/datafusion
-RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
 COPY ballista ./ballista/
 COPY ballista-examples ./ballista-examples/
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
 COPY datafusion-cli ./datafusion-cli/
+COPY datafusion-common ./datafusion-common/
+COPY datafusion-expr ./datafusion-expr/
+COPY datafusion-physical-expr ./datafusion-physical-expr/
+COPY datafusion-jit ./datafusion-jit/
+COPY datafusion-proto ./datafusion-proto/
 COPY datafusion-examples ./datafusion-examples/
 RUN cargo chef prepare --recipe-path recipe.json
 
@@ -52,6 +52,11 @@ RUN mkdir /tmp/ballista/ballista-examples
 RUN mkdir /tmp/ballista/benchmarks
 RUN mkdir /tmp/ballista/datafusion
 RUN mkdir /tmp/ballista/datafusion-cli
+RUN mkdir /tmp/ballista/datafusion-common
+RUN mkdir /tmp/ballista/datafusion-expr
+RUN mkdir /tmp/ballista/datafusion-physical-expr
+RUN mkdir /tmp/ballista/datafusion-jit
+RUN mkdir /tmp/ballista/datafusion-proto
 RUN mkdir /tmp/ballista/datafusion-examples
 ADD Cargo.toml .
 COPY ballista ./ballista/
@@ -59,6 +64,11 @@ COPY ballista-examples ./ballista-examples/
 COPY benchmarks ./benchmarks/
 COPY datafusion ./datafusion/
 COPY datafusion-cli ./datafusion-cli/
+COPY datafusion-common ./datafusion-common/
+COPY datafusion-expr ./datafusion-expr/
+COPY datafusion-physical-expr ./datafusion-physical-expr/
+COPY datafusion-jit ./datafusion-jit/
+COPY datafusion-proto ./datafusion-proto/
 COPY datafusion-examples ./datafusion-examples/
 COPY --from=cacher /tmp/ballista/target target
 ARG RELEASE_FLAG=--release
