@@ -42,7 +42,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 ### New Features
 
 - Read JSON as table
-- Simplify DDL with Datafusion-Cli
+- Simplify DDL with DataFusion-Cli
 - Add Decimal128 data type and the attendant features such as Arrow Kernel and UDF support
 - Add new experimental e-graph based optimizer
 

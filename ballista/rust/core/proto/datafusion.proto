@@ -22,7 +22,7 @@ package datafusion;
 
 option java_multiple_files = true;
 option java_package = "org.datafusioncompute.protobuf";
-option java_outer_classname = "DatafusionProto";
+option java_outer_classname = "DataFusionProto";
 
 message ColumnRelation {
   string relation = 1;
