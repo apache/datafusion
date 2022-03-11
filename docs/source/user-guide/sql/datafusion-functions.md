@@ -86,10 +86,12 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
 Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to seconds resolution.
 
 ## `EXTRACT, date_part`
+
 `EXTRACT(field FROM source)`
-- The extract function retrieves subfields such as year or hour from date/time values. 
-source must be a value expression of type timestamp, Data32, Data64 field is an identifier that selects what field to extract from the source value. 
-The extract function returns values of type u32.
+
+- The extract function retrieves subfields such as year or hour from date/time values.
+  source must be a value expression of type timestamp, Data32, Data64 field is an identifier that selects what field to extract from the source value.
+  The extract function returns values of type u32.
   - `year`
   - `EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 2020`
   - `month`
@@ -106,7 +108,7 @@ The extract function returns values of type u32.
   - `EXTRACT(second FROM to_timestamp('2020-09-08T12:00:03+00:00')) -> 3`
 
 `date_part('field', source)`
-- Note that here the field parameter needs to be a string value, not a name. 
-The valid field names for date_part are the same as for extract.
+
+- Note that here the field parameter needs to be a string value, not a name.
+  The valid field names for date_part are the same as for extract.
   - `date_part('second', to_timestamp('2020-09-08T12:00:12+00:00')) -> 12`
-  
