@@ -84,6 +84,7 @@
     - [x] [to_timestamp_millis](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_millis)
     - [x] [to_timestamp_micros](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_micros)
     - [x] [to_timestamp_seconds](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_seconds)
+    - [x] [extract, date_part](docs/user-guide/book/sql/datafusion-functions.html#`EXTRACT, date_part`)
 - nested functions
   - [x] Array of columns
 - [x] Schema Queries
