@@ -36,7 +36,7 @@ use datafusion::logical_plan::{
     Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan,
     LogicalPlanBuilder, Repartition, TableScan, Values,
 };
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 use prost::bytes::BufMut;
 use prost::Message;
@@ -70,7 +70,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &ExecutionContext,
+        ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan, BallistaError> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
@@ -920,7 +920,7 @@ mod roundtrip_tests {
             roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
         };
         ($initial_struct:ident) => {
-            let ctx = ExecutionContext::new();
+            let ctx = SessionContext::new();
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
                 protobuf::PhysicalPlanNode,
@@ -1252,7 +1252,7 @@ mod roundtrip_tests {
 
     #[tokio::test]
     async fn roundtrip_logical_plan_custom_ctx() -> Result<()> {
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
             BallistaCodec::default();
         let custom_object_store = Arc::new(TestObjectStore {});

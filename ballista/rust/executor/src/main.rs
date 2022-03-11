@@ -42,7 +42,7 @@ use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
 use config::prelude::*;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 #[macro_use]
 extern crate configure_me;
@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
     let executor = Arc::new(Executor::new(
         executor_meta,
         &work_dir,
-        Arc::new(ExecutionContext::new()),
+        Arc::new(SessionContext::new()),
     ));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)

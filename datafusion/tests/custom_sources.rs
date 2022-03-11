@@ -30,7 +30,7 @@ use datafusion::{
     physical_plan::DisplayFormatType,
 };
 
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_plan::{
     col, Expr, LogicalPlan, LogicalPlanBuilder, TableScan, UNNAMED_TABLE,
 };
@@ -46,7 +46,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Projection;
 
 //// Custom source dataframe tests ////
@@ -135,7 +134,7 @@ impl ExecutionPlan for CustomExecutionPlan {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(TestCustomRecordBatchStream { nb_batch: 1 }))
     }
@@ -211,7 +210,7 @@ impl TableProvider for CustomTableProvider {
 
 #[tokio::test]
 async fn custom_source_dataframe() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     let table = ctx.read_table(Arc::new(CustomTableProvider))?;
     let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
@@ -246,8 +245,8 @@ async fn custom_source_dataframe() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
 
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let batches = collect(physical_plan, runtime).await?;
+    let task_ctx = ctx.task_ctx();
+    let batches = collect(physical_plan, task_ctx).await?;
     let origin_rec_batch = TEST_CUSTOM_RECORD_BATCH!()?;
     assert_eq!(1, batches.len());
     assert_eq!(1, batches[0].num_columns());
@@ -258,7 +257,7 @@ async fn custom_source_dataframe() -> Result<()> {
 
 #[tokio::test]
 async fn optimizers_catch_all_statistics() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(CustomTableProvider))
         .unwrap();
 
@@ -293,8 +292,8 @@ async fn optimizers_catch_all_statistics() {
     )
     .unwrap();
 
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let actual = collect(physical_plan, runtime).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let actual = collect(physical_plan, task_ctx).await.unwrap();
 
     assert_eq!(actual.len(), 1);
     assert_eq!(format!("{:?}", actual[0]), format!("{:?}", expected));

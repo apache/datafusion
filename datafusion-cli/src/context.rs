@@ -19,13 +19,13 @@
 
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use std::sync::Arc;
 
 /// The CLI supports using a local DataFusion context or a distributed BallistaContext
 pub enum Context {
     /// In-process execution with DataFusion
-    Local(ExecutionContext),
+    Local(SessionContext),
     /// Distributed execution with Ballista (if available)
     Remote(BallistaContext),
 }
@@ -37,8 +37,8 @@ impl Context {
     }
 
     /// create a local context using the given config
-    pub fn new_local(config: &ExecutionConfig) -> Context {
-        Context::Local(ExecutionContext::with_config(config.clone()))
+    pub fn new_local(config: &SessionConfig) -> Context {
+        Context::Local(SessionContext::with_config(config.clone()))
     }
 
     /// execute an SQL statement against the context

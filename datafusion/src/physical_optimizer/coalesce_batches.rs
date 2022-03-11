@@ -42,7 +42,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        config: &crate::execution::context::ExecutionConfig,
+        config: &crate::execution::context::SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         // wrap operators in CoalesceBatches to avoid lots of tiny batches when we have
         // highly selective filters

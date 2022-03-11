@@ -22,8 +22,8 @@ use datafusion::prelude::*;
 /// fetching results
 #[tokio::main]
 async fn main() -> Result<()> {
-    // create local execution context
-    let mut ctx = ExecutionContext::new();
+    // create local session context
+    let mut ctx = SessionContext::new();
 
     let testdata = datafusion::arrow::util::test_util::parquet_test_data();
 

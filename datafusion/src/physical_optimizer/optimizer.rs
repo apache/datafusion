@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use crate::{
-    error::Result, execution::context::ExecutionConfig, physical_plan::ExecutionPlan,
+    error::Result, execution::context::SessionConfig, physical_plan::ExecutionPlan,
 };
 
 /// `PhysicalOptimizerRule` transforms one ['ExecutionPlan'] into another which
@@ -31,7 +31,7 @@ pub trait PhysicalOptimizerRule {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ExecutionConfig,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 
     /// A human readable name for this optimizer rule

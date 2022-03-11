@@ -20,7 +20,7 @@
 # Ballista Rust Client
 
 Ballista usage is very similar to DataFusion. Tha main difference is that the starting point is a `BallistaContext`
-instead of the DataFusion `ExecutionContext`. Ballista uses the same DataFrame API as DataFusion.
+instead of the DataFusion `SessionContext`. Ballista uses the same DataFrame API as DataFusion.
 
 The following code sample demonstrates how to create a `BallistaContext` to connect to a Ballista scheduler process.
 

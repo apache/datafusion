@@ -19,13 +19,13 @@ use super::*;
 
 #[tokio::test]
 async fn case_when() -> Result<()> {
-    let mut ctx = create_case_context()?;
+    let ctx = create_case_context()?;
     let sql = "SELECT \
         CASE WHEN c1 = 'a' THEN 1 \
              WHEN c1 = 'b' THEN 2 \
              END \
         FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------------------------------------------------------------------------------------+",
         "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) END |",
@@ -42,13 +42,13 @@ async fn case_when() -> Result<()> {
 
 #[tokio::test]
 async fn case_when_else() -> Result<()> {
-    let mut ctx = create_case_context()?;
+    let ctx = create_case_context()?;
     let sql = "SELECT \
         CASE WHEN c1 = 'a' THEN 1 \
              WHEN c1 = 'b' THEN 2 \
              ELSE 999 END \
         FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+------------------------------------------------------------------------------------------------------+",
         "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN #t1.c1 = Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
@@ -65,13 +65,13 @@ async fn case_when_else() -> Result<()> {
 
 #[tokio::test]
 async fn case_when_with_base_expr() -> Result<()> {
-    let mut ctx = create_case_context()?;
+    let ctx = create_case_context()?;
     let sql = "SELECT \
         CASE c1 WHEN 'a' THEN 1 \
              WHEN 'b' THEN 2 \
              END \
         FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------------------------------------------------+",
         "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) END |",
@@ -88,13 +88,13 @@ async fn case_when_with_base_expr() -> Result<()> {
 
 #[tokio::test]
 async fn case_when_else_with_base_expr() -> Result<()> {
-    let mut ctx = create_case_context()?;
+    let ctx = create_case_context()?;
     let sql = "SELECT \
         CASE c1 WHEN 'a' THEN 1 \
              WHEN 'b' THEN 2 \
              ELSE 999 END \
         FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------------------------------------------------------------------------------------------+",
         "| CASE #t1.c1 WHEN Utf8(\"a\") THEN Int64(1) WHEN Utf8(\"b\") THEN Int64(2) ELSE Int64(999) END |",
@@ -124,10 +124,10 @@ async fn query_not() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT NOT c1 FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------------+",
         "| NOT test.c1 |",
@@ -143,7 +143,7 @@ async fn query_not() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_sum_cast() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     // c8 = i32; c9 = i64
     let sql = "SELECT c8 + c9 FROM aggregate_test_100";
@@ -166,10 +166,10 @@ async fn query_is_null() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT c1 IS NULL FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
         "| test.c1 IS NULL |",
@@ -198,10 +198,10 @@ async fn query_is_not_null() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT c1 IS NOT NULL FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------+",
         "| test.c1 IS NOT NULL |",
@@ -219,10 +219,10 @@ async fn query_is_not_null() -> Result<()> {
 async fn query_without_from() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
     let sql = "SELECT 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------+",
         "| Int64(1) |",
@@ -233,7 +233,7 @@ async fn query_without_from() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT 1+2, 3/4, cos(0)";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------+---------------------+---------------+",
         "| Int64(1) + Int64(2) | Int64(3) / Int64(4) | cos(Int64(0)) |",
@@ -262,10 +262,10 @@ async fn query_scalar_minus_array() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT 4 - c1 FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+------------------------+",
         "| Int64(4) Minus test.c1 |",
@@ -669,9 +669,9 @@ async fn test_random_expression() -> Result<()> {
 
 #[tokio::test]
 async fn case_with_bool_type_result() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "select case when 'cpu' != 'cpu' then true else false end";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------------------------------------------------------+",
         "| CASE WHEN Utf8(\"cpu\") != Utf8(\"cpu\") THEN Boolean(true) ELSE Boolean(false) END |",
@@ -685,7 +685,7 @@ async fn case_with_bool_type_result() -> Result<()> {
 
 #[tokio::test]
 async fn in_list_array() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT
             c1 IN ('a', 'c') AS utf8_in_true
@@ -694,7 +694,7 @@ async fn in_list_array() -> Result<()> {
             ,c1 NOT IN ('a', 'c') AS utf8_not_in_false
             ,NULL IN ('a', 'c') AS utf8_in_null
         FROM aggregate_test_100 WHERE c12 < 0.05";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------------+---------------+------------------+-------------------+--------------+",
         "| utf8_in_true | utf8_in_false | utf8_not_in_true | utf8_not_in_false | utf8_in_null |",
@@ -810,11 +810,11 @@ async fn test_in_list_scalar() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_boolean_eq_neq() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_boolean(&mut ctx).await.unwrap();
     // verify the plumbing is all hooked up for eq and neq
     let sql = "SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+-------+-------+-------+-----------+-------+------------+",
@@ -836,11 +836,11 @@ async fn csv_query_boolean_eq_neq() {
 
 #[tokio::test]
 async fn csv_query_boolean_lt_lt_eq() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_boolean(&mut ctx).await.unwrap();
     // verify the plumbing is all hooked up for < and <=
     let sql = "SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+-------+-------+-------+-----------+-------+--------------+",
@@ -862,11 +862,11 @@ async fn csv_query_boolean_lt_lt_eq() {
 
 #[tokio::test]
 async fn csv_query_boolean_gt_gt_eq() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_boolean(&mut ctx).await.unwrap();
     // verify the plumbing is all hooked up for > and >=
     let sql = "SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+-------+-------+-------+-----------+-------+--------------+",
@@ -888,7 +888,7 @@ async fn csv_query_boolean_gt_gt_eq() {
 
 #[tokio::test]
 async fn csv_query_boolean_distinct_from() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_boolean(&mut ctx).await.unwrap();
     // verify the plumbing is all hooked up for is distinct from and is not distinct from
     let sql = "SELECT a, b, \
@@ -897,7 +897,7 @@ async fn csv_query_boolean_distinct_from() {
                a is not distinct from b as ndf, \
                a is not distinct from true as ndf_scalar \
                FROM t1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+-------+-------+-------+-----------+-------+------------+",
@@ -919,7 +919,7 @@ async fn csv_query_boolean_distinct_from() {
 
 #[tokio::test]
 async fn csv_query_nullif_divide_by_0() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c8/nullif(c7, 0) FROM aggregate_test_100";
     let actual = execute(&mut ctx, sql).await;
@@ -941,10 +941,10 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
 }
 #[tokio::test]
 async fn csv_count_star() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+-----+------------------------------+",
         "| COUNT(UInt8(1)) | c   | COUNT(aggregate_test_100.c1) |",

@@ -48,7 +48,7 @@ use arrow::{
 use hashbrown::raw::RawTable;
 use pin_project_lite::pin_project;
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 
 use super::common::AbortOnDropSingle;
@@ -233,9 +233,9 @@ impl ExecutionPlan for HashAggregateExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, runtime).await?;
+        let input = self.input.execute(partition, context).await?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -1030,6 +1030,7 @@ mod tests {
     use futures::FutureExt;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+    use crate::prelude::SessionContext;
 
     /// some mock data to aggregates
     fn some_data() -> (Arc<Schema>, Vec<RecordBatch>) {
@@ -1076,7 +1077,8 @@ mod tests {
             DataType::Float64,
         ))];
 
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
 
         let partial_aggregate = Arc::new(HashAggregateExec::try_new(
             AggregateMode::Partial,
@@ -1087,7 +1089,8 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, runtime.clone()).await?).await?;
+            common::collect(partial_aggregate.execute(0, task_ctx.clone()).await?)
+                .await?;
 
         let expected = vec![
             "+---+---------------+-------------+",
@@ -1119,7 +1122,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(merged_aggregate.execute(0, runtime.clone()).await?).await?;
+            common::collect(merged_aggregate.execute(0, task_ctx.clone()).await?).await?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];
@@ -1187,7 +1190,7 @@ mod tests {
         async fn execute(
             &self,
             _partition: usize,
-            _runtime: Arc<RuntimeEnv>,
+            _context: Arc<TaskContext>,
         ) -> Result<SendableRecordBatchStream> {
             let stream = if self.yield_first {
                 TestYieldingStream::New
@@ -1264,7 +1267,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_without_groups() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -1286,7 +1290,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec, runtime);
+        let fut = crate::physical_plan::collect(hash_aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -1298,7 +1302,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel_with_groups() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float32, true),
@@ -1323,7 +1328,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec, runtime);
+        let fut = crate::physical_plan::collect(hash_aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

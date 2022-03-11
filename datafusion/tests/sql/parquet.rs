@@ -24,12 +24,12 @@ use super::*;
 
 #[tokio::test]
 async fn parquet_query() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_alltypes_parquet(&mut ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+-----------------------------------------+",
         "| id | CAST(alltypes_plain.string_col AS Utf8) |",
@@ -50,7 +50,7 @@ async fn parquet_query() {
 
 #[tokio::test]
 async fn parquet_single_nan_schema() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
         .await
@@ -59,8 +59,8 @@ async fn parquet_single_nan_schema() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -70,7 +70,7 @@ async fn parquet_single_nan_schema() {
 #[tokio::test]
 #[ignore = "Test ignored, will be enabled as part of the nested Parquet reader"]
 async fn parquet_list_columns() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "list_columns",
@@ -96,8 +96,8 @@ async fn parquet_list_columns() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.unwrap();
 
     //   int64_list              utf8_list
     // 0  [1, 2, 3]        [abc, efg, hij]
@@ -212,7 +212,7 @@ async fn schema_merge_ignores_metadata() {
 
     // Read the parquet files into a dataframe to confirm results
     // (no errors)
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     let df = ctx
         .read_parquet(table_dir.to_str().unwrap().to_string())
         .await

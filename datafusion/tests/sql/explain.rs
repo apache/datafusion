@@ -18,7 +18,7 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::{
     logical_plan::{LogicalPlan, LogicalPlanBuilder, PlanType},
-    prelude::ExecutionContext,
+    prelude::SessionContext,
 };
 
 #[test]
@@ -39,7 +39,7 @@ fn optimize_explain() {
     }
 
     // now optimize the plan and expect to see more plans
-    let optimized_plan = ExecutionContext::new().optimize(&plan).unwrap();
+    let optimized_plan = SessionContext::new().optimize(&plan).unwrap();
     if let LogicalPlan::Explain(e) = &optimized_plan {
         // should have more than one plan
         assert!(
