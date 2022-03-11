@@ -1205,8 +1205,7 @@ impl ContextProvider for ExecutionContextState {
         self.execution_props
             .var_providers
             .as_ref()
-            .map(|provider| provider.get(&provider_type)?.get_type(variable_names))
-            .flatten()
+            .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
     }
 }
 
