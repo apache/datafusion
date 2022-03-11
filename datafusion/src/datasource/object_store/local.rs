@@ -185,6 +185,7 @@ pub fn local_unpartitioned_file(file: String) -> PartitionedFile {
             last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
         },
         partition_values: vec![],
+        range: None,
     }
 }
 

@@ -262,7 +262,7 @@ async fn prune_int32_scalar_fun() {
     println!("{}", output.description());
     // This should prune out groups with error, because there is not col to
     // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
+    assert_eq!(output.predicate_evaluation_errors(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(output.result_rows, 3, "{}", output.description());
 }
@@ -278,7 +278,7 @@ async fn prune_int32_complex_expr() {
     println!("{}", output.description());
     // This should prune out groups with error, because there is not col to
     // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
+    assert_eq!(output.predicate_evaluation_errors(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(output.result_rows, 2, "{}", output.description());
 }
@@ -294,7 +294,7 @@ async fn prune_int32_complex_expr_subtract() {
     println!("{}", output.description());
     // This should prune out groups with error, because there is not col to
     // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
+    assert_eq!(output.predicate_evaluation_errors(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(output.result_rows, 9, "{}", output.description());
 }
@@ -366,7 +366,7 @@ async fn prune_f64_scalar_fun() {
     println!("{}", output.description());
     // This should prune out groups with error, because there is not col to
     // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
+    assert_eq!(output.predicate_evaluation_errors(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(output.result_rows, 1, "{}", output.description());
 }
@@ -382,7 +382,7 @@ async fn prune_f64_complex_expr() {
     println!("{}", output.description());
     // This should prune out groups with error, because there is not col to
     // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
+    assert_eq!(output.predicate_evaluation_errors(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(output.result_rows, 9, "{}", output.description());
 }
@@ -398,7 +398,7 @@ async fn prune_f64_complex_expr_subtract() {
     println!("{}", output.description());
     // This should prune out groups with error, because there is not col to
     // prune the row groups.
-    assert_eq!(output.predicate_evaluation_errors(), Some(1));
+    assert_eq!(output.predicate_evaluation_errors(), Some(4));
     assert_eq!(output.row_groups_pruned(), Some(0));
     assert_eq!(output.result_rows, 9, "{}", output.description());
 }

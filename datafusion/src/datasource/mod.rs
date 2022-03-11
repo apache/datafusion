@@ -125,14 +125,24 @@ pub async fn get_statistics_with_limit(
 }
 
 #[derive(Debug, Clone)]
-/// A single file that should be read, along with its schema, statistics
+/// File part identified by [start, end) positions.
+pub struct FileRange {
+    /// Range start
+    pub start: i64,
+    /// Range end
+    pub end: i64,
+}
+
+#[derive(Debug, Clone)]
+/// A single file or part of a file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
 pub struct PartitionedFile {
     /// Path for the file (e.g. URL, filesystem path, etc)
     pub file_meta: FileMeta,
     /// Values of partition columns to be appended to each row
     pub partition_values: Vec<ScalarValue>,
-    // We may include row group range here for a more fine-grained parallel execution
+    /// An optional file range for a more fine-grained parallel execution
+    pub range: Option<FileRange>,
 }
 
 impl PartitionedFile {
@@ -144,6 +154,19 @@ impl PartitionedFile {
                 last_modified: None,
             },
             partition_values: vec![],
+            range: None,
+        }
+    }
+
+    /// Create a file range without metadata or partition
+    pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
+        Self {
+            file_meta: FileMeta {
+                sized_file: SizedFile { path, size },
+                last_modified: None,
+            },
+            partition_values: vec![],
+            range: Some(FileRange { start, end }),
         }
     }
 }
