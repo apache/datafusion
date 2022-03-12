@@ -46,6 +46,7 @@ use ballista_scheduler::{
 
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::BallistaCodec;
+use ballista_core::utils::load_udf_from_plugin;
 use log::info;
 use tokio::sync::{mpsc, RwLock};
 
@@ -70,6 +71,7 @@ async fn start_server(
     namespace: String,
     addr: SocketAddr,
     policy: TaskSchedulingPolicy,
+    plugin_dir: String,
 ) -> Result<()> {
     info!(
         "Ballista v{} Scheduler listening on {:?}",
@@ -80,6 +82,10 @@ async fn start_server(
         "Starting Scheduler grpc server with task scheduling policy of {:?}",
         policy
     );
+
+    let mut context = ExecutionContext::new();
+    load_udf_from_plugin(&mut context, plugin_dir.as_str());
+
     let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         match policy {
             TaskSchedulingPolicy::PushStaged => {
@@ -90,7 +96,7 @@ async fn start_server(
                     namespace.clone(),
                     policy,
                     Some(SchedulerEnv { tx_job }),
-                    Arc::new(RwLock::new(ExecutionContext::new())),
+                    Arc::new(RwLock::new(context)),
                     BallistaCodec::default(),
                 );
                 let task_scheduler =
@@ -101,7 +107,7 @@ async fn start_server(
             _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
-                Arc::new(RwLock::new(ExecutionContext::new())),
+                Arc::new(RwLock::new(context)),
                 BallistaCodec::default(),
             ),
         };

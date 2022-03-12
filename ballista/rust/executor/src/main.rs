@@ -34,6 +34,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::serde::BallistaCodec;
+use ballista_core::utils::load_udf_from_plugin;
 use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
@@ -89,6 +90,7 @@ async fn main() -> Result<()> {
             .into_string()
             .unwrap(),
     );
+    let plugin_dir = opt.plugin_dir;
     info!("Running with config:");
     info!("work_dir: {}", work_dir);
     info!("concurrent_tasks: {}", opt.concurrent_tasks);
@@ -107,11 +109,9 @@ async fn main() -> Result<()> {
             .into(),
         ),
     };
-    let executor = Arc::new(Executor::new(
-        executor_meta,
-        &work_dir,
-        Arc::new(ExecutionContext::new()),
-    ));
+    let mut context = ExecutionContext::new();
+    load_udf_from_plugin(&mut context, plugin_dir);
+    let executor = Arc::new(Executor::new(executor_meta, &work_dir, Arc::new(context)));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await

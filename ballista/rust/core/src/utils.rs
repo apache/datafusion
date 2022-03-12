@@ -47,6 +47,7 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::empty::EmptyExec;
 
+use crate::plugin::udf::get_udf_plugin_manager;
 use datafusion::physical_plan::file_format::{CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
@@ -224,6 +225,17 @@ fn build_exec_plan_diagram(
     Ok(node_id)
 }
 
+/// Create a DataFusion context that is compatible with Ballista
+pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
+    let exe_config = ExecutionConfig::new()
+        .with_target_partitions(config.default_shuffle_partitions())
+        .with_information_schema(config.default_with_information_schema());
+
+    let mut context = ExecutionContext::with_config(exe_config);
+    load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
+    context
+}
+
 /// Create a DataFusion context that uses the BallistaQueryPlanner to send logical plans
 /// to a Ballista scheduler
 pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
@@ -234,11 +246,28 @@ pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
     let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
     let planner: Arc<BallistaQueryPlanner<T>> =
         Arc::new(BallistaQueryPlanner::new(scheduler_url, config.clone()));
-    let config = ExecutionConfig::new()
+    let exe_config = ExecutionConfig::new()
         .with_query_planner(planner)
         .with_target_partitions(config.default_shuffle_partitions())
-        .with_information_schema(true);
-    ExecutionContext::with_config(config)
+        .with_information_schema(config.default_with_information_schema());
+    let mut context = ExecutionContext::with_config(exe_config);
+    load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
+    context
+}
+
+/// load udf from plugin and register to ExecutionContext
+pub fn load_udf_from_plugin(ctx: &mut ExecutionContext, plugin_dir: &str) {
+    if let Some(udf_plugin_manager) = get_udf_plugin_manager(plugin_dir) {
+        udf_plugin_manager
+            .scalar_udfs
+            .iter()
+            .for_each(|(_, scalar_udf)| ctx.register_udf((**scalar_udf).clone()));
+
+        udf_plugin_manager
+            .aggregate_udfs
+            .iter()
+            .for_each(|(_, aggregate_udf)| ctx.register_udaf((**aggregate_udf).clone()));
+    }
 }
 
 pub struct BallistaQueryPlanner<T: AsLogicalPlan> {

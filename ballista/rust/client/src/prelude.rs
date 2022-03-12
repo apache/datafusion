@@ -20,6 +20,9 @@
 pub use crate::context::BallistaContext;
 pub use ballista_core::config::BallistaConfig;
 pub use ballista_core::config::BALLISTA_DEFAULT_SHUFFLE_PARTITIONS;
+pub use ballista_core::declare_plugin;
+pub use ballista_core::declare_udf_plugin;
 pub use ballista_core::error::{BallistaError, Result};
+pub use ballista_core::plugin::*;
 
 pub use futures::StreamExt;

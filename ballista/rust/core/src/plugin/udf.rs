@@ -14,11 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::physical_plan::udaf::AggregateUDF;
-use crate::physical_plan::udf::ScalarUDF;
+use crate::error::{BallistaError, Result};
 use crate::plugin::plugin_manager::global_plugin_manager;
 use crate::plugin::{Plugin, PluginEnum, PluginRegistrar};
-use datafusion_common::{DataFusionError, Result};
+use datafusion::physical_plan::udaf::AggregateUDF;
+use datafusion::physical_plan::udf::ScalarUDF;
 use libloading::{Library, Symbol};
 use std::any::Any;
 use std::collections::HashMap;
@@ -58,7 +58,7 @@ impl PluginRegistrar for UDFPluginManager {
         type PluginRegister = unsafe fn() -> Box<dyn UDFPlugin>;
         let register_fun: Symbol<PluginRegister> =
             library.get(b"registrar_udf_plugin\0").map_err(|e| {
-                DataFusionError::IoError(io::Error::new(
+                BallistaError::IoError(io::Error::new(
                     io::ErrorKind::Other,
                     format!("not found fn registrar_udf_plugin in the library: {}", e),
                 ))
@@ -71,7 +71,7 @@ impl PluginRegistrar for UDFPluginManager {
             .iter()
             .try_for_each(|udf_name| {
                 if self.scalar_udfs.contains_key(udf_name) {
-                    Err(DataFusionError::IoError(io::Error::new(
+                    Err(BallistaError::IoError(io::Error::new(
                         io::ErrorKind::Other,
                         format!("udf name: {} already exists", udf_name),
                     )))
@@ -89,7 +89,7 @@ impl PluginRegistrar for UDFPluginManager {
             .iter()
             .try_for_each(|udaf_name| {
                 if self.aggregate_udfs.contains_key(udaf_name) {
-                    Err(DataFusionError::IoError(io::Error::new(
+                    Err(BallistaError::IoError(io::Error::new(
                         io::ErrorKind::Other,
                         format!("udaf name: {} already exists", udaf_name),
                     )))

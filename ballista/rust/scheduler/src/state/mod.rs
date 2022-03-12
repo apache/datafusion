@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, OwnedMutexGuard};
 
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::execution_plans::UnresolvedShuffleExec;
+use ballista_core::plugin::udf::get_udf_plugin_manager;
 use ballista_core::serde::protobuf::{
     self, job_status, task_status, CompletedJob, CompletedTask, ExecutorHeartbeat,
     FailedJob, FailedTask, JobStatus, RunningJob, RunningTask, TaskStatus,
@@ -278,7 +279,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         self.init_executors_metadata_from_storage().await?;
         self.init_jobs_from_storage().await?;
         self.init_stages_from_storage(ctx).await?;
-
         Ok(())
     }
 

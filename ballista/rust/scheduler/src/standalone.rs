@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ballista_core::config::BallistaConfig;
 use ballista_core::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 use ballista_core::serde::BallistaCodec;
+use ballista_core::utils::load_udf_from_plugin;
 use ballista_core::{
     error::Result, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
     BALLISTA_VERSION,
@@ -30,14 +32,16 @@ use tonic::transport::Server;
 
 use crate::{state::StandaloneClient, SchedulerServer};
 
-pub async fn new_standalone_scheduler() -> Result<SocketAddr> {
+pub async fn new_standalone_scheduler(config: &BallistaConfig) -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
+    let mut context = ExecutionContext::new();
+    load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
     let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         SchedulerServer::new(
             Arc::new(client),
             "ballista".to_string(),
-            Arc::new(RwLock::new(ExecutionContext::new())),
+            Arc::new(RwLock::new(context)),
             BallistaCodec::default(),
         );
     scheduler_server.init().await?;

@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::error::Result;
 use crate::plugin::udf::UDFPluginManager;
-use datafusion_common::Result;
 use libloading::Library;
 use std::any::Any;
 use std::env;
@@ -58,7 +58,8 @@ impl PluginEnum {
 /// Every plugin need a PluginDeclaration
 #[derive(Copy, Clone)]
 pub struct PluginDeclaration {
-    /// rustc version of the plugin. The plugin's rustc_version need same as plugin manager.
+    /// Rust doesn’t have a stable ABI, meaning different compiler versions can generate incompatible code.
+    /// For these reasons, the UDF plug-in must be compiled using the same version of rustc as datafusion.
     pub rustc_version: &'static str,
 
     /// core version of the plugin. The plugin's core_version need same as plugin manager.
@@ -113,12 +114,12 @@ pub fn plugin_dir() -> String {
 
     // If current_exe_dir contain `deps` the root dir is the parent dir
     // eg: /Users/xxx/workspace/rust/rust_plugin_sty/target/debug/deps/plugins_app-067452b3ff2af70e
-    // the plugin dir is /Users/xxx/workspace/rust/rust_plugin_sty/target/debug
+    // the plugin dir is /Users/xxx/workspace/rust/rust_plugin_sty/target/debug/deps
     // else eg: /Users/xxx/workspace/rust/rust_plugin_sty/target/debug/plugins_app
     // the plugin dir is /Users/xxx/workspace/rust/rust_plugin_sty/target/debug/
     if current_exe_dir.contains("/deps/") {
         let i = current_exe_dir.find("/deps/").unwrap();
-        String::from(&current_exe_dir.as_str()[..i])
+        String::from(&current_exe_dir.as_str()[..i + 6])
     } else {
         let i = current_exe_dir.rfind('/').unwrap();
         String::from(&current_exe_dir.as_str()[..i])

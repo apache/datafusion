@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ballista::prelude::udf::UDFPlugin;
+use ballista::prelude::{declare_udf_plugin, Result};
+use ballista::prelude::{BallistaError, Plugin};
 use datafusion::arrow::array::{ArrayRef, Int64Array, ListArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int64Type};
-use datafusion::declare_udf_plugin;
-use datafusion::error::DataFusionError;
-use datafusion::error::Result;
 use datafusion::physical_plan::functions::{make_scalar_function, Signature, Volatility};
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
-use datafusion::plugin::udf::UDFPlugin;
 use datafusion_expr::{ReturnTypeFunction, ScalarFunctionImplementation};
 use lazy_static::lazy_static;
 use std::any::Any;
@@ -33,39 +32,33 @@ use std::sync::Arc;
 #[derive(Default)]
 struct SimpleUDF {}
 
-impl datafusion::plugin::Plugin for SimpleUDF {
+impl Plugin for SimpleUDF {
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
 impl UDFPlugin for SimpleUDF {
-    fn get_scalar_udf_by_name(
-        &self,
-        fun_name: &str,
-    ) -> datafusion::error::Result<ScalarUDF> {
+    fn get_scalar_udf_by_name(&self, fun_name: &str) -> Result<ScalarUDF> {
         let error = format!("There is no user-define ScalarUDF named {}", fun_name);
         Ok(match fun_name {
             "array_4" => create_udf_array_n("array_4", 4),
             _ => {
-                return Err(DataFusionError::Execution(error));
+                return Err(BallistaError::Internal(error));
             }
         })
     }
 
-    fn udf_names(&self) -> datafusion::error::Result<Vec<String>> {
+    fn udf_names(&self) -> Result<Vec<String>> {
         Ok(vec!["array_4".to_string()])
     }
 
-    fn get_aggregate_udf_by_name(
-        &self,
-        fun_name: &str,
-    ) -> datafusion::error::Result<AggregateUDF> {
+    fn get_aggregate_udf_by_name(&self, fun_name: &str) -> Result<AggregateUDF> {
         let error = format!("There is no user-define AggregateUDF named {}", fun_name);
-        Err(DataFusionError::Execution(error))
+        Err(BallistaError::Internal(error))
     }
 
-    fn udaf_names(&self) -> datafusion::error::Result<Vec<String>> {
+    fn udaf_names(&self) -> Result<Vec<String>> {
         Ok(vec![])
     }
 }
@@ -101,7 +94,7 @@ pub fn create_udf(
 }
 
 /// Construct any length array
-fn _array_n(args: &[ArrayRef], uindex: usize) -> Result<ArrayRef> {
+fn _array_n(args: &[ArrayRef], uindex: usize) -> datafusion::error::Result<ArrayRef> {
     let array_length = &args[uindex]
         .as_any()
         .downcast_ref::<Int64Array>()

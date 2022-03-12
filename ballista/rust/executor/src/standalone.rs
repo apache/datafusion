@@ -19,8 +19,10 @@ use std::sync::Arc;
 
 use arrow_flight::flight_service_server::FlightServiceServer;
 
+use ballista_core::config::BallistaConfig;
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use ballista_core::utils::load_udf_from_plugin;
 use ballista_core::{
     error::Result,
     serde::protobuf::executor_registration::OptionalHost,
@@ -43,6 +45,7 @@ pub async fn new_standalone_executor<
     scheduler: SchedulerGrpcClient<Channel>,
     concurrent_tasks: usize,
     codec: BallistaCodec<T, U>,
+    config: &BallistaConfig,
 ) -> Result<()> {
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
@@ -71,7 +74,9 @@ pub async fn new_standalone_executor<
         .into_string()
         .unwrap();
     info!("work_dir: {}", work_dir);
-    let ctx = Arc::new(ExecutionContext::new());
+    let mut context = ExecutionContext::new();
+    load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
+    let ctx = Arc::new(context);
     let executor = Arc::new(Executor::new(executor_meta, &work_dir, ctx));
 
     let service = BallistaFlightService::new(executor.clone());

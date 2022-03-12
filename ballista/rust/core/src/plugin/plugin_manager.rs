@@ -14,9 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::plugin::{PluginDeclaration, CORE_VERSION, RUSTC_VERSION};
-use crate::plugin::{PluginEnum, PluginRegistrar};
-use datafusion_common::{DataFusionError, Result};
+use crate::error::{BallistaError, Result};
 use libloading::Library;
 use log::info;
 use std::collections::HashMap;
@@ -24,6 +22,9 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use walkdir::{DirEntry, WalkDir};
 
+use crate::plugin::{
+    PluginDeclaration, PluginEnum, PluginRegistrar, CORE_VERSION, RUSTC_VERSION,
+};
 use once_cell::sync::OnceCell;
 
 /// To prevent the library from being loaded multiple times, we use once_cell defines a Arc<Mutex<GlobalPluginManager>>
@@ -66,7 +67,7 @@ impl GlobalPluginManager {
 
         for plugin_file in plugin_files {
             let library = Library::new(plugin_file.path()).map_err(|e| {
-                DataFusionError::IoError(io::Error::new(
+                BallistaError::IoError(io::Error::new(
                     io::ErrorKind::Other,
                     format!("load library error: {}", e),
                 ))
@@ -87,7 +88,7 @@ impl GlobalPluginManager {
 
             // ersion checks to prevent accidental ABI incompatibilities
             if dec.rustc_version != RUSTC_VERSION || dec.core_version != CORE_VERSION {
-                return Err(DataFusionError::IoError(io::Error::new(
+                return Err(BallistaError::IoError(io::Error::new(
                     io::ErrorKind::Other,
                     "Version mismatch",
                 )));

@@ -20,6 +20,8 @@ fn main() -> Result<(), String> {
     println!("cargo:rerun-if-env-changed=FORCE_REBUILD");
 
     println!("cargo:rerun-if-changed=proto/ballista.proto");
+    let version = rustc_version::version().unwrap();
+    println!("cargo:rustc-env=RUSTC_VERSION={}", version);
     tonic_build::configure()
         .compile(&["proto/ballista.proto"], &["proto"])
         .map_err(|e| format!("protobuf compilation failed: {}", e))

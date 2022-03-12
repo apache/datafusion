@@ -28,11 +28,23 @@ edition = "2021"
 publish = false
 rust-version = "1.58"
 
+[[example]]
+name = "simple_udf_plugin"
+path = "src/bin/simple_udf_plugin.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "use_simple_udf_plugin"
+path = "src/bin/use_simple_udf_plugin.rs"
+
 [dependencies]
 datafusion = { path = "../datafusion" }
+datafusion-expr = { path = "../datafusion-expr" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0"}
 prost = "0.9"
 tonic = "0.6"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 futures = "0.3"
 num_cpus = "1.13.0"
+test-cdylib = "1.1.0"
+lazy_static = { version = "^1.4.0" }

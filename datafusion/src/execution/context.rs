@@ -84,7 +84,6 @@ use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
-use crate::plugin::udf::get_udf_plugin_manager;
 use crate::sql::{
     parser::{DFParser, FileType},
     planner::{ContextProvider, SqlToRel},
@@ -188,35 +187,17 @@ impl ExecutionContext {
 
         let runtime_env = Arc::new(RuntimeEnv::new(config.runtime.clone()).unwrap());
 
-        let mut context = Self {
+        Self {
             state: Arc::new(Mutex::new(ExecutionContextState {
                 catalog_list,
                 scalar_functions: HashMap::new(),
                 aggregate_functions: HashMap::new(),
-                config: config.clone(),
+                config,
                 execution_props: ExecutionProps::new(),
                 object_store_registry: Arc::new(ObjectStoreRegistry::new()),
                 runtime_env,
             })),
-        };
-
-        // register udf
-        if let Some(udf_plugin_manager) =
-            get_udf_plugin_manager(config.plugin_dir.as_str())
-        {
-            udf_plugin_manager
-                .scalar_udfs
-                .iter()
-                .for_each(|(_, scalar_udf)| context.register_udf((**scalar_udf).clone()));
-
-            udf_plugin_manager
-                .aggregate_udfs
-                .iter()
-                .for_each(|(_, aggregate_udf)| {
-                    context.register_udaf((**aggregate_udf).clone())
-                });
         }
-        context
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
@@ -923,8 +904,6 @@ pub struct ExecutionConfig {
     parquet_pruning: bool,
     /// Runtime configurations such as memory threshold and local disk for spill
     pub runtime: RuntimeConfig,
-    /// give a plugin files dir, and then the dynamic library files in this dir will be load when ExecutionContext is be create.
-    pub plugin_dir: String,
 }
 
 impl Default for ExecutionConfig {
@@ -963,7 +942,6 @@ impl Default for ExecutionConfig {
             repartition_windows: true,
             parquet_pruning: true,
             runtime: RuntimeConfig::default(),
-            plugin_dir: String::from(""),
         }
     }
 }

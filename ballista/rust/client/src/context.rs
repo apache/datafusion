@@ -26,7 +26,9 @@ use std::sync::Arc;
 
 use ballista_core::config::BallistaConfig;
 use ballista_core::serde::protobuf::LogicalPlanNode;
-use ballista_core::utils::create_df_ctx_with_ballista_query_planner;
+use ballista_core::utils::{
+    create_datafusion_context, create_df_ctx_with_ballista_query_planner,
+};
 
 use datafusion::catalog::TableReference;
 use datafusion::dataframe::DataFrame;
@@ -34,9 +36,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
-use datafusion::prelude::{
-    AvroReadOptions, CsvReadOptions, ExecutionConfig, ExecutionContext,
-};
+use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
 use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
 
 struct BallistaContextState {
@@ -75,7 +75,7 @@ impl BallistaContextState {
 
         log::info!("Running in local mode. Scheduler will be run in-proc");
 
-        let addr = ballista_scheduler::new_standalone_scheduler().await?;
+        let addr = ballista_scheduler::new_standalone_scheduler(config).await?;
 
         let scheduler = loop {
             match SchedulerGrpcClient::connect(format!(
@@ -99,6 +99,7 @@ impl BallistaContextState {
             scheduler,
             concurrent_tasks,
             default_codec,
+            config,
         )
         .await?;
 
@@ -305,11 +306,7 @@ impl BallistaContext {
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
             let state = self.state.lock();
-            ctx = ExecutionContext::with_config(
-                ExecutionConfig::new().with_information_schema(
-                    state.config.default_with_information_schema(),
-                ),
-            );
+            ctx = create_datafusion_context(&state.config());
         }
 
         // register tables with DataFusion context

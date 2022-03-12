@@ -101,9 +101,11 @@ use anyhow::Context;
 use ballista_core::config::{BallistaConfig, TaskSchedulingPolicy};
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
+use ballista_core::plugin::udf::get_udf_plugin_manager;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use ballista_core::utils::load_udf_from_plugin;
 use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, RwLock};
@@ -912,13 +914,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             status: Some(job_meta),
         }))
     }
-}
-
-/// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
-    let config = ExecutionConfig::new()
-        .with_target_partitions(config.default_shuffle_partitions());
-    ExecutionContext::with_config(config)
 }
 
 #[cfg(all(test, feature = "sled"))]
