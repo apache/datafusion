@@ -17,11 +17,11 @@
   under the License.
 -->
 
-# Datafusion output field name semantic
+# DataFusion output field name semantic
 
 This specification documents how field names in output record batches should be
 generated based on given user queries. The filed name rules apply to
-Datafusion queries planned from both SQL queries and Dataframe APIs.
+DataFusion queries planned from both SQL queries and Dataframe APIs.
 
 ## Field name rules
 
@@ -66,7 +66,7 @@ FROM t1
 JOIN t2 ON t1.id = t2.id
 ```
 
-Datafusion Arrow record batches output:
+DataFusion Arrow record batches output:
 
 | id  | a   | id  | b     |
 | --- | --- | --- | ----- |
@@ -95,7 +95,7 @@ Query:
 SELECT ABS(t1.id), abs(-id) FROM t1;
 ```
 
-Datafusion Arrow record batches output:
+DataFusion Arrow record batches output:
 
 | abs(t1.id) | abs((- t1.id)) |
 | ---------- | -------------- |
@@ -138,7 +138,7 @@ Query:
 SELECT t1.id + ABS(id), ABS(id * t1.id) FROM t1;
 ```
 
-Datafusion Arrow record batches output:
+DataFusion Arrow record batches output:
 
 | t1.id + abs(t1.id) | abs(t1.id \* t1.id) |
 | ------------------ | ------------------- |
@@ -181,7 +181,7 @@ Query:
 SELECT 1, 2+5, 'foo_bar';
 ```
 
-Datafusion Arrow record batches output:
+DataFusion Arrow record batches output:
 
 | 1   | (2 + 5) | foo_bar |
 | --- | ------- | ------- |

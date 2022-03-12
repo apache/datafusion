@@ -20,7 +20,7 @@
 Changelogs are maintained separately for each subproject. Please check out the
 changelog file within each subproject folder for more details:
 
-* [Datafusion CHANGELOG](./datafusion/CHANGELOG.md)
+* [DataFusion CHANGELOG](./datafusion/CHANGELOG.md)
 * [Ballista CHANGELOG](./ballista/CHANGELOG.md)
 
 For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/arrow/blob/master/CHANGELOG.md).

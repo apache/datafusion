@@ -35,9 +35,9 @@ import datafusion
 
 # -- Project information -----------------------------------------------------
 
-project = 'Arrow Datafusion'
+project = 'Arrow DataFusion'
 copyright = '2022, Apache Software Foundation'
-author = 'Arrow Datafusion Authors'
+author = 'Arrow DataFusion Authors'
 
 
 # -- General configuration ---------------------------------------------------

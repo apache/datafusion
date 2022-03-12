@@ -38,4 +38,4 @@ class TestBenchmark(conbench.runner.Benchmark):
 @conbench.runner.register_benchmark
 class CargoBenchmarks(_criterion.CriterionBenchmark):
     name = "datafusion"
-    description = "Run Arrow Datafusion micro benchmarks."
+    description = "Run Arrow DataFusion micro benchmarks."
