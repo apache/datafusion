@@ -37,9 +37,9 @@ pub trait EventAction<E>: Send + Sync {
 
 #[derive(Clone)]
 pub struct EventLoop<E> {
-    name: String,
+    pub name: String,
+    pub buffer_size: usize,
     stopped: Arc<AtomicBool>,
-    buffer_size: usize,
     action: Arc<dyn EventAction<E>>,
     tx_event: Option<mpsc::Sender<E>>,
 }
@@ -52,8 +52,8 @@ impl<E: Send + 'static> EventLoop<E> {
     ) -> Self {
         Self {
             name,
-            stopped: Arc::new(AtomicBool::new(false)),
             buffer_size,
+            stopped: Arc::new(AtomicBool::new(false)),
             action,
             tx_event: None,
         }
