@@ -38,6 +38,43 @@ use datafusion::{
 use futures::{stream, StreamExt};
 
 #[tokio::test]
+async fn parquet_distinct_partition_col() -> Result<()> {
+    let mut ctx = ExecutionContext::new();
+
+    register_partitioned_alltypes_parquet(
+        &mut ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &["year", "month", "day"],
+        "",
+        "alltypes_plain.parquet",
+    )
+    .await;
+
+    let result = ctx
+        .sql("SELECT distinct year,month,day FROM t")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+------+-------+-----+",
+        "| year | month | day |",
+        "+------+-------+-----+",
+        "| 2021 | 09    | 09  |",
+        "| 2021 | 10    | 09  |",
+        "| 2021 | 10    | 28  |",
+        "+------+-------+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
     let mut ctx = ExecutionContext::new();
 

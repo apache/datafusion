@@ -236,32 +236,59 @@ impl ExecutionPlan for ParquetExec {
 
         let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
 
-        let join_handle = task::spawn_blocking(move || {
-            if let Err(e) = read_partition(
-                object_store.as_ref(),
-                adapter,
-                partition_index,
-                &partition,
-                metrics,
-                &projection,
-                &pruning_predicate,
-                batch_size,
-                response_tx.clone(),
-                limit,
-                partition_col_proj,
-            ) {
-                println!(
+        let join_handle = if projection.is_empty() {
+            task::spawn_blocking(move || {
+                if let Err(e) = read_partition_no_file_columns(
+                    object_store.as_ref(),
+                    partition_index,
+                    &partition,
+                    metrics,
+                    &pruning_predicate,
+                    batch_size,
+                    response_tx.clone(),
+                    limit,
+                    partition_col_proj,
+                ) {
+                    println!(
+                        "Parquet reader thread terminated due to error: {:?} for files: {:?}",
+                        e, partition
+                    );
+                    // Send the error back to the main thread.
+                    //
+                    // Ignore error sending (via `.ok()`) because that
+                    // means the receiver has been torn down (and nothing
+                    // cares about the errors anymore)
+                    send_result(&response_tx, Err(e.into())).ok();
+                }
+            })
+        } else {
+            task::spawn_blocking(move || {
+                if let Err(e) = read_partition(
+                    object_store.as_ref(),
+                    adapter,
+                    partition_index,
+                    &partition,
+                    metrics,
+                    &projection,
+                    &pruning_predicate,
+                    batch_size,
+                    response_tx.clone(),
+                    limit,
+                    partition_col_proj,
+                ) {
+                    println!(
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
                 );
-                // Send the error back to the main thread.
-                //
-                // Ignore error sending (via `.ok()`) because that
-                // means the receiver has been torn down (and nothing
-                // cares about the errors anymore)
-                send_result(&response_tx, Err(e.into())).ok();
-            }
-        });
+                    // Send the error back to the main thread.
+                    //
+                    // Ignore error sending (via `.ok()`) because that
+                    // means the receiver has been torn down (and nothing
+                    // cares about the errors anymore)
+                    send_result(&response_tx, Err(e.into())).ok();
+                }
+            })
+        };
 
         Ok(RecordBatchReceiverStream::create(
             &self.projected_schema,
@@ -447,6 +474,78 @@ fn build_row_group_predicate(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn read_partition_no_file_columns(
+    object_store: &dyn ObjectStore,
+    partition_index: usize,
+    partition: &[PartitionedFile],
+    metrics: ExecutionPlanMetricsSet,
+    predicate_builder: &Option<PruningPredicate>,
+    batch_size: usize,
+    response_tx: Sender<ArrowResult<RecordBatch>>,
+    limit: Option<usize>,
+    mut partition_column_projector: PartitionColumnProjector,
+) -> Result<()> {
+    let mut remaining_rows = limit.unwrap_or(usize::MAX);
+    for partitioned_file in partition {
+        let mut file_row_count = 0;
+        let file_metrics = ParquetFileMetrics::new(
+            partition_index,
+            &*partitioned_file.file_meta.path(),
+            &metrics,
+        );
+        let object_reader =
+            object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
+        let mut file_reader =
+            SerializedFileReader::new(ChunkObjectReader(object_reader))?;
+        if let Some(predicate_builder) = predicate_builder {
+            let row_group_predicate = build_row_group_predicate(
+                predicate_builder,
+                file_metrics,
+                file_reader.metadata().row_groups(),
+            );
+            file_reader.filter_row_groups(&row_group_predicate);
+        }
+
+        for i in 0..file_reader.num_row_groups() {
+            let row_group = file_reader.get_row_group(i)?;
+            let num_rows = row_group.metadata().num_rows();
+            let num_rows = usize::try_from(num_rows).map_err(|e| {
+                DataFusionError::Execution(format!(
+                    "Could not convert number of rows from i64 to usize: {}",
+                    e
+                ))
+            })?;
+            file_row_count += num_rows;
+            if file_row_count >= remaining_rows {
+                file_row_count = remaining_rows;
+                remaining_rows = 0;
+                break;
+            } else {
+                remaining_rows -= file_row_count;
+            }
+        }
+
+        while file_row_count > batch_size {
+            send_result(
+                &response_tx,
+                partition_column_projector
+                    .project_empty(batch_size, &partitioned_file.partition_values),
+            )?;
+            file_row_count -= batch_size;
+        }
+        send_result(
+            &response_tx,
+            partition_column_projector
+                .project_empty(batch_size, &partitioned_file.partition_values),
+        )?;
+        if remaining_rows == 0 {
+            break;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn read_partition(
     object_store: &dyn ObjectStore,
     schema_adapter: SchemaAdapter,
@@ -481,7 +580,6 @@ fn read_partition(
             );
             file_reader.filter_row_groups(&row_group_predicate);
         }
-
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
         let adapted_projections =
             schema_adapter.map_projections(&arrow_reader.get_schema()?, projection)?;
