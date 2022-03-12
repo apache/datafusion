@@ -45,7 +45,6 @@ use crate::physical_plan::{
 };
 use crate::sql::utils::find_window_exprs;
 
-use crate::datasource::datasource::TableProviderFilterPushDown;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or

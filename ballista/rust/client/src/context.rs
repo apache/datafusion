@@ -33,7 +33,6 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::dataframe::DataFrame;
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
-use datafusion::parquet::record::Field::Str;
 use datafusion::prelude::{
     AvroReadOptions, CsvReadOptions, ExecutionConfig, ExecutionContext,
 };

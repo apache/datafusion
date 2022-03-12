@@ -78,7 +78,7 @@ impl BallistaContext {
                 .to_string(),
         ))
     }
-    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<DataFrame>> {
         unreachable!()
     }
 }
