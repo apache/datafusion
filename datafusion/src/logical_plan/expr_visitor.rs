@@ -73,9 +73,9 @@ impl ExprVisitable for Expr {
     /// ```text
     /// pre_visit(BinaryExpr(GT))
     /// pre_visit(Column("foo"))
+    /// post_visit(Column("foo"))
     /// pre_visit(Column("bar"))
     /// post_visit(Column("bar"))
-    /// post_visit(Column("foo"))
     /// post_visit(BinaryExpr(GT))
     /// ```
     ///
