@@ -379,7 +379,7 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("Column-");
                 desc.push_str(&column.flat_name());
             }
-            Expr::ScalarVariable(var_names) => {
+            Expr::ScalarVariable(_, var_names) => {
                 desc.push_str("ScalarVariable-");
                 desc.push_str(&var_names.join("."));
             }

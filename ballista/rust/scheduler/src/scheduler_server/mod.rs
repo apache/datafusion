@@ -33,6 +33,9 @@ use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 use crate::scheduler_server::event_loop::{
     SchedulerServerEvent, SchedulerServerEventAction,
 };
+use crate::scheduler_server::query_stage_scheduler::{
+    QueryStageScheduler, QueryStageSchedulerEvent,
+};
 use crate::state::backend::StateBackendClient;
 use crate::state::SchedulerState;
 
@@ -45,6 +48,7 @@ pub mod externalscaler {
 mod event_loop;
 mod external_scaler;
 mod grpc;
+mod query_stage_scheduler;
 
 type ExecutorsClient = Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>;
 
@@ -55,6 +59,7 @@ pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     policy: TaskSchedulingPolicy,
     executors_client: Option<ExecutorsClient>,
     event_loop: Option<EventLoop<SchedulerServerEvent>>,
+    query_stage_event_loop: EventLoop<QueryStageSchedulerEvent>,
     ctx: Arc<RwLock<ExecutionContext>>,
     codec: BallistaCodec<T, U>,
 }
@@ -98,6 +103,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             } else {
                 (None, None)
             };
+        let query_stage_scheduler =
+            Arc::new(QueryStageScheduler::new(ctx.clone(), state.clone(), None));
+        let query_stage_event_loop =
+            EventLoop::new("query_stage".to_owned(), 10000, query_stage_scheduler);
         Self {
             state,
             start_time: SystemTime::now()
@@ -107,6 +116,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             policy,
             executors_client,
             event_loop,
+            query_stage_event_loop,
             ctx,
             codec,
         }
@@ -122,10 +132,31 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         {
             if let Some(event_loop) = self.event_loop.as_mut() {
                 event_loop.start()?;
+
+                let query_stage_scheduler = Arc::new(QueryStageScheduler::new(
+                    self.ctx.clone(),
+                    self.state.clone(),
+                    Some(event_loop.get_sender()?),
+                ));
+                let query_stage_event_loop = EventLoop::new(
+                    self.query_stage_event_loop.name.clone(),
+                    self.query_stage_event_loop.buffer_size,
+                    query_stage_scheduler,
+                );
+                self.query_stage_event_loop = query_stage_event_loop;
             }
+
+            self.query_stage_event_loop.start()?;
         }
 
         Ok(())
+    }
+
+    async fn post_event(&self, event: QueryStageSchedulerEvent) -> Result<()> {
+        self.query_stage_event_loop
+            .get_sender()?
+            .post_event(event)
+            .await
     }
 }
 

@@ -78,6 +78,8 @@ pub trait ContextProvider {
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>>;
+    /// Getter for system/user-defined variable type
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType>;
 }
 
 /// SQL query planner
@@ -1410,7 +1412,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if id.value.starts_with('@') {
                     // TODO: figure out if ScalarVariables should be insensitive.
                     let var_names = vec![id.value];
-                    Ok(Expr::ScalarVariable(var_names))
+                    let ty = self
+                        .schema_provider
+                        .get_variable_type(&var_names)
+                        .ok_or_else(|| {
+                            DataFusionError::Execution(format!(
+                                "variable {:?} has no type information",
+                                var_names
+                            ))
+                        })?;
+                    Ok(Expr::ScalarVariable(ty, var_names))
                 } else {
                     // Don't use `col()` here because it will try to
                     // interpret names with '.' as if they were
@@ -1438,7 +1449,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
 
                 if &var_names[0][0..1] == "@" {
-                    Ok(Expr::ScalarVariable(var_names))
+                    let ty = self
+                        .schema_provider
+                        .get_variable_type(&var_names)
+                        .ok_or_else(|| {
+                            DataFusionError::Execution(format!(
+                                "variable {:?} has no type information",
+                                var_names
+                            ))
+                        })?;
+                    Ok(Expr::ScalarVariable(ty, var_names))
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
@@ -3943,6 +3963,10 @@ mod tests {
         }
 
         fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
+            unimplemented!()
+        }
+
+        fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
             unimplemented!()
         }
     }
