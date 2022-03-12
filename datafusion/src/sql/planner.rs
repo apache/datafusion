@@ -1581,22 +1581,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 substring_from,
                 substring_for,
             } => {
-                if substring_from.is_none() && substring_for.is_none() {
-                    let orig_sql = SQLExpr::Substring {
-                        expr,
-                        substring_from,
-                        substring_for,
-                    };
-
-                    return Err(DataFusionError::Plan(format!(
-                        "Substring without for/from is not valid {:?}",
-                        orig_sql
-                    )));
-                }
-
-                let arg = self.sql_expr_to_logical_expr(*expr, schema)?;
                 let args = match (substring_from, substring_for) {
                     (Some(from_expr), Some(for_expr)) => {
+                        let arg = self.sql_expr_to_logical_expr(*expr, schema)?;
                         let from_logic =
                             self.sql_expr_to_logical_expr(*from_expr, schema)?;
                         let for_logic =
@@ -1604,19 +1591,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         vec![arg, from_logic, for_logic]
                     }
                     (Some(from_expr), None) => {
+                        let arg = self.sql_expr_to_logical_expr(*expr, schema)?;
                         let from_logic =
                             self.sql_expr_to_logical_expr(*from_expr, schema)?;
                         vec![arg, from_logic]
                     }
                     (None, Some(for_expr)) => {
+                        let arg = self.sql_expr_to_logical_expr(*expr, schema)?;
                         let from_logic = Expr::Literal(ScalarValue::Int64(Some(1)));
                         let for_logic =
                             self.sql_expr_to_logical_expr(*for_expr, schema)?;
                         vec![arg, from_logic, for_logic]
                     }
                     (None, None) => {
-                        // handled above
-                        unreachable!();
+                        let orig_sql = SQLExpr::Substring {
+                            expr,
+                            substring_from: None,
+                            substring_for: None,
+                        };
+
+                        return Err(DataFusionError::Plan(format!(
+                            "Substring without for/from is not valid {:?}",
+                            orig_sql
+                        )));
                     }
                 };
 
