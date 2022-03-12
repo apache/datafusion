@@ -17,7 +17,6 @@
 
 use anyhow::Context;
 use ballista_core::config::TaskSchedulingPolicy;
-use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf::execute_query_params::Query;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
@@ -26,10 +25,9 @@ use ballista_core::serde::protobuf::scheduler_grpc_server::SchedulerGrpc;
 use ballista_core::serde::protobuf::{
     job_status, ExecuteQueryParams, ExecuteQueryResult, ExecutorHeartbeat, FailedJob,
     FileType, GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams,
-    GetJobStatusResult, HeartBeatParams, HeartBeatResult, JobStatus, PartitionId,
-    PollWorkParams, PollWorkResult, QueuedJob, RegisterExecutorParams,
-    RegisterExecutorResult, RunningJob, TaskDefinition, TaskStatus,
-    UpdateTaskStatusParams, UpdateTaskStatusResult,
+    GetJobStatusResult, HeartBeatParams, HeartBeatResult, JobStatus, PollWorkParams,
+    PollWorkResult, QueuedJob, RegisterExecutorParams, RegisterExecutorResult,
+    TaskDefinition, UpdateTaskStatusParams, UpdateTaskStatusResult,
 };
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata};
@@ -37,19 +35,17 @@ use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::object_store::{local::LocalFileSystem, ObjectStore};
-use datafusion::logical_plan::LogicalPlan;
-use datafusion::physical_plan::ExecutionPlan;
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::collections::HashSet;
 use std::convert::TryInto;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 
-use crate::planner::DistributedPlanner;
 use crate::scheduler_server::event_loop::SchedulerServerEvent;
+use crate::scheduler_server::query_stage_scheduler::QueryStageSchedulerEvent;
 use crate::scheduler_server::SchedulerServer;
 
 #[tonic::async_trait]
@@ -422,9 +418,13 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     tonic::Status::internal(format!("Could not save job metadata: {}", e))
                 })?;
 
-            // Create job details for the plan, like stages, tasks, etc
-            // TODO To achieve more throughput, maybe change it to be event-based processing in the future
-            match create_job(self, job_id.clone(), plan).await {
+            match self
+                .post_event(QueryStageSchedulerEvent::JobSubmitted(
+                    job_id.clone(),
+                    Box::new(plan),
+                ))
+                .await
+            {
                 Err(error) => {
                     let msg = format!("Job {} failed due to {}", job_id, error);
                     warn!("{}", msg);
@@ -468,112 +468,6 @@ fn generate_job_id() -> String {
         .map(char::from)
         .take(7)
         .collect()
-}
-
-async fn create_job<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
-    scheduler_server: &SchedulerServer<T, U>,
-    job_id: String,
-    plan: LogicalPlan,
-) -> Result<(), BallistaError> {
-    // create physical plan using DataFusion
-    let plan = async move {
-        let start = Instant::now();
-
-        let ctx = scheduler_server.ctx.read().await.clone();
-        let optimized_plan = ctx.optimize(&plan).map_err(|e| {
-            let msg = format!("Could not create optimized logical plan: {}", e);
-            error!("{}", msg);
-            BallistaError::General(msg)
-        })?;
-
-        debug!("Calculated optimized plan: {:?}", optimized_plan);
-
-        let plan = ctx
-            .create_physical_plan(&optimized_plan)
-            .await
-            .map_err(|e| {
-                let msg = format!("Could not create physical plan: {}", e);
-                error!("{}", msg);
-                BallistaError::General(msg)
-            });
-
-        info!(
-            "DataFusion created physical plan in {} milliseconds",
-            start.elapsed().as_millis()
-        );
-
-        plan
-    }
-    .await?;
-
-    scheduler_server
-        .state
-        .save_job_metadata(
-            &job_id,
-            &JobStatus {
-                status: Some(job_status::Status::Running(RunningJob {})),
-            },
-        )
-        .await
-        .map_err(|e| {
-            warn!("Could not update job {} status to running: {}", job_id, e);
-            e
-        })?;
-
-    // create distributed physical plan using Ballista
-    let mut planner = DistributedPlanner::new();
-    let stages = planner
-        .plan_query_stages(&job_id, plan)
-        .await
-        .map_err(|e| {
-            let msg = format!("Could not plan query stages: {}", e);
-            error!("{}", msg);
-            BallistaError::General(msg)
-        })?;
-
-    // save stages into state
-    for shuffle_writer in stages {
-        scheduler_server
-            .state
-            .save_stage_plan(&job_id, shuffle_writer.stage_id(), shuffle_writer.clone())
-            .await
-            .map_err(|e| {
-                let msg = format!("Could not save stage plan: {}", e);
-                error!("{}", msg);
-                BallistaError::General(msg)
-            })?;
-        let num_partitions = shuffle_writer.output_partitioning().partition_count();
-        for partition_id in 0..num_partitions {
-            let pending_status = TaskStatus {
-                task_id: Some(PartitionId {
-                    job_id: job_id.clone(),
-                    stage_id: shuffle_writer.stage_id() as u32,
-                    partition_id: partition_id as u32,
-                }),
-                status: None,
-            };
-            scheduler_server
-                .state
-                .save_task_status(&pending_status)
-                .await
-                .map_err(|e| {
-                    let msg = format!("Could not save task status: {}", e);
-                    error!("{}", msg);
-                    BallistaError::General(msg)
-                })?;
-        }
-    }
-
-    if let Some(event_loop) = scheduler_server.event_loop.as_ref() {
-        // Send job_id to the scheduler channel
-        event_loop
-            .get_sender()?
-            .post_event(SchedulerServerEvent::JobSubmitted(job_id))
-            .await
-            .unwrap();
-    };
-
-    Ok(())
 }
 
 #[cfg(all(test, feature = "sled"))]
