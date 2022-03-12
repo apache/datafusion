@@ -833,7 +833,7 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
-    /// Should Datafusion parquet reader using the predicate to prune data
+    /// Should DataFusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
     /// Runtime configurations such as memory threshold and local disk for spill
     pub runtime: RuntimeConfig,

@@ -132,7 +132,7 @@ python -m pytest -v integration-tests/test_psql_parity.py
 
 ### Criterion Benchmarks
 
-[Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by Datafusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within Datafusion.
+[Criterion](https://docs.rs/criterion/latest/criterion/index.html) is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.
 
 Criterion integrates with Cargo's built-in [benchmark support](https://doc.rust-lang.org/cargo/commands/cargo-bench.html) and a given benchmark can be run with
 
@@ -160,7 +160,7 @@ The benchmark will automatically remove any generated parquet file on exit, howe
 
 ### Upstream Benchmark Suites
 
-Instructions and tooling for running upstream benchmark suites against Datafusion and/or Ballista can be found in [benchmarks](./benchmarks).
+Instructions and tooling for running upstream benchmark suites against DataFusion and/or Ballista can be found in [benchmarks](./benchmarks).
 
 These are valuable for comparative evaluation against alternative Arrow implementations and query engines.
 
@@ -227,7 +227,7 @@ dot -Tpdf < /tmp/plan.dot > /tmp/plan.pdf
 
 ## Specification
 
-We formalize Datafusion semantics and behaviors through specification
+We formalize DataFusion semantics and behaviors through specification
 documents. These specifications are useful to be used as references to help
 resolve ambiguities during development or code reviews.
 
