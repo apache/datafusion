@@ -583,7 +583,7 @@ impl DefaultPhysicalPlanner {
                             // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
                             //
                             // If we run these logical columns through physical_name function, we will
-                            // get physical names with column qualifiers, which violates Datafusion's
+                            // get physical names with column qualifiers, which violates DataFusion's
                             // field name semantics. To account for this, we need to derive the
                             // physical name from physical input instead.
                             //

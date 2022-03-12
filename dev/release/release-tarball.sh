@@ -65,7 +65,7 @@ cp -r ${tmp_dir}/dev/* ${tmp_dir}/release/${release_version}/
 svn add ${tmp_dir}/release/${release_version}
 
 echo "Commit release"
-svn ci -m "Apache Arrow Datafusion ${version}" ${tmp_dir}/release
+svn ci -m "Apache Arrow DataFusion ${version}" ${tmp_dir}/release
 
 echo "Clean up"
 rm -rf ${tmp_dir}
