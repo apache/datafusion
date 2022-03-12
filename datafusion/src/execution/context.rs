@@ -45,7 +45,7 @@ use std::path::PathBuf;
 use std::string::String;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -1190,6 +1190,23 @@ impl ContextProvider for ExecutionContextState {
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.aggregate_functions.get(name).cloned()
     }
+
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        if variable_names.is_empty() {
+            return None;
+        }
+
+        let provider_type = if &variable_names[0][0..2] == "@@" {
+            VarType::System
+        } else {
+            VarType::UserDefined
+        };
+
+        self.execution_props
+            .var_providers
+            .as_ref()
+            .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
+    }
 }
 
 impl FunctionRegistry for ExecutionContextState {
@@ -1300,14 +1317,15 @@ mod tests {
         ctx.register_table("dual", provider)?;
 
         let results =
-            plan_and_collect(&mut ctx, "SELECT @@version, @name FROM dual").await?;
+            plan_and_collect(&mut ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
+                .await?;
 
         let expected = vec![
-            "+----------------------+------------------------+",
-            "| @@version            | @name                  |",
-            "+----------------------+------------------------+",
-            "| system-var-@@version | user-defined-var-@name |",
-            "+----------------------+------------------------+",
+            "+----------------------+------------------------+------------------------+",
+            "| @@version            | @name                  | @integer Plus Int64(1) |",
+            "+----------------------+------------------------+------------------------+",
+            "| system-var-@@version | user-defined-var-@name | 42                     |",
+            "+----------------------+------------------------+------------------------+",
         ];
         assert_batches_eq!(expected, &results);
 
