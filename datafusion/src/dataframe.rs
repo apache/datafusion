@@ -17,35 +17,61 @@
 
 //! DataFrame API for building and executing query plans.
 
-use parking_lot::Mutex;
-use std::any::Any;
-use std::sync::Arc;
-
-use crate::arrow::datatypes::Schema;
-use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
-use crate::execution::context::{ExecutionContext, ExecutionContextState};
 use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
+use parquet::file::properties::WriterProperties;
+use std::sync::Arc;
+
+use crate::physical_plan::SendableRecordBatchStream;
+use async_trait::async_trait;
+
+use parking_lot::Mutex;
+use std::any::Any;
+use crate::arrow::datatypes::Schema;
+use crate::arrow::datatypes::SchemaRef;
+use crate::execution::context::{ExecutionContext, ExecutionContextState};
 use crate::scalar::ScalarValue;
 use crate::physical_plan::{collect, collect_partitioned};
-use parquet::file::properties::WriterProperties;
-
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::{
-    execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
+    execute_stream, execute_stream_partitioned, ExecutionPlan,
 };
 use crate::sql::utils::find_window_exprs;
-use async_trait::async_trait;
+
 use crate::datasource::datasource::TableProviderFilterPushDown;
 
-/// Implementation of DataFrame API
+/// DataFrame represents a logical set of rows with the same named columns.
+/// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
+/// [Spark DataFrame](https://spark.apache.org/docs/latest/sql-programming-guide.html)
+///
+/// DataFrames are typically created by the `read_csv` and `read_parquet` methods on the
+/// [ExecutionContext](../execution/context/struct.ExecutionContext.html) and can then be modified
+/// by calling the transformation methods, such as `filter`, `select`, `aggregate`, and `limit`
+/// to build up a query definition.
+///
+/// The query can be executed by calling the `collect` method.
+///
+/// ```
+/// # use datafusion::prelude::*;
+/// # use datafusion::error::Result;
+/// # #[tokio::main]
+/// # async fn main() -> Result<()> {
+/// let mut ctx = ExecutionContext::new();
+/// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+/// let df = df.filter(col("a").lt_eq(col("b")))?
+///            .aggregate(vec![col("a")], vec![min(col("b"))])?
+///            .limit(100)?;
+/// let results = df.collect();
+/// # Ok(())
+/// # }
+/// ```
 pub struct DataFrame {
     ctx_state: Arc<Mutex<ExecutionContextState>>,
     plan: LogicalPlan,
