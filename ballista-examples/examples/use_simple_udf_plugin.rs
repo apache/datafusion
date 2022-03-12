@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     let dylib = test_cdylib::build_example("simple_udf_plugin");
     global_plugin_manager(dylib.display().to_string().as_str());
     let config = BallistaConfig::builder()
-        .set("ballista.shuffle.partitions", "4")
+        .set("ballista.shuffle.partitions", "2")
         .build()?;
     let ctx = BallistaContext::standalone(&config, 1).await.unwrap();
 
@@ -40,9 +40,7 @@ async fn main() -> Result<()> {
     .await?;
 
     // execute the query
-    let df = ctx
-        .sql("select array_4(1, c2, 0, 0, 2) from aggregate_test_100 limit 3")
-        .await?;
+    let df = ctx.sql("show functions").await?;
 
     // print the results
     df.show().await?;

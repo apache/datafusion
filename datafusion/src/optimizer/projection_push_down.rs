@@ -185,10 +185,13 @@ fn optimize_plan(
                 // no need for an expression at all
                 Ok(new_input)
             } else {
+                let metadata = new_input.schema().metadata().clone();
                 Ok(LogicalPlan::Projection(Projection {
                     expr: new_expr,
                     input: Arc::new(new_input),
-                    schema: DFSchemaRef::new(DFSchema::new(new_fields)?),
+                    schema: DFSchemaRef::new(DFSchema::new_with_metadata(
+                        new_fields, metadata,
+                    )?),
                     alias: alias.clone(),
                 }))
             }
@@ -307,13 +310,14 @@ fn optimize_plan(
                 }
             })?;
 
-            let new_schema = DFSchema::new(
+            let new_schema = DFSchema::new_with_metadata(
                 schema
                     .fields()
                     .iter()
                     .filter(|x| new_required_columns.contains(&x.qualified_column()))
                     .cloned()
                     .collect(),
+                schema.metadata().clone(),
             )?;
 
             Ok(LogicalPlan::Aggregate(Aggregate {
@@ -413,13 +417,14 @@ fn optimize_plan(
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let new_schema = DFSchema::new(
+            let new_schema = DFSchema::new_with_metadata(
                 schema
                     .fields()
                     .iter()
                     .filter(|f| union_required_fields.contains(f.field()))
                     .cloned()
                     .collect(),
+                schema.metadata().clone(),
             )?;
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
@@ -466,6 +471,8 @@ fn optimize_plan(
 
 #[cfg(test)]
 mod tests {
+
+    use std::collections::HashMap;
 
     use super::*;
     use crate::logical_plan::{
@@ -605,11 +612,14 @@ mod tests {
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
             **optimized_join.schema(),
-            DFSchema::new(vec![
-                DFField::new(Some("test"), "a", DataType::UInt32, false),
-                DFField::new(Some("test"), "b", DataType::UInt32, false),
-                DFField::new(Some("test2"), "c1", DataType::UInt32, false),
-            ])?,
+            DFSchema::new_with_metadata(
+                vec![
+                    DFField::new(Some("test"), "a", DataType::UInt32, false),
+                    DFField::new(Some("test"), "b", DataType::UInt32, false),
+                    DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+                ],
+                HashMap::new()
+            )?,
         );
 
         Ok(())
@@ -646,11 +656,14 @@ mod tests {
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
             **optimized_join.schema(),
-            DFSchema::new(vec![
-                DFField::new(Some("test"), "a", DataType::UInt32, false),
-                DFField::new(Some("test"), "b", DataType::UInt32, false),
-                DFField::new(Some("test2"), "c1", DataType::UInt32, false),
-            ])?,
+            DFSchema::new_with_metadata(
+                vec![
+                    DFField::new(Some("test"), "a", DataType::UInt32, false),
+                    DFField::new(Some("test"), "b", DataType::UInt32, false),
+                    DFField::new(Some("test2"), "c1", DataType::UInt32, false),
+                ],
+                HashMap::new()
+            )?,
         );
 
         Ok(())
@@ -685,11 +698,14 @@ mod tests {
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
             **optimized_join.schema(),
-            DFSchema::new(vec![
-                DFField::new(Some("test"), "a", DataType::UInt32, false),
-                DFField::new(Some("test"), "b", DataType::UInt32, false),
-                DFField::new(Some("test2"), "a", DataType::UInt32, false),
-            ])?,
+            DFSchema::new_with_metadata(
+                vec![
+                    DFField::new(Some("test"), "a", DataType::UInt32, false),
+                    DFField::new(Some("test"), "b", DataType::UInt32, false),
+                    DFField::new(Some("test2"), "a", DataType::UInt32, false),
+                ],
+                HashMap::new()
+            )?,
         );
 
         Ok(())
@@ -746,7 +762,11 @@ mod tests {
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
         let projected_fields = exprlist_to_fields(&expr, input_schema).unwrap();
-        let projected_schema = DFSchema::new(projected_fields).unwrap();
+        let projected_schema = DFSchema::new_with_metadata(
+            projected_fields,
+            input_schema.metadata().clone(),
+        )
+        .unwrap();
         let plan = LogicalPlan::Projection(Projection {
             expr,
             input: Arc::new(table_scan),

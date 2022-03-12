@@ -39,66 +39,23 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::window_functions::WindowFunction;
 
+use datafusion::physical_plan::udf::ScalarUDFExpr;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
         Literal, NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
     },
-    functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
+    functions::{self, ScalarFunctionExpr},
     Partitioning,
 };
 use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
 
+use crate::plugin::udf::get_udf_plugin_manager;
 use protobuf::physical_expr_node::ExprType;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
         Column::new(&c.name, c.index as usize)
-    }
-}
-
-impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
-    fn from(f: &protobuf::ScalarFunction) -> BuiltinScalarFunction {
-        use protobuf::ScalarFunction;
-        match f {
-            ScalarFunction::Sqrt => BuiltinScalarFunction::Sqrt,
-            ScalarFunction::Sin => BuiltinScalarFunction::Sin,
-            ScalarFunction::Cos => BuiltinScalarFunction::Cos,
-            ScalarFunction::Tan => BuiltinScalarFunction::Tan,
-            ScalarFunction::Asin => BuiltinScalarFunction::Asin,
-            ScalarFunction::Acos => BuiltinScalarFunction::Acos,
-            ScalarFunction::Atan => BuiltinScalarFunction::Atan,
-            ScalarFunction::Exp => BuiltinScalarFunction::Exp,
-            ScalarFunction::Log => BuiltinScalarFunction::Log,
-            ScalarFunction::Log2 => BuiltinScalarFunction::Log2,
-            ScalarFunction::Log10 => BuiltinScalarFunction::Log10,
-            ScalarFunction::Floor => BuiltinScalarFunction::Floor,
-            ScalarFunction::Ceil => BuiltinScalarFunction::Ceil,
-            ScalarFunction::Round => BuiltinScalarFunction::Round,
-            ScalarFunction::Trunc => BuiltinScalarFunction::Trunc,
-            ScalarFunction::Abs => BuiltinScalarFunction::Abs,
-            ScalarFunction::Signum => BuiltinScalarFunction::Signum,
-            ScalarFunction::Octetlength => BuiltinScalarFunction::OctetLength,
-            ScalarFunction::Concat => BuiltinScalarFunction::Concat,
-            ScalarFunction::Lower => BuiltinScalarFunction::Lower,
-            ScalarFunction::Upper => BuiltinScalarFunction::Upper,
-            ScalarFunction::Trim => BuiltinScalarFunction::Trim,
-            ScalarFunction::Ltrim => BuiltinScalarFunction::Ltrim,
-            ScalarFunction::Rtrim => BuiltinScalarFunction::Rtrim,
-            ScalarFunction::Totimestamp => BuiltinScalarFunction::ToTimestamp,
-            ScalarFunction::Array => BuiltinScalarFunction::Array,
-            ScalarFunction::Nullif => BuiltinScalarFunction::NullIf,
-            ScalarFunction::Datepart => BuiltinScalarFunction::DatePart,
-            ScalarFunction::Datetrunc => BuiltinScalarFunction::DateTrunc,
-            ScalarFunction::Md5 => BuiltinScalarFunction::MD5,
-            ScalarFunction::Sha224 => BuiltinScalarFunction::SHA224,
-            ScalarFunction::Sha256 => BuiltinScalarFunction::SHA256,
-            ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
-            ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
-            ScalarFunction::Digest => BuiltinScalarFunction::Digest,
-            ScalarFunction::Ln => BuiltinScalarFunction::Ln,
-            ScalarFunction::Totimestampmillis => BuiltinScalarFunction::ToTimestampMillis,
-        }
     }
 }
 
@@ -127,6 +84,37 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
             ExprType::AggregateExpr(_) => {
                 return Err(BallistaError::General(
                     "Cannot convert aggregate expr node to physical expression"
+                        .to_owned(),
+                ));
+            }
+            ExprType::ScalarUdfProtoExpr(e) => {
+                if let Some(udf_plugin_manager) = get_udf_plugin_manager("") {
+                    let fun = udf_plugin_manager
+                        .scalar_udfs
+                        .get(&e.fun_name)
+                        .ok_or_else(|| {
+                            proto_error(format!(
+                                "can not get udf:{} from UDFPluginMananger.scalar_udfs!",
+                                &e.fun_name.to_owned()
+                            ))
+                        })?;
+                    let args = e
+                        .expr
+                        .iter()
+                        .map(|x| x.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    Arc::new(ScalarUDFExpr::new(
+                        e.fun_name.as_str(),
+                        (**fun).clone(),
+                        args,
+                        &convert_required!(e.return_type)?,
+                    ))
+                }
+            }
+            ExprType::AggregateUdfExpr(_) => {
+                return Err(BallistaError::General(
+                    "Cannot convert aggregate udf expr node to physical expression"
                         .to_owned(),
                 ));
             }
@@ -187,13 +175,14 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                 convert_required!(e.arrow_type)?,
             )),
             ExprType::ScalarFunction(e) => {
-                let scalar_function = protobuf::ScalarFunction::from_i32(e.fun)
-                    .ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown scalar function: {}",
-                            e.fun,
-                        ))
-                    })?;
+                let scalar_function =
+                    datafusion_proto::protobuf::ScalarFunction::from_i32(e.fun)
+                        .ok_or_else(|| {
+                            proto_error(format!(
+                                "Received an unknown scalar function: {}",
+                                e.fun,
+                            ))
+                        })?;
 
                 let args = e
                     .args
@@ -240,23 +229,24 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
     ) -> Result<Self, Self::Error> {
         match expr {
             protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
-                    proto_error(format!(
-                        "Received an unknown window aggregate function: {}",
-                        n
-                    ))
-                })?;
+                let f = datafusion_proto::protobuf::AggregateFunction::from_i32(*n)
+                    .ok_or_else(|| {
+                        proto_error(format!(
+                            "Received an unknown window aggregate function: {}",
+                            n
+                        ))
+                    })?;
 
                 Ok(WindowFunction::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f =
-                    protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown window builtin function: {}",
-                            n
-                        ))
-                    })?;
+                let f = datafusion_proto::protobuf::BuiltInWindowFunction::from_i32(*n)
+                    .ok_or_else(|| {
+                    proto_error(format!(
+                        "Received an unknown window builtin function: {}",
+                        n
+                    ))
+                })?;
 
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }

@@ -24,6 +24,7 @@ use crate::serde::protobuf::physical_expr_node::ExprType;
 use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 
+use crate::plugin::udf::get_udf_plugin_manager;
 use crate::serde::protobuf::{PhysicalExtensionNode, PhysicalPlanNode};
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{
@@ -52,6 +53,7 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::udaf::create_aggregate_expr as create_aggregate_udf_expr;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
@@ -130,10 +132,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 str_to_byte(&scan.delimiter)?,
             ))),
             PhysicalPlanType::ParquetScan(scan) => {
+                let predicate = scan
+                    .pruning_predicate
+                    .as_ref()
+                    .map(|expr| expr.try_into())
+                    .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
                     decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
-                    // TODO predicate should be de-serialized
-                    None,
+                    predicate,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
@@ -298,7 +304,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         match expr_type {
                             ExprType::AggregateExpr(agg_node) => {
                                 let aggr_function =
-                                    protobuf::AggregateFunction::from_i32(
+                                    datafusion_proto::protobuf::AggregateFunction::from_i32(
                                         agg_node.aggr_function,
                                     )
                                         .ok_or_else(
@@ -317,6 +323,40 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &physical_schema,
                                     name.to_string(),
                                 )?)
+                            }
+                            ExprType::AggregateUdfExpr(agg_node) => {
+                                let name = agg_node.fun_name.as_str();
+                                let udaf_fun_name = &name[0..name.find('(').unwrap()];
+
+                                if let Some(udf_plugin_manager) = get_udf_plugin_manager("") {
+                                    let fun = udf_plugin_manager
+                                        .aggregate_udfs
+                                        .get(udaf_fun_name)
+                                        .ok_or_else(|| {
+                                        proto_error(format!(
+                                            "can not get udf:{} from UDFPluginMananger.aggregate_udfs!",
+                                            udaf_fun_name
+                                        ))
+                                    })?;
+
+                                    let fun = fun.as_ref();
+
+                                    let args: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr
+                                        .iter()
+                                        .map(|e| e.try_into())
+                                        .collect::<Result<Vec<_>, BallistaError>>()?;
+
+                                    Ok(create_aggregate_udf_expr(
+                                        fun,
+                                        &args,
+                                        &physical_schema,
+                                        udaf_fun_name.to_string(),
+                                    )?)
+                                } else {
+                                    Err(BallistaError::General(
+                                        "no udf plugin be found".to_string()
+                                    ))
+                                }
                             }
                             _ => Err(BallistaError::General(
                                 "Invalid aggregate  expression for HashAggregateExec"
@@ -701,11 +741,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )),
             })
         } else if let Some(exec) = plan.downcast_ref::<ParquetExec>() {
+            let pruning_expr = exec
+                .pruning_predicate()
+                .map(|pred| pred.logical_expr().try_into())
+                .transpose()?;
             Ok(protobuf::PhysicalPlanNode {
                 physical_plan_type: Some(PhysicalPlanType::ParquetScan(
                     protobuf::ParquetScanExecNode {
                         base_conf: Some(exec.base_config().try_into()?),
-                        // TODO serialize predicates
+                        pruning_predicate: pruning_expr,
                     },
                 )),
             })
@@ -929,6 +973,8 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
+    use datafusion::datasource::object_store::local::LocalFileSystem;
+    use datafusion::datasource::PartitionedFile;
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::prelude::ExecutionContext;
     use datafusion::{
@@ -949,6 +995,9 @@ mod roundtrip_tests {
         },
         scalar::ScalarValue,
     };
+
+    use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
+    use datafusion::physical_plan::Statistics;
 
     use super::super::super::error::Result;
     use super::super::protobuf;
@@ -1118,5 +1167,33 @@ mod roundtrip_tests {
             "".to_string(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 4)),
         )?))
+    }
+
+    #[test]
+    fn roundtrip_parquet_exec_with_pruning_predicate() -> Result<()> {
+        let scan_config = FileScanConfig {
+            object_store: Arc::new(LocalFileSystem {}),
+            file_schema: Arc::new(Schema::new(vec![Field::new(
+                "col",
+                DataType::Utf8,
+                false,
+            )])),
+            file_groups: vec![vec![PartitionedFile::new(
+                "/path/to/file.parquet".to_string(),
+                1024,
+            )]],
+            statistics: Statistics {
+                num_rows: Some(100),
+                total_byte_size: Some(1024),
+                column_statistics: None,
+                is_exact: false,
+            },
+            projection: None,
+            limit: None,
+            table_partition_cols: vec![],
+        };
+
+        let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
+        roundtrip_test(Arc::new(ParquetExec::new(scan_config, Some(predicate))))
     }
 }

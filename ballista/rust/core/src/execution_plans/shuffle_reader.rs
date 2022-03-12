@@ -201,14 +201,14 @@ fn stats_for_partitions(
 
 async fn fetch_partition(
     location: &PartitionLocation,
-) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+) -> Result<Pin<Box<dyn RecordBatchStream + Send>>> {
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
     let mut ballista_client =
         BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-    Ok(ballista_client
+    ballista_client
         .fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
@@ -216,7 +216,7 @@ async fn fetch_partition(
             &location.path,
         )
         .await
-        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
+        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))
 }
 
 #[cfg(test)]

@@ -26,7 +26,7 @@ authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
 keywords = [ "arrow", "query", "sql" ]
 edition = "2021"
-rust-version = "1.58"
+rust-version = "1.59"
 
 [lib]
 name = "datafusion_physical_expr"
@@ -41,7 +41,7 @@ unicode_expressions = ["unicode-segmentation"]
 [dependencies]
 datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
 datafusion-expr = { path = "../datafusion-expr", version = "7.0.0" }
-arrow = { version = "9.1", features = ["prettyprint"] }
+arrow = { version = "10.0", features = ["prettyprint"] }
 paste = "^1.0"
 ahash = { version = "0.7", default-features = false }
 ordered-float = "2.10"

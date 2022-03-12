@@ -17,12 +17,12 @@
 
 //! SQL Utility Functions
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
 use sqlparser::ast::Ident;
 
 use crate::logical_plan::ExprVisitable;
 use crate::logical_plan::{Expr, LogicalPlan};
-use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
@@ -522,7 +522,7 @@ pub(crate) fn make_decimal_type(
         }
         (Some(p), Some(s)) => {
             // Arrow decimal is i128 meaning 38 maximum decimal digits
-            if (p as usize) > MAX_PRECISION_FOR_DECIMAL128 || s > p {
+            if (p as usize) > DECIMAL_MAX_PRECISION || s > p {
                 return Err(DataFusionError::Internal(format!(
                     "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
                     p, s

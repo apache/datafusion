@@ -19,16 +19,15 @@
 
 use std::task::Poll;
 
-use crate::state::ConfigBackendClient;
 use ballista_core::error::{ballista_error, Result};
 
 use etcd_client::{GetOptions, LockResponse, WatchOptions, WatchStream, Watcher};
 use futures::{Stream, StreamExt};
 use log::warn;
 
-use super::{Lock, Watch, WatchEvent};
+use crate::state::backend::{Lock, StateBackendClient, Watch, WatchEvent};
 
-/// A [`ConfigBackendClient`] implementation that uses etcd to save cluster configuration.
+/// A [`StateBackendClient`] implementation that uses etcd to save cluster configuration.
 #[derive(Clone)]
 pub struct EtcdClient {
     etcd: etcd_client::Client,
@@ -41,7 +40,7 @@ impl EtcdClient {
 }
 
 #[tonic::async_trait]
-impl ConfigBackendClient for EtcdClient {
+impl StateBackendClient for EtcdClient {
     async fn get(&self, key: &str) -> Result<Vec<u8>> {
         Ok(self
             .etcd

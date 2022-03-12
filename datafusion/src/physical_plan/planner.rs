@@ -583,7 +583,7 @@ impl DefaultPhysicalPlanner {
                             // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
                             //
                             // If we run these logical columns through physical_name function, we will
-                            // get physical names with column qualifiers, which violates Datafusion's
+                            // get physical names with column qualifiers, which violates DataFusion's
                             // field name semantics. To account for this, we need to derive the
                             // physical name from physical input instead.
                             //
@@ -1444,6 +1444,7 @@ mod tests {
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
     use fmt::Debug;
+    use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};
 
@@ -1628,7 +1629,7 @@ mod tests {
                 dict_id: 0, \
                 dict_is_ordered: false, \
                 metadata: None } }\
-        ] }, \
+        ], metadata: {} }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
@@ -1816,8 +1817,11 @@ mod tests {
         fn default() -> Self {
             Self {
                 schema: DFSchemaRef::new(
-                    DFSchema::new(vec![DFField::new(None, "a", DataType::Int32, false)])
-                        .unwrap(),
+                    DFSchema::new_with_metadata(
+                        vec![DFField::new(None, "a", DataType::Int32, false)],
+                        HashMap::new(),
+                    )
+                    .unwrap(),
                 ),
             }
         }

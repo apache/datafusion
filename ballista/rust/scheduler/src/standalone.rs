@@ -30,14 +30,16 @@ use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tonic::transport::Server;
 
-use crate::{state::StandaloneClient, SchedulerServer};
+use crate::{
+    scheduler_server::SchedulerServer, state::backend::standalone::StandaloneClient,
+};
 
 pub async fn new_standalone_scheduler(config: &BallistaConfig) -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
     let mut context = ExecutionContext::new();
     load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
-    let scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
+    let mut scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         SchedulerServer::new(
             Arc::new(client),
             "ballista".to_string(),
@@ -45,7 +47,7 @@ pub async fn new_standalone_scheduler(config: &BallistaConfig) -> Result<SocketA
             BallistaCodec::default(),
         );
     scheduler_server.init().await?;
-    let server = SchedulerGrpcServer::new(scheduler_server);
+    let server = SchedulerGrpcServer::new(scheduler_server.clone());
     // Let the OS assign a random, free port
     let listener = TcpListener::bind("localhost:0").await?;
     let addr = listener.local_addr()?;
