@@ -1409,7 +1409,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
                     // TODO: figure out if ScalarVariables should be insensitive.
-                    let var_names = vec![id.value.clone()];
+                    let var_names = vec![id.value];
                     Ok(Expr::ScalarVariable(var_names))
                 } else {
                     // Don't use `col()` here because it will try to
@@ -1425,7 +1425,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { ref column, keys } => {
                 if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    plan_indexed(col(&id.value), keys.clone())
+                    plan_indexed(col(&id.value), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
@@ -1513,7 +1513,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ref value,
             } => Ok(Expr::Cast {
                 expr: Box::new(lit(&**value)),
-                data_type: convert_data_type(&data_type)?,
+                data_type: convert_data_type(data_type)?,
             }),
 
             SQLExpr::IsNull(expr) => Ok(Expr::IsNull(Box::new(
