@@ -86,7 +86,7 @@ pub enum Expr {
     /// A named reference to a qualified filed in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
-    ScalarVariable(Vec<String>),
+    ScalarVariable(DataType, Vec<String>),
     /// A constant value.
     Literal(ScalarValue),
     /// A binary expression such as "age > 21"
@@ -399,7 +399,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{:?} AS {}", expr, alias),
             Expr::Column(c) => write!(f, "{}", c),
-            Expr::ScalarVariable(var_names) => write!(f, "{}", var_names.join(".")),
+            Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{:?}", v),
             Expr::Case {
                 expr,
@@ -562,7 +562,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
-        Expr::ScalarVariable(variable_names) => Ok(variable_names.join(".")),
+        Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {
             let left = create_name(left, input_schema)?;
