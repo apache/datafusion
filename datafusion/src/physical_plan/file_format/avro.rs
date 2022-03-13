@@ -18,15 +18,15 @@
 //! Execution plan for reading line-delimited Avro files
 #[cfg(feature = "avro")]
 use crate::avro_to_arrow;
+#[cfg(feature = "avro")]
+use crate::datasource::object_store::ReadSeek;
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
-
-use crate::datasource::object_store::ReadSeek;
-use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;

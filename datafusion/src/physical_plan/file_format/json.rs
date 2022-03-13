@@ -61,6 +61,7 @@ impl NdJsonExec {
 struct JsonBatchReader<R: ReadSeek> {
     reader: R,
     schema: SchemaRef,
+    #[allow(dead_code)]
     proj: Option<Vec<String>>,
     rows: Vec<String>,
 }

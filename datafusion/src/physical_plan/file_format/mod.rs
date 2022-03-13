@@ -211,7 +211,12 @@ impl SchemaAdapter {
                 if file_schema.field(mapped_idx).data_type() == field.data_type() {
                     mapped.push(mapped_idx)
                 } else {
-                    let msg = format!("Failed to map column projection for field {}. Incompatible data types {:?} and {:?}", field.name(), file_schema.field(mapped_idx).data_type(), field.data_type());
+                    let msg = format!(
+                        "Failed to map column projection for field {}. Incompatible data types {:?} and {:?}",
+                        field.name(),
+                        file_schema.field(mapped_idx).data_type(),
+                        field.data_type()
+                    );
                     info!("{}", msg);
                     return Err(DataFusionError::Execution(msg));
                 }
@@ -341,34 +346,15 @@ fn create_dict_array(
     let dict_vals = val.to_array();
 
     // build keys array
-    let sliced_key_buffer = match key_array_cache {
-        Some(buf) if buf.len() >= len * 2 => buf.slice(0, len * 2),
-        _ => {
-            // keys are all 0
-            key_array_cache
-                .insert(UInt16Array::from_trusted_len_values_iter(
-                    iter::repeat(0).take(len * 2),
-                ))
-                .clone()
-        }
+    let sliced_keys = match key_array_cache {
+        Some(buf) if buf.len() >= len => buf.slice(0, len),
+        _ => key_array_cache
+            .insert(UInt16Array::from_trusted_len_values_iter(
+                iter::repeat(0).take(len),
+            ))
+            .clone(),
     };
-
-    // // create data type
-    // let data_type =
-    //     DataType::Dictionary(IntegerType::UInt16, Box::new(val.get_datatype()), false);
-    //
-    // debug_assert_eq!(data_type, *DEFAULT_PARTITION_COLUMN_DATATYPE);
-    //
-    // // assemble pieces together
-    // let mut builder = ArrayData::builder(data_type)
-    //     .len(len)
-    //     .add_buffer(sliced_key_buffer);
-    // builder = builder.add_child_data(dict_vals.data().clone());
-    // Arc::new(DictionaryArray::<u16>::from(builder.build().unwrap()))
-    Arc::new(DictionaryArray::<u16>::from_data(
-        sliced_key_buffer,
-        dict_vals,
-    ))
+    Arc::new(DictionaryArray::<u16>::from_data(sliced_keys, dict_vals))
 }
 
 #[cfg(test)]
