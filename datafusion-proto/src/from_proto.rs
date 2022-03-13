@@ -35,7 +35,6 @@ use datafusion::{
     },
     scalar::ScalarValue,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -156,12 +155,10 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
             .iter()
             .map(|c| c.try_into())
             .collect::<Result<Vec<DFField>, _>>()?;
-        let metadata = df_schema
-            .metadata
-            .iter()
-            .map(|m| (m.0.clone(), m.1.clone()))
-            .collect::<HashMap<String, String>>();
-        Ok(DFSchema::new_with_metadata(fields, metadata)?)
+        Ok(DFSchema::new_with_metadata(
+            fields,
+            df_schema.metadata.clone(),
+        )?)
     }
 }
 

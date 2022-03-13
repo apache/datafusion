@@ -35,7 +35,6 @@ use datafusion::{
     },
     scalar::ScalarValue,
 };
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum Error {
@@ -291,12 +290,10 @@ impl From<&DFField> for protobuf::DfField {
 impl From<&DFSchemaRef> for protobuf::DfSchema {
     fn from(s: &DFSchemaRef) -> protobuf::DfSchema {
         let columns = s.fields().iter().map(|f| f.into()).collect::<Vec<_>>();
-        let metadata = s
-            .metadata()
-            .iter()
-            .map(|m| (m.0.clone(), m.1.clone()))
-            .collect::<HashMap<_, _>>();
-        protobuf::DfSchema { columns, metadata }
+        protobuf::DfSchema {
+            columns,
+            metadata: s.metadata().clone(),
+        }
     }
 }
 
