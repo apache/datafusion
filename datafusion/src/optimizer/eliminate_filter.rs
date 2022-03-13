@@ -50,11 +50,15 @@ impl OptimizerRule for EliminateFilter {
             LogicalPlan::Filter(Filter {
                 predicate: Expr::Literal(ScalarValue::Boolean(Some(v))),
                 input,
-            }) if !*v => {
-                return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
-                    produce_one_row: false,
-                    schema: input.schema().clone(),
-                }));
+            }) => {
+                if !*v {
+                    return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: input.schema().clone(),
+                    }));
+                } else {
+                    return Ok((**input).clone());
+                }
             }
             _ => {
                 // apply the optimization to all inputs of the plan
