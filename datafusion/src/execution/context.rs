@@ -52,11 +52,11 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
     ResolvedTableReference, TableReference,
 };
+use crate::dataframe::DataFrame;
 use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
-use crate::dataframe::DataFrame;
 use crate::logical_plan::{
     CreateExternalTable, CreateMemoryTable, DropTable, FunctionRegistry, LogicalPlan,
     LogicalPlanBuilder, UNNAMED_TABLE,
@@ -78,6 +78,7 @@ use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
+use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
@@ -86,7 +87,6 @@ use crate::sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use crate::variable::{VarProvider, VarType};
-use crate::physical_plan::udaf::AggregateUDF;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
@@ -416,10 +416,7 @@ impl ExecutionContext {
             LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
                 .await?
                 .build()?;
-        Ok(Arc::new(DataFrame::new(
-            self.state.clone(),
-            &logical_plan,
-        )))
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.

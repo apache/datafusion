@@ -29,22 +29,19 @@ use std::sync::Arc;
 use crate::physical_plan::SendableRecordBatchStream;
 use async_trait::async_trait;
 
-use parking_lot::Mutex;
-use std::any::Any;
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
-use crate::execution::context::{ExecutionContext, ExecutionContextState};
-use crate::scalar::ScalarValue;
-use crate::physical_plan::{collect, collect_partitioned};
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
+use crate::execution::context::{ExecutionContext, ExecutionContextState};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
-use crate::physical_plan::{
-    execute_stream, execute_stream_partitioned, ExecutionPlan,
-};
+use crate::physical_plan::{collect, collect_partitioned};
+use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
+use crate::scalar::ScalarValue;
 use crate::sql::utils::find_window_exprs;
-
+use parking_lot::Mutex;
+use std::any::Any;
 
 /// DataFrame represents a logical set of rows with the same named columns.
 /// Similar to a [Pandas DataFrame](https://pandas.pydata.org/pandas-docs/stable/reference/api/pandas.DataFrame.html) or
@@ -129,7 +126,7 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn select(&self, expr_list: Vec<Expr>) -> Result<Arc<DataFrame>>{
+    pub fn select(&self, expr_list: Vec<Expr>) -> Result<Arc<DataFrame>> {
         let window_func_exprs = find_window_exprs(&expr_list);
         let plan = if window_func_exprs.is_empty() {
             self.to_logical_plan()
@@ -138,7 +135,10 @@ impl DataFrame {
         };
         let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
 
-        Ok(Arc::new(DataFrame::new(self.ctx_state.clone(), &project_plan)))
+        Ok(Arc::new(DataFrame::new(
+            self.ctx_state.clone(),
+            &project_plan,
+        )))
     }
 
     /// Filter a DataFrame to only include rows that match the specified filter expression.
@@ -274,7 +274,6 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.ctx_state.clone(), &plan)))
     }
 
-
     /// Join this DataFrame with another DataFrame using the specified columns as join keys
     ///
     /// ```
@@ -300,8 +299,7 @@ impl DataFrame {
         join_type: JoinType,
         left_cols: &[&str],
         right_cols: &[&str],
-    ) ->  Result<Arc<DataFrame>> {
-
+    ) -> Result<Arc<DataFrame>> {
         let plan = LogicalPlanBuilder::from(self.to_logical_plan())
             .join(
                 &right.to_logical_plan(),
@@ -438,7 +436,9 @@ impl DataFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn execute_stream_partitioned(&self) -> Result<Vec<SendableRecordBatchStream>> {
+    pub async fn execute_stream_partitioned(
+        &self,
+    ) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
         let runtime = self.ctx_state.lock().runtime_env.clone();
         Ok(execute_stream_partitioned(plan, runtime).await?)
@@ -576,7 +576,7 @@ impl TableProvider for DataFrame {
     }
 
     fn schema(&self) -> SchemaRef {
-        let schema: Schema =  self.plan.schema().as_ref().into();
+        let schema: Schema = self.plan.schema().as_ref().into();
         Arc::new(schema)
     }
 
@@ -617,11 +617,10 @@ impl TableProvider for DataFrame {
                 .map_or_else(|| Ok(expr.clone()), |n| expr.limit(n))?
                 .to_logical_plan(),
         )
-            .create_physical_plan()
-            .await
+        .create_physical_plan()
+        .await
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -688,7 +687,7 @@ mod tests {
         let sql_plan = create_plan(
             "select c1, first_value(c1) over (partition by c2) from aggregate_test_100",
         )
-            .await?;
+        .await?;
 
         assert_same_plan(&plan, &sql_plan);
         Ok(())
@@ -838,7 +837,7 @@ mod tests {
             "SELECT c1, c3 FROM aggregate_test_100
             INTERSECT ALL SELECT c1, c3 FROM aggregate_test_100",
         )
-            .await?;
+        .await?;
         assert_same_plan(&result, &expected);
         Ok(())
     }
@@ -852,7 +851,7 @@ mod tests {
             "SELECT c1, c3 FROM aggregate_test_100
             EXCEPT ALL SELECT c1, c3 FROM aggregate_test_100",
         )
-            .await?;
+        .await?;
         assert_same_plan(&result, &expected);
         Ok(())
     }
@@ -861,8 +860,7 @@ mod tests {
     async fn register_table() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c12"])?;
         let mut ctx = ExecutionContext::new();
-        let df_impl =
-            Arc::new(DataFrame::new(ctx.state.clone(), &df.to_logical_plan()));
+        let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.to_logical_plan()));
 
         // register a dataframe as a table
         ctx.register_table("test_table", df_impl.clone())?;
@@ -945,7 +943,7 @@ mod tests {
             &format!("{}/csv/aggregate_test_100.csv", testdata),
             CsvReadOptions::new().schema(schema.as_ref()),
         )
-            .await?;
+        .await?;
         Ok(())
     }
 }
