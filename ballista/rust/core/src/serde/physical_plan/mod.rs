@@ -969,8 +969,6 @@ mod roundtrip_tests {
     use super::super::protobuf;
     use crate::execution_plans::ShuffleWriterExec;
     use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
-    use crate::serde::AsExecutionPlan;
-    use crate::serde::BallistaCodec;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = ExecutionContext::new();

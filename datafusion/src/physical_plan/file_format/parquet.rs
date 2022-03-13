@@ -1166,10 +1166,10 @@ mod tests {
     fn row_group_pruning_predicate_missing_stats() -> Result<()> {
         use datafusion_expr::{col, lit};
         // int > 1 => c1_max > 1
-        let expr = col("c1").gt(lit(15));
+        let expr = col("c1").gt(lit(15_i32));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let pruning_predicate =
-            PruningPredicate::try_new(&expr, Arc::new(schema.clone()))?;
+            PruningPredicate::try_new(expr, Arc::new(schema.clone()))?;
 
         let schema_descr = to_parquet_schema(&schema)?;
         let rgm1 = get_row_group_meta_data(

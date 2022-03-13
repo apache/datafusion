@@ -17,7 +17,6 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use arrow::compute::cast::CastOptions;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
@@ -40,12 +39,6 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::window_functions::WindowFunction;
 
-use datafusion::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
-    Literal, NegativeExpr, NotExpr, TryCastExpr,
-};
-use datafusion::physical_plan::{
-    functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
@@ -142,11 +135,7 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
             ExprType::Cast(e) => Arc::new(CastExpr::new(
                 convert_box_required!(e.expr)?,
                 convert_required!(e.arrow_type)?,
-                // TODO: shouldn't this be added to proto ?
-                CastOptions {
-                    wrapped: false,
-                    partial: false,
-                },
+                DEFAULT_DATAFUSION_CAST_OPTIONS,
             )),
             ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
                 convert_box_required!(e.expr)?,

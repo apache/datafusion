@@ -851,9 +851,8 @@ mod roundtrip_tests {
 
     use super::super::{super::error::Result, protobuf};
     use crate::error::BallistaError;
-    use crate::serde::AsLogicalPlan;
-    use crate::serde::BallistaCodec;
-    use arrow::datatypes::IntegerType;
+    use crate::serde::{AsLogicalPlan, BallistaCodec};
+    use async_trait::async_trait;
     use core::panic;
     use datafusion::datasource::listing::ListingTable;
     use datafusion::datasource::object_store::{
@@ -871,7 +870,7 @@ mod roundtrip_tests {
         prelude::*,
         sql::parser::FileType,
     };
-    use std::{convert::TryInto, sync::Arc};
+    use std::sync::Arc;
 
     #[derive(Debug)]
     struct TestObjectStore {}
@@ -964,7 +963,6 @@ mod roundtrip_tests {
 
     #[tokio::test]
     async fn roundtrip_repartition() -> Result<()> {
-        use crate::serde::AsLogicalPlan;
         use datafusion::logical_plan::Partitioning;
 
         let test_partition_counts = [usize::MIN, usize::MAX, 43256];

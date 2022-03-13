@@ -21,7 +21,7 @@
 
 use crate::protobuf;
 use datafusion::arrow::datatypes::{
-    DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
+    DataType, Field, IntegerType, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
 };
 use datafusion::field_util::{FieldExt, SchemaExt};
 use datafusion::logical_plan::{
@@ -143,6 +143,52 @@ impl From<&DataType> for protobuf::ArrowType {
     }
 }
 
+impl From<&IntegerType> for protobuf::IntegerType {
+    fn from(val: &IntegerType) -> protobuf::IntegerType {
+        protobuf::IntegerType {
+            integer_type_enum: Some(val.into()),
+        }
+    }
+}
+
+impl TryInto<IntegerType> for &protobuf::IntegerType {
+    type Error = Error;
+    fn try_into(self) -> Result<IntegerType, Self::Error> {
+        let pb_integer_type = self.integer_type_enum.as_ref().ok_or_else(|| {
+            crate::to_proto::proto_error(
+                "Protobuf deserialization error: IntegerType missing required field 'data_type'",
+            )
+        })?;
+        Ok(match pb_integer_type {
+            protobuf::integer_type::IntegerTypeEnum::Int8(_) => IntegerType::Int8,
+            protobuf::integer_type::IntegerTypeEnum::Int16(_) => IntegerType::Int16,
+            protobuf::integer_type::IntegerTypeEnum::Int32(_) => IntegerType::Int32,
+            protobuf::integer_type::IntegerTypeEnum::Int64(_) => IntegerType::Int64,
+            protobuf::integer_type::IntegerTypeEnum::Uint8(_) => IntegerType::UInt8,
+            protobuf::integer_type::IntegerTypeEnum::Uint16(_) => IntegerType::UInt16,
+            protobuf::integer_type::IntegerTypeEnum::Uint32(_) => IntegerType::UInt32,
+            protobuf::integer_type::IntegerTypeEnum::Uint64(_) => IntegerType::UInt64,
+        })
+    }
+}
+
+impl From<&IntegerType> for protobuf::integer_type::IntegerTypeEnum {
+    fn from(val: &IntegerType) -> protobuf::integer_type::IntegerTypeEnum {
+        use protobuf::integer_type::IntegerTypeEnum;
+        use protobuf::EmptyMessage;
+        match val {
+            IntegerType::Int8 => IntegerTypeEnum::Int8(EmptyMessage {}),
+            IntegerType::Int16 => IntegerTypeEnum::Int16(EmptyMessage {}),
+            IntegerType::Int32 => IntegerTypeEnum::Int32(EmptyMessage {}),
+            IntegerType::Int64 => IntegerTypeEnum::Int64(EmptyMessage {}),
+            IntegerType::UInt8 => IntegerTypeEnum::Uint8(EmptyMessage {}),
+            IntegerType::UInt16 => IntegerTypeEnum::Uint16(EmptyMessage {}),
+            IntegerType::UInt32 => IntegerTypeEnum::Uint32(EmptyMessage {}),
+            IntegerType::UInt64 => IntegerTypeEnum::Uint64(EmptyMessage {}),
+        }
+    }
+}
+
 impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     fn from(val: &DataType) -> Self {
         use protobuf::EmptyMessage;
@@ -182,7 +228,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
                 Self::Interval(protobuf::IntervalUnit::from(interval_unit) as i32)
             }
             DataType::Binary => Self::Binary(EmptyMessage {}),
-            DataType::FixedSizeBinary(size) => Self::FixedSizeBinary(*size),
+            DataType::FixedSizeBinary(size) => Self::FixedSizeBinary((*size) as i32),
             DataType::LargeBinary => Self::LargeBinary(EmptyMessage {}),
             DataType::Utf8 => Self::Utf8(EmptyMessage {}),
             DataType::LargeUtf8 => Self::LargeUtf8(EmptyMessage {}),
@@ -219,7 +265,7 @@ impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
             }
             DataType::Dictionary(key_type, value_type, _) => {
                 Self::Dictionary(Box::new(protobuf::Dictionary {
-                    key: key_type.into(),
+                    key: Some(key_type.into()),
                     value: Some(Box::new(value_type.as_ref().into())),
                 }))
             }
@@ -899,7 +945,9 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
             }
             datafusion::scalar::ScalarValue::IntervalDayTime(val) => {
                 create_proto_scalar(val, PrimitiveScalarType::IntervalDaytime, |s| {
-                    Value::IntervalDaytimeValue(*s)
+                    Value::IntervalDaytimeValue(
+                        (s.days() * 86400000 + s.milliseconds()) as i64,
+                    )
                 })
             }
             _ => {
@@ -1135,4 +1183,8 @@ fn is_valid_scalar_type_no_list_check(datatype: &DataType) -> bool {
         DataType::List(_) => true,
         _ => false,
     }
+}
+
+fn proto_error<S: Into<String>>(message: S) -> Error {
+    Error::General(message.into())
 }

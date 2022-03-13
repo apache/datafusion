@@ -28,7 +28,6 @@ use datafusion::logical_plan::{JoinConstraint, JoinType, LogicalPlan, Operator};
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
-use arrow::datatypes::IntegerType;
 use datafusion::logical_plan::plan::Extension;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::ExecutionContext;
