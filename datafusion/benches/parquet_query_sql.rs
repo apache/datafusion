@@ -48,8 +48,6 @@ use tokio_stream::StreamExt;
 const NUM_BATCHES: usize = 2048;
 /// The number of rows in each record batch to write
 const WRITE_RECORD_BATCH_SIZE: usize = 1024;
-/// The number of rows in a row group
-const ROW_GROUP_SIZE: usize = 1024 * 1024;
 /// The number of row groups expected
 const EXPECTED_ROW_GROUPS: usize = 2;
 

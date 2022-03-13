@@ -555,7 +555,8 @@ mod tests {
     use crate::generic_test_op;
     use datafusion_common::field_util::SchemaExt;
     use datafusion_common::record_batch::RecordBatch;
-    use datafusion_common::ScalarValue::Decimal128;
+    use datafusion_common::Result;
+    use datafusion_common::ScalarValue;
 
     #[test]
     fn min_decimal() -> Result<()> {
@@ -571,9 +572,10 @@ mod tests {
         );
         let result = min_batch(&array)?;
         assert_eq!(result, ScalarValue::Decimal128(Some(1), 10, 0));
+
         // min batch without values
         let array: ArrayRef =
-            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 5));
+            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 0));
         let result = min_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
@@ -583,15 +585,8 @@ mod tests {
 
         // min batch with agg
         let array: ArrayRef = Arc::new(
-            Int128Array::from_iter(vec![
-                None,
-                Some(1),
-                Some(2),
-                Some(3),
-                Some(4),
-                Some(5),
-            ])
-            .to(DataType::Decimal(10, 0)),
+            Int128Array::from_iter((1..6).map(Some).collect::<Vec<Option<i128>>>())
+                .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
             array,
@@ -606,7 +601,7 @@ mod tests {
     fn min_decimal_all_nulls() -> Result<()> {
         // min batch all nulls
         let array: ArrayRef =
-            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 5));
+            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 6));
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -620,8 +615,12 @@ mod tests {
     fn min_decimal_with_nulls() -> Result<()> {
         // min batch with nulls
         let array: ArrayRef = Arc::new(
-            Int128Array::from_iter(vec![Some(1), None, Some(3), Some(4), Some(5)])
-                .to(DataType::Decimal(10, 0)),
+            Int128Array::from_iter(
+                (1..6)
+                    .map(|i| if i == 2 { None } else { Some(i) })
+                    .collect::<Vec<Option<i128>>>(),
+            )
+            .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
             array,
@@ -644,32 +643,28 @@ mod tests {
         let result = max(&left, &right);
         let expect = DataFusionError::Internal(format!(
             "MIN/MAX is not expected to receive scalars of incompatible types {:?}",
-            (Decimal128(Some(123), 10, 2), Decimal128(Some(124), 10, 3))
+            (DataType::Decimal(10, 2), DataType::Decimal(10, 3))
         ));
         assert_eq!(expect.to_string(), result.unwrap_err().to_string());
 
         // max batch
         let array: ArrayRef = Arc::new(
-            Int128Array::from_slice(&[1, 2, 3, 4, 5]).to(DataType::Decimal(10, 5)),
+            Int128Array::from_slice((1..6).collect::<Vec<i128>>())
+                .to(DataType::Decimal(10, 5)),
         );
         let result = max_batch(&array)?;
         assert_eq!(result, ScalarValue::Decimal128(Some(5), 10, 5));
+
         // max batch without values
         let array: ArrayRef =
-            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 5));
+            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 0));
         let result = max_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
+
         // max batch with agg
         let array: ArrayRef = Arc::new(
-            Int128Array::from_iter(vec![
-                None,
-                Some(1),
-                Some(2),
-                Some(3),
-                Some(4),
-                Some(5),
-            ])
-            .to(DataType::Decimal(10, 0)),
+            Int128Array::from_iter((1..6).map(Some).collect::<Vec<Option<i128>>>())
+                .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
             array,
@@ -683,8 +678,12 @@ mod tests {
     #[test]
     fn max_decimal_with_nulls() -> Result<()> {
         let array: ArrayRef = Arc::new(
-            Int128Array::from_iter(vec![Some(1), None, Some(3), Some(4), Some(5)])
-                .to(DataType::Decimal(10, 0)),
+            Int128Array::from_iter(
+                (1..6)
+                    .map(|i| if i == 2 { None } else { Some(i) })
+                    .collect::<Vec<Option<i128>>>(),
+            )
+            .to(DataType::Decimal(10, 0)),
         );
         generic_test_op!(
             array,
@@ -698,7 +697,7 @@ mod tests {
     #[test]
     fn max_decimal_all_nulls() -> Result<()> {
         let array: ArrayRef =
-            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 5));
+            Arc::new(Int128Array::new_null(DataType::Decimal(10, 0), 6));
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),

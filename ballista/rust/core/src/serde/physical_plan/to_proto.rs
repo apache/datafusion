@@ -51,16 +51,84 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<protobuf::PhysicalExprNode, Self::Error> {
+        use datafusion::physical_plan::expressions;
+        use datafusion_proto::protobuf::AggregateFunction;
         let aggr_function = if self.as_any().downcast_ref::<Avg>().is_some() {
-            Ok(protobuf::AggregateFunction::Avg.into())
+            Ok(AggregateFunction::Avg.into())
         } else if self.as_any().downcast_ref::<Sum>().is_some() {
-            Ok(protobuf::AggregateFunction::Sum.into())
+            Ok(AggregateFunction::Sum.into())
         } else if self.as_any().downcast_ref::<Count>().is_some() {
-            Ok(protobuf::AggregateFunction::Count.into())
+            Ok(AggregateFunction::Count.into())
         } else if self.as_any().downcast_ref::<Min>().is_some() {
-            Ok(protobuf::AggregateFunction::Min.into())
+            Ok(AggregateFunction::Min.into())
         } else if self.as_any().downcast_ref::<Max>().is_some() {
-            Ok(protobuf::AggregateFunction::Max.into())
+            Ok(AggregateFunction::Max.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxDistinct>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxDistinct.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ArrayAgg>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ArrayAgg.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Variance>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Variance.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::VariancePop>()
+            .is_some()
+        {
+            Ok(AggregateFunction::VariancePop.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Covariance>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Covariance.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::CovariancePop>()
+            .is_some()
+        {
+            Ok(AggregateFunction::CovariancePop.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Stddev>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Stddev.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::StddevPop>()
+            .is_some()
+        {
+            Ok(AggregateFunction::StddevPop.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Correlation>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Correlation.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxPercentileCont>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxPercentileCont.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxMedian>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxMedian.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",
@@ -220,7 +288,7 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
         } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
             let fun: BuiltinScalarFunction =
                 BuiltinScalarFunction::from_str(expr.name())?;
-            let fun: protobuf::ScalarFunction = (&fun).try_into()?;
+            let fun: datafusion_proto::protobuf::ScalarFunction = (&fun).try_into()?;
             let args: Vec<protobuf::PhysicalExprNode> = expr
                 .args()
                 .iter()

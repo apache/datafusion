@@ -18,7 +18,9 @@
 //! Variable provider
 
 use crate::error::Result;
-use datafusion_common::ScalarValue;
+use crate::scalar::ScalarValue;
+use arrow::datatypes::DataType;
+
 /// Variable type, system/user defined
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum VarType {
@@ -32,4 +34,7 @@ pub enum VarType {
 pub trait VarProvider {
     /// Get variable value
     fn get_value(&self, var_names: Vec<String>) -> Result<ScalarValue>;
+
+    /// Return the type of the given variable
+    fn get_type(&self, var_names: &[String]) -> Option<DataType>;
 }

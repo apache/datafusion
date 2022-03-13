@@ -23,6 +23,7 @@ mod file_stream;
 mod json;
 mod parquet;
 
+pub(crate) use self::parquet::plan_to_parquet;
 pub use self::parquet::ParquetExec;
 use arrow::{
     array::{ArrayRef, DictionaryArray},
@@ -30,6 +31,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
 };
 pub use avro::AvroExec;
+pub(crate) use csv::plan_to_csv;
 pub use csv::CsvExec;
 use datafusion_common::record_batch::RecordBatch;
 pub use json::NdJsonExec;
@@ -41,8 +43,7 @@ use crate::{
     error::Result,
     scalar::ScalarValue,
 };
-use arrow::array::new_null_array;
-use arrow::array::UInt8Array;
+use arrow::array::{new_null_array, UInt16Array};
 use arrow::datatypes::IntegerType;
 use datafusion_common::field_util::{FieldExt, SchemaExt};
 use lazy_static::lazy_static;
@@ -59,7 +60,7 @@ use super::{ColumnStatistics, Statistics};
 lazy_static! {
     /// The datatype used for all partitioning columns for now
     pub static ref DEFAULT_PARTITION_COLUMN_DATATYPE: DataType =
-        DataType::Dictionary(IntegerType::UInt8, Box::new(DataType::Utf8), false);
+        DataType::Dictionary(IntegerType::UInt16, Box::new(DataType::Utf8), false);
 }
 
 /// The base configurations to provide when creating a physical plan for
@@ -265,7 +266,7 @@ struct PartitionColumnProjector {
     /// An Arrow buffer initialized to zeros that represents the key array of all partition
     /// columns (partition columns are materialized by dictionary arrays with only one
     /// value in the dictionary, thus all the keys are equal to zero).
-    key_array_cache: Option<UInt8Array>,
+    key_array_cache: Option<UInt16Array>,
     /// Mapping between the indexes in the list of partition columns and the target
     /// schema. Sorted by index in the target schema so that we can iterate on it to
     /// insert the partition columns in the target record batch.
@@ -332,7 +333,7 @@ impl PartitionColumnProjector {
 }
 
 fn create_dict_array(
-    key_array_cache: &mut Option<UInt8Array>,
+    key_array_cache: &mut Option<UInt16Array>,
     val: &ScalarValue,
     len: usize,
 ) -> ArrayRef {
@@ -340,15 +341,34 @@ fn create_dict_array(
     let dict_vals = val.to_array();
 
     // build keys array
-    let sliced_keys = match key_array_cache {
-        Some(buf) if buf.len() >= len => buf.slice(0, len),
-        _ => key_array_cache
-            .insert(UInt8Array::from_trusted_len_values_iter(
-                iter::repeat(0).take(len),
-            ))
-            .clone(),
+    let sliced_key_buffer = match key_array_cache {
+        Some(buf) if buf.len() >= len * 2 => buf.slice(0, len * 2),
+        _ => {
+            // keys are all 0
+            key_array_cache
+                .insert(UInt16Array::from_trusted_len_values_iter(
+                    iter::repeat(0).take(len * 2),
+                ))
+                .clone()
+        }
     };
-    Arc::new(DictionaryArray::<u8>::from_data(sliced_keys, dict_vals))
+
+    // // create data type
+    // let data_type =
+    //     DataType::Dictionary(IntegerType::UInt16, Box::new(val.get_datatype()), false);
+    //
+    // debug_assert_eq!(data_type, *DEFAULT_PARTITION_COLUMN_DATATYPE);
+    //
+    // // assemble pieces together
+    // let mut builder = ArrayData::builder(data_type)
+    //     .len(len)
+    //     .add_buffer(sliced_key_buffer);
+    // builder = builder.add_child_data(dict_vals.data().clone());
+    // Arc::new(DictionaryArray::<u16>::from(builder.build().unwrap()))
+    Arc::new(DictionaryArray::<u16>::from_data(
+        sliced_key_buffer,
+        dict_vals,
+    ))
 }
 
 #[cfg(test)]

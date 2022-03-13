@@ -22,11 +22,12 @@ use sqlparser::ast::Ident;
 
 use crate::logical_plan::ExprVisitable;
 use crate::logical_plan::{Expr, LogicalPlan};
-use crate::scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
+use datafusion_common::DECIMAL_MAX_PRECISION;
 use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
@@ -368,7 +369,7 @@ where
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
-            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_) => {
+            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_, _) => {
                 Ok(expr.clone())
             }
             Expr::Wildcard => Ok(Expr::Wildcard),
@@ -522,7 +523,7 @@ pub(crate) fn make_decimal_type(
         }
         (Some(p), Some(s)) => {
             // Arrow decimal is i128 meaning 38 maximum decimal digits
-            if (p as usize) > MAX_PRECISION_FOR_DECIMAL128 || s > p {
+            if (p as usize) > DECIMAL_MAX_PRECISION || s > p {
                 return Err(DataFusionError::Internal(format!(
                     "For decimal(precision, scale) precision must be less than or equal to 38 and scale can't be greater than precision. Got ({}, {})",
                     p, s
@@ -535,9 +536,9 @@ pub(crate) fn make_decimal_type(
 }
 
 // Normalize an identifer to a lowercase string unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: &Ident) -> String {
+pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
-        Some(_) => id.value.clone(),
+        Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),
     }
 }

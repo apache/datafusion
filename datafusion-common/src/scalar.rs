@@ -41,10 +41,9 @@ type LargeBinaryArray = BinaryArray<i64>;
 type MutableStringArray = MutableUtf8Array<i32>;
 type MutableLargeStringArray = MutableUtf8Array<i64>;
 
-// TODO may need to be moved to arrow-rs
 /// The max precision and scale for decimal128
-pub const MAX_PRECISION_FOR_DECIMAL128: usize = 38;
-pub const MAX_SCALE_FOR_DECIMAL128: usize = 38;
+pub const DECIMAL_MAX_PRECISION: usize = 38;
+pub const DECIMAL_MAX_SCALE: usize = 38;
 
 /// Represents a dynamically typed, nullable single value.
 /// This is the single-valued counter-part of arrow’s `Array`.
@@ -521,7 +520,7 @@ impl ScalarValue {
         scale: usize,
     ) -> Result<Self> {
         // make sure the precision and scale is valid
-        if precision <= MAX_PRECISION_FOR_DECIMAL128 && scale <= precision {
+        if precision <= DECIMAL_MAX_PRECISION && scale <= precision {
             return Ok(ScalarValue::Decimal128(Some(value), precision, scale));
         }
         return Err(DataFusionError::Internal(format!(

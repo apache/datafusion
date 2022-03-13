@@ -374,7 +374,7 @@ impl<'a> ConstEvaluator<'a> {
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. }
-            | Expr::ScalarVariable(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
@@ -734,6 +734,7 @@ mod tests {
 
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_common::DFMetadata;
 
     use super::*;
     use crate::assert_contains;
@@ -1208,12 +1209,15 @@ mod tests {
 
     fn expr_test_schema() -> DFSchemaRef {
         Arc::new(
-            DFSchema::new(vec![
-                DFField::new(None, "c1", DataType::Utf8, true),
-                DFField::new(None, "c2", DataType::Boolean, true),
-                DFField::new(None, "c1_non_null", DataType::Utf8, false),
-                DFField::new(None, "c2_non_null", DataType::Boolean, false),
-            ])
+            DFSchema::new_with_metadata(
+                vec![
+                    DFField::new(None, "c1", DataType::Utf8, true),
+                    DFField::new(None, "c2", DataType::Boolean, true),
+                    DFField::new(None, "c1_non_null", DataType::Utf8, false),
+                    DFField::new(None, "c2_non_null", DataType::Boolean, false),
+                ],
+                DFMetadata::new(),
+            )
             .unwrap(),
         )
     }

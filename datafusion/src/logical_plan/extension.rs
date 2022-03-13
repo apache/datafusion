@@ -71,6 +71,7 @@ pub trait UserDefinedLogicalNode: fmt::Debug {
     /// of self.inputs and self.exprs.
     ///
     /// So, `self.from_template(exprs, ..).expressions() == exprs
+    #[allow(clippy::wrong_self_convention)]
     fn from_template(
         &self,
         exprs: &[Expr],

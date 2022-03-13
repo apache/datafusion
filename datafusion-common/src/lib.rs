@@ -25,6 +25,8 @@ pub mod record_batch;
 mod scalar;
 
 pub use column::Column;
-pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
+pub use dfschema::{
+    convert_metadata, DFField, DFMetadata, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema,
+};
 pub use error::{DataFusionError, Result};
-pub use scalar::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};
+pub use scalar::{ScalarValue, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};

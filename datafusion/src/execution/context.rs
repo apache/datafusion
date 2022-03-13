@@ -16,46 +16,14 @@
 // under the License.
 
 //! ExecutionContext contains methods for registering data sources and executing queries
-use crate::{
-    catalog::{
-        catalog::{CatalogList, MemoryCatalogList},
-        information_schema::CatalogWithInformationSchema,
-    },
-    datasource::listing::{ListingOptions, ListingTable},
-    datasource::{
-        file_format::{
-            avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
-            csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
-            parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-            FileFormat,
-        },
-        MemTable,
-    },
-    logical_plan::{PlanType, ToStringifiedPlan},
-    optimizer::eliminate_limit::EliminateLimit,
-    physical_optimizer::{
-        aggregate_statistics::AggregateStatistics,
-        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
-    },
-};
+use arrow::datatypes::DataType;
+use arrow::datatypes::SchemaRef;
 use log::{debug, trace};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::io::BufWriter;
-use std::path::Path;
+use std::path::PathBuf;
 use std::string::String;
 use std::sync::Arc;
-use std::{fs, path::PathBuf};
-
-use futures::{StreamExt, TryStreamExt};
-use tokio::task::{self, JoinHandle};
-
-use arrow::array::ArrayRef;
-use arrow::chunk::Chunk;
-use arrow::datatypes::PhysicalType;
-use arrow::error::Result as ArrowResult;
-use arrow::io::parquet::write::{row_group_iter, to_parquet_schema};
-use arrow::{datatypes::SchemaRef, io::csv};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -79,6 +47,28 @@ use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
 use crate::optimizer::to_approx_perc::ToApproxPerc;
+use crate::{
+    catalog::{
+        catalog::{CatalogList, MemoryCatalogList},
+        information_schema::CatalogWithInformationSchema,
+    },
+    datasource::listing::{ListingOptions, ListingTable},
+    datasource::{
+        file_format::{
+            avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
+            csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
+            parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+            FileFormat,
+        },
+        MemTable,
+    },
+    logical_plan::{PlanType, ToStringifiedPlan},
+    optimizer::eliminate_limit::EliminateLimit,
+    physical_optimizer::{
+        aggregate_statistics::AggregateStatistics,
+        hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
+    },
+};
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -86,6 +76,7 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
+use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
@@ -98,9 +89,6 @@ use crate::variable::{VarProvider, VarType};
 use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion_common::field_util::{FieldExt, SchemaExt};
-use datafusion_common::record_batch::RecordBatch;
-use parquet::encoding::Encoding;
 use parquet::write::WriteOptions;
 
 use super::{
@@ -283,9 +271,11 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
+            LogicalPlan::DropTable(DropTable {
+                name, if_exists, ..
+            }) => {
                 let returned = self.deregister_table(name.as_str())?;
-                if !if_exist && returned.is_none() {
+                if !if_exists && returned.is_none() {
                     Err(DataFusionError::Execution(format!(
                         "Memory table {:?} doesn't exist.",
                         name
@@ -307,7 +297,7 @@ impl ExecutionContext {
     ///
     /// This function is intended for internal use and should not be called directly.
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        let statements = DFParser::parse_sql(sql)?;
+        let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
             return Err(DataFusionError::NotImplemented(
@@ -318,7 +308,7 @@ impl ExecutionContext {
         // create a query planner
         let state = self.state.lock().clone();
         let query_planner = SqlToRel::new(&state);
-        query_planner.statement_to_plan(&statements[0])
+        query_planner.statement_to_plan(statements.pop().unwrap())
     }
 
     /// Registers a variable provider within this context.
@@ -725,54 +715,7 @@ impl ExecutionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let path = path.as_ref();
-        // create directory to contain the CSV files (one per partition)
-        let fs_path = Path::new(path);
-        let runtime = self.runtime_env();
-        match fs::create_dir(fs_path) {
-            Ok(()) => {
-                let mut tasks = vec![];
-                for i in 0..plan.output_partitioning().partition_count() {
-                    let plan = plan.clone();
-                    let filename = format!("part-{}.csv", i);
-                    let path = fs_path.join(&filename);
-
-                    let writer = std::fs::File::create(path)?;
-                    let mut writer = BufWriter::new(writer);
-                    let mut field_names = vec![];
-                    let schema = plan.schema();
-                    for f in schema.fields() {
-                        field_names.push(f.name());
-                    }
-
-                    let options = csv::write::SerializeOptions::default();
-
-                    csv::write::write_header(&mut writer, &field_names, &options)?;
-
-                    let stream = plan.execute(i, runtime.clone()).await?;
-                    let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                        stream
-                            .map(|batch| {
-                                csv::write::write_chunk(
-                                    &mut writer,
-                                    &batch?.into(),
-                                    &options,
-                                )
-                            })
-                            .try_collect()
-                            .await
-                            .map_err(DataFusionError::from)
-                    });
-                    tasks.push(handle);
-                }
-                futures::future::join_all(tasks).await;
-                Ok(())
-            }
-            Err(e) => Err(DataFusionError::Execution(format!(
-                "Could not create directory {}: {:?}",
-                path, e
-            ))),
-        }
+        plan_to_csv(self, plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
@@ -780,85 +723,9 @@ impl ExecutionContext {
         &self,
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
-        options: WriteOptions,
+        writer_properties: WriteOptions,
     ) -> Result<()> {
-        let path = path.as_ref();
-        // create directory to contain the Parquet files (one per partition)
-        let fs_path = Path::new(path);
-        let runtime = self.runtime_env();
-        match fs::create_dir(fs_path) {
-            Ok(()) => {
-                let mut tasks = vec![];
-                for i in 0..plan.output_partitioning().partition_count() {
-                    let plan = plan.clone();
-                    let schema = plan.schema();
-                    let filename = format!("part-{}.parquet", i);
-                    let path = fs_path.join(&filename);
-
-                    let mut file = fs::File::create(path)?;
-                    let stream = plan.execute(i, runtime.clone()).await?;
-
-                    let handle: JoinHandle<Result<u64>> = task::spawn(async move {
-                        let parquet_schema = to_parquet_schema(&schema)?;
-                        let a = parquet_schema.clone();
-
-                        let encodings: Vec<Encoding> = schema
-                            .fields()
-                            .iter()
-                            .map(|field| match field.data_type().to_physical_type() {
-                                PhysicalType::Binary
-                                | PhysicalType::LargeBinary
-                                | PhysicalType::Utf8
-                                | PhysicalType::LargeUtf8 => {
-                                    Encoding::DeltaLengthByteArray
-                                }
-                                _ => Encoding::Plain,
-                            })
-                            .collect();
-
-                        let mut row_groups =
-                            stream.map(|batch: ArrowResult<RecordBatch>| {
-                                // map each record batch to a row group
-                                batch.map(|batch| {
-                                    // column chunk in row group
-                                    let chunk: Chunk<ArrayRef> = batch.into();
-                                    let len = chunk.len();
-                                    (
-                                        row_group_iter(
-                                            chunk,
-                                            encodings.clone(),
-                                            a.columns().to_vec(),
-                                            options,
-                                        ),
-                                        len,
-                                    )
-                                })
-                            });
-
-                        let mut writer = parquet::write::FileWriter::new(
-                            &mut file,
-                            to_parquet_schema(&schema)?,
-                            options,
-                            None,
-                        );
-                        writer.start()?;
-                        while let Some(row_group) = row_groups.next().await {
-                            let (group, len) = row_group?;
-                            writer.write(group, len)?;
-                        }
-                        let (written, _) = writer.end(None)?;
-                        Ok(written)
-                    });
-                    tasks.push(handle);
-                }
-                futures::future::join_all(tasks).await;
-                Ok(())
-            }
-            Err(e) => Err(DataFusionError::Execution(format!(
-                "Could not create directory {}: {:?}",
-                path, e
-            ))),
-        }
+        plan_to_parquet(self, plan, path, Some(writer_properties)).await
     }
 
     /// Optimizes the logical plan by applying optimizer rules, and
@@ -966,7 +833,7 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
-    /// Should Datafusion parquet reader using the predicate to prune data
+    /// Should DataFusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
     /// Runtime configurations such as memory threshold and local disk for spill
     pub runtime: RuntimeConfig,
@@ -1323,6 +1190,23 @@ impl ContextProvider for ExecutionContextState {
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.aggregate_functions.get(name).cloned()
     }
+
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        if variable_names.is_empty() {
+            return None;
+        }
+
+        let provider_type = if &variable_names[0][0..2] == "@@" {
+            VarType::System
+        } else {
+            VarType::UserDefined
+        };
+
+        self.execution_props
+            .var_providers
+            .as_ref()
+            .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
+    }
 }
 
 impl FunctionRegistry for ExecutionContextState {
@@ -1373,6 +1257,7 @@ mod tests {
     use arrow::array::*;
     use arrow::datatypes::*;
     use async_trait::async_trait;
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
@@ -1428,14 +1313,15 @@ mod tests {
         ctx.register_table("dual", provider)?;
 
         let results =
-            plan_and_collect(&mut ctx, "SELECT @@version, @name FROM dual").await?;
+            plan_and_collect(&mut ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
+                .await?;
 
         let expected = vec![
-            "+----------------------+------------------------+",
-            "| @@version            | @name                  |",
-            "+----------------------+------------------------+",
-            "| system-var-@@version | user-defined-var-@name |",
-            "+----------------------+------------------------+",
+            "+----------------------+------------------------+------------------------+",
+            "| @@version            | @name                  | @integer Plus Int64(1) |",
+            "+----------------------+------------------------+------------------------+",
+            "| system-var-@@version | user-defined-var-@name | 42                     |",
+            "+----------------------+------------------------+------------------------+",
         ];
         assert_batches_eq!(expected, &results);
 
@@ -2772,79 +2658,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_csv_results() -> Result<()> {
-        // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
-        let mut ctx = create_ctx(&tmp_dir, 4).await?;
-
-        // execute a simple query and write the results to CSV
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        write_csv(&mut ctx, "SELECT c1, c2 FROM test", &out_dir).await?;
-
-        // create a new context and verify that the results were saved to a partitioned csv file
-        let mut ctx = ExecutionContext::new();
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::UInt32, false),
-            Field::new("c2", DataType::UInt64, false),
-        ]));
-
-        // register each partition as well as the top level dir
-        let csv_read_option = CsvReadOptions::new().schema(&schema);
-        ctx.register_csv("part0", &format!("{}/part-0.csv", out_dir), csv_read_option)
-            .await?;
-        ctx.register_csv("allparts", &out_dir, csv_read_option)
-            .await?;
-
-        let part0 = plan_and_collect(&mut ctx, "SELECT c1, c2 FROM part0").await?;
-        let allparts = plan_and_collect(&mut ctx, "SELECT c1, c2 FROM allparts").await?;
-
-        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
-
-        assert_eq!(part0[0].schema(), allparts[0].schema());
-
-        assert_eq!(allparts_count, 40);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn write_parquet_results() -> Result<()> {
-        // create partitioned input file and context
-        let tmp_dir = TempDir::new()?;
-        let mut ctx = create_ctx(&tmp_dir, 4).await?;
-
-        // execute a simple query and write the results to parquet
-        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
-        write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
-
-        // create a new context and verify that the results were saved to a partitioned csv file
-        let mut ctx = ExecutionContext::new();
-
-        // register each partition as well as the top level dir
-        ctx.register_parquet("part0", &format!("{}/part-0.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("part1", &format!("{}/part-1.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("part2", &format!("{}/part-2.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("part3", &format!("{}/part-3.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("allparts", &out_dir).await?;
-
-        let part0 = plan_and_collect(&mut ctx, "SELECT c1, c2 FROM part0").await?;
-        let allparts = plan_and_collect(&mut ctx, "SELECT c1, c2 FROM allparts").await?;
-
-        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
-
-        assert_eq!(part0[0].schema(), allparts[0].schema());
-
-        assert_eq!(allparts_count, 40);
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn query_csv_with_custom_partition_extension() -> Result<()> {
         let tmp_dir = TempDir::new()?;
 
@@ -3313,38 +3126,6 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         let mut ctx = create_ctx(&tmp_dir, partition_count).await?;
         plan_and_collect(&mut ctx, sql).await
-    }
-
-    /// Execute SQL and write results to partitioned csv files
-    async fn write_csv(
-        ctx: &mut ExecutionContext,
-        sql: &str,
-        out_dir: &str,
-    ) -> Result<()> {
-        let logical_plan = ctx.create_logical_plan(sql)?;
-        let logical_plan = ctx.optimize(&logical_plan)?;
-        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-        ctx.write_csv(physical_plan, out_dir).await
-    }
-
-    /// Execute SQL and write results to partitioned parquet files
-    async fn write_parquet(
-        ctx: &mut ExecutionContext,
-        sql: &str,
-        out_dir: &str,
-        options: Option<WriteOptions>,
-    ) -> Result<()> {
-        let logical_plan = ctx.create_logical_plan(sql)?;
-        let logical_plan = ctx.optimize(&logical_plan)?;
-        let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
-
-        let options = options.unwrap_or(WriteOptions {
-            compression: parquet::compression::Compression::Uncompressed,
-            write_statistics: false,
-            version: parquet::write::Version::V1,
-        });
-
-        ctx.write_parquet(physical_plan, out_dir, options).await
     }
 
     /// Generate CSV partitions within the supplied directory

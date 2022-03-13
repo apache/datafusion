@@ -218,7 +218,7 @@ mod noforce_hash_collisions {
     fn create_hashes_dictionary<K: DictionaryKey>(
         array: &ArrayRef,
         random_state: &RandomState,
-        hashes_buffer: &mut Vec<u64>,
+        hashes_buffer: &mut [u64],
         multi_col: bool,
     ) -> Result<()> {
         let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();

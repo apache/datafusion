@@ -275,6 +275,14 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     })
 }
 
+macro_rules! cast_array_u32_i32 {
+    ($ARRAY: expr, $FN:expr) => {
+        $FN($ARRAY.as_ref())
+            .map(|x| cast::primitive_to_primitive::<u32, i32>(&x, &DataType::Int32))
+            .map_err(|e| e.into())
+    };
+}
+
 /// DATE_PART SQL function
 pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     if args.len() != 2 {
@@ -300,9 +308,13 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     };
 
     let arr = match date_part.to_lowercase().as_str() {
-        "hour" => Ok(temporal::hour(array.as_ref())
-            .map(|x| cast::primitive_to_primitive::<u32, i32>(&x, &DataType::Int32))?),
-        "year" => Ok(temporal::year(array.as_ref())?),
+        "year" => temporal::year(array.as_ref()).map_err(|e| e.into()),
+        "month" => cast_array_u32_i32!(array, temporal::month),
+        "week" => cast_array_u32_i32!(array, temporal::iso_week),
+        "day" => cast_array_u32_i32!(array, temporal::day),
+        "hour" => cast_array_u32_i32!(array, temporal::hour),
+        "minute" => cast_array_u32_i32!(array, temporal::minute),
+        "second" => cast_array_u32_i32!(array, temporal::second),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{}' not supported",
             date_part

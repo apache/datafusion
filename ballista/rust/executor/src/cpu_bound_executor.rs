@@ -97,7 +97,7 @@ impl DedicatedExecutor {
 
         let (tx, rx) = std::sync::mpsc::channel();
 
-        //Cannot create a seperated tokio runtime in another tokio runtime,
+        //Cannot create a separated tokio runtime in another tokio runtime,
         //So use std::thread to spawn a thread
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -203,7 +203,7 @@ fn set_current_thread_priority(prio: i32) {
 }
 
 #[cfg(not(unix))]
-fn set_current_thread_priority(prio: i32) {
+fn set_current_thread_priority(_prio: i32) {
     warn!("Setting worker thread priority not supported on this platform");
 }
 

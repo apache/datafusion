@@ -46,9 +46,10 @@ impl RecordBatch {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow2::array::PrimitiveArray;
-    /// # use arrow2::datatypes::{Schema, Field, DataType};
-    /// # use arrow2::record_batch::RecordBatch;
+    /// # use arrow::array::PrimitiveArray;
+    /// # use arrow::datatypes::{Schema, Field, DataType};
+    /// # use datafusion_common::record_batch::RecordBatch;
+    /// # use datafusion_common::field_util::SchemaExt;
     /// # fn main() -> arrow2::error::Result<()> {
     /// let id_array = PrimitiveArray::from_slice([1i32, 2, 3, 4, 5]);
     /// let schema = Arc::new(Schema::new(vec![
@@ -173,9 +174,10 @@ impl RecordBatch {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow2::array::PrimitiveArray;
-    /// # use arrow2::datatypes::{Schema, Field, DataType};
-    /// # use arrow2::record_batch::RecordBatch;
+    /// # use arrow::array::PrimitiveArray;
+    /// # use arrow::datatypes::{Schema, Field, DataType};
+    /// # use datafusion_common::record_batch::RecordBatch;
+    /// # use datafusion_common::field_util::SchemaExt;
     /// # fn main() -> arrow2::error::Result<()> {
     /// let id_array = PrimitiveArray::from_slice([1i32, 2, 3, 4, 5]);
     /// let schema = Arc::new(Schema::new(vec![
@@ -202,9 +204,10 @@ impl RecordBatch {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use arrow2::array::PrimitiveArray;
-    /// # use arrow2::datatypes::{Schema, Field, DataType};
-    /// # use arrow2::record_batch::RecordBatch;
+    /// # use arrow::array::PrimitiveArray;
+    /// # use arrow::datatypes::{Schema, Field, DataType};
+    /// # use datafusion_common::record_batch::RecordBatch;
+    /// # use datafusion_common::field_util::SchemaExt;
     /// # fn main() -> arrow2::error::Result<()> {
     /// let id_array = PrimitiveArray::from_slice([1i32, 2, 3, 4, 5]);
     /// let schema = Arc::new(Schema::new(vec![
@@ -250,7 +253,7 @@ impl RecordBatch {
     /// use std::sync::Arc;
     /// use arrow::array::*;
     /// use arrow::datatypes::DataType;
-    /// use datafusion::record_batch::RecordBatch;
+    /// use datafusion_common::record_batch::RecordBatch;
     ///
     /// let a: Arc<dyn Array> = Arc::new(Int32Array::from_slice(&[1, 2]));
     /// let b: Arc<dyn Array> = Arc::new(Utf8Array::<i32>::from_slice(&["a", "b"]));
@@ -287,7 +290,7 @@ impl RecordBatch {
     /// use std::sync::Arc;
     /// use arrow::array::*;
     /// use arrow::datatypes::DataType;
-    /// use datafusion::record_batch::RecordBatch;
+    /// use datafusion_common::record_batch::RecordBatch;
     ///
     /// let a: Arc<dyn Array> = Arc::new(Int32Array::from_slice(&[1, 2]));
     /// let b: Arc<dyn Array> = Arc::new(Utf8Array::<i32>::from_slice(&["a", "b"]));

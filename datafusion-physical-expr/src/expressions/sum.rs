@@ -27,8 +27,7 @@ use arrow::{
     array::*,
     datatypes::{DataType, Field},
 };
-use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarValue, MAX_PRECISION_FOR_DECIMAL128};
+use datafusion_common::{DataFusionError, Result, ScalarValue, DECIMAL_MAX_PRECISION};
 use datafusion_expr::Accumulator;
 
 use super::format_state_name;
@@ -58,7 +57,7 @@ pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
         DataType::Decimal(precision, scale) => {
             // in the spark, the result type is DECIMAL(min(38,precision+10), s)
             // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-            let new_precision = MAX_PRECISION_FOR_DECIMAL128.min(*precision + 10);
+            let new_precision = DECIMAL_MAX_PRECISION.min(*precision + 10);
             Ok(DataType::Decimal(new_precision, *scale))
         }
         other => Err(DataFusionError::Plan(format!(
@@ -490,8 +489,8 @@ mod tests {
 
         // test with batch
         let mut decimal_builder =
-            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
-        for _i in 1..6 {
+            Int128Vec::with_capacity(6).to(DataType::Decimal(10, 0));
+        for _i in 1..7 {
             decimal_builder.push_null();
         }
         let array: ArrayRef = decimal_builder.as_arc();

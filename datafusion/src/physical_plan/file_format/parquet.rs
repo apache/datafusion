@@ -17,12 +17,16 @@
 
 //! Execution plan for reading Parquet files
 
+use futures::{StreamExt, TryStreamExt};
 use std::fmt;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
 use crate::datasource::object_store::ObjectStore;
 use crate::datasource::PartitionedFile;
+use crate::execution::context::ExecutionContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::record_batch::RecordBatch;
 use crate::{
@@ -52,8 +56,10 @@ use parquet::statistics::{
     PrimitiveStatistics as ParquetPrimitiveStatistics,
 };
 
+use arrow::io::parquet::write::RowGroupIterator;
 use fmt::Debug;
 
+use tokio::task::JoinHandle;
 use tokio::{
     sync::mpsc::{channel, Receiver, Sender},
     task,
@@ -63,7 +69,9 @@ use crate::datasource::file_format::parquet::fetch_schema;
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
+use parquet::encoding::Encoding;
 use parquet::metadata::RowGroupMetaData;
+use parquet::write::WriteOptions;
 
 use super::PartitionColumnProjector;
 
@@ -101,15 +109,12 @@ impl ParquetExec {
 
         let pruning_predicate = predicate.and_then(|predicate_expr| {
             match PruningPredicate::try_new(
-                &predicate_expr,
+                predicate_expr,
                 base_config.file_schema.clone(),
             ) {
                 Ok(pruning_predicate) => Some(pruning_predicate),
                 Err(e) => {
-                    debug!(
-                        "Could not create pruning predicate for {:?}: {}",
-                        predicate_expr, e
-                    );
+                    debug!("Could not create pruning predicate for: {}", e);
                     predicate_creation_errors.add(1);
                     None
                 }
@@ -130,6 +135,11 @@ impl ParquetExec {
     /// Ref to the base configs
     pub fn base_config(&self) -> &FileScanConfig {
         &self.base_config
+    }
+
+    /// Optional reference to this parquet scan's pruning predicate
+    pub fn pruning_predicate(&self) -> Option<&PruningPredicate> {
+        self.pruning_predicate.as_ref()
     }
 }
 
@@ -549,6 +559,71 @@ fn read_partition(
     Ok(())
 }
 
+/// Executes a query and writes the results to a partitioned Parquet file.
+pub async fn plan_to_parquet(
+    context: &ExecutionContext,
+    plan: Arc<dyn ExecutionPlan>,
+    path: impl AsRef<str>,
+    writer_properties: Option<WriteOptions>,
+) -> Result<()> {
+    let options = writer_properties.clone().ok_or_else(|| {
+        DataFusionError::Execution("missing parquet writer properties".to_string())
+    })?;
+    use arrow::io::parquet::write::FileWriter as ArrowWriter;
+    let path = path.as_ref();
+    // create directory to contain the Parquet files (one per partition)
+    let fs_path = Path::new(path);
+    let runtime = context.runtime_env();
+    match fs::create_dir(fs_path) {
+        Ok(()) => {
+            let mut tasks = vec![];
+            for i in 0..plan.output_partitioning().partition_count() {
+                let plan = plan.clone();
+                let filename = format!("part-{}.parquet", i);
+                let path = fs_path.join(&filename);
+                let file = fs::File::create(path)?;
+                let mut writer = ArrowWriter::try_new(
+                    file.try_clone().unwrap(),
+                    plan.schema().as_ref().clone(),
+                    options,
+                )?;
+                writer.start()?;
+                let stream = plan.execute(i, runtime.clone()).await?;
+                let handle: JoinHandle<Result<()>> = task::spawn(async move {
+                    stream
+                        .map(|batch| {
+                            let iter = vec![batch.map(|b| b.into())];
+                            let row_groups = RowGroupIterator::try_new(
+                                iter.into_iter(),
+                                plan.schema().as_ref(),
+                                options,
+                                vec![Encoding::Plain]
+                                    .repeat(plan.schema().as_ref().fields.len()),
+                            )
+                            .unwrap();
+                            for rg in row_groups {
+                                let (group, len) = rg?;
+                                writer.write(group, len)?;
+                            }
+                            crate::error::Result::<()>::Ok(())
+                        })
+                        .try_collect()
+                        .await
+                        .map_err(DataFusionError::from)?;
+                    writer.end(None).map_err(DataFusionError::from).map(|_| ())
+                });
+                tasks.push(handle);
+            }
+            futures::future::join_all(tasks).await;
+            Ok(())
+        }
+        Err(e) => Err(DataFusionError::Execution(format!(
+            "Could not create directory {}: {:?}",
+            path, e
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::datasource::{
@@ -562,7 +637,9 @@ mod tests {
 
     use super::*;
     use crate::datasource::object_store::{FileMeta, SizedFile};
+    use crate::execution::options::CsvReadOptions;
     use crate::physical_plan::collect;
+    use crate::prelude::ExecutionConfig;
     use ::parquet::statistics::Statistics as ParquetStatistics;
     use arrow::datatypes::{DataType, Field};
     use arrow::io::parquet;
@@ -574,6 +651,9 @@ mod tests {
     use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
     use parquet_format_async_temp::RowGroup;
+    use std::fs::File;
+    use std::io::Write;
+    use tempfile::TempDir;
 
     /// writes each RecordBatch as an individual parquet file and then
     /// reads it back in to the named location.
@@ -1043,7 +1123,7 @@ mod tests {
         let expr = col("c1").gt(lit(15));
         let schema = Schema::new(vec![Field::new("c1", DataType::Int32, false)]);
         let pruning_predicate =
-            PruningPredicate::try_new(&expr, Arc::new(schema.clone()))?;
+            PruningPredicate::try_new(expr, Arc::new(schema.clone()))?;
 
         let schema_descr = to_parquet_schema(&schema)?;
         let rgm1 = get_row_group_meta_data(
@@ -1140,7 +1220,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Int32, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema.clone())?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
 
         let schema_descr = to_parquet_schema(&schema)?;
         let rgm1 = get_row_group_meta_data(
@@ -1199,7 +1279,7 @@ mod tests {
         // if conditions in predicate are joined with OR and an unsupported expression is used
         // this bypasses the entire predicate expression and no row groups are filtered out
         let expr = col("c1").gt(lit(15)).or(col("c2").modulus(lit(2)));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let row_group_predicate = build_row_group_predicate(
             &pruning_predicate,
             parquet_file_metrics(),
@@ -1269,7 +1349,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
 
         let row_group_predicate = build_row_group_predicate(
@@ -1301,7 +1381,7 @@ mod tests {
             Field::new("c1", DataType::Int32, false),
             Field::new("c2", DataType::Boolean, false),
         ]));
-        let pruning_predicate = PruningPredicate::try_new(&expr, schema)?;
+        let pruning_predicate = PruningPredicate::try_new(expr, schema)?;
         let row_group_metadata = gen_row_group_meta_data_for_pruning_predicate();
 
         let row_group_predicate = build_row_group_predicate(
@@ -1376,5 +1456,86 @@ mod tests {
         }
         let rg = RowGroup::new(chunks, 0, 0, None, None, None, None);
         RowGroupMetaData::try_from_thrift(schema_descr, rg).unwrap()
+    }
+
+    fn populate_csv_partitions(
+        tmp_dir: &TempDir,
+        partition_count: usize,
+        file_extension: &str,
+    ) -> Result<SchemaRef> {
+        // define schema for data source (csv file)
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::UInt32, false),
+            Field::new("c2", DataType::UInt64, false),
+            Field::new("c3", DataType::Boolean, false),
+        ]));
+
+        // generate a partitioned file
+        for partition in 0..partition_count {
+            let filename = format!("partition-{}.{}", partition, file_extension);
+            let file_path = tmp_dir.path().join(&filename);
+            let mut file = File::create(file_path)?;
+
+            // generate some data
+            for i in 0..=10 {
+                let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
+                file.write_all(data.as_bytes())?;
+            }
+        }
+
+        Ok(schema)
+    }
+
+    #[tokio::test]
+    async fn write_parquet_results() -> Result<()> {
+        // create partitioned input file and context
+        let tmp_dir = TempDir::new()?;
+        // let mut ctx = create_ctx(&tmp_dir, 4).await?;
+        let mut ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_target_partitions(8),
+        );
+        let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
+        // register csv file with the execution context
+        ctx.register_csv(
+            "test",
+            tmp_dir.path().to_str().unwrap(),
+            CsvReadOptions::new().schema(&schema),
+        )
+        .await?;
+
+        // execute a simple query and write the results to parquet
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let df = ctx.sql("SELECT c1, c2 FROM test").await?;
+        df.write_parquet(&out_dir, None).await?;
+        // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
+
+        // create a new context and verify that the results were saved to a partitioned csv file
+        let mut ctx = ExecutionContext::new();
+
+        // register each partition as well as the top level dir
+        ctx.register_parquet("part0", &format!("{}/part-0.parquet", out_dir))
+            .await?;
+        ctx.register_parquet("part1", &format!("{}/part-1.parquet", out_dir))
+            .await?;
+        ctx.register_parquet("part2", &format!("{}/part-2.parquet", out_dir))
+            .await?;
+        ctx.register_parquet("part3", &format!("{}/part-3.parquet", out_dir))
+            .await?;
+        ctx.register_parquet("allparts", &out_dir).await?;
+
+        let part0 = ctx.sql("SELECT c1, c2 FROM part0").await?.collect().await?;
+        let allparts = ctx
+            .sql("SELECT c1, c2 FROM allparts")
+            .await?
+            .collect()
+            .await?;
+
+        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
+
+        assert_eq!(part0[0].schema(), allparts[0].schema());
+
+        assert_eq!(allparts_count, 40);
+
+        Ok(())
     }
 }

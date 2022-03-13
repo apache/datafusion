@@ -136,32 +136,6 @@ macro_rules! binary_bitwise_array_scalar {
     }};
 }
 
-fn bitwise_and_scalar(
-    array: &dyn Array,
-    scalar: ScalarValue,
-) -> Option<Result<ArrayRef>> {
-    let result = match array.data_type() {
-        DataType::Int8 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int8Array, i8)
-        }
-        DataType::Int16 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int16Array, i16)
-        }
-        DataType::Int32 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int32Array, i32)
-        }
-        DataType::Int64 => {
-            binary_bitwise_array_scalar!(array, scalar, &, Int64Array, i64)
-        }
-        other => Err(DataFusionError::Internal(format!(
-            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
-            other,
-            Operator::BitwiseAnd
-        ))),
-    };
-    Some(result)
-}
-
 /// The binary_bitwise_array_op macro only evaluates for integer types
 /// like int64, int32.
 /// It is used to do bitwise operation.
@@ -204,6 +178,77 @@ fn bitwise_and(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
             Operator::BitwiseAnd
         ))),
     }
+}
+
+fn bitwise_or(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef> {
+    match &left.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_op!(left, right, |, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_op!(left, right, |, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_op!(left, right, |, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_op!(left, right, |, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseOr
+        ))),
+    }
+}
+
+fn bitwise_and_scalar(
+    array: &dyn Array,
+    scalar: ScalarValue,
+) -> Option<Result<ArrayRef>> {
+    let result = match array.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_scalar!(array, scalar, &, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseAnd
+        ))),
+    };
+    Some(result)
+}
+
+fn bitwise_or_scalar(array: &dyn Array, scalar: ScalarValue) -> Option<Result<ArrayRef>> {
+    let result = match array.data_type() {
+        DataType::Int8 => {
+            binary_bitwise_array_scalar!(array, scalar, |, Int8Array, i8)
+        }
+        DataType::Int16 => {
+            binary_bitwise_array_scalar!(array, scalar, |, Int16Array, i16)
+        }
+        DataType::Int32 => {
+            binary_bitwise_array_scalar!(array, scalar, |, Int32Array, i32)
+        }
+        DataType::Int64 => {
+            binary_bitwise_array_scalar!(array, scalar, |, Int64Array, i64)
+        }
+        other => Err(DataFusionError::Internal(format!(
+            "Data type {:?} not supported for binary operation '{}' on dyn arrays",
+            other,
+            Operator::BitwiseOr
+        ))),
+    };
+    Some(result)
 }
 
 /// Binary expression
@@ -336,6 +381,8 @@ fn evaluate(lhs: &dyn Array, op: &Operator, rhs: &dyn Array) -> Result<Arc<dyn A
         boolean_op!(lhs, rhs, compute::boolean_kleene::or)
     } else if matches!(op, And) {
         boolean_op!(lhs, rhs, compute::boolean_kleene::and)
+    } else if matches!(op, BitwiseOr) {
+        bitwise_or(lhs, rhs)
     } else if matches!(op, BitwiseAnd) {
         bitwise_and(lhs, rhs)
     } else {
@@ -531,6 +578,8 @@ fn evaluate_scalar(
     } else if matches!(op, Or | And) {
         // TODO: optimize scalar Or | And
         Ok(None)
+    } else if matches!(op, BitwiseOr) {
+        bitwise_or_scalar(lhs, rhs.clone()).transpose()
     } else if matches!(op, BitwiseAnd) {
         bitwise_and_scalar(lhs, rhs.clone()).transpose()
     } else {
@@ -619,7 +668,7 @@ pub fn binary_operator_data_type(
         | Operator::IsDistinctFrom
         | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
         // bitwise operations return the common coerced type
-        Operator::BitwiseAnd => Ok(result_type),
+        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
         // math operations return the same value as the common coerced type
         Operator::Plus
         | Operator::Minus
@@ -2798,6 +2847,10 @@ mod tests {
         let result = bitwise_and(left.as_ref(), right.as_ref())?;
         let expected = Int32Vec::from(vec![Some(0), None, Some(3)]).as_arc();
         assert_eq!(result.as_ref(), expected.as_ref());
+
+        let result = bitwise_or(left.as_ref(), right.as_ref())?;
+        let expected = Int32Vec::from(vec![Some(13), None, Some(15)]).as_arc();
+        assert_eq!(result.as_ref(), expected.as_ref());
         Ok(())
     }
 
@@ -2806,8 +2859,12 @@ mod tests {
         let left =
             Arc::new(Int32Array::from_iter(vec![Some(12), None, Some(11)])) as ArrayRef;
         let right = ScalarValue::from(3i32);
-        let result = bitwise_and_scalar(left.as_ref(), right).unwrap()?;
+        let result = bitwise_and_scalar(left.as_ref(), right.clone()).unwrap()?;
         let expected = Int32Vec::from(vec![Some(0), None, Some(3)]).as_arc();
+        assert_eq!(result.as_ref(), expected.as_ref());
+
+        let result = bitwise_and_scalar(left.as_ref(), right).unwrap()?;
+        let expected = Int32Vec::from(vec![Some(15), None, Some(11)]).as_arc();
         assert_eq!(result.as_ref(), expected.as_ref());
         Ok(())
     }

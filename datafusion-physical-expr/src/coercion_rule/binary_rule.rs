@@ -18,9 +18,8 @@
 //! Coercion rules for matching argument types for binary operators
 
 use arrow::datatypes::DataType;
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_common::{MAX_PRECISION_FOR_DECIMAL128, MAX_SCALE_FOR_DECIMAL128};
+use datafusion_common::{DataFusionError, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use datafusion_expr::Operator;
 
 /// Coercion rules for all binary operators. Returns the output type
@@ -32,7 +31,9 @@ pub(crate) fn coerce_types(
 ) -> Result<DataType> {
     // This result MUST be compatible with `binary_coerce`
     let result = match op {
-        Operator::BitwiseAnd => bitwise_coercion(lhs_type, rhs_type),
+        Operator::BitwiseAnd | Operator::BitwiseOr => {
+            bitwise_coercion(lhs_type, rhs_type)
+        }
         Operator::And | Operator::Or => match (lhs_type, rhs_type) {
             // logical binary boolean operators can only be evaluated in bools
             (DataType::Boolean, DataType::Boolean) => Some(DataType::Boolean),
@@ -259,8 +260,8 @@ fn mathematics_numerical_coercion(
 
 fn create_decimal_type(precision: usize, scale: usize) -> DataType {
     DataType::Decimal(
-        MAX_PRECISION_FOR_DECIMAL128.min(precision),
-        MAX_SCALE_FOR_DECIMAL128.min(scale),
+        DECIMAL_MAX_PRECISION.min(precision),
+        DECIMAL_MAX_SCALE.min(scale),
     )
 }
 

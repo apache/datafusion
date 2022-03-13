@@ -30,9 +30,9 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 arrow-format = { version = "0.4", features = ["flight-data", "flight-service"] }
-arrow = { package = "arrow2", version="0.9", features = ["io_ipc"] }
+arrow = { package = "arrow2", version="0.10", features = ["io_ipc"] }
 anyhow = "1"
-async-trait = "0.1.36"
+async-trait = "0.1.41"
 ballista-core = { path = "../core", version = "0.6.0" }
 configure_me = "0.4.0"
 datafusion = { path = "../../../datafusion", version = "7.0.0" }
@@ -47,6 +47,7 @@ tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
 hyper = "0.14.4"
 parking_lot = "0.12"
+chrono = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 

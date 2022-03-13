@@ -17,17 +17,16 @@
 
 use std::{sync::Arc, task::Poll};
 
-use crate::state::ConfigBackendClient;
 use ballista_core::error::{ballista_error, BallistaError, Result};
 
 use futures::{FutureExt, Stream};
 use log::warn;
-use sled::{Event, Subscriber};
+use sled_package as sled;
 use tokio::sync::Mutex;
 
-use super::{Lock, Watch, WatchEvent};
+use crate::state::backend::{Lock, StateBackendClient, Watch, WatchEvent};
 
-/// A [`ConfigBackendClient`] implementation that uses file-based storage to save cluster configuration.
+/// A [`StateBackendClient`] implementation that uses file-based storage to save cluster configuration.
 #[derive(Clone)]
 pub struct StandaloneClient {
     db: sled::Db,
@@ -63,7 +62,7 @@ fn sled_to_ballista_error(e: sled::Error) -> BallistaError {
 }
 
 #[tonic::async_trait]
-impl ConfigBackendClient for StandaloneClient {
+impl StateBackendClient for StandaloneClient {
     async fn get(&self, key: &str) -> Result<Vec<u8>> {
         Ok(self
             .db
@@ -111,7 +110,7 @@ impl ConfigBackendClient for StandaloneClient {
 }
 
 struct SledWatch {
-    subscriber: Subscriber,
+    subscriber: sled::Subscriber,
 }
 
 #[tonic::async_trait]
@@ -131,11 +130,11 @@ impl Stream for SledWatch {
         match self.get_mut().subscriber.poll_unpin(cx) {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => Poll::Ready(None),
-            Poll::Ready(Some(Event::Insert { key, value })) => {
+            Poll::Ready(Some(sled::Event::Insert { key, value })) => {
                 let key = std::str::from_utf8(&key).unwrap().to_owned();
                 Poll::Ready(Some(WatchEvent::Put(key, value.to_vec())))
             }
-            Poll::Ready(Some(Event::Remove { key })) => {
+            Poll::Ready(Some(sled::Event::Remove { key })) => {
                 let key = std::str::from_utf8(&key).unwrap().to_owned();
                 Poll::Ready(Some(WatchEvent::Delete(key)))
             }
@@ -149,9 +148,8 @@ impl Stream for SledWatch {
 
 #[cfg(test)]
 mod tests {
-    use crate::state::{ConfigBackendClient, Watch, WatchEvent};
+    use super::{StandaloneClient, StateBackendClient, Watch, WatchEvent};
 
-    use super::StandaloneClient;
     use futures::StreamExt;
     use std::result::Result;
 
