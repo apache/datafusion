@@ -369,11 +369,13 @@ fn signature(fun: &BuiltinScalarFunction) -> Signature {
             array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
             fun.volatility(),
         ),
-        BuiltinScalarFunction::Concat
-        | BuiltinScalarFunction::ConcatWithSeparator
-        | BuiltinScalarFunction::Coalesce => {
+        BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
             Signature::variadic(vec![DataType::Utf8], fun.volatility())
         }
+        BuiltinScalarFunction::Coalesce => Signature::variadic(
+            conditional_expressions::SUPPORTED_COALESCE_TYPES.to_vec(),
+            fun.volatility(),
+        ),
         BuiltinScalarFunction::Ascii
         | BuiltinScalarFunction::BitLength
         | BuiltinScalarFunction::CharacterLength

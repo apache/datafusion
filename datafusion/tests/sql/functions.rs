@@ -306,3 +306,35 @@ async fn coalesce_result_with_default_value() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn coalesce_sum_with_default_value() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int32, true),
+        Field::new("c2", DataType::Int32, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), None, Some(1), None])),
+            Arc::new(Int32Array::from(vec![Some(2), Some(2), None, None])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let mut ctx = ExecutionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = "SELECT SUM(COALESCE(c1, c2, 0)) FROM test";
+    let actual = execute_to_batches(&mut ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------------+",
+        "| SUM(coalesce(test.c1,test.c2,Int64(0))) |",
+        "+-----------------------------------------+",
+        "| 4                                       |",
+        "+-----------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
