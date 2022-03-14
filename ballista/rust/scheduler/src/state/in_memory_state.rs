@@ -128,7 +128,8 @@ impl InMemorySchedulerState {
             executors_data
                 .iter()
                 .filter_map(|(exec, data)| {
-                    alive_executors.contains(exec).then(|| data.clone())
+                    (data.available_task_slots > 0 && alive_executors.contains(exec))
+                        .then(|| data.clone())
                 })
                 .collect::<Vec<ExecutorData>>()
         };
