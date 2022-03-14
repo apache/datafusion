@@ -302,35 +302,13 @@ impl ExecutionContext {
                 let schema = catalog.schema(&schema_name);
 
                 match (if_not_exists, schema) {
-                    //
                     (true, Some(_)) => {
-                        println!("Schema '{:?}' already exists", &schema_name);
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                     }
                     (true, None) | (false, None) => {
-                        println!("Creating schema {:?}", schema_name);
                         let schema = Arc::new(MemorySchemaProvider::new());
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
-                        schema.register_table(
-                            "test".into(),
-                            Arc::new(DataFrameImpl::new(self.state.clone(), &plan)),
-                        )?;
-                        let schem_reg_res = catalog.register_schema(&schema_name, schema);
-                        match schem_reg_res {
-                            Some(_) => {
-                                println!("Existing schema with name")
-                            }
-                            None => {
-                                println!("Succesfully registerd")
-                            }
-                        };
-                        // println!("Schemas pre reg: {:?}", catalog.schema_names);
-                        self.register_catalog(default_catalog, catalog);
-                        println!(
-                            "Schema names: {:?}",
-                            self.catalog(default_catalog).unwrap().schema_names()
-                        );
+                        catalog.register_schema(&schema_name, schema);
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
                     }
@@ -1218,10 +1196,6 @@ impl ExecutionContextState {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref.into());
-        println!(
-            "Resolved ref: {:?}:{:?}:{:?}",
-            resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-        );
 
         self.catalog_list
             .catalog(resolved_ref.catalog)
@@ -2971,6 +2945,29 @@ mod tests {
 
         assert_eq!(Weak::strong_count(&catalog_list_weak), 0);
         assert_eq!(Weak::strong_count(&catalog_weak), 0);
+    }
+
+    #[tokio::test]
+    async fn sql_create_schema() -> Result<()> {
+        // the information schema used to introduce cyclic Arcs
+        let mut ctx = ExecutionContext::with_config(
+            ExecutionConfig::new().with_information_schema(true),
+        );
+
+        // Create schema
+        ctx.sql("CREATE SCHEMA abc").await?.collect().await?;
+
+        // Add table to schema
+        ctx.sql("CREATE TABLE abc.y AS VALUES (1,2,3)")
+            .await?
+            .collect()
+            .await?;
+
+        // Check table exists in schema
+        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+
+        assert_eq!(results[0].num_rows(), 1);
+        Ok(())
     }
 
     #[tokio::test]

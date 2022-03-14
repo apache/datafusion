@@ -90,17 +90,8 @@ impl CatalogProvider for CatalogWithInformationSchema {
         name: &str,
         schema: Arc<dyn SchemaProvider>,
     ) -> Option<Arc<dyn SchemaProvider>> {
-        let catalog_list = self.catalog_list.upgrade();
-        match catalog_list {
-            Some(cl) => {
-                let catalog = cl.catalog(name);
-                match catalog {
-                    Some(c) => c.register_schema(name, schema),
-                    None => None,
-                }
-            }
-            None => None,
-        }
+        let catalog = &self.inner;
+        catalog.register_schema(name, schema)
     }
 }
 
