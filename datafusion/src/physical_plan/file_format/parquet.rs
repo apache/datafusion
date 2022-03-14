@@ -18,6 +18,7 @@
 //! Execution plan for reading Parquet files
 
 use futures::{StreamExt, TryStreamExt};
+use log::error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
@@ -240,16 +241,13 @@ impl ExecutionPlan for ParquetExec {
             task::spawn_blocking(move || {
                 if let Err(e) = read_partition_no_file_columns(
                     object_store.as_ref(),
-                    partition_index,
                     &partition,
-                    metrics,
-                    &pruning_predicate,
                     batch_size,
                     response_tx.clone(),
                     limit,
                     partition_col_proj,
                 ) {
-                    println!(
+                    error!(
                         "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                         e, partition
                     );
@@ -276,7 +274,7 @@ impl ExecutionPlan for ParquetExec {
                     limit,
                     partition_col_proj,
                 ) {
-                    println!(
+                    error!(
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
                 );
@@ -473,39 +471,21 @@ fn build_row_group_predicate(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn read_partition_no_file_columns(
     object_store: &dyn ObjectStore,
-    partition_index: usize,
     partition: &[PartitionedFile],
-    metrics: ExecutionPlanMetricsSet,
-    predicate_builder: &Option<PruningPredicate>,
     batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
-    limit: Option<usize>,
+    mut limit: Option<usize>,
     mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
-    let mut remaining_rows = limit.unwrap_or(usize::MAX);
+    
     for partitioned_file in partition {
         let mut file_row_count = 0;
-        let file_metrics = ParquetFileMetrics::new(
-            partition_index,
-            &*partitioned_file.file_meta.path(),
-            &metrics,
-        );
         let object_reader =
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
-        let mut file_reader =
+        let file_reader =
             SerializedFileReader::new(ChunkObjectReader(object_reader))?;
-        if let Some(predicate_builder) = predicate_builder {
-            let row_group_predicate = build_row_group_predicate(
-                predicate_builder,
-                file_metrics,
-                file_reader.metadata().row_groups(),
-            );
-            file_reader.filter_row_groups(&row_group_predicate);
-        }
-
         for i in 0..file_reader.num_row_groups() {
             let row_group = file_reader.get_row_group(i)?;
             let num_rows = row_group.metadata().num_rows();
@@ -516,12 +496,15 @@ fn read_partition_no_file_columns(
                 ))
             })?;
             file_row_count += num_rows;
+            let remaining_rows = limit.unwrap_or(usize::MAX);
             if file_row_count >= remaining_rows {
                 file_row_count = remaining_rows;
-                remaining_rows = 0;
+                limit = Some(0);
                 break;
             } else {
-                remaining_rows -= file_row_count;
+                if let Some(remaining_limt) = &mut limit{
+                    *remaining_limt -=  file_row_count;
+                }
             }
         }
 
@@ -533,12 +516,15 @@ fn read_partition_no_file_columns(
             )?;
             file_row_count -= batch_size;
         }
-        send_result(
-            &response_tx,
-            partition_column_projector
-                .project_empty(batch_size, &partitioned_file.partition_values),
-        )?;
-        if remaining_rows == 0 {
+        if file_row_count != 0{
+            send_result(
+                &response_tx,
+                partition_column_projector
+                    .project_empty(batch_size, &partitioned_file.partition_values),
+            )?;
+        }
+        
+        if limit == Some(0) {
             break;
         }
     }
