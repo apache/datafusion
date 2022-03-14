@@ -177,7 +177,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
             } => Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name: schema_name.to_string(),
-                if_not_exists: *if_not_exists,
+                if_not_exists,
                 schema: Arc::new(DFSchema::empty()),
             })),
             Statement::Drop {

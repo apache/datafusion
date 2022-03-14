@@ -1028,8 +1028,10 @@ impl LogicalPlan {
                     }) => {
                         write!(f, "CreateCatalogSchema: {:?}", schema_name)
                     }
-                    LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
-                        write!(f, "DropTable: {:?} if not exist:={}", name, if_exist)
+                    LogicalPlan::DropTable(DropTable {
+                        name, if_exists, ..
+                    }) => {
+                        write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
