@@ -116,6 +116,10 @@ impl ExprSchemable for Expr {
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+                "QualifiedWildcard expressions are not valid in a logical query plan"
+                    .to_owned(),
+            )),
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(schema)?;
 
@@ -177,6 +181,10 @@ impl ExprSchemable for Expr {
             } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
+            )),
+            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+                "QualifiedWildcard expressions are not valid in a logical query plan"
+                    .to_owned(),
             )),
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(input_schema)?;

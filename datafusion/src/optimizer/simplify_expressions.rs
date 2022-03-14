@@ -377,7 +377,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Column(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
-            | Expr::Wildcard => false,
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. } => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
             Expr::Literal(_)
