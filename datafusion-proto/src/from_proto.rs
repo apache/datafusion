@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::protobuf;
+use datafusion::prelude::concat_ws;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
@@ -1038,16 +1039,12 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     ScalarFunction::Digest => {
                         Ok(digest((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
-                    //ScalarFunction::ToTimestampMillis => Ok(to_tome)
                     ScalarFunction::Ascii => Ok(ascii((&args[0]).try_into()?)),
                     ScalarFunction::BitLength => Ok((&args[0]).try_into()?),
                     ScalarFunction::CharacterLength => {
                         Ok(character_length((&args[0]).try_into()?))
                     }
                     ScalarFunction::Chr => Ok(chr((&args[0]).try_into()?)),
-                    // ScalarFunction::ConcatWithSeparator => {
-                    //     Ok(concat_ws((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    // }
                     ScalarFunction::InitCap => Ok(ascii((&args[0]).try_into()?)),
                     ScalarFunction::Left => {
                         Ok(left((&args[0]).try_into()?, (&args[1]).try_into()?))
@@ -1065,6 +1062,10 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     ScalarFunction::Right => {
                         Ok(right((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
+                    //issue https://github.com/apache/arrow-datafusion/issues/2009
+                    // ScalarFunction::ConcatWithSeparator => {
+                    //     Ok(concat_ws(vec![]))
+                    // }
                     // ScalarFunction::Rpad => Ok(rpad(vec![])),
                     // ScalarFunction::RegexpReplace => {
                     //     Ok(regexp_replace(vec![]))
@@ -1073,7 +1074,7 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     //     Ok(regexp_match(vec![]))
                     // }
                     // ScalarFunction::Lpad => Ok(lpad(vec![])),
-                    //ScalarFunction::Btrim => Ok(btrim((&args[0]).try_into()?)),
+                    //ScalarFunction::Btrim => Ok(btrim(vec![])),
                     ScalarFunction::SplitPart => Ok(split_part(
                         (&args[0]).try_into()?,
                         (&args[1]).try_into()?,
@@ -1089,8 +1090,10 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                         Ok(substr((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
                     ScalarFunction::ToHex => Ok(to_hex((&args[0]).try_into()?)),
-                    //ScalarFunction::ToTimestampMicros Ok(totime((&args[0]).try_into()?)),
-                    //ScalarFunction::ToTimestampSeconds
+                    //issue: https://github.com/apache/arrow-datafusion/issues/2010
+                    //ScalarFunction::ToTimestampMillis =>
+                    //ScalarFunction::ToTimestampMicros =>
+                    //ScalarFunction::ToTimestampSeconds =>
                     ScalarFunction::Now => Ok(now((&args[0]).try_into()?)),
                     ScalarFunction::Translate => Ok(translate(
                         (&args[0]).try_into()?,
