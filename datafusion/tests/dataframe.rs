@@ -28,6 +28,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::{col, Expr};
 use datafusion::{datasource::MemTable, prelude::JoinType};
+use datafusion_expr::lit;
 
 #[tokio::test]
 async fn join() -> Result<()> {
@@ -115,6 +116,37 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     let expected = vec![
         "+-----+", "| a   |", "+-----+", "| 100 |", "| 10  |", "| 10  |", "| 1   |",
         "+-----+",
+    ];
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn filter_with_alias_overwrite() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from_slice(&[1, 10, 10, 100]))],
+    )
+    .unwrap();
+
+    let mut ctx = ExecutionContext::new();
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
+    ctx.register_table("t", Arc::new(provider)).unwrap();
+
+    let df = ctx
+        .table("t")
+        .unwrap()
+        .select(vec![(col("a").eq(lit(10))).alias("a")])
+        .unwrap()
+        .filter(col("a"))
+        .unwrap();
+    let results = df.collect().await.unwrap();
+
+    let expected = vec![
+        "+------+", "| a    |", "+------+", "| true |", "| true |", "+------+",
     ];
     assert_batches_eq!(expected, &results);
 

@@ -32,6 +32,7 @@ use crate::{
         MemTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
+    optimizer::eliminate_filter::EliminateFilter,
     optimizer::eliminate_limit::EliminateLimit,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
@@ -45,7 +46,7 @@ use std::path::PathBuf;
 use std::string::String;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -271,9 +272,11 @@ impl ExecutionContext {
                 Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
             }
 
-            LogicalPlan::DropTable(DropTable { name, if_exist, .. }) => {
+            LogicalPlan::DropTable(DropTable {
+                name, if_exists, ..
+            }) => {
                 let returned = self.deregister_table(name.as_str())?;
-                if !if_exist && returned.is_none() {
+                if !if_exists && returned.is_none() {
                     Err(DataFusionError::Execution(format!(
                         "Memory table {:?} doesn't exist.",
                         name
@@ -295,7 +298,7 @@ impl ExecutionContext {
     ///
     /// This function is intended for internal use and should not be called directly.
     pub fn create_logical_plan(&self, sql: &str) -> Result<LogicalPlan> {
-        let statements = DFParser::parse_sql(sql)?;
+        let mut statements = DFParser::parse_sql(sql)?;
 
         if statements.len() != 1 {
             return Err(DataFusionError::NotImplemented(
@@ -306,7 +309,7 @@ impl ExecutionContext {
         // create a query planner
         let state = self.state.lock().clone();
         let query_planner = SqlToRel::new(&state);
-        query_planner.statement_to_plan(&statements[0])
+        query_planner.statement_to_plan(statements.pop().unwrap())
     }
 
     /// Registers a variable provider within this context.
@@ -828,7 +831,7 @@ pub struct ExecutionConfig {
     /// Should DataFusion repartition data using the partition keys to execute window functions in
     /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
-    /// Should Datafusion parquet reader using the predicate to prune data
+    /// Should DataFusion parquet reader using the predicate to prune data
     parquet_pruning: bool,
     /// Runtime configurations such as memory threshold and local disk for spill
     pub runtime: RuntimeConfig,
@@ -842,6 +845,7 @@ impl Default for ExecutionConfig {
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
                 Arc::new(SimplifyExpressions::new()),
+                Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
@@ -1185,6 +1189,23 @@ impl ContextProvider for ExecutionContextState {
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.aggregate_functions.get(name).cloned()
     }
+
+    fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
+        if variable_names.is_empty() {
+            return None;
+        }
+
+        let provider_type = if &variable_names[0][0..2] == "@@" {
+            VarType::System
+        } else {
+            VarType::UserDefined
+        };
+
+        self.execution_props
+            .var_providers
+            .as_ref()
+            .and_then(|provider| provider.get(&provider_type)?.get_type(variable_names))
+    }
 }
 
 impl FunctionRegistry for ExecutionContextState {
@@ -1295,14 +1316,15 @@ mod tests {
         ctx.register_table("dual", provider)?;
 
         let results =
-            plan_and_collect(&mut ctx, "SELECT @@version, @name FROM dual").await?;
+            plan_and_collect(&mut ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
+                .await?;
 
         let expected = vec![
-            "+----------------------+------------------------+",
-            "| @@version            | @name                  |",
-            "+----------------------+------------------------+",
-            "| system-var-@@version | user-defined-var-@name |",
-            "+----------------------+------------------------+",
+            "+----------------------+------------------------+------------------------+",
+            "| @@version            | @name                  | @integer Plus Int64(1) |",
+            "+----------------------+------------------------+------------------------+",
+            "| system-var-@@version | user-defined-var-@name | 42                     |",
+            "+----------------------+------------------------+------------------------+",
         ];
         assert_batches_eq!(expected, &results);
 

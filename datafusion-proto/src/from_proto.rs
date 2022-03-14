@@ -155,7 +155,10 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
             .iter()
             .map(|c| c.try_into())
             .collect::<Result<Vec<DFField>, _>>()?;
-        Ok(DFSchema::new(fields)?)
+        Ok(DFSchema::new_with_metadata(
+            fields,
+            df_schema.metadata.clone(),
+        )?)
     }
 }
 

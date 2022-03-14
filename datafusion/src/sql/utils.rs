@@ -368,7 +368,7 @@ where
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
-            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_) => {
+            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_, _) => {
                 Ok(expr.clone())
             }
             Expr::Wildcard => Ok(Expr::Wildcard),
@@ -535,9 +535,9 @@ pub(crate) fn make_decimal_type(
 }
 
 // Normalize an identifer to a lowercase string unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: &Ident) -> String {
+pub(crate) fn normalize_ident(id: Ident) -> String {
     match id.quote_style {
-        Some(_) => id.value.clone(),
+        Some(_) => id.value,
         None => id.value.to_ascii_lowercase(),
     }
 }

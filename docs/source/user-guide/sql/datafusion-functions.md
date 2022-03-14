@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Datafusion-Specific Functions
+# DataFusion-Specific Functions
 
 These SQL functions are specific to DataFusion, or they are well known and have functionality which is specific to DataFusion. Specifically, the `to_timestamp_xx()` functions exist due to Arrow's support for multiple timestamp resolutions.
 

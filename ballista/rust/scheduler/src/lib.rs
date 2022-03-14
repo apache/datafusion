@@ -26,6 +26,3 @@ pub mod state;
 
 #[cfg(test)]
 pub mod test_utils;
-
-#[cfg(feature = "sled")]
-extern crate sled_package as sled;

@@ -349,8 +349,11 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     };
 
     let arr = match date_part.to_lowercase().as_str() {
-        "hour" => extract_date_part!(array, temporal::hour),
         "year" => extract_date_part!(array, temporal::year),
+        "month" => extract_date_part!(array, temporal::month),
+        "week" => extract_date_part!(array, temporal::week),
+        "day" => extract_date_part!(array, temporal::day),
+        "hour" => extract_date_part!(array, temporal::hour),
         "minute" => extract_date_part!(array, temporal::minute),
         "second" => extract_date_part!(array, temporal::second),
         _ => Err(DataFusionError::Execution(format!(

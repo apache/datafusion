@@ -188,7 +188,8 @@ impl LogicalPlanBuilder {
         for (i, j) in nulls {
             values[i][j] = Expr::Literal(ScalarValue::try_from(fields[j].data_type())?);
         }
-        let schema = DFSchemaRef::new(DFSchema::new(fields)?);
+        let schema =
+            DFSchemaRef::new(DFSchema::new_with_metadata(fields, HashMap::new())?);
         Ok(Self::from(LogicalPlan::Values(Values { schema, values })))
     }
 
@@ -392,12 +393,13 @@ impl LogicalPlanBuilder {
         let projected_schema = projection
             .as_ref()
             .map(|p| {
-                DFSchema::new(
+                DFSchema::new_with_metadata(
                     p.iter()
                         .map(|i| {
                             DFField::from_qualified(&table_name, schema.field(*i).clone())
                         })
                         .collect(),
+                    schema.metadata().clone(),
                 )
             })
             .unwrap_or_else(|| {
@@ -500,7 +502,10 @@ impl LogicalPlanBuilder {
 
                 expr.extend(missing_exprs);
 
-                let new_schema = DFSchema::new(exprlist_to_fields(&expr, input_schema)?)?;
+                let new_schema = DFSchema::new_with_metadata(
+                    exprlist_to_fields(&expr, input_schema)?,
+                    input_schema.metadata().clone(),
+                )?;
 
                 Ok(LogicalPlan::Projection(Projection {
                     expr,
@@ -569,7 +574,10 @@ impl LogicalPlanBuilder {
             .iter()
             .map(|f| Expr::Column(f.qualified_column()))
             .collect();
-        let new_schema = DFSchema::new(exprlist_to_fields(&new_expr, schema)?)?;
+        let new_schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(&new_expr, schema)?,
+            schema.metadata().clone(),
+        )?;
 
         Ok(Self::from(LogicalPlan::Projection(Projection {
             expr: new_expr,
@@ -787,7 +795,10 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Window(Window {
             input: Arc::new(self.plan.clone()),
             window_expr,
-            schema: Arc::new(DFSchema::new(window_fields)?),
+            schema: Arc::new(DFSchema::new_with_metadata(
+                window_fields,
+                self.plan.schema().metadata().clone(),
+            )?),
         })))
     }
 
@@ -803,8 +814,10 @@ impl LogicalPlanBuilder {
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
         let all_expr = group_expr.iter().chain(aggr_expr.iter());
         validate_unique_names("Aggregations", all_expr.clone(), self.plan.schema())?;
-        let aggr_schema =
-            DFSchema::new(exprlist_to_fields(all_expr, self.plan.schema())?)?;
+        let aggr_schema = DFSchema::new_with_metadata(
+            exprlist_to_fields(all_expr, self.plan.schema())?,
+            self.plan.schema().metadata().clone(),
+        )?;
         Ok(Self::from(LogicalPlan::Aggregate(Aggregate {
             input: Arc::new(self.plan.clone()),
             group_expr,
@@ -927,7 +940,9 @@ pub fn build_join_schema(
         }
     };
 
-    DFSchema::new(fields)
+    let mut metadata = left.metadata().clone();
+    metadata.extend(right.metadata().clone());
+    DFSchema::new_with_metadata(fields, metadata)
 }
 
 /// Errors if one or more expressions have equal names.
@@ -1019,7 +1034,10 @@ pub fn project_with_alias(
         }
     }
     validate_unique_names("Projections", projected_expr.iter(), input_schema)?;
-    let input_schema = DFSchema::new(exprlist_to_fields(&projected_expr, input_schema)?)?;
+    let input_schema = DFSchema::new_with_metadata(
+        exprlist_to_fields(&projected_expr, input_schema)?,
+        plan.schema().metadata().clone(),
+    )?;
     let schema = match alias {
         Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
         None => input_schema,

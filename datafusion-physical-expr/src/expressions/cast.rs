@@ -30,7 +30,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
-/// provide Datafusion default cast options
+/// provide DataFusion default cast options
 pub const DEFAULT_DATAFUSION_CAST_OPTIONS: CastOptions = CastOptions { safe: false };
 
 /// CAST expression casts an expression to a specific data type and returns a runtime error on invalid cast

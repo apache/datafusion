@@ -290,7 +290,10 @@ impl From<&DFField> for protobuf::DfField {
 impl From<&DFSchemaRef> for protobuf::DfSchema {
     fn from(s: &DFSchemaRef) -> protobuf::DfSchema {
         let columns = s.fields().iter().map(|f| f.into()).collect::<Vec<_>>();
-        protobuf::DfSchema { columns }
+        protobuf::DfSchema {
+            columns,
+            metadata: s.metadata().clone(),
+        }
     }
 }
 
@@ -508,7 +511,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
                 }
             }
-            Expr::ScalarVariable(_) => unimplemented!(),
+            Expr::ScalarVariable(_, _) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
