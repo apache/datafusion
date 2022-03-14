@@ -479,13 +479,11 @@ fn read_partition_no_file_columns(
     mut limit: Option<usize>,
     mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
-    
     for partitioned_file in partition {
         let mut file_row_count = 0;
         let object_reader =
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
-        let file_reader =
-            SerializedFileReader::new(ChunkObjectReader(object_reader))?;
+        let file_reader = SerializedFileReader::new(ChunkObjectReader(object_reader))?;
         for i in 0..file_reader.num_row_groups() {
             let row_group = file_reader.get_row_group(i)?;
             let num_rows = row_group.metadata().num_rows();
@@ -501,10 +499,8 @@ fn read_partition_no_file_columns(
                 file_row_count = remaining_rows;
                 limit = Some(0);
                 break;
-            } else {
-                if let Some(remaining_limt) = &mut limit{
-                    *remaining_limt -=  file_row_count;
-                }
+            } else if let Some(remaining_limt) = &mut limit {
+                *remaining_limt -= file_row_count;
             }
         }
 
@@ -516,14 +512,14 @@ fn read_partition_no_file_columns(
             )?;
             file_row_count -= batch_size;
         }
-        if file_row_count != 0{
+        if file_row_count != 0 {
             send_result(
                 &response_tx,
                 partition_column_projector
                     .project_empty(batch_size, &partitioned_file.partition_values),
             )?;
         }
-        
+
         if limit == Some(0) {
             break;
         }
