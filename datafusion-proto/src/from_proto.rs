@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::protobuf;
-use datafusion::prelude::concat_ws;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
