@@ -1091,14 +1091,14 @@ pub(crate) fn expand_wildcard(
 }
 
 pub(crate) fn expand_qualified_wildcard(
-    qualifier: &String,
+    qualifier: &str,
     schema: &DFSchema,
     plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
     let qualified_fields = schema
         .fields_with_qualified(qualifier)
         .into_iter()
-        .map(|f| f.clone())
+        .cloned()
         .collect();
     let qualifier_schema =
         DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;

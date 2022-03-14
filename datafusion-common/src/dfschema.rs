@@ -222,7 +222,7 @@ impl DFSchema {
         }
     }
 
-    pub fn fields_with_qualified(&self, qualifier: &String) -> Vec<&DFField> {
+    pub fn fields_with_qualified(&self, qualifier: &str) -> Vec<&DFField> {
         self.fields
             .iter()
             .filter(|field| {
