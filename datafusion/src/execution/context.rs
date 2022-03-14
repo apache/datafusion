@@ -32,6 +32,7 @@ use crate::{
         MemTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
+    optimizer::eliminate_filter::EliminateFilter,
     optimizer::eliminate_limit::EliminateLimit,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
@@ -847,6 +848,7 @@ impl Default for ExecutionConfig {
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
                 Arc::new(SimplifyExpressions::new()),
+                Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
