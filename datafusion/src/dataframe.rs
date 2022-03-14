@@ -335,13 +335,20 @@ impl DataFrame {
         Ok(Arc::new(DataFrame::new(self.ctx_state.clone(), &plan)))
     }
 
-    /// Convert to logical plan
-    pub fn to_logical_plan(&self) -> LogicalPlan {
-        self.plan.clone()
-    }
-
     /// Convert the logical plan represented by this DataFrame into a physical plan and
     /// execute it, collecting all resulting batches into memory
+    /// Executes this DataFrame and collects all results into a vector of RecordBatch.
+    /// ```
+    /// # use datafusion::prelude::*;
+    /// # use datafusion::error::Result;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    /// let mut ctx = ExecutionContext::new();
+    /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
+    /// let batches = df.collect().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let plan = self.create_physical_plan().await?;
         let runtime = self.ctx_state.lock().runtime_env.clone();
@@ -460,6 +467,11 @@ impl DataFrame {
     /// ```
     pub fn schema(&self) -> &DFSchema {
         self.plan.schema()
+    }
+
+    /// Return the logical plan represented by this DataFrame.
+    pub fn to_logical_plan(&self) -> LogicalPlan {
+        self.plan.clone()
     }
 
     /// Return a DataFrame with the explanation of its plan so far.
