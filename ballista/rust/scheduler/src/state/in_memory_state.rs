@@ -16,7 +16,8 @@
 // under the License.
 
 use ballista_core::serde::protobuf::{ExecutorHeartbeat, TaskStatus};
-use ballista_core::serde::scheduler::ExecutorData;
+use ballista_core::serde::scheduler::{ExecutorData, ExecutorDeltaData};
+use log::{error, info, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -83,6 +84,33 @@ impl InMemorySchedulerState {
     pub(crate) fn save_executor_data(&self, executor_data: ExecutorData) {
         let mut executors_data = self.executors_data.write();
         executors_data.insert(executor_data.executor_id.clone(), executor_data);
+    }
+
+    pub(crate) fn update_executor_data(&self, executor_delta_data: &ExecutorDeltaData) {
+        let mut executors_data = self.executors_data.write();
+        if let Some(executor_data) =
+            executors_data.get_mut(&executor_delta_data.executor_id)
+        {
+            let available_task_slots = executor_data.available_task_slots as i32
+                + executor_delta_data.task_slots;
+            if available_task_slots < 0 {
+                error!(
+                    "Available task slots {} for executor {} is less than 0",
+                    available_task_slots, executor_data.executor_id
+                );
+            } else {
+                info!(
+                    "available_task_slots for executor {} becomes {}",
+                    executor_data.executor_id, available_task_slots
+                );
+                executor_data.available_task_slots = available_task_slots as u32;
+            }
+        } else {
+            warn!(
+                "Could not find executor data for {}",
+                executor_delta_data.executor_id
+            );
+        }
     }
 
     pub(crate) fn get_executor_data(&self, executor_id: &str) -> Option<ExecutorData> {
