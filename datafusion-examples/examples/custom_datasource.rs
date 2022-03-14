@@ -66,7 +66,7 @@ async fn search_accounts(
             .build()
             .unwrap();
 
-    let mut dataframe = DataFrameImpl::new(ctx.state, &logical_plan)
+    let mut dataframe = DataFrame::new(ctx.state, &logical_plan)
         .select_columns(&["id", "bank_account"])?;
 
     if let Some(f) = filter {
