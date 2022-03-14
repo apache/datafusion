@@ -20,8 +20,8 @@ use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
     logical_plan::{
-        abs, ascii, atan, ceil, character_length, chr, cos, digest,
-        exp, floor, left, ln, log10, log2, now, random, repeat, replace, reverse, right, round, signum, sin,
+        abs, ascii, atan, ceil, character_length, chr, cos, digest, exp, floor, left, ln,
+        log10, log2, now, random, repeat, replace, reverse, right, round, signum, sin,
         split_part, sqrt, starts_with, strpos, substr, tan, to_hex, translate, trunc,
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
