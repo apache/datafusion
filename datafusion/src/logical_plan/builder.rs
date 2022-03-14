@@ -1090,6 +1090,21 @@ pub(crate) fn expand_wildcard(
     }
 }
 
+pub(crate) fn expand_qualified_wildcard(
+    qualifier: &String,
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let qualified_fields = schema
+        .fields_with_qualified(qualifier)
+        .into_iter()
+        .map(|f| f.clone())
+        .collect();
+    let qualifier_schema =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+    expand_wildcard(&qualifier_schema, plan)
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
