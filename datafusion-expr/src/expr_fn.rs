@@ -230,7 +230,6 @@ unary_scalar_expr!(Ln, ln);
 // string functions
 scalar_expr!(Ascii, ascii, string);
 scalar_expr!(BitLength, bit_length, string);
-nary_scalar_expr!(Btrim, btrim);
 scalar_expr!(CharacterLength, character_length, string);
 scalar_expr!(CharacterLength, length, string);
 scalar_expr!(Chr, chr, string);
@@ -238,17 +237,13 @@ scalar_expr!(Digest, digest, string, algorithm);
 scalar_expr!(InitCap, initcap, string);
 scalar_expr!(Left, left, string, count);
 scalar_expr!(Lower, lower, string);
-nary_scalar_expr!(Lpad, lpad);
 scalar_expr!(Ltrim, ltrim, string);
 scalar_expr!(MD5, md5, string);
 scalar_expr!(OctetLength, octet_length, string);
-nary_scalar_expr!(RegexpMatch, regexp_match);
-nary_scalar_expr!(RegexpReplace, regexp_replace);
 scalar_expr!(Replace, replace, string, from, to);
 scalar_expr!(Repeat, repeat, string, count);
 scalar_expr!(Reverse, reverse, string);
 scalar_expr!(Right, right, string, count);
-nary_scalar_expr!(Rpad, rpad);
 scalar_expr!(Rtrim, rtrim, string);
 scalar_expr!(SHA224, sha224, string);
 scalar_expr!(SHA256, sha256, string);
@@ -262,6 +257,14 @@ scalar_expr!(ToHex, to_hex, string);
 scalar_expr!(Translate, translate, string, from, to);
 scalar_expr!(Trim, trim, string);
 scalar_expr!(Upper, upper, string);
+//use vec as parameter
+nary_scalar_expr!(Lpad, lpad);
+nary_scalar_expr!(Rpad, rpad);
+nary_scalar_expr!(RegexpReplace, regexp_replace);
+nary_scalar_expr!(RegexpMatch, regexp_match);
+nary_scalar_expr!(Btrim, btrim);
+//there is a func concat_ws before, so use concat_ws_expr as name.c
+nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
 
 // date functions
 scalar_expr!(DatePart, date_part, part, date);

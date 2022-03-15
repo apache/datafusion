@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::protobuf;
+use datafusion::logical_plan::concat_ws_expr;
+use datafusion::prelude::{btrim, lpad, regexp_match, regexp_replace, rpad};
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
@@ -1061,19 +1063,42 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     ScalarFunction::Right => {
                         Ok(right((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
-                    //issue https://github.com/apache/arrow-datafusion/issues/2009
-                    // ScalarFunction::ConcatWithSeparator => {
-                    //     Ok(concat_ws(vec![]))
-                    // }
-                    // ScalarFunction::Rpad => Ok(rpad(vec![])),
-                    // ScalarFunction::RegexpReplace => {
-                    //     Ok(regexp_replace(vec![]))
-                    // }
-                    // ScalarFunction::RegexpMatch => {
-                    //     Ok(regexp_match(vec![]))
-                    // }
-                    // ScalarFunction::Lpad => Ok(lpad(vec![])),
-                    //ScalarFunction::Btrim => Ok(btrim(vec![])),
+                    ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    ScalarFunction::Lpad => Ok(lpad(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    ScalarFunction::Rpad => Ok(rpad(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    ScalarFunction::RegexpReplace => Ok(regexp_replace(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    ScalarFunction::RegexpMatch => Ok(regexp_match(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
+                    ScalarFunction::Btrim => Ok(btrim(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
                     ScalarFunction::SplitPart => Ok(split_part(
                         (&args[0]).try_into()?,
                         (&args[1]).try_into()?,
