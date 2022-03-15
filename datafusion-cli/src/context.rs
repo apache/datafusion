@@ -42,7 +42,7 @@ impl Context {
     }
 
     /// execute an SQL statement against the context
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
         match self {
             Context::Local(datafusion) => datafusion.sql(sql).await,
             Context::Remote(ballista) => ballista.sql(sql).await,
@@ -63,7 +63,7 @@ impl BallistaContext {
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
         Ok(Self(BallistaContext::remote(host, port, &config)))
     }
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
         self.0.sql(sql).await
     }
 }
@@ -78,7 +78,7 @@ impl BallistaContext {
                 .to_string(),
         ))
     }
-    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<DataFrame>> {
         unreachable!()
     }
 }
