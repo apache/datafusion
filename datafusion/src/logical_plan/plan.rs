@@ -357,7 +357,7 @@ pub enum LogicalPlan {
     CreateExternalTable(CreateExternalTable),
     /// Creates an in memory table.
     CreateMemoryTable(CreateMemoryTable),
-    /// Creates an in memory table.
+    /// Creates a new catalog schema.
     CreateCatalogSchema(CreateCatalogSchema),
     /// Drops a table.
     DropTable(DropTable),
