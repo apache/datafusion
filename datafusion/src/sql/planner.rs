@@ -1020,7 +1020,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                     table,
                                 }
                             }
-                            _ => panic!("invalid qualifier!"),
+                            _ => {
+                                return Err(DataFusionError::Plan(
+                                    "invalid qualified wildcard".to_string(),
+                                ))
+                            }
                         };
                         let table_provider =
                             self.schema_provider.get_table_provider(table_ref);
