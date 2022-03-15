@@ -229,7 +229,9 @@ pub enum Expr {
     /// Represents a reference to all fields in a schema.
     Wildcard,
     QualifiedWildcard {
-        qualifier: String,
+        catalog: Option<String>,
+        schema: Option<String>,
+        table: String,
     },
 }
 
@@ -515,7 +517,18 @@ impl fmt::Debug for Expr {
                 }
             }
             Expr::Wildcard => write!(f, "*"),
-            Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
+            Expr::QualifiedWildcard {
+                catalog,
+                schema,
+                table,
+            } => match (catalog, schema, table) {
+                (None, None, table) => write!(f, "{}.*", table),
+                (None, Some(schema), table) => write!(f, "{}.{}.*", schema, table),
+                (Some(catalog), Some(schema), table) => {
+                    write!(f, "{}.{}.{}.*", catalog, schema, table)
+                }
+                _ => panic!("invalid qualifier!"),
+            },
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }

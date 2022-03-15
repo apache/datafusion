@@ -73,3 +73,25 @@ async fn select_qualified_wildcard_join() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn select_non_alias_qualified_wildcard_join() -> Result<()> {
+    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let sql =
+        "SELECT t1.*, tb2.* FROM t1 tb1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id";
+    let expected = vec![
+        "+-------+---------+-------+---------+",
+        "| t1_id | t1_name | t2_id | t2_name |",
+        "+-------+---------+-------+---------+",
+        "| 11    | a       | 11    | z       |",
+        "| 22    | b       | 22    | y       |",
+        "| 44    | d       | 44    | x       |",
+        "+-------+---------+-------+---------+",
+    ];
+
+    let results = execute_to_batches(&mut ctx, sql).await;
+
+    assert_batches_eq!(expected, &results);
+
+    Ok(())
+}

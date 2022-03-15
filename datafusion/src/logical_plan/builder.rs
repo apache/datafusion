@@ -1091,18 +1091,23 @@ pub(crate) fn expand_wildcard(
 }
 
 pub(crate) fn expand_qualified_wildcard(
-    qualifier: &str,
+    table: &str,
+    table_provider: Option<Arc<dyn TableProvider>>,
     schema: &DFSchema,
     plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
-    let qualified_fields = schema
-        .fields_with_qualified(qualifier)
-        .into_iter()
-        .cloned()
-        .collect();
-    let qualifier_schema =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-    expand_wildcard(&qualifier_schema, plan)
+    if let Some(table_provider) = table_provider {
+        expand_wildcard(&table_provider.schema().to_dfschema()?, plan)
+    } else {
+        let qualified_fields = schema
+            .fields_with_qualified(table)
+            .into_iter()
+            .cloned()
+            .collect();
+        let qualifier_schema =
+            DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+        expand_wildcard(&qualifier_schema, plan)
+    }
 }
 
 #[cfg(test)]

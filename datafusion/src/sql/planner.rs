@@ -1003,8 +1003,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         expand_wildcard(input_schema, plan)?
                     }
-                    Expr::QualifiedWildcard { ref qualifier } => {
-                        expand_qualified_wildcard(qualifier, input_schema, plan)?
+                    Expr::QualifiedWildcard {
+                        catalog,
+                        schema,
+                        table,
+                    } => {
+                        let table_ref = match (&catalog, &schema, &table) {
+                            (None, None, table) => TableReference::Bare { table },
+                            (None, Some(schema), table) => {
+                                TableReference::Partial { schema, table }
+                            }
+                            (Some(catalog), Some(schema), table) => {
+                                TableReference::Full {
+                                    catalog,
+                                    schema,
+                                    table,
+                                }
+                            }
+                            _ => panic!("invalid qualifier!"),
+                        };
+                        let table_provider =
+                            self.schema_provider.get_table_provider(table_ref);
+                        expand_qualified_wildcard(
+                            &table,
+                            table_provider,
+                            input_schema,
+                            plan,
+                        )?
                     }
                     _ => vec![normalize_col(expr, plan)?],
                 })
@@ -1208,8 +1233,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SelectItem::Wildcard => Ok(Expr::Wildcard),
             SelectItem::QualifiedWildcard(ref object_name) => {
                 let table_ref: TableReference = object_name.try_into()?;
+                let (catalog, schema, table) = match table_ref {
+                    TableReference::Bare { table } => (None, None, table),
+                    TableReference::Partial { schema, table } => {
+                        (None, Some(schema.to_string()), table)
+                    }
+                    TableReference::Full {
+                        catalog,
+                        schema,
+                        table,
+                    } => (Some(catalog.to_string()), Some(schema.to_string()), table),
+                };
                 Ok(Expr::QualifiedWildcard {
-                    qualifier: table_ref.table().to_string(),
+                    catalog,
+                    schema,
+                    table: table.to_string(),
                 })
             }
         }
