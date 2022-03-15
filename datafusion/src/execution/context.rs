@@ -53,11 +53,11 @@ use crate::catalog::{
     schema::{MemorySchemaProvider, SchemaProvider},
     ResolvedTableReference, TableReference,
 };
+use crate::dataframe::DataFrame;
 use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
-use crate::execution::dataframe_impl::DataFrameImpl;
 use crate::logical_plan::{
     CreateExternalTable, CreateMemoryTable, DropTable, FunctionRegistry, LogicalPlan,
     LogicalPlanBuilder, UNNAMED_TABLE,
@@ -79,6 +79,7 @@ use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
+use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
@@ -87,7 +88,6 @@ use crate::sql::{
     planner::{ContextProvider, SqlToRel},
 };
 use crate::variable::{VarProvider, VarType};
-use crate::{dataframe::DataFrame, physical_plan::udaf::AggregateUDF};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
@@ -206,7 +206,7 @@ impl ExecutionContext {
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
             LogicalPlan::CreateExternalTable(CreateExternalTable {
@@ -254,12 +254,12 @@ impl ExecutionContext {
                 self.register_listing_table(name, location, options, provided_schema)
                     .await?;
                 let plan = LogicalPlanBuilder::empty(false).build()?;
-                Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
             }
 
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, input }) => {
                 let plan = self.optimize(&input)?;
-                let physical = Arc::new(DataFrameImpl::new(self.state.clone(), &plan));
+                let physical = Arc::new(DataFrame::new(self.state.clone(), &plan));
 
                 let batches: Vec<_> = physical.collect_partitioned().await?;
                 let table = Arc::new(MemTable::try_new(
@@ -269,7 +269,7 @@ impl ExecutionContext {
                 self.register_table(name.as_str(), table)?;
 
                 let plan = LogicalPlanBuilder::empty(false).build()?;
-                Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
             }
 
             LogicalPlan::DropTable(DropTable {
@@ -283,11 +283,11 @@ impl ExecutionContext {
                     )))
                 } else {
                     let plan = LogicalPlanBuilder::empty(false).build()?;
-                    Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                    Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                 }
             }
 
-            plan => Ok(Arc::new(DataFrameImpl::new(
+            plan => Ok(Arc::new(DataFrame::new(
                 self.state.clone(),
                 &self.optimize(&plan)?,
             ))),
@@ -358,11 +358,11 @@ impl ExecutionContext {
         &mut self,
         uri: impl Into<String>,
         options: AvroReadOptions<'_>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
         let target_partitions = self.state.lock().config.target_partitions;
-        Ok(Arc::new(DataFrameImpl::new(
+        Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
                 object_store,
@@ -377,8 +377,8 @@ impl ExecutionContext {
     }
 
     /// Creates an empty DataFrame.
-    pub fn read_empty(&self) -> Result<Arc<dyn DataFrame>> {
-        Ok(Arc::new(DataFrameImpl::new(
+    pub fn read_empty(&self) -> Result<Arc<DataFrame>> {
+        Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::empty(true).build()?,
         )))
@@ -389,11 +389,11 @@ impl ExecutionContext {
         &mut self,
         uri: impl Into<String>,
         options: CsvReadOptions<'_>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
         let target_partitions = self.state.lock().config.target_partitions;
-        Ok(Arc::new(DataFrameImpl::new(
+        Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_csv(
                 object_store,
@@ -411,7 +411,7 @@ impl ExecutionContext {
     pub async fn read_parquet(
         &mut self,
         uri: impl Into<String>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.object_store(&uri)?;
         let target_partitions = self.state.lock().config.target_partitions;
@@ -419,18 +419,15 @@ impl ExecutionContext {
             LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
                 .await?
                 .build()?;
-        Ok(Arc::new(DataFrameImpl::new(
-            self.state.clone(),
-            &logical_plan,
-        )))
+        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.
     pub fn read_table(
         &mut self,
         provider: Arc<dyn TableProvider>,
-    ) -> Result<Arc<dyn DataFrame>> {
-        Ok(Arc::new(DataFrameImpl::new(
+    ) -> Result<Arc<DataFrame>> {
+        Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
         )))
@@ -622,7 +619,7 @@ impl ExecutionContext {
     pub fn table<'a>(
         &self,
         table_ref: impl Into<TableReference<'a>>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    ) -> Result<Arc<DataFrame>> {
         let table_ref = table_ref.into();
         let schema = self.state.lock().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
@@ -633,7 +630,7 @@ impl ExecutionContext {
                     None,
                 )?
                 .build()?;
-                Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
             }
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
@@ -2626,7 +2623,7 @@ mod tests {
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
-        // Note capitalizaton
+        // Note capitalization
         let my_avg = create_udaf(
             "MY_AVG",
             DataType::Float64,
@@ -3188,28 +3185,28 @@ mod tests {
     // See https://github.com/apache/arrow-datafusion/issues/1154
     #[async_trait]
     trait CallReadTrait {
-        async fn call_read_csv(&self) -> Arc<dyn DataFrame>;
-        async fn call_read_avro(&self) -> Arc<dyn DataFrame>;
-        async fn call_read_parquet(&self) -> Arc<dyn DataFrame>;
+        async fn call_read_csv(&self) -> Arc<DataFrame>;
+        async fn call_read_avro(&self) -> Arc<DataFrame>;
+        async fn call_read_parquet(&self) -> Arc<DataFrame>;
     }
 
     struct CallRead {}
 
     #[async_trait]
     impl CallReadTrait for CallRead {
-        async fn call_read_csv(&self) -> Arc<dyn DataFrame> {
+        async fn call_read_csv(&self) -> Arc<DataFrame> {
             let mut ctx = ExecutionContext::new();
             ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
         }
 
-        async fn call_read_avro(&self) -> Arc<dyn DataFrame> {
+        async fn call_read_avro(&self) -> Arc<DataFrame> {
             let mut ctx = ExecutionContext::new();
             ctx.read_avro("dummy", AvroReadOptions::default())
                 .await
                 .unwrap()
         }
 
-        async fn call_read_parquet(&self) -> Arc<dyn DataFrame> {
+        async fn call_read_parquet(&self) -> Arc<DataFrame> {
             let mut ctx = ExecutionContext::new();
             ctx.read_parquet("dummy").await.unwrap()
         }

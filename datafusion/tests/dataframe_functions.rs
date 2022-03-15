@@ -35,7 +35,7 @@ use datafusion::execution::context::ExecutionContext;
 
 use datafusion::assert_batches_eq;
 
-fn create_test_table() -> Result<Arc<dyn DataFrame>> {
+fn create_test_table() -> Result<Arc<DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
