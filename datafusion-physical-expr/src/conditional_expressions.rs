@@ -32,29 +32,6 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         )));
     }
 
-    // let (lhs, rhs) = (&args[0], &args[1]);
-    //
-    // match (lhs, rhs) {
-    //     (ColumnarValue::Array(lhs), ColumnarValue::Scalar(rhs)) => {
-    //         let cond_array = binary_array_op_scalar!(lhs, rhs.clone(), eq).unwrap()?;
-    //
-    //         let array = primitive_bool_array_op!(lhs, *cond_array, nullif)?;
-    //
-    //         Ok(ColumnarValue::Array(array))
-    //     }
-    //     (ColumnarValue::Array(lhs), ColumnarValue::Array(rhs)) => {
-    //         // Get args0 == args1 evaluated and produce a boolean array
-    //         let cond_array = binary_array_op!(lhs, rhs, eq)?;
-    //
-    //         // Now, invoke nullif on the result
-    //         let array = primitive_bool_array_op!(lhs, *cond_array, nullif)?;
-    //         Ok(ColumnarValue::Array(array))
-    //     }
-    //     _ => Err(DataFusionError::NotImplemented(
-    //         "coalesce does not support a literal as first argument".to_string(),
-    //     )),
-    // }
-
     let mut res = vec![];
     let size = match args[0] {
         ColumnarValue::Array(ref a) => a.len(),
