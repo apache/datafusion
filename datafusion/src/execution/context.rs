@@ -304,13 +304,13 @@ impl ExecutionContext {
                 match (if_not_exists, schema) {
                     (true, Some(_)) => {
                         let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (true, None) | (false, None) => {
                         let schema = Arc::new(MemorySchemaProvider::new());
                         catalog.register_schema(&schema_name, schema);
                         let plan = LogicalPlanBuilder::empty(false).build()?;
-                        Ok(Arc::new(DataFrameImpl::new(self.state.clone(), &plan)))
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
                         "Schema '{:?}' already exists",
