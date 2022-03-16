@@ -65,6 +65,7 @@ impl ExecutorManager {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn get_alive_executors_within_one_minute(&self) -> HashSet<String> {
         let now_epoch_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -116,6 +117,7 @@ impl ExecutorManager {
     /// 1. firstly alive
     /// 2. secondly available task slots > 0
     #[cfg(not(test))]
+    #[allow(dead_code)]
     pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
         let mut res = {
             let alive_executors = self.get_alive_executors_within_one_minute();
@@ -133,6 +135,7 @@ impl ExecutorManager {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
         let mut res: Vec<ExecutorData> =
             self.executors_data.read().values().cloned().collect();

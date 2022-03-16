@@ -53,6 +53,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         }
     }
 
+    #[allow(unused_variables)]
     async fn offer_resources(&self, n: u32) -> Result<Option<SchedulerServerEvent>> {
         let mut available_executors =
             self.state.executor_manager.get_available_executors_data();
@@ -93,6 +94,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         Ok(None)
     }
 
+    #[allow(dead_code)]
     async fn launch_tasks(
         &self,
         executors: &[ExecutorDataChange],
