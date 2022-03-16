@@ -265,6 +265,7 @@ nary_scalar_expr!(RegexpMatch, regexp_match);
 nary_scalar_expr!(Btrim, btrim);
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
+nary_scalar_expr!(Concat, concat_expr);
 nary_scalar_expr!(Now, now_expr);
 
 // date functions

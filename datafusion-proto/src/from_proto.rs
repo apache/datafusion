@@ -20,11 +20,11 @@ use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
     logical_plan::{
-        abs, ascii, atan, ceil, character_length, chr, concat_ws_expr, cos, digest, exp,
-        floor, left, ln, log10, log2, now_expr, random, regexp_replace, repeat, replace,
-        reverse, right, round, signum, sin, split_part, sqrt, starts_with, strpos,
-        substr, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-        to_timestamp_seconds, translate, trunc,
+        abs, acos, ascii, asin, atan, ceil, character_length, chr, concat_expr,
+        concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, random,
+        regexp_replace, repeat, replace, reverse, right, round, signum, sin, split_part,
+        sqrt, starts_with, strpos, substr, tan, to_hex, to_timestamp_micros,
+        to_timestamp_millis, to_timestamp_seconds, translate, trunc,
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
     },
@@ -33,8 +33,8 @@ use datafusion::{
         window_functions::BuiltInWindowFunction,
     },
     prelude::{
-        btrim, date_part, date_trunc, lower, lpad, ltrim, octet_length, regexp_match,
-        rpad, rtrim, sha224, sha256, sha384, sha512, trim, upper,
+        array, btrim, date_part, date_trunc, lower, lpad, ltrim, md5, octet_length,
+        regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim, upper,
     },
     scalar::ScalarValue,
 };
@@ -1004,6 +1004,14 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                 let args = &expr.args;
 
                 match scalar_function {
+                    ScalarFunction::Asin => Ok(asin((&args[0]).try_into()?)),
+                    ScalarFunction::Acos => Ok(acos((&args[0]).try_into()?)),
+                    ScalarFunction::Array => Ok(array(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
                     ScalarFunction::Sqrt => Ok(sqrt((&args[0]).try_into()?)),
                     ScalarFunction::Sin => Ok(sin((&args[0]).try_into()?)),
                     ScalarFunction::Cos => Ok(cos((&args[0]).try_into()?)),
@@ -1037,6 +1045,7 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     ScalarFunction::Sha256 => Ok(sha256((&args[0]).try_into()?)),
                     ScalarFunction::Sha384 => Ok(sha384((&args[0]).try_into()?)),
                     ScalarFunction::Sha512 => Ok(sha512((&args[0]).try_into()?)),
+                    ScalarFunction::Md5 => Ok(md5((&args[0]).try_into()?)),
                     ScalarFunction::Digest => {
                         Ok(digest((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
@@ -1063,6 +1072,12 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     ScalarFunction::Right => {
                         Ok(right((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
+                    ScalarFunction::Concat => Ok(concat_expr(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
                     ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
                         args.to_owned()
                             .iter()
