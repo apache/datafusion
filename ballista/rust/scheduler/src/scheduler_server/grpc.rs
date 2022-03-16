@@ -17,6 +17,7 @@
 
 use anyhow::Context;
 use ballista_core::config::TaskSchedulingPolicy;
+use ballista_core::error::BallistaError;
 use ballista_core::serde::protobuf::execute_query_params::Query;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::protobuf::executor_registration::OptionalHost;
@@ -40,6 +41,7 @@ use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::convert::TryInto;
 use std::sync::Arc;
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 
@@ -356,9 +358,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             // Generate job id.
             // TODO Maybe the format will be changed in the future
             let job_id = generate_job_id();
+            let state = self.state.clone();
+            let query_stage_event_sender =
+                self.query_stage_event_loop.get_sender().map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Could not get query stage event sender due to: {}",
+                        e
+                    ))
+                })?;
 
             // Save placeholder job metadata
-            self.state
+            state
                 .save_job_metadata(
                     &job_id,
                     &JobStatus {
@@ -370,19 +380,55 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     tonic::Status::internal(format!("Could not save job metadata: {}", e))
                 })?;
 
-            match self
-                .post_stage_event(QueryStageSchedulerEvent::JobSubmitted(
-                    job_id.clone(),
-                    Box::new(plan),
-                ))
+            let job_id_spawn = job_id.clone();
+            let ctx = self.ctx.read().await.clone();
+            tokio::spawn(async move {
+                if let Err(e) = async {
+                    // create physical plan
+                    let start = Instant::now();
+                    let plan = async {
+                        let optimized_plan = ctx.optimize(&plan).map_err(|e| {
+                            let msg =
+                                format!("Could not create optimized logical plan: {}", e);
+                            error!("{}", msg);
+
+                            BallistaError::General(msg)
+                        })?;
+
+                        debug!("Calculated optimized plan: {:?}", optimized_plan);
+
+                        ctx.create_physical_plan(&optimized_plan)
+                            .await
+                            .map_err(|e| {
+                                let msg =
+                                    format!("Could not create physical plan: {}", e);
+                                error!("{}", msg);
+
+                                BallistaError::General(msg)
+                            })
+                    }
+                    .await?;
+                    info!(
+                        "DataFusion created physical plan in {} milliseconds",
+                        start.elapsed().as_millis()
+                    );
+
+                    query_stage_event_sender
+                        .post_event(QueryStageSchedulerEvent::JobSubmitted(
+                            job_id_spawn.clone(),
+                            plan,
+                        ))
+                        .await?;
+
+                    Ok::<(), BallistaError>(())
+                }
                 .await
-            {
-                Err(error) => {
-                    let msg = format!("Job {} failed due to {}", job_id, error);
+                {
+                    let msg = format!("Job {} failed due to {}", job_id_spawn, e);
                     warn!("{}", msg);
-                    self.state
+                    state
                         .save_job_metadata(
-                            &job_id,
+                            &job_id_spawn,
                             &JobStatus {
                                 status: Some(job_status::Status::Failed(FailedJob {
                                     error: msg.to_string(),
@@ -390,11 +436,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                             },
                         )
                         .await
-                        .unwrap();
-                    return Err(tonic::Status::internal(msg));
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "Fail to update job status to failed for {}",
+                                job_id_spawn
+                            )
+                        });
                 }
-                Ok(_) => Ok(Response::new(ExecuteQueryResult { job_id })),
-            }
+            });
+
+            Ok(Response::new(ExecuteQueryResult { job_id }))
         } else {
             Err(tonic::Status::internal("Error parsing request"))
         }

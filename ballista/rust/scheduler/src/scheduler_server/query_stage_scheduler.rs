@@ -17,12 +17,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use log::{debug, error, info, warn};
-use tokio::sync::RwLock;
 
 use ballista_core::error::{BallistaError, Result};
 
@@ -34,9 +32,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::scheduler::{ExecutorMetadata, PartitionStats};
 use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan};
-use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
 
 use crate::planner::{
     find_unresolved_shuffles, remove_unresolved_shuffles, DistributedPlanner,
@@ -48,54 +44,19 @@ pub(crate) struct QueryStageScheduler<
     T: 'static + AsLogicalPlan,
     U: 'static + AsExecutionPlan,
 > {
-    ctx: Arc<RwLock<SessionContext>>,
     state: Arc<SchedulerState<T, U>>,
     event_sender: Option<EventSender<SchedulerServerEvent>>,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageScheduler<T, U> {
     pub(crate) fn new(
-        ctx: Arc<RwLock<SessionContext>>,
         state: Arc<SchedulerState<T, U>>,
         event_sender: Option<EventSender<SchedulerServerEvent>>,
     ) -> Self {
         Self {
-            ctx,
             state,
             event_sender,
         }
-    }
-
-    async fn create_physical_plan(
-        &self,
-        plan: Box<LogicalPlan>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let start = Instant::now();
-
-        let ctx = self.ctx.read().await.clone();
-        let optimized_plan = ctx.optimize(plan.as_ref()).map_err(|e| {
-            let msg = format!("Could not create optimized logical plan: {}", e);
-            error!("{}", msg);
-            BallistaError::General(msg)
-        })?;
-
-        debug!("Calculated optimized plan: {:?}", optimized_plan);
-
-        let plan = ctx
-            .create_physical_plan(&optimized_plan)
-            .await
-            .map_err(|e| {
-                let msg = format!("Could not create physical plan: {}", e);
-                error!("{}", msg);
-                BallistaError::General(msg)
-            });
-
-        info!(
-            "DataFusion created physical plan in {} milliseconds",
-            start.elapsed().as_millis()
-        );
-
-        plan
     }
 
     async fn generate_stages(
@@ -369,20 +330,41 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         match event {
             QueryStageSchedulerEvent::JobSubmitted(job_id, plan) => {
                 info!("Job {} submitted", job_id);
-                let plan = self.create_physical_plan(plan).await?;
-                if let Err(e) = self
-                    .state
-                    .save_job_metadata(
-                        &job_id,
-                        &JobStatus {
-                            status: Some(job_status::Status::Running(RunningJob {})),
-                        },
-                    )
-                    .await
-                {
-                    warn!("Could not update job {} status to running: {}", job_id, e);
+                match self.generate_stages(&job_id, plan).await {
+                    Err(e) => {
+                        let msg = format!("Job {} failed due to {}", job_id, e);
+                        warn!("{}", msg);
+                        self.state
+                            .save_job_metadata(
+                                &job_id,
+                                &JobStatus {
+                                    status: Some(job_status::Status::Failed(FailedJob {
+                                        error: msg.to_string(),
+                                    })),
+                                },
+                            )
+                            .await?;
+                    }
+                    Ok(()) => {
+                        if let Err(e) = self
+                            .state
+                            .save_job_metadata(
+                                &job_id,
+                                &JobStatus {
+                                    status: Some(job_status::Status::Running(
+                                        RunningJob {},
+                                    )),
+                                },
+                            )
+                            .await
+                        {
+                            warn!(
+                                "Could not update job {} status to running: {}",
+                                job_id, e
+                            );
+                        }
+                    }
                 }
-                self.generate_stages(&job_id, plan).await?;
             }
             QueryStageSchedulerEvent::StageFinished(job_id, stage_id) => {
                 info!("Job stage {}/{} finished", job_id, stage_id);

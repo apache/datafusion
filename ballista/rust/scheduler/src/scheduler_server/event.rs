@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::logical_plan::LogicalPlan;
+use datafusion::physical_plan::ExecutionPlan;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) enum SchedulerServerEvent {
@@ -25,7 +26,7 @@ pub(crate) enum SchedulerServerEvent {
 
 #[derive(Clone)]
 pub enum QueryStageSchedulerEvent {
-    JobSubmitted(String, Box<LogicalPlan>),
+    JobSubmitted(String, Arc<dyn ExecutionPlan>),
     StageFinished(String, u32),
     JobFinished(String),
     JobFailed(String, u32, String),

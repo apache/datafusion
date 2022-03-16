@@ -102,7 +102,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                 (None, None)
             };
         let query_stage_scheduler =
-            Arc::new(QueryStageScheduler::new(ctx.clone(), state.clone(), None));
+            Arc::new(QueryStageScheduler::new(state.clone(), None));
         let query_stage_event_loop =
             EventLoop::new("query_stage".to_owned(), 10000, query_stage_scheduler);
         Self {
@@ -132,7 +132,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                 event_loop.start()?;
 
                 let query_stage_scheduler = Arc::new(QueryStageScheduler::new(
-                    self.ctx.clone(),
                     self.state.clone(),
                     Some(event_loop.get_sender()?),
                 ));
@@ -195,7 +194,7 @@ mod test {
     use tokio::sync::RwLock;
 
     use ballista_core::config::TaskSchedulingPolicy;
-    use ballista_core::error::Result;
+    use ballista_core::error::{BallistaError, Result};
     use ballista_core::execution_plans::ShuffleWriterExec;
     use ballista_core::serde::protobuf::{
         job_status, task_status, CompletedTask, LogicalPlanNode, PartitionId,
@@ -254,6 +253,26 @@ mod test {
             }
         }
 
+        let plan = async {
+            let ctx = scheduler.ctx.read().await.clone();
+            let optimized_plan = ctx.optimize(&plan_of_linear_stages).map_err(|e| {
+                BallistaError::General(format!(
+                    "Could not create optimized logical plan: {}",
+                    e
+                ))
+            })?;
+
+            ctx.create_physical_plan(&optimized_plan)
+                .await
+                .map_err(|e| {
+                    BallistaError::General(format!(
+                        "Could not create physical plan: {}",
+                        e
+                    ))
+                })
+        }
+        .await?;
+
         let job_id = "job";
 
         {
@@ -261,7 +280,7 @@ mod test {
             scheduler
                 .post_stage_event(QueryStageSchedulerEvent::JobSubmitted(
                     job_id.to_owned(),
-                    Box::new(plan_of_linear_stages),
+                    plan,
                 ))
                 .await?;
 
