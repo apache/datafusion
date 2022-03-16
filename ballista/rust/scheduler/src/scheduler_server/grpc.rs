@@ -31,7 +31,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
 use ballista_core::serde::scheduler::{
-    ExecutorData, ExecutorDeltaData, ExecutorMetadata,
+    ExecutorData, ExecutorDataChange, ExecutorMetadata,
 };
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
@@ -294,7 +294,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             }
 
             if let Some(executor_data) = self.state.get_executor_data(&executor_id) {
-                self.state.update_executor_data(&ExecutorDeltaData {
+                self.state.update_executor_data(&ExecutorDataChange {
                     executor_id: executor_data.executor_id,
                     task_slots: num_tasks as i32,
                 });

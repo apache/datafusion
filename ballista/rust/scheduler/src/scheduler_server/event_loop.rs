@@ -24,7 +24,7 @@ use log::{debug, warn};
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop::EventAction;
 use ballista_core::serde::protobuf::{LaunchTaskParams, TaskDefinition};
-use ballista_core::serde::scheduler::ExecutorDeltaData;
+use ballista_core::serde::scheduler::ExecutorDataChange;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 
 use crate::scheduler_server::ExecutorsClient;
@@ -70,9 +70,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             return Ok(Some(SchedulerServerEvent::JobSubmitted(job_id)));
         }
 
-        let mut executors_delta_data: Vec<ExecutorDeltaData> = available_executors
+        let mut executors_data_change: Vec<ExecutorDataChange> = available_executors
             .iter()
-            .map(|executor_data| ExecutorDeltaData {
+            .map(|executor_data| ExecutorDataChange {
                 executor_id: executor_data.executor_id.clone(),
                 task_slots: executor_data.available_task_slots as i32,
             })
@@ -82,16 +82,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .state
             .fetch_tasks(&mut available_executors, &job_id)
             .await?;
-        for (delta_data, data) in executors_delta_data
+        for (data_change, data) in executors_data_change
             .iter_mut()
             .zip(available_executors.iter())
         {
-            delta_data.task_slots =
-                data.available_task_slots as i32 - delta_data.task_slots;
+            data_change.task_slots =
+                data.available_task_slots as i32 - data_change.task_slots;
         }
 
         if num_tasks > 0 {
-            self.launch_tasks(&executors_delta_data, tasks_assigment)
+            self.launch_tasks(&executors_data_change, tasks_assigment)
                 .await?;
         }
 
@@ -100,12 +100,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
     async fn launch_tasks(
         &self,
-        executors: &[ExecutorDeltaData],
+        executors: &[ExecutorDataChange],
         tasks_assigment: Vec<Vec<TaskDefinition>>,
     ) -> Result<()> {
         for (idx_executor, tasks) in tasks_assigment.into_iter().enumerate() {
             if !tasks.is_empty() {
-                let executor_delta_data = &executors[idx_executor];
+                let executor_data_change = &executors[idx_executor];
                 debug!(
                     "Start to launch tasks {:?} to executor {:?}",
                     tasks
@@ -123,17 +123,17 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                             }
                         })
                         .collect::<Vec<String>>(),
-                    executor_delta_data.executor_id
+                    executor_data_change.executor_id
                 );
                 let mut client = {
                     let clients = self.executors_client.read().await;
                     clients
-                        .get(&executor_delta_data.executor_id)
+                        .get(&executor_data_change.executor_id)
                         .unwrap()
                         .clone()
                 };
                 // Update the resources first
-                self.state.update_executor_data(executor_delta_data);
+                self.state.update_executor_data(executor_data_change);
                 // TODO check whether launching task is successful or not
                 client.launch_task(LaunchTaskParams { task: tasks }).await?;
             } else {

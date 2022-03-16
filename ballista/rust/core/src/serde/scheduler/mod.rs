@@ -147,7 +147,7 @@ pub struct ExecutorData {
     pub available_task_slots: u32,
 }
 
-pub struct ExecutorDeltaData {
+pub struct ExecutorDataChange {
     pub executor_id: String,
     pub task_slots: i32,
 }
