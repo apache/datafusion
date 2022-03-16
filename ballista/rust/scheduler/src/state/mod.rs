@@ -32,7 +32,7 @@ use ballista_core::serde::protobuf::{
     FailedTask, JobStatus, RunningJob, RunningTask, TaskStatus,
 };
 use ballista_core::serde::scheduler::{
-    ExecutorData, ExecutorMetadata, PartitionId, PartitionStats,
+    ExecutorData, ExecutorDataChange, ExecutorMetadata, PartitionId, PartitionStats,
 };
 use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::prelude::ExecutionContext;
@@ -225,6 +225,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
 
     pub fn save_executor_data(&self, executor_data: ExecutorData) {
         self.in_memory_state.save_executor_data(executor_data);
+    }
+
+    pub fn update_executor_data(&self, executor_data_change: &ExecutorDataChange) {
+        self.in_memory_state
+            .update_executor_data(executor_data_change);
     }
 
     pub fn get_available_executors_data(&self) -> Vec<ExecutorData> {

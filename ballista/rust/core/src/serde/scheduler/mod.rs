@@ -147,6 +147,11 @@ pub struct ExecutorData {
     pub available_task_slots: u32,
 }
 
+pub struct ExecutorDataChange {
+    pub executor_id: String,
+    pub task_slots: i32,
+}
+
 struct ExecutorResourcePair {
     total: protobuf::executor_resource::Resource,
     available: protobuf::executor_resource::Resource,
