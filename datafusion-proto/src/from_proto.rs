@@ -16,15 +16,15 @@
 // under the License.
 
 use crate::protobuf;
-use datafusion::logical_plan::concat_ws_expr;
-use datafusion::prelude::{btrim, lpad, regexp_match, regexp_replace, rpad};
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
     logical_plan::{
-        abs, ascii, atan, ceil, character_length, chr, cos, digest, exp, floor, left, ln,
-        log10, log2, now, random, repeat, replace, reverse, right, round, signum, sin,
-        split_part, sqrt, starts_with, strpos, substr, tan, to_hex, translate, trunc,
+        abs, ascii, atan, ceil, character_length, chr, concat_ws_expr, cos, digest, exp,
+        floor, left, ln, log10, log2, now_expr, random, regexp_replace, repeat, replace,
+        reverse, right, round, signum, sin, split_part, sqrt, starts_with, strpos,
+        substr, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
+        to_timestamp_seconds, translate, trunc,
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
     },
@@ -33,8 +33,8 @@ use datafusion::{
         window_functions::BuiltInWindowFunction,
     },
     prelude::{
-        date_part, date_trunc, lower, ltrim, octet_length, rtrim, sha224, sha256, sha384,
-        sha512, trim, upper,
+        btrim, date_part, date_trunc, lower, lpad, ltrim, octet_length, regexp_match,
+        rpad, rtrim, sha224, sha256, sha384, sha512, trim, upper,
     },
     scalar::ScalarValue,
 };
@@ -1114,11 +1114,21 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                         Ok(substr((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }
                     ScalarFunction::ToHex => Ok(to_hex((&args[0]).try_into()?)),
-                    //issue: https://github.com/apache/arrow-datafusion/issues/2010
-                    //ScalarFunction::ToTimestampMillis =>
-                    //ScalarFunction::ToTimestampMicros =>
-                    //ScalarFunction::ToTimestampSeconds =>
-                    ScalarFunction::Now => Ok(now((&args[0]).try_into()?)),
+                    ScalarFunction::ToTimestampMillis => {
+                        Ok(to_timestamp_millis((&args[0]).try_into()?))
+                    }
+                    ScalarFunction::ToTimestampMicros => {
+                        Ok(to_timestamp_micros((&args[0]).try_into()?))
+                    }
+                    ScalarFunction::ToTimestampSeconds => {
+                        Ok(to_timestamp_seconds((&args[0]).try_into()?))
+                    }
+                    ScalarFunction::Now => Ok(now_expr(
+                        args.to_owned()
+                            .iter()
+                            .map(|e| e.try_into())
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )),
                     ScalarFunction::Translate => Ok(translate(
                         (&args[0]).try_into()?,
                         (&args[1]).try_into()?,

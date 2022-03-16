@@ -46,10 +46,11 @@ pub use expr::{
     columnize_expr, combine_filters, concat, concat_ws, concat_ws_expr, cos, count,
     count_distinct, create_udaf, create_udf, date_part, date_trunc, digest, exp,
     exprlist_to_fields, floor, in_list, initcap, left, length, lit, lit_timestamp_nano,
-    ln, log10, log2, lower, lpad, ltrim, max, md5, min, now, octet_length, or, random,
-    regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad, rtrim,
-    sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt, starts_with, strpos,
-    substr, sum, tan, to_hex, translate, trim, trunc, unalias, upper, when, Column, Expr,
+    ln, log10, log2, lower, lpad, ltrim, max, md5, min, now, now_expr, octet_length, or,
+    random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
+    rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt, starts_with,
+    strpos, substr, sum, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
+    to_timestamp_seconds, translate, trim, trunc, unalias, upper, when, Column, Expr,
     ExprSchema, Literal,
 };
 pub use expr_rewriter::{

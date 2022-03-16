@@ -265,10 +265,14 @@ nary_scalar_expr!(RegexpMatch, regexp_match);
 nary_scalar_expr!(Btrim, btrim);
 //there is a func concat_ws before, so use concat_ws_expr as name.c
 nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
+nary_scalar_expr!(Now, now_expr);
 
 // date functions
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
+scalar_expr!(ToTimestampMillis, to_timestamp_millis, date);
+scalar_expr!(ToTimestampMicros, to_timestamp_micros, date);
+scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date);
 
 /// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
