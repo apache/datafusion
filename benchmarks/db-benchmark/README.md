@@ -24,6 +24,6 @@
 Run the following from root `arrow-datafusion` directory
 
 ```bash
-$ docker buildx -t db-benchmark -f benchmarks/db-benchmark/db-benchmark.dockerfile .
+$ docker buildx build -t db-benchmark -f benchmarks/db-benchmark/db-benchmark.dockerfile .
 $ docker run --privileged db-benchmark
 ```
