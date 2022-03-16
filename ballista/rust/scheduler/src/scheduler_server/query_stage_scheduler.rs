@@ -19,12 +19,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use tokio::sync::RwLock;
 
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop::{EventAction, EventSender};
-use ballista_core::serde::protobuf::{PartitionId, TaskStatus};
+use ballista_core::serde::protobuf::{
+    job_status, JobStatus, PartitionId, RunningJob, TaskStatus,
+};
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
@@ -160,7 +162,20 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     ) -> Result<Option<QueryStageSchedulerEvent>> {
         match event {
             QueryStageSchedulerEvent::JobSubmitted(job_id, plan) => {
+                info!("Job {} submitted", job_id);
                 let plan = self.create_physical_plan(plan).await?;
+                if let Err(e) = self
+                    .state
+                    .save_job_metadata(
+                        &job_id,
+                        &JobStatus {
+                            status: Some(job_status::Status::Running(RunningJob {})),
+                        },
+                    )
+                    .await
+                {
+                    warn!("Could not update job {} status to running: {}", job_id, e);
+                }
                 self.generate_stages(&job_id, plan).await?;
 
                 if let Some(event_sender) = self.event_sender.as_ref() {

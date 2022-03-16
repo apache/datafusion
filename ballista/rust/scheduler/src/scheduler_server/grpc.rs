@@ -30,7 +30,9 @@ use ballista_core::serde::protobuf::{
     TaskDefinition, UpdateTaskStatusParams, UpdateTaskStatusResult,
 };
 use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata};
+use ballista_core::serde::scheduler::{
+    ExecutorData, ExecutorDataChange, ExecutorMetadata,
+};
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
@@ -290,9 +292,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     jobs.insert(task_id.job_id.clone());
                 }
             }
-            if let Some(mut executor_data) = self.state.get_executor_data(&executor_id) {
-                executor_data.available_task_slots += num_tasks as u32;
-                self.state.save_executor_data(executor_data);
+
+            if let Some(executor_data) = self.state.get_executor_data(&executor_id) {
+                self.state.update_executor_data(&ExecutorDataChange {
+                    executor_id: executor_data.executor_id,
+                    task_slots: num_tasks as i32,
+                });
             } else {
                 error!("Fail to get executor data for {:?}", &executor_id);
             }
