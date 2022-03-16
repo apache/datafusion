@@ -29,12 +29,12 @@ use datafusion::{
         DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream,
         Statistics,
     },
-    prelude::ExecutionContext,
+    prelude::SessionContext,
     scalar::ScalarValue,
 };
 
 use async_trait::async_trait;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::TaskContext;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan
@@ -144,7 +144,7 @@ impl ExecutionPlan for StatisticsValidation {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
@@ -171,8 +171,8 @@ impl ExecutionPlan for StatisticsValidation {
     }
 }
 
-fn init_ctx(stats: Statistics, schema: Schema) -> Result<ExecutionContext> {
-    let mut ctx = ExecutionContext::new();
+fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
+    let mut ctx = SessionContext::new();
     let provider: Arc<dyn TableProvider> =
         Arc::new(StatisticsValidation::new(stats, Arc::new(schema)));
     ctx.register_table("stats_table", provider)?;

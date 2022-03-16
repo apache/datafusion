@@ -116,7 +116,7 @@ async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT length(c1) FROM test";
     let actual = execute(&mut ctx, sql).await;

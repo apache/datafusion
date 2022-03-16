@@ -44,7 +44,7 @@ Simple usage:
    import pyarrow
 
    # create a context
-   ctx = datafusion.ExecutionContext()
+   ctx = datafusion.SessionContext()
 
    # create a RecordBatch and a new DataFrame from it
    batch = pyarrow.RecordBatch.from_arrays(

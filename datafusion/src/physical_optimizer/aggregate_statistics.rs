@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::Schema;
 
-use crate::execution::context::ExecutionConfig;
+use crate::execution::context::SessionConfig;
 use crate::physical_plan::empty::EmptyExec;
 use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::projection::ProjectionExec;
@@ -48,7 +48,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        execution_config: &ExecutionConfig,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
@@ -84,10 +84,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                     Arc::new(EmptyExec::new(true, Arc::new(Schema::empty()))),
                 )?))
             } else {
-                optimize_children(self, plan, execution_config)
+                optimize_children(self, plan, config)
             }
         } else {
-            optimize_children(self, plan, execution_config)
+            optimize_children(self, plan, config)
         }
     }
 
@@ -259,7 +259,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
 
     use crate::error::Result;
-    use crate::execution::runtime_env::RuntimeEnv;
     use crate::logical_plan::Operator;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
@@ -267,6 +266,7 @@ mod tests {
     use crate::physical_plan::filter::FilterExec;
     use crate::physical_plan::hash_aggregate::HashAggregateExec;
     use crate::physical_plan::memory::MemoryExec;
+    use crate::prelude::SessionContext;
 
     /// Mock data using a MemoryExec which has an exact count statistic
     fn mock_data() -> Result<Arc<MemoryExec>> {
@@ -295,8 +295,9 @@ mod tests {
         plan: HashAggregateExec,
         nulls: bool,
     ) -> Result<()> {
-        let conf = ExecutionConfig::new();
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
+        let conf = session_ctx.state.lock().clone().config;
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
         let (col, count) = match nulls {
@@ -306,7 +307,7 @@ mod tests {
 
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
-        let result = common::collect(optimized.execute(0, runtime).await?).await?;
+        let result = common::collect(optimized.execute(0, task_ctx).await?).await?;
         assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
         assert_eq!(
             result[0]
@@ -473,7 +474,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let conf = ExecutionConfig::new();
+        let conf = SessionConfig::new();
         let optimized =
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
@@ -515,7 +516,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let conf = ExecutionConfig::new();
+        let conf = SessionConfig::new();
         let optimized =
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 

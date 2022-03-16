@@ -26,7 +26,7 @@
 //! ```
 
 pub use crate::dataframe::DataFrame;
-pub use crate::execution::context::{ExecutionConfig, ExecutionContext};
+pub use crate::execution::context::{SessionConfig, SessionContext};
 pub use crate::execution::options::AvroReadOptions;
 pub use crate::execution::options::{CsvReadOptions, NdJsonReadOptions};
 pub use crate::logical_plan::{

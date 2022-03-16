@@ -40,7 +40,7 @@ impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
     fn optimize(
         &self,
         plan: Arc<dyn crate::physical_plan::ExecutionPlan>,
-        config: &crate::execution::context::ExecutionConfig,
+        config: &crate::execution::context::SessionConfig,
     ) -> Result<Arc<dyn crate::physical_plan::ExecutionPlan>> {
         if plan.children().is_empty() {
             // leaf node, children cannot be replaced

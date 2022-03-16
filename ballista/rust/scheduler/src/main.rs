@@ -62,7 +62,7 @@ mod config {
 }
 
 use config::prelude::*;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 async fn start_server(
     config_backend: Arc<dyn StateBackendClient>,
@@ -85,13 +85,13 @@ async fn start_server(
                 config_backend.clone(),
                 namespace.clone(),
                 policy,
-                Arc::new(RwLock::new(ExecutionContext::new())),
+                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             ),
             _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
-                Arc::new(RwLock::new(ExecutionContext::new())),
+                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             ),
         };

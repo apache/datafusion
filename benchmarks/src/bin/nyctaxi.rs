@@ -26,7 +26,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::util::pretty;
 
 use datafusion::error::Result;
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use datafusion::execution::context::{SessionConfig, SessionContext};
 
 use datafusion::physical_plan::collect;
 use datafusion::prelude::CsvReadOptions;
@@ -69,10 +69,10 @@ async fn main() -> Result<()> {
     let opt = Opt::from_args();
     println!("Running benchmarks with the following options: {:?}", opt);
 
-    let config = ExecutionConfig::new()
+    let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
-    let mut ctx = ExecutionContext::with_config(config);
+    let mut ctx = SessionContext::with_config(config);
 
     let path = opt.path.to_str().unwrap();
 
@@ -93,7 +93,7 @@ async fn main() -> Result<()> {
 }
 
 async fn datafusion_sql_benchmarks(
-    ctx: &mut ExecutionContext,
+    ctx: &mut SessionContext,
     iterations: usize,
     debug: bool,
 ) -> Result<()> {
@@ -115,15 +115,15 @@ async fn datafusion_sql_benchmarks(
     Ok(())
 }
 
-async fn execute_sql(ctx: &mut ExecutionContext, sql: &str, debug: bool) -> Result<()> {
-    let runtime = ctx.state.lock().runtime_env.clone();
+async fn execute_sql(ctx: &SessionContext, sql: &str, debug: bool) -> Result<()> {
     let plan = ctx.create_logical_plan(sql)?;
     let plan = ctx.optimize(&plan)?;
     if debug {
         println!("Optimized logical plan:\n{:?}", plan);
     }
     let physical_plan = ctx.create_physical_plan(&plan).await?;
-    let result = collect(physical_plan, runtime).await?;
+    let task_ctx = ctx.task_ctx();
+    let result = collect(physical_plan, task_ctx).await?;
     if debug {
         pretty::print_batches(&result)?;
     }

@@ -19,11 +19,11 @@ use super::*;
 
 #[tokio::test]
 async fn test_sort_unprojected_col() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_alltypes_parquet(&mut ctx).await;
     // execute the query
     let sql = "SELECT id FROM alltypes_plain ORDER BY int_col, double_col";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+", "| id |", "+----+", "| 4  |", "| 6  |", "| 2  |", "| 0  |", "| 5  |",
         "| 7  |", "| 3  |", "| 1  |", "+----+",
@@ -34,10 +34,10 @@ async fn test_sort_unprojected_col() -> Result<()> {
 
 #[tokio::test]
 async fn test_order_by_agg_expr() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------------------+",
         "| MIN(aggregate_test_100.c12) |",
@@ -48,16 +48,16 @@ async fn test_order_by_agg_expr() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12) + 0.1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn test_nulls_first_asc() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----+--------+",
         "| num | letter |",
@@ -73,9 +73,9 @@ async fn test_nulls_first_asc() -> Result<()> {
 
 #[tokio::test]
 async fn test_nulls_first_desc() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----+--------+",
         "| num | letter |",
@@ -91,9 +91,9 @@ async fn test_nulls_first_desc() -> Result<()> {
 
 #[tokio::test]
 async fn test_specific_nulls_last_desc() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num DESC NULLS LAST";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----+--------+",
         "| num | letter |",
@@ -109,9 +109,9 @@ async fn test_specific_nulls_last_desc() -> Result<()> {
 
 #[tokio::test]
 async fn test_specific_nulls_first_asc() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT * FROM (VALUES (1, 'one'), (2, 'two'), (null, 'three')) AS t (num,letter) ORDER BY num ASC NULLS FIRST";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----+--------+",
         "| num | letter |",

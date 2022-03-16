@@ -41,7 +41,7 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 
 /// Limit execution plan
@@ -134,7 +134,7 @@ impl ExecutionPlan for GlobalLimitExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
@@ -152,7 +152,7 @@ impl ExecutionPlan for GlobalLimitExec {
         }
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let stream = self.input.execute(0, runtime).await?;
+        let stream = self.input.execute(0, context).await?;
         Ok(Box::pin(LimitStream::new(
             stream,
             self.limit,
@@ -285,10 +285,10 @@ impl ExecutionPlan for LocalLimitExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-        let stream = self.input.execute(partition, runtime).await?;
+        let stream = self.input.execute(partition, context).await?;
         Ok(Box::pin(LimitStream::new(
             stream,
             self.limit,
@@ -432,11 +432,13 @@ mod tests {
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
+    use crate::prelude::SessionContext;
     use crate::{test, test_util};
 
     #[tokio::test]
     async fn limit() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = test_util::aggr_test_schema();
 
         let num_partitions = 4;
@@ -464,7 +466,7 @@ mod tests {
             GlobalLimitExec::new(Arc::new(CoalescePartitionsExec::new(Arc::new(csv))), 7);
 
         // the result should contain 4 batches (one per input partition)
-        let iter = limit.execute(0, runtime).await?;
+        let iter = limit.execute(0, task_ctx).await?;
         let batches = common::collect(iter).await?;
 
         // there should be a total of 100 rows

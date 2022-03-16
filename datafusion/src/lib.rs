@@ -34,7 +34,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! // create the dataframe
 //! let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
@@ -73,7 +73,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let mut ctx = ExecutionContext::new();
+//! let mut ctx = SessionContext::new();
 //!
 //! ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 //!
@@ -111,7 +111,7 @@
 //! 3. The planner [`SqlToRel`](sql::planner::SqlToRel) converts logical nodes on the AST to a [`LogicalPlan`](logical_plan::LogicalPlan).
 //! 4. [`OptimizerRules`](optimizer::optimizer::OptimizerRule) are applied to the [`LogicalPlan`](logical_plan::LogicalPlan) to optimize it.
 //! 5. The [`LogicalPlan`](logical_plan::LogicalPlan) is converted to an [`ExecutionPlan`](physical_plan::ExecutionPlan) by a [`PhysicalPlanner`](physical_plan::PhysicalPlanner)
-//! 6. The [`ExecutionPlan`](physical_plan::ExecutionPlan) is executed against data through the [`ExecutionContext`](execution::context::ExecutionContext)
+//! 6. The [`ExecutionPlan`](physical_plan::ExecutionPlan) is executed against data through the [`SessionContext`](execution::context::SessionContext)
 //!
 //! With a [`DataFrame`](dataframe::DataFrame) API, steps 1-3 are not used as the DataFrame builds the [`LogicalPlan`](logical_plan::LogicalPlan) directly.
 //!
