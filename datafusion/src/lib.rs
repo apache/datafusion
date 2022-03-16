@@ -236,3 +236,9 @@ pub mod test_util;
 
 #[cfg(doctest)]
 doc_comment::doctest!("../../README.md", readme_example_test);
+
+#[cfg(doctest)]
+doc_comment::doctest!(
+    "../../docs/source/user-guide/example-usage.md",
+    user_guid_example_tests
+);
