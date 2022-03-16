@@ -23,7 +23,7 @@ use arrow::datatypes::{Schema, SchemaRef};
 
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::{
-    file_format::{avro::AvroFormat, csv::CsvFormat},
+    file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
     listing::ListingOptions,
 };
 
@@ -175,6 +175,20 @@ impl<'a> Default for NdJsonReadOptions<'a> {
             schema: None,
             schema_infer_max_records: 1000,
             file_extension: DEFAULT_JSON_EXTENSION,
+        }
+    }
+}
+
+impl<'a> NdJsonReadOptions<'a> {
+    /// Helper to convert these user facing options to `ListingTable` options
+    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+        let file_format = JsonFormat::default();
+        ListingOptions {
+            format: Arc::new(file_format),
+            collect_stat: false,
+            file_extension: self.file_extension.to_owned(),
+            target_partitions,
+            table_partition_cols: vec![],
         }
     }
 }

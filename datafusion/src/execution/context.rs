@@ -26,6 +26,7 @@ use crate::{
         file_format::{
             avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
             csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
+            json::{JsonFormat, DEFAULT_JSON_EXTENSION},
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
@@ -96,7 +97,7 @@ use uuid::Uuid;
 use super::{
     disk_manager::DiskManagerConfig,
     memory_manager::MemoryManagerConfig,
-    options::{AvroReadOptions, CsvReadOptions},
+    options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions},
     DiskManager, MemoryManager,
 };
 
@@ -223,24 +224,24 @@ impl SessionContext {
                 ref has_header,
             }) => {
                 let (file_format, file_extension) = match file_type {
-                    FileType::CSV => Ok((
+                    FileType::CSV => (
                         Arc::new(CsvFormat::default().with_has_header(*has_header))
                             as Arc<dyn FileFormat>,
                         DEFAULT_CSV_EXTENSION,
-                    )),
-                    FileType::Parquet => Ok((
+                    ),
+                    FileType::Parquet => (
                         Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
                         DEFAULT_PARQUET_EXTENSION,
-                    )),
-                    FileType::Avro => Ok((
+                    ),
+                    FileType::Avro => (
                         Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
                         DEFAULT_AVRO_EXTENSION,
-                    )),
-                    _ => Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported file type {:?}.",
-                        file_type
-                    ))),
-                }?;
+                    ),
+                    FileType::NdJson => (
+                        Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_JSON_EXTENSION,
+                    ),
+                };
 
                 let options = ListingOptions {
                     format: file_format,
@@ -359,7 +360,6 @@ impl SessionContext {
     }
 
     /// Creates a DataFrame for reading an Avro data source.
-
     pub async fn read_avro(
         &mut self,
         uri: impl Into<String>,
@@ -371,6 +371,29 @@ impl SessionContext {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
+                object_store,
+                path,
+                options,
+                None,
+                target_partitions,
+            )
+            .await?
+            .build()?,
+        )))
+    }
+
+    /// Creates a DataFrame for reading an Json data source.
+    pub async fn read_json(
+        &mut self,
+        uri: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
+    ) -> Result<Arc<DataFrame>> {
+        let uri: String = uri.into();
+        let (object_store, path) = self.object_store(&uri)?;
+        let target_partitions = self.state.lock().config.target_partitions;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_json(
                 object_store,
                 path,
                 options,
@@ -517,6 +540,22 @@ impl SessionContext {
         name: &str,
         uri: &str,
         options: AvroReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options =
+            options.to_listing_options(self.state.lock().config.target_partitions);
+
+        self.register_listing_table(name, uri, listing_options, options.schema)
+            .await?;
+        Ok(())
+    }
+
+    /// Registers a Json data source so that it can be referenced from SQL statements
+    /// executed against this context.
+    pub async fn register_json(
+        &mut self,
+        name: &str,
+        uri: &str,
+        options: NdJsonReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
             options.to_listing_options(self.state.lock().config.target_partitions);
