@@ -1169,7 +1169,7 @@ pub fn parse_expr(
             let scalar_fn = ctx
                 .state
                 .lock()
-                .get_function_meta(fun_name.as_str()).ok_or(Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
+                .get_function_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
 
             Ok(Expr::ScalarUDF {
                 fun: scalar_fn,
@@ -1183,7 +1183,7 @@ pub fn parse_expr(
             let agg_fn = ctx
                 .state
                 .lock()
-                .get_aggregate_meta(fun_name.as_str()).ok_or(Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
+                .get_aggregate_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
 
             Ok(Expr::AggregateUDF {
                 fun: agg_fn,
