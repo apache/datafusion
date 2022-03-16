@@ -17,6 +17,7 @@
 
 FROM ubuntu
 ARG DEBIAN_FRONTEND=noninteractive
+ARG TARGETPLATFORM
 
 RUN apt-get update && \
     apt-get install -y git build-essential
@@ -67,18 +68,29 @@ COPY . arrow-datafusion
 # 1. datafusion-python that builds from datafusion version referenced datafusion-python
 RUN cd datafusion-python \
     && maturin build --release \
-    && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_aarch64.whl \
+    && case "${TARGETPLATFORM}" in \
+    */amd64) CPUARCH=x86_64 ;; \
+    */arm64) CPUARCH=aarch64 ;; \
+    *) exit 1 ;; \
+    esac \
+    # Version will need to be updated in conjunction with datafusion-python version
+    && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_${CPUARCH}.whl \
     && cd ..
 
 # 2. datafusion-python that builds from local datafusion.  use this when making local changes to datafusion.
 # Currently, as of March 5th 2022, this done not build (i think) because datafusion is being split into multiple crates
 # and datafusion-python has not yet been updated to reflect this.
 # RUN cd datafusion-python \
-#     && sed -i '/datafusion =/c\datafusion = { path = "../arrow-datafusion/datafusion", features = ["pyarrow"] }' Cargo.toml \
-#     && sed -i '/fuzz-utils/d' ../arrow-datafusion/datafusion/Cargo.toml \
-#     && maturin build --release \
-#     && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_aarch64.whl \
-#     && cd ..
+# && sed -i '/datafusion =/c\datafusion = { path = "../arrow-datafusion/datafusion", features = ["pyarrow"] }' Cargo.toml \
+# && sed -i '/fuzz-utils/d' ../arrow-datafusion/datafusion/Cargo.toml \
+# && maturin build --release \
+# && case "${TARGETPLATFORM}" in \
+#     */amd64) CPUARCH=x86_64 ;; \
+#     */amd64) CPUARCH=aarch64 ;; \
+#     *) exit 1 ;; \
+# esac \
+# && python3 -m pip install target/wheels/datafusion-0.4.0-cp36-abi3-linux_${CPUARCH}.whl \
+# && cd ..
 
 # Make datafusion directory in db-benchmark
 RUN mkdir db-benchmark/datafusion \
