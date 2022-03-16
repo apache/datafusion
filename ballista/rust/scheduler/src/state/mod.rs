@@ -35,7 +35,7 @@ use ballista_core::serde::scheduler::{
     ExecutorData, ExecutorDataChange, ExecutorMetadata, PartitionId, PartitionStats,
 };
 use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec};
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 use super::planner::remove_unresolved_shuffles;
 
@@ -134,7 +134,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         ret
     }
 
-    pub async fn init(&self, ctx: &ExecutionContext) -> Result<()> {
+    pub async fn init(&self, ctx: &SessionContext) -> Result<()> {
         self.persistent_state.init(ctx).await?;
 
         Ok(())

@@ -259,7 +259,7 @@ mod test {
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use datafusion::prelude::ExecutionContext;
+    use datafusion::prelude::SessionContext;
 
     use ballista_core::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
     use std::sync::Arc;
@@ -574,7 +574,7 @@ order by
     fn roundtrip_operator(
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =

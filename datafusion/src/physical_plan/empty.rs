@@ -31,7 +31,7 @@ use arrow::record_batch::RecordBatch;
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 
 /// Execution plan for empty relation (produces no rows)
@@ -121,7 +121,7 @@ impl ExecutionPlan for EmptyExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // GlobalLimitExec has a single output partition
         if 0 != partition {
@@ -161,18 +161,20 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::SessionContext;
     use crate::{physical_plan::common, test_util};
 
     #[tokio::test]
     async fn empty() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = test_util::aggr_test_schema();
 
         let empty = EmptyExec::new(false, schema.clone());
         assert_eq!(empty.schema(), schema);
 
         // we should have no results
-        let iter = empty.execute(0, runtime).await?;
+        let iter = empty.execute(0, task_ctx).await?;
         let batches = common::collect(iter).await?;
         assert!(batches.is_empty());
 
@@ -201,23 +203,25 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_execute() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(false, schema);
 
         // ask for the wrong partition
-        assert!(empty.execute(1, runtime.clone()).await.is_err());
-        assert!(empty.execute(20, runtime.clone()).await.is_err());
+        assert!(empty.execute(1, task_ctx.clone()).await.is_err());
+        assert!(empty.execute(20, task_ctx).await.is_err());
         Ok(())
     }
 
     #[tokio::test]
     async fn produce_one_row() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = test_util::aggr_test_schema();
         let empty = EmptyExec::new(true, schema);
 
-        let iter = empty.execute(0, runtime).await?;
+        let iter = empty.execute(0, task_ctx).await?;
         let batches = common::collect(iter).await?;
 
         // should have one item

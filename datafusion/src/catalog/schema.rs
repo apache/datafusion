@@ -251,7 +251,7 @@ mod tests {
     };
     use crate::datasource::empty::EmptyTable;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::execution::context::ExecutionContext;
+    use crate::execution::context::SessionContext;
 
     use futures::StreamExt;
 
@@ -290,7 +290,7 @@ mod tests {
         let catalog = MemoryCatalogProvider::new();
         catalog.register_schema("active", Arc::new(schema));
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         ctx.register_catalog("cat", Arc::new(catalog));
 

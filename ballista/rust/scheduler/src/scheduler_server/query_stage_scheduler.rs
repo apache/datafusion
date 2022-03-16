@@ -30,7 +30,7 @@ use ballista_core::serde::protobuf::{
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 use crate::planner::DistributedPlanner;
 use crate::scheduler_server::event_loop::SchedulerServerEvent;
@@ -45,14 +45,14 @@ pub(crate) struct QueryStageScheduler<
     T: 'static + AsLogicalPlan,
     U: 'static + AsExecutionPlan,
 > {
-    ctx: Arc<RwLock<ExecutionContext>>,
+    ctx: Arc<RwLock<SessionContext>>,
     state: Arc<SchedulerState<T, U>>,
     event_sender: Option<EventSender<SchedulerServerEvent>>,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageScheduler<T, U> {
     pub(crate) fn new(
-        ctx: Arc<RwLock<ExecutionContext>>,
+        ctx: Arc<RwLock<SessionContext>>,
         state: Arc<SchedulerState<T, U>>,
         event_sender: Option<EventSender<SchedulerServerEvent>>,
     ) -> Self {

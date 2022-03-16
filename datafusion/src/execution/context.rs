@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! ExecutionContext contains methods for registering data sources and executing queries
+//! SessionContext contains methods for registering data sources and executing queries
 use crate::{
     catalog::{
         catalog::{CatalogList, MemoryCatalogList},
@@ -91,6 +91,7 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
+use uuid::Uuid;
 
 use super::{
     disk_manager::DiskManagerConfig,
@@ -99,8 +100,9 @@ use super::{
     DiskManager, MemoryManager,
 };
 
-/// ExecutionContext is the main interface for executing queries with DataFusion. The context
-/// provides the following functionality:
+/// SessionContext is the main interface for executing queries with DataFusion. It stands for
+/// the connection between user and DataFusion/Ballista cluster.
+/// The context provides the following functionality
 ///
 /// * Create DataFrame from a CSV or Parquet data source.
 /// * Register a CSV or Parquet data source as a table that can be referenced from a SQL query.
@@ -115,7 +117,7 @@ use super::{
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// let mut ctx = ExecutionContext::new();
+/// let mut ctx = SessionContext::new();
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
@@ -133,32 +135,34 @@ use super::{
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// let mut ctx = ExecutionContext::new();
+/// let mut ctx = SessionContext::new();
 /// ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 /// let results = ctx.sql("SELECT a, MIN(b) FROM example GROUP BY a LIMIT 100").await?;
 /// # Ok(())
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct ExecutionContext {
+pub struct SessionContext {
+    /// Uuid for the session
+    session_id: String,
     /// Internal state for the context
-    pub state: Arc<Mutex<ExecutionContextState>>,
+    pub state: Arc<Mutex<SessionState>>,
 }
 
-impl Default for ExecutionContext {
+impl Default for SessionContext {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ExecutionContext {
+impl SessionContext {
     /// Creates a new execution context using a default configuration.
     pub fn new() -> Self {
-        Self::with_config(ExecutionConfig::new())
+        Self::with_config(SessionConfig::new())
     }
 
-    /// Creates a new execution context using the provided configuration.
-    pub fn with_config(config: ExecutionConfig) -> Self {
+    /// Creates a new session context using the provided configuration.
+    pub fn with_config(config: SessionConfig) -> Self {
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
 
         if config.create_default_catalog_and_schema {
@@ -183,21 +187,23 @@ impl ExecutionContext {
         }
 
         let runtime_env = Arc::new(RuntimeEnv::new(config.runtime.clone()).unwrap());
-
+        let state = SessionState {
+            session_id: Uuid::new_v4().to_string(),
+            catalog_list,
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            config,
+            execution_props: ExecutionProps::new(),
+            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
+            runtime_env,
+        };
         Self {
-            state: Arc::new(Mutex::new(ExecutionContextState {
-                catalog_list,
-                scalar_functions: HashMap::new(),
-                aggregate_functions: HashMap::new(),
-                config,
-                execution_props: ExecutionProps::new(),
-                object_store_registry: Arc::new(ObjectStoreRegistry::new()),
-                runtime_env,
-            })),
+            session_id: state.session_id.clone(),
+            state: Arc::new(Mutex::new(state)),
         }
     }
 
-    /// Return the [RuntimeEnv] used to run queries with this [ExecutionContext]
+    /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.lock().runtime_env.clone()
     }
@@ -643,9 +649,9 @@ impl ExecutionContext {
     ///
     /// Use [`table`] to get a specific table.
     ///
-    /// [`table`]: ExecutionContext::table
+    /// [`table`]: SessionContext::table
     #[deprecated(
-        note = "Please use the catalog provider interface (`ExecutionContext::catalog`) to examine available catalogs, schemas, and tables"
+        note = "Please use the catalog provider interface (`SessionContext::catalog`) to examine available catalogs, schemas, and tables"
     )]
     pub fn tables(&self) -> Result<HashSet<String>> {
         Ok(self
@@ -753,15 +759,21 @@ impl ExecutionContext {
         trace!("Full Optimized logical plan:\n {:?}", plan);
         Ok(new_plan)
     }
-}
 
-impl From<Arc<Mutex<ExecutionContextState>>> for ExecutionContext {
-    fn from(state: Arc<Mutex<ExecutionContextState>>) -> Self {
-        ExecutionContext { state }
+    /// Get a new TaskContext to run in this session
+    pub fn task_ctx(&self) -> Arc<TaskContext> {
+        Arc::new(TaskContext::from(self))
     }
 }
 
-impl FunctionRegistry for ExecutionContext {
+impl From<Arc<Mutex<SessionState>>> for SessionContext {
+    fn from(state: Arc<Mutex<SessionState>>) -> Self {
+        let session_id = state.lock().session_id.clone();
+        SessionContext { session_id, state }
+    }
+}
+
+impl FunctionRegistry for SessionContext {
     fn udfs(&self) -> HashSet<String> {
         self.state.lock().udfs()
     }
@@ -782,7 +794,7 @@ pub trait QueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        ctx_state: &ExecutionContextState,
+        session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
@@ -795,16 +807,18 @@ impl QueryPlanner for DefaultQueryPlanner {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        ctx_state: &ExecutionContextState,
+        session_state: &SessionState,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = DefaultPhysicalPlanner::default();
-        planner.create_physical_plan(logical_plan, ctx_state).await
+        planner
+            .create_physical_plan(logical_plan, session_state)
+            .await
     }
 }
 
 /// Configuration options for execution context
 #[derive(Clone)]
-pub struct ExecutionConfig {
+pub struct SessionConfig {
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
     /// Responsible for optimizing a logical plan
@@ -837,7 +851,7 @@ pub struct ExecutionConfig {
     pub runtime: RuntimeConfig,
 }
 
-impl Default for ExecutionConfig {
+impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             target_partitions: num_cpus::get(),
@@ -878,7 +892,7 @@ impl Default for ExecutionConfig {
     }
 }
 
-impl ExecutionConfig {
+impl SessionConfig {
     /// Create an execution config with default setting
     pub fn new() -> Self {
         Default::default()
@@ -1105,7 +1119,9 @@ impl ExecutionProps {
 
 /// Execution context for registering data sources and executing queries
 #[derive(Clone)]
-pub struct ExecutionContextState {
+pub struct SessionState {
+    /// Uuid for the session
+    session_id: String,
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
@@ -1113,7 +1129,7 @@ pub struct ExecutionContextState {
     /// Aggregate functions registered in the context
     pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Context configuration
-    pub config: ExecutionConfig,
+    pub config: SessionConfig,
     /// Execution properties
     pub execution_props: ExecutionProps,
     /// Object Store that are registered with the context
@@ -1122,20 +1138,22 @@ pub struct ExecutionContextState {
     pub runtime_env: Arc<RuntimeEnv>,
 }
 
-impl Default for ExecutionContextState {
+impl Default for SessionState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ExecutionContextState {
-    /// Returns new ExecutionContextState
+impl SessionState {
+    /// Returns new SessionState
     pub fn new() -> Self {
-        ExecutionContextState {
+        let session_id = Uuid::new_v4().to_string();
+        SessionState {
+            session_id,
             catalog_list: Arc::new(MemoryCatalogList::new()),
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
-            config: ExecutionConfig::new(),
+            config: SessionConfig::new(),
             execution_props: ExecutionProps::new(),
             object_store_registry: Arc::new(ObjectStoreRegistry::new()),
             runtime_env: Arc::new(RuntimeEnv::default()),
@@ -1175,7 +1193,7 @@ impl ExecutionContextState {
     }
 }
 
-impl ContextProvider for ExecutionContextState {
+impl ContextProvider for SessionState {
     fn get_table_provider(&self, name: TableReference) -> Option<Arc<dyn TableProvider>> {
         let resolved_ref = self.resolve_table_ref(name);
         let schema = self.schema_for_ref(resolved_ref).ok()?;
@@ -1208,7 +1226,7 @@ impl ContextProvider for ExecutionContextState {
     }
 }
 
-impl FunctionRegistry for ExecutionContextState {
+impl FunctionRegistry for SessionState {
     fn udfs(&self) -> HashSet<String> {
         self.scalar_functions.keys().cloned().collect()
     }
@@ -1233,6 +1251,74 @@ impl FunctionRegistry for ExecutionContextState {
                 name
             ))
         })
+    }
+}
+
+/// Task Context Properties
+pub enum TaskProperties {
+    ///SessionConfig
+    SessionConfig(SessionConfig),
+    /// Name-value pairs of task properties
+    KVPairs(HashMap<String, String>),
+}
+
+/// Task Execution Context
+pub struct TaskContext {
+    /// Session Id
+    pub session_id: String,
+    /// Optional Task Identify
+    pub task_id: Option<String>,
+    /// Task settings
+    pub task_settings: TaskProperties,
+    /// Runtime environment associated with this task context
+    pub runtime: Arc<RuntimeEnv>,
+}
+
+impl TaskContext {
+    /// Create a new task context instance
+    pub fn new(
+        task_id: String,
+        session_id: String,
+        task_settings: HashMap<String, String>,
+        runtime: Arc<RuntimeEnv>,
+    ) -> Self {
+        Self {
+            task_id: Some(task_id),
+            session_id,
+            task_settings: TaskProperties::KVPairs(task_settings),
+            runtime,
+        }
+    }
+}
+
+/// Create a new task context instance from SessionContext
+impl From<&SessionContext> for TaskContext {
+    fn from(session: &SessionContext) -> Self {
+        let state_clone = session.state.lock().clone();
+        let session_id = session.session_id.clone();
+        let config = state_clone.config;
+        let runtime = session.runtime_env();
+        Self {
+            task_id: None,
+            session_id,
+            task_settings: TaskProperties::SessionConfig(config),
+            runtime,
+        }
+    }
+}
+
+/// Create a new task context instance from SessionState
+impl From<&SessionState> for TaskContext {
+    fn from(state: &SessionState) -> Self {
+        let session_id = state.session_id.clone();
+        let config = state.config.clone();
+        let runtime = state.runtime_env.clone();
+        Self {
+            task_id: None,
+            session_id,
+            task_settings: TaskProperties::SessionConfig(config),
+            runtime,
+        }
     }
 }
 
@@ -1271,16 +1357,16 @@ mod tests {
     async fn shared_memory_and_disk_manager() {
         // Demonstrate the ability to share DiskManager and
         // MemoryManager between two different executions.
-        let ctx1 = ExecutionContext::new();
+        let ctx1 = SessionContext::new();
 
         // configure with same memory / disk manager
         let memory_manager = ctx1.runtime_env().memory_manager.clone();
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
-        let config = ExecutionConfig::new()
+        let config = SessionConfig::new()
             .with_existing_memory_manager(memory_manager.clone())
             .with_existing_disk_manager(disk_manager.clone());
 
-        let ctx2 = ExecutionContext::with_config(config);
+        let ctx2 = SessionContext::with_config(config);
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&memory_manager),
@@ -1594,7 +1680,7 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_min() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
@@ -1618,7 +1704,7 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_max() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
@@ -1643,7 +1729,7 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_sum() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
@@ -1667,7 +1753,7 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_avg() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
@@ -1982,7 +2068,7 @@ mod tests {
     #[tokio::test]
     async fn group_by_date_trunc() -> Result<()> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         let schema = Arc::new(Schema::new(vec![
             Field::new("c2", DataType::UInt64, false),
             Field::new(
@@ -2033,7 +2119,7 @@ mod tests {
     #[tokio::test]
     async fn group_by_largeutf8() {
         {
-            let mut ctx = ExecutionContext::new();
+            let mut ctx = SessionContext::new();
 
             // input data looks like:
             // A, 1
@@ -2083,7 +2169,7 @@ mod tests {
 
     #[tokio::test]
     async fn unprojected_filter() {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         let df = ctx
             .read_table(test::table_with_sequence(1, 3).unwrap())
             .unwrap();
@@ -2108,7 +2194,7 @@ mod tests {
     #[tokio::test]
     async fn group_by_dictionary() {
         async fn run_test_case<K: ArrowDictionaryKeyType>() {
-            let mut ctx = ExecutionContext::new();
+            let mut ctx = SessionContext::new();
 
             // input data looks like:
             // A, 1
@@ -2205,7 +2291,7 @@ mod tests {
         partitions: Vec<Vec<(&str, u64)>>,
     ) -> Result<Vec<RecordBatch>> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         let schema = Arc::new(Schema::new(vec![
             Field::new("c_group", DataType::Utf8, false),
             Field::new("c_int8", DataType::Int8, false),
@@ -2428,7 +2514,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_functions() {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2468,7 +2554,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_builtin_math_expression() {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         let type_values = vec![
             (
@@ -2538,7 +2624,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2579,7 +2665,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_aggregates() {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2619,7 +2705,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_user_defined_aggregates() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2666,7 +2752,7 @@ mod tests {
         // The main stipulation of this test: use a file extension that isn't .csv.
         let file_extension = ".tst";
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         let schema = populate_csv_partitions(&tmp_dir, 2, file_extension)?;
         ctx.register_csv(
             "test",
@@ -2695,7 +2781,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_context_to_threads() -> Result<()> {
-        // ensure ExecutionContexts can be used in a multi-threaded
+        // ensure SessionContexts can be used in a multi-threaded
         // environment. Usecase is for concurrent planing.
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
@@ -2722,7 +2808,7 @@ mod tests {
 
     #[tokio::test]
     async fn ctx_sql_should_optimize_plan() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         let plan1 = ctx
             .create_logical_plan("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
 
@@ -2753,7 +2839,7 @@ mod tests {
             vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         let provider =
             MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
@@ -2778,8 +2864,8 @@ mod tests {
 
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().with_query_planner(Arc::new(MyQueryPlanner {})),
+        let mut ctx = SessionContext::with_config(
+            SessionConfig::new().with_query_planner(Arc::new(MyQueryPlanner {})),
         );
 
         let df = ctx.sql("SELECT 1").await?;
@@ -2789,8 +2875,8 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_default_catalog_and_schema() -> Result<()> {
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().create_default_catalog_and_schema(false),
+        let mut ctx = SessionContext::with_config(
+            SessionConfig::new().create_default_catalog_and_schema(false),
         );
 
         assert!(matches!(
@@ -2808,8 +2894,8 @@ mod tests {
 
     #[tokio::test]
     async fn custom_catalog_and_schema() -> Result<()> {
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new()
+        let mut ctx = SessionContext::with_config(
+            SessionConfig::new()
                 .create_default_catalog_and_schema(false)
                 .with_default_catalog_and_schema("my_catalog", "my_schema"),
         );
@@ -2842,7 +2928,7 @@ mod tests {
 
     #[tokio::test]
     async fn cross_catalog_access() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         let catalog_a = MemoryCatalogProvider::new();
         let schema_a = MemorySchemaProvider::new();
@@ -2887,8 +2973,8 @@ mod tests {
     #[tokio::test]
     async fn catalogs_not_leaked() {
         // the information schema used to introduce cyclic Arcs
-        let ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().with_information_schema(true),
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
         );
 
         // register a single catalog
@@ -2910,7 +2996,7 @@ mod tests {
     #[tokio::test]
     async fn normalized_column_identifiers() {
         // create local execution context
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         // register csv file with the execution context
         ctx.register_csv(
@@ -3081,7 +3167,7 @@ mod tests {
         async fn create_physical_plan(
             &self,
             _logical_plan: &LogicalPlan,
-            _ctx_state: &ExecutionContextState,
+            _session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Err(DataFusionError::NotImplemented(
                 "query not supported".to_string(),
@@ -3093,7 +3179,7 @@ mod tests {
             _expr: &Expr,
             _input_dfschema: &crate::logical_plan::DFSchema,
             _input_schema: &Schema,
-            _ctx_state: &ExecutionContextState,
+            _session_state: &SessionState,
         ) -> Result<Arc<dyn crate::physical_plan::PhysicalExpr>> {
             unimplemented!()
         }
@@ -3106,18 +3192,18 @@ mod tests {
         async fn create_physical_plan(
             &self,
             logical_plan: &LogicalPlan,
-            ctx_state: &ExecutionContextState,
+            session_state: &SessionState,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             let physical_planner = MyPhysicalPlanner {};
             physical_planner
-                .create_physical_plan(logical_plan, ctx_state)
+                .create_physical_plan(logical_plan, session_state)
                 .await
         }
     }
 
     /// Execute SQL and return results
     async fn plan_and_collect(
-        ctx: &mut ExecutionContext,
+        ctx: &mut SessionContext,
         sql: &str,
     ) -> Result<Vec<RecordBatch>> {
         ctx.sql(sql).await?.collect().await
@@ -3163,10 +3249,9 @@ mod tests {
     async fn create_ctx(
         tmp_dir: &TempDir,
         partition_count: usize,
-    ) -> Result<ExecutionContext> {
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().with_target_partitions(8),
-        );
+    ) -> Result<SessionContext> {
+        let mut ctx =
+            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 
@@ -3195,19 +3280,19 @@ mod tests {
     #[async_trait]
     impl CallReadTrait for CallRead {
         async fn call_read_csv(&self) -> Arc<DataFrame> {
-            let mut ctx = ExecutionContext::new();
+            let mut ctx = SessionContext::new();
             ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
         }
 
         async fn call_read_avro(&self) -> Arc<DataFrame> {
-            let mut ctx = ExecutionContext::new();
+            let mut ctx = SessionContext::new();
             ctx.read_avro("dummy", AvroReadOptions::default())
                 .await
                 .unwrap()
         }
 
         async fn call_read_parquet(&self) -> Arc<DataFrame> {
-            let mut ctx = ExecutionContext::new();
+            let mut ctx = SessionContext::new();
             ctx.read_parquet("dummy").await.unwrap()
         }
     }

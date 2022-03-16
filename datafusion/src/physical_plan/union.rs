@@ -32,7 +32,7 @@ use super::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
@@ -104,7 +104,7 @@ impl ExecutionPlan for UnionExec {
     async fn execute(
         &self,
         mut partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
@@ -116,7 +116,7 @@ impl ExecutionPlan for UnionExec {
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition, runtime.clone()).await?;
+                let stream = input.execute(partition, context.clone()).await?;
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
             } else {
                 partition -= input.output_partitioning().partition_count();
@@ -237,6 +237,7 @@ mod tests {
     use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
     use crate::{test, test_util};
 
+    use crate::prelude::SessionContext;
     use crate::{
         physical_plan::{
             collect,
@@ -248,7 +249,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = test_util::aggr_test_schema();
         let fs: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem {});
 
@@ -289,7 +291,7 @@ mod tests {
         // Should have 9 partitions and 9 output batches
         assert_eq!(union_exec.output_partitioning().partition_count(), 9);
 
-        let result: Vec<RecordBatch> = collect(union_exec, runtime).await?;
+        let result: Vec<RecordBatch> = collect(union_exec, task_ctx).await?;
         assert_eq!(result.len(), 9);
 
         Ok(())

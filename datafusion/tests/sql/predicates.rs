@@ -19,10 +19,10 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_with_predicate() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, c12 FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+---------------------+",
         "| c1 | c12                 |",
@@ -37,10 +37,10 @@ async fn csv_query_with_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_negative_predicate() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1, c4 FROM aggregate_test_100 WHERE c3 < -55 AND -c4 > 30000";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
         "| c1 | c4     |",
@@ -55,10 +55,10 @@ async fn csv_query_with_negative_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_negated_predicate() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE NOT(c1 != 'a')";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
         "| COUNT(UInt8(1)) |",
@@ -72,10 +72,10 @@ async fn csv_query_with_negated_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_is_not_null_predicate() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NOT NULL";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
         "| COUNT(UInt8(1)) |",
@@ -89,10 +89,10 @@ async fn csv_query_with_is_not_null_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_with_is_null_predicate() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT COUNT(1) FROM aggregate_test_100 WHERE c1 IS NULL";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------+",
         "| COUNT(UInt8(1)) |",
@@ -106,12 +106,12 @@ async fn csv_query_with_is_null_predicate() -> Result<()> {
 
 #[tokio::test]
 async fn query_where_neg_num() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
 
     // Negative numbers do not parse correctly as of Arrow 2.0.0
     let sql = "select c7, c8 from aggregate_test_100 where c7 >= -2 and c7 < 10";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+-------+",
         "| c7 | c8    |",
@@ -127,18 +127,18 @@ async fn query_where_neg_num() -> Result<()> {
 
     // Also check floating point neg numbers
     let sql = "select c7, c8 from aggregate_test_100 where c7 >= -2.9 and c7 < 10";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn like() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT COUNT(c1) FROM aggregate_test_100 WHERE c13 LIKE '%FB%'";
     // check that the physical and logical schemas are equal
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+------------------------------+",
         "| COUNT(aggregate_test_100.c1) |",
@@ -152,10 +152,10 @@ async fn like() -> Result<()> {
 
 #[tokio::test]
 async fn csv_between_expr() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 BETWEEN 0.995 AND 1.0";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c4    |",
@@ -169,10 +169,10 @@ async fn csv_between_expr() -> Result<()> {
 
 #[tokio::test]
 async fn csv_between_expr_negated() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c4 FROM aggregate_test_100 WHERE c12 NOT BETWEEN 0 AND 0.995";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c4    |",
@@ -193,11 +193,11 @@ async fn like_on_strings() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
     let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c1    |",
@@ -220,11 +220,11 @@ async fn like_on_string_dictionaries() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
     let sql = "SELECT * FROM test WHERE c1 LIKE '%a%'";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c1    |",
@@ -247,11 +247,11 @@ async fn test_regexp_is_match() -> Result<()> {
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
     let sql = "SELECT * FROM test WHERE c1 ~ 'z'";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c1    |",
@@ -262,7 +262,7 @@ async fn test_regexp_is_match() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT * FROM test WHERE c1 ~* 'z'";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c1    |",
@@ -274,7 +274,7 @@ async fn test_regexp_is_match() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT * FROM test WHERE c1 !~ 'z'";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c1    |",
@@ -287,7 +287,7 @@ async fn test_regexp_is_match() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT * FROM test WHERE c1 !~* 'z'";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+",
         "| c1    |",
@@ -313,8 +313,8 @@ async fn except_with_null_not_equal() {
         "+-----+-----+",
     ];
 
-    let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let ctx = create_join_context_qualified().unwrap();
+    let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);
 }
@@ -325,19 +325,19 @@ async fn except_with_null_equal() {
             EXCEPT SELECT * FROM (SELECT null AS id1, 1 AS id2) t2";
 
     let expected = vec!["++", "++"];
-    let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let ctx = create_join_context_qualified().unwrap();
+    let actual = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
 async fn test_expect_all() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_alltypes_parquet(&mut ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT ALL SELECT int_col, double_col FROM alltypes_plain where int_col < 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------+------------+",
         "| int_col | double_col |",
@@ -354,11 +354,11 @@ async fn test_expect_all() -> Result<()> {
 
 #[tokio::test]
 async fn test_expect_distinct() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_alltypes_parquet(&mut ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 EXCEPT SELECT int_col, double_col FROM alltypes_plain where int_col < 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------+------------+",
         "| int_col | double_col |",

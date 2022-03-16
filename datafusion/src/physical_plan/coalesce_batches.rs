@@ -29,7 +29,7 @@ use crate::physical_plan::{
     SendableRecordBatchStream,
 };
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
@@ -124,10 +124,10 @@ impl ExecutionPlan for CoalesceBatchesExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream {
-            input: self.input.execute(partition, runtime).await?,
+            input: self.input.execute(partition, context).await?,
             schema: self.input.schema(),
             target_batch_size: self.target_batch_size,
             buffer: Vec::new(),
@@ -305,6 +305,7 @@ pub fn concat_batches(
 mod tests {
     use super::*;
     use crate::physical_plan::{memory::MemoryExec, repartition::RepartitionExec};
+    use crate::prelude::SessionContext;
     use crate::test::create_vec_batches;
     use arrow::datatypes::{DataType, Field, Schema};
 
@@ -348,10 +349,11 @@ mod tests {
         // execute and collect results
         let output_partition_count = exec.output_partitioning().partition_count();
         let mut output_partitions = Vec::with_capacity(output_partition_count);
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
         for i in 0..output_partition_count {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i, runtime.clone()).await?;
+            let task_ctx = session_ctx.task_ctx();
+            let mut stream = exec.execute(i, task_ctx.clone()).await?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);

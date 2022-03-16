@@ -23,14 +23,14 @@ use super::*;
 
 #[tokio::test]
 async fn create_table_as() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql = "CREATE TABLE my_table AS SELECT * FROM aggregate_simple";
     ctx.sql(sql).await.unwrap();
 
     let sql_all = "SELECT * FROM my_table order by c1 LIMIT 1";
-    let results_all = execute_to_batches(&mut ctx, sql_all).await;
+    let results_all = execute_to_batches(&ctx, sql_all).await;
 
     let expected = vec![
         "+---------+----------------+------+",
@@ -47,7 +47,7 @@ async fn create_table_as() -> Result<()> {
 
 #[tokio::test]
 async fn drop_table() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql = "CREATE TABLE my_table AS SELECT * FROM aggregate_simple";
@@ -67,10 +67,10 @@ async fn drop_table() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_create_external_table() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "SELECT c1, c2, c3, c4, c5, c6, c7, c8, c9, 10, c11, c12, c13 FROM aggregate_test_100 LIMIT 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+----+----+-------+------------+----------------------+----+-------+------------+-----------+-------------+--------------------+--------------------------------+",
         "| c1 | c2 | c3 | c4    | c5         | c6                   | c7 | c8    | c9         | Int64(10) | c11         | c12                | c13                            |",
@@ -83,7 +83,7 @@ async fn csv_query_create_external_table() {
 
 #[tokio::test]
 async fn create_external_table_with_timestamps() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     let data = "Jorge,2018-12-13T12:12:10.011Z\n\
                 Andrew,2018-11-13T17:11:10.011Z";

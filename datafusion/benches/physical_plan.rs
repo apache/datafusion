@@ -29,17 +29,21 @@ use arrow::{
 };
 use tokio::runtime::Runtime;
 
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
     collect,
     expressions::{col, PhysicalSortExpr},
     memory::MemoryExec,
 };
+use datafusion::prelude::SessionContext;
 
 // Initialise the operator using the provided record batches and the sort key
 // as inputs. All record batches must have the same schema.
-fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
+fn sort_preserving_merge_operator(
+    session_ctx: Arc<SessionContext>,
+    batches: Vec<RecordBatch>,
+    sort: &[&str],
+) {
     let schema = batches[0].schema();
 
     let sort = sort
@@ -57,10 +61,9 @@ fn sort_preserving_merge_operator(batches: Vec<RecordBatch>, sort: &[&str]) {
     )
     .unwrap();
     let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
-
+    let task_ctx = session_ctx.task_ctx();
     let rt = Runtime::new().unwrap();
-    let rt_env = Arc::new(RuntimeEnv::default());
-    rt.block_on(collect(merge, rt_env)).unwrap();
+    rt.block_on(collect(merge, task_ctx)).unwrap();
 }
 
 // Produces `n` record batches of row size `m`. Each record batch will have
@@ -161,12 +164,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         ),
     ];
 
+    let ctx = Arc::new(SessionContext::new());
     for (name, input) in benches {
+        let ctx_clone = ctx.clone();
         c.bench_function(name, move |b| {
             b.iter_batched(
                 || input.clone(),
                 |input| {
-                    sort_preserving_merge_operator(input, &["a", "b", "c", "d"]);
+                    sort_preserving_merge_operator(
+                        ctx_clone.clone(),
+                        input,
+                        &["a", "b", "c", "d"],
+                    );
                 },
                 BatchSize::LargeInput,
             )

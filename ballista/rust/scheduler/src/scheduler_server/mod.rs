@@ -28,7 +28,7 @@ use ballista_core::event_loop::EventLoop;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
-use datafusion::prelude::{ExecutionConfig, ExecutionContext};
+use datafusion::prelude::{SessionConfig, SessionContext};
 
 use crate::scheduler_server::event_loop::{
     SchedulerServerEvent, SchedulerServerEventAction,
@@ -60,7 +60,7 @@ pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     executors_client: Option<ExecutorsClient>,
     event_loop: Option<EventLoop<SchedulerServerEvent>>,
     query_stage_event_loop: EventLoop<QueryStageSchedulerEvent>,
-    ctx: Arc<RwLock<ExecutionContext>>,
+    ctx: Arc<RwLock<SessionContext>>,
     codec: BallistaCodec<T, U>,
 }
 
@@ -68,7 +68,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
     pub fn new(
         config: Arc<dyn StateBackendClient>,
         namespace: String,
-        ctx: Arc<RwLock<ExecutionContext>>,
+        ctx: Arc<RwLock<SessionContext>>,
         codec: BallistaCodec<T, U>,
     ) -> Self {
         SchedulerServer::new_with_policy(
@@ -84,7 +84,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         config: Arc<dyn StateBackendClient>,
         namespace: String,
         policy: TaskSchedulingPolicy,
-        ctx: Arc<RwLock<ExecutionContext>>,
+        ctx: Arc<RwLock<SessionContext>>,
         codec: BallistaCodec<T, U>,
     ) -> Self {
         let state = Arc::new(SchedulerState::new(config, namespace, codec.clone()));
@@ -161,8 +161,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
-    let config = ExecutionConfig::new()
-        .with_target_partitions(config.default_shuffle_partitions());
-    ExecutionContext::with_config(config)
+pub fn create_datafusion_context(config: &BallistaConfig) -> SessionContext {
+    let config =
+        SessionConfig::new().with_target_partitions(config.default_shuffle_partitions());
+    SessionContext::with_config(config)
 }

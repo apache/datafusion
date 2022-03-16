@@ -490,7 +490,7 @@ mod test {
     };
     use ballista_core::serde::scheduler::ExecutorSpecification;
     use ballista_core::serde::BallistaCodec;
-    use datafusion::prelude::ExecutionContext;
+    use datafusion::prelude::SessionContext;
 
     use super::{SchedulerGrpc, SchedulerServer};
 
@@ -502,7 +502,7 @@ mod test {
             SchedulerServer::new(
                 state_storage.clone(),
                 namespace.to_owned(),
-                Arc::new(RwLock::new(ExecutionContext::new())),
+                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             );
         let exec_meta = ExecutorRegistration {
