@@ -21,9 +21,9 @@ use datafusion::{
     error::DataFusionError,
     logical_plan::{
         abs, acos, ascii, asin, atan, ceil, character_length, chr, concat_expr,
-        concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, random,
-        regexp_replace, repeat, replace, reverse, right, round, signum, sin, split_part,
-        sqrt, starts_with, strpos, substr, tan, to_hex, to_timestamp_micros,
+        concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, nullif,
+        random, regexp_replace, repeat, replace, reverse, right, round, signum, sin,
+        split_part, sqrt, starts_with, strpos, substr, tan, to_hex, to_timestamp_micros,
         to_timestamp_millis, to_timestamp_seconds, translate, trunc,
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
@@ -1046,6 +1046,7 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     ScalarFunction::Sha384 => Ok(sha384((&args[0]).try_into()?)),
                     ScalarFunction::Sha512 => Ok(sha512((&args[0]).try_into()?)),
                     ScalarFunction::Md5 => Ok(md5((&args[0]).try_into()?)),
+                    ScalarFunction::NullIf => Ok(nullif((&args[0]).try_into()?)),
                     ScalarFunction::Digest => {
                         Ok(digest((&args[0]).try_into()?, (&args[1]).try_into()?))
                     }

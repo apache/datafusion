@@ -226,6 +226,7 @@ unary_scalar_expr!(Exp, exp);
 unary_scalar_expr!(Log2, log2);
 unary_scalar_expr!(Log10, log10);
 unary_scalar_expr!(Ln, ln);
+unary_scalar_expr!(NullIf, nullif);
 
 // string functions
 scalar_expr!(Ascii, ascii, string);
