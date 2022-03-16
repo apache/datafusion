@@ -84,7 +84,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[LogicalPlan],
-        ctx: &ExecutionContext,
+        ctx: &SessionContext,
     ) -> Result<Extension, BallistaError>;
 
     fn try_encode(
@@ -102,7 +102,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
-        _ctx: &ExecutionContext,
+        _ctx: &SessionContext,
     ) -> Result<Extension, BallistaError> {
         Err(BallistaError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
@@ -149,7 +149,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        ctx: &ExecutionContext,
+        ctx: &SessionContext,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
 
     fn try_encode(
@@ -167,7 +167,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _ctx: &ExecutionContext,
+        _ctx: &SessionContext,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         Err(BallistaError::NotImplemented(
             "PhysicalExtensionCodec is not provided".to_string(),
@@ -601,7 +601,7 @@ mod tests {
             &self,
             buf: &[u8],
             inputs: &[LogicalPlan],
-            ctx: &ExecutionContext,
+            ctx: &SessionContext,
         ) -> Result<Extension, BallistaError> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = TopKPlanProto::decode(buf).map_err(|e| {
@@ -659,7 +659,7 @@ mod tests {
             &self,
             buf: &[u8],
             inputs: &[Arc<dyn ExecutionPlan>],
-            _ctx: &ExecutionContext,
+            _ctx: &SessionContext,
         ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = TopKExecProto::decode(buf).map_err(|e| {

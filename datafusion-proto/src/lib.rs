@@ -584,7 +584,7 @@ mod roundtrip_tests {
     fn roundtrip_not() {
         let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -592,7 +592,7 @@ mod roundtrip_tests {
     fn roundtrip_is_null() {
         let test_expr = Expr::IsNull(Box::new(col("id")));
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -600,7 +600,7 @@ mod roundtrip_tests {
     fn roundtrip_is_not_null() {
         let test_expr = Expr::IsNotNull(Box::new(col("id")));
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -613,7 +613,7 @@ mod roundtrip_tests {
             high: Box::new(lit(3.0_f32)),
         };
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -625,7 +625,7 @@ mod roundtrip_tests {
             else_expr: Some(Box::new(lit(4.0_f32))),
         };
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -636,7 +636,7 @@ mod roundtrip_tests {
             data_type: DataType::Boolean,
         };
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -648,7 +648,7 @@ mod roundtrip_tests {
             nulls_first: true,
         };
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -656,7 +656,7 @@ mod roundtrip_tests {
     fn roundtrip_negative() {
         let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -668,7 +668,7 @@ mod roundtrip_tests {
             negated: true,
         };
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -676,7 +676,7 @@ mod roundtrip_tests {
     fn roundtrip_wildcard() {
         let test_expr = Expr::Wildcard;
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -686,7 +686,7 @@ mod roundtrip_tests {
             fun: Sqrt,
             args: vec![col("col")],
         };
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -698,7 +698,7 @@ mod roundtrip_tests {
             distinct: false,
         };
 
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         roundtrip_expr_test!(test_expr, ctx);
     }
 
@@ -750,7 +750,7 @@ mod roundtrip_tests {
             args: vec![lit(1.0_f64)],
         };
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_udaf(dummy_agg);
 
         roundtrip_expr_test!(test_expr, ctx);
@@ -775,7 +775,7 @@ mod roundtrip_tests {
             args: vec![lit("")],
         };
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         ctx.register_udf(udf);
 
         roundtrip_expr_test!(test_expr, ctx);
