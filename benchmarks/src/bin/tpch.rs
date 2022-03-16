@@ -273,11 +273,10 @@ async fn main() -> Result<()> {
 async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordBatch>> {
     println!("Running benchmarks with the following options: {:?}", opt);
     let mut benchmark_run = BenchmarkRun::new(opt.query);
-    let config = ExecutionConfig::new()
+    let config = SessionConfig::new()
         .with_target_partitions(opt.partitions)
         .with_batch_size(opt.batch_size);
-    let mut ctx = ExecutionContext::with_config(config);
-    let runtime = ctx.state.lock().runtime_env.clone();
+    let mut ctx = SessionContext::with_config(config);
 
     // register tables
     for table in TABLES {
@@ -290,10 +289,9 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
         if opt.mem_table {
             println!("Loading table '{}' into memory", table);
             let start = Instant::now();
-
+            let task_ctx = ctx.task_ctx();
             let memtable =
-                MemTable::load(table_provider, Some(opt.partitions), runtime.clone())
-                    .await?;
+                MemTable::load(table_provider, Some(opt.partitions), task_ctx).await?;
             println!(
                 "Loaded table '{}' into memory in {} ms",
                 table,
@@ -311,7 +309,7 @@ async fn benchmark_datafusion(opt: DataFusionBenchmarkOpt) -> Result<Vec<RecordB
     for i in 0..opt.iterations {
         let start = Instant::now();
         let plan = create_logical_plan(&mut ctx, opt.query)?;
-        result = execute_query(&mut ctx, &plan, opt.debug).await?;
+        result = execute_query(&ctx, &plan, opt.debug).await?;
         let elapsed = start.elapsed().as_secs_f64() * 1000.0;
         millis.push(elapsed as f64);
         let row_count = result.iter().map(|b| b.num_rows()).sum();
@@ -584,13 +582,13 @@ fn get_query_sql(query: usize) -> Result<String> {
     }
 }
 
-fn create_logical_plan(ctx: &mut ExecutionContext, query: usize) -> Result<LogicalPlan> {
+fn create_logical_plan(ctx: &mut SessionContext, query: usize) -> Result<LogicalPlan> {
     let sql = get_query_sql(query)?;
     ctx.create_logical_plan(&sql)
 }
 
 async fn execute_query(
-    ctx: &mut ExecutionContext,
+    ctx: &SessionContext,
     plan: &LogicalPlan,
     debug: bool,
 ) -> Result<Vec<RecordBatch>> {
@@ -608,8 +606,8 @@ async fn execute_query(
             displayable(physical_plan.as_ref()).indent()
         );
     }
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let result = collect(physical_plan.clone(), runtime).await?;
+    let task_ctx = ctx.task_ctx();
+    let result = collect(physical_plan.clone(), task_ctx).await?;
     if debug {
         println!(
             "=== Physical plan with metrics ===\n{}\n",
@@ -632,8 +630,8 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
             .delimiter(b'|')
             .file_extension(".tbl");
 
-        let config = ExecutionConfig::new().with_batch_size(opt.batch_size);
-        let mut ctx = ExecutionContext::with_config(config);
+        let config = SessionConfig::new().with_batch_size(opt.batch_size);
+        let mut ctx = SessionContext::with_config(config);
 
         // build plan to read the TBL file
         let mut csv = ctx.read_csv(&input_path, options).await?;
@@ -1282,10 +1280,10 @@ mod tests {
     async fn run_query(n: usize) -> Result<()> {
         // Tests running query with empty tables, to see whether they run succesfully.
 
-        let config = ExecutionConfig::new()
+        let config = SessionConfig::new()
             .with_target_partitions(1)
             .with_batch_size(10);
-        let mut ctx = ExecutionContext::with_config(config);
+        let mut ctx = SessionContext::with_config(config);
 
         for &table in TABLES {
             let schema = get_schema(table);
@@ -1297,7 +1295,7 @@ mod tests {
         }
 
         let plan = create_logical_plan(&mut ctx, n)?;
-        execute_query(&mut ctx, &plan, false).await?;
+        execute_query(&ctx, &plan, false).await?;
 
         Ok(())
     }
@@ -1307,7 +1305,7 @@ mod tests {
             // load expected answers from tpch-dbgen
             // read csv as all strings, trim and cast to expected type as the csv string
             // to value parser does not handle data with leading/trailing spaces
-            let mut ctx = ExecutionContext::new();
+            let mut ctx = SessionContext::new();
             let schema = string_schema(get_answer_schema(n));
             let options = CsvReadOptions::new()
                 .schema(&schema)
@@ -1379,10 +1377,10 @@ mod tests {
         use datafusion::physical_plan::ExecutionPlan;
 
         async fn round_trip_query(n: usize) -> Result<()> {
-            let config = ExecutionConfig::new()
+            let config = SessionConfig::new()
                 .with_target_partitions(1)
                 .with_batch_size(10);
-            let mut ctx = ExecutionContext::with_config(config);
+            let mut ctx = SessionContext::with_config(config);
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
                 protobuf::PhysicalPlanNode,

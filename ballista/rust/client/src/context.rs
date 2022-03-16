@@ -34,7 +34,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
 use datafusion::prelude::{
-    AvroReadOptions, CsvReadOptions, ExecutionConfig, ExecutionContext,
+    AvroReadOptions, CsvReadOptions, SessionConfig, SessionContext,
 };
 use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
 
@@ -304,8 +304,8 @@ impl BallistaContext {
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
             let state = self.state.lock();
-            ctx = ExecutionContext::with_config(
-                ExecutionConfig::new().with_information_schema(
+            ctx = SessionContext::with_config(
+                SessionConfig::new().with_information_schema(
                     state.config.default_with_information_schema(),
                 ),
             );

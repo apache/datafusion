@@ -37,7 +37,7 @@ use log::debug;
 
 use crate::{
     error::Result,
-    execution::context::ExecutionContext,
+    execution::context::SessionContext,
     logical_plan::{self, Expr, ExprVisitable, ExpressionVisitor, Recursion},
     physical_plan::functions::Volatility,
     scalar::ScalarValue,
@@ -242,7 +242,7 @@ pub async fn pruned_partition_list(
         // Filter the partitions using a local datafusion context
         // TODO having the external context would allow us to resolve `Volatility::Stable`
         // scalar functions (`ScalarFunction` & `ScalarUDF`) and `ScalarVariable`s
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
         let mut df = ctx.read_table(Arc::new(mem_table))?;
         for filter in applicable_filters {
             df = df.filter(filter.clone())?;

@@ -30,7 +30,7 @@ use crate::state::backend::StateBackendClient;
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 type StageKey = (String, u32);
 
@@ -70,7 +70,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     }
 
     /// Load the state stored in storage into memory
-    pub(crate) async fn init(&self, ctx: &ExecutionContext) -> Result<()> {
+    pub(crate) async fn init(&self, ctx: &SessionContext) -> Result<()> {
         self.init_executors_metadata_from_storage().await?;
         self.init_jobs_from_storage().await?;
         self.init_stages_from_storage(ctx).await?;
@@ -111,7 +111,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         Ok(())
     }
 
-    async fn init_stages_from_storage(&self, ctx: &ExecutionContext) -> Result<()> {
+    async fn init_stages_from_storage(&self, ctx: &SessionContext) -> Result<()> {
         let entries = self
             .config_client
             .get_from_prefix(&get_stage_prefix(&self.namespace))

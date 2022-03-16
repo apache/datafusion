@@ -31,11 +31,11 @@ extern crate datafusion;
 use arrow::datatypes::{DataType, Field, Schema};
 
 use datafusion::datasource::MemTable;
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::SessionContext;
 
 use tokio::runtime::Runtime;
 
-fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
+fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
@@ -43,7 +43,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
     rt.block_on(df.collect()).unwrap();
 }
 
-fn create_context() -> Arc<Mutex<ExecutionContext>> {
+fn create_context() -> Arc<Mutex<SessionContext>> {
     // define schema for data source (csv file)
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),
@@ -76,18 +76,18 @@ fn create_context() -> Arc<Mutex<ExecutionContext>> {
 
     let rt = Runtime::new().unwrap();
 
-    let ctx_holder: Arc<Mutex<Vec<Arc<Mutex<ExecutionContext>>>>> =
+    let ctx_holder: Arc<Mutex<Vec<Arc<Mutex<SessionContext>>>>> =
         Arc::new(Mutex::new(vec![]));
 
     let partitions = 16;
 
     rt.block_on(async {
-        // create local execution context
-        let mut ctx = ExecutionContext::new();
+        // create local session context
+        let mut ctx = SessionContext::new();
         ctx.state.lock().config.target_partitions = 1;
-        let runtime = ctx.state.lock().runtime_env.clone();
 
-        let mem_table = MemTable::load(Arc::new(csv.await), Some(partitions), runtime)
+        let task_ctx = ctx.task_ctx();
+        let mem_table = MemTable::load(Arc::new(csv.await), Some(partitions), task_ctx)
             .await
             .unwrap();
         ctx.register_table("aggregate_test_100", Arc::new(mem_table))

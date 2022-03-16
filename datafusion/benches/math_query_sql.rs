@@ -34,10 +34,10 @@ use arrow::{
 };
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::SessionContext;
 use datafusion::from_slice::FromSlice;
 
-fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
+fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
@@ -48,7 +48,7 @@ fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
 fn create_context(
     array_len: usize,
     batch_size: usize,
-) -> Result<Arc<Mutex<ExecutionContext>>> {
+) -> Result<Arc<Mutex<SessionContext>>> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
         Field::new("f32", DataType::Float32, false),
@@ -69,7 +69,7 @@ fn create_context(
         })
         .collect::<Vec<_>>();
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;

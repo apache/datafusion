@@ -20,6 +20,7 @@
 //! but spills to disk if needed.
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::context::TaskContext;
 use crate::execution::memory_manager::{
     human_readable_size, ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
 };
@@ -476,7 +477,7 @@ impl ExecutionPlan for SortExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         if !self.preserve_partitioning {
             if 0 != partition {
@@ -494,14 +495,14 @@ impl ExecutionPlan for SortExec {
             }
         }
 
-        let input = self.input.execute(partition, runtime.clone()).await?;
+        let input = self.input.execute(partition, context.clone()).await?;
 
         do_sort(
             input,
             partition,
             self.expr.clone(),
             self.metrics_set.clone(),
-            runtime,
+            context,
         )
         .await
     }
@@ -568,7 +569,7 @@ async fn do_sort(
     partition_id: usize,
     expr: Vec<PhysicalSortExpr>,
     metrics_set: CompositeMetricsSet,
-    runtime: Arc<RuntimeEnv>,
+    context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
     let schema = input.schema();
     let sorter = ExternalSorter::new(
@@ -576,9 +577,9 @@ async fn do_sort(
         schema.clone(),
         expr,
         metrics_set,
-        runtime.clone(),
+        context.runtime.clone(),
     );
-    runtime.register_requester(sorter.id());
+    context.runtime.register_requester(sorter.id());
     while let Some(batch) = input.next().await {
         let batch = batch?;
         sorter.insert_batch(batch).await?;
@@ -590,7 +591,7 @@ async fn do_sort(
 mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::execution::context::ExecutionConfig;
+    use crate::execution::context::SessionConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -598,6 +599,7 @@ mod tests {
         collect,
         file_format::{CsvExec, FileScanConfig},
     };
+    use crate::prelude::SessionContext;
     use crate::test;
     use crate::test::assert_is_pending;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
@@ -610,7 +612,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
         let (_, files) =
@@ -651,7 +654,7 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
         )?);
 
-        let result = collect(sort_exec, runtime).await?;
+        let result = collect(sort_exec, task_ctx).await?;
 
         assert_eq!(result.len(), 1);
 
@@ -675,8 +678,8 @@ mod tests {
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
         // trigger spill there will be 4 batches with 5.5KB for each
-        let config = ExecutionConfig::new().with_memory_limit(12288, 1.0)?;
-        let runtime = Arc::new(RuntimeEnv::new(config.runtime)?);
+        let config = SessionConfig::new().with_memory_limit(12288, 1.0)?;
+        let session_ctx = SessionContext::with_config(config);
 
         let schema = test_util::aggr_test_schema();
         let partitions = 4;
@@ -718,7 +721,8 @@ mod tests {
             Arc::new(CoalescePartitionsExec::new(Arc::new(csv))),
         )?);
 
-        let result = collect(sort_exec.clone(), runtime).await?;
+        let task_ctx = session_ctx.task_ctx();
+        let result = collect(sort_exec.clone(), task_ctx).await?;
 
         assert_eq!(result.len(), 1);
 
@@ -749,7 +753,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sort_metadata() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let field_metadata: BTreeMap<String, String> =
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
@@ -779,7 +784,7 @@ mod tests {
             input,
         )?);
 
-        let result: Vec<RecordBatch> = collect(sort_exec, runtime).await?;
+        let result: Vec<RecordBatch> = collect(sort_exec, task_ctx).await?;
 
         let expected_data: ArrayRef =
             Arc::new(vec![1, 2, 3].into_iter().map(Some).collect::<UInt64Array>());
@@ -801,7 +806,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_lex_sort_by_float() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Float32, true),
             Field::new("b", DataType::Float64, true),
@@ -857,7 +863,7 @@ mod tests {
         assert_eq!(DataType::Float32, *sort_exec.schema().field(0).data_type());
         assert_eq!(DataType::Float64, *sort_exec.schema().field(1).data_type());
 
-        let result: Vec<RecordBatch> = collect(sort_exec.clone(), runtime).await?;
+        let result: Vec<RecordBatch> = collect(sort_exec.clone(), task_ctx).await?;
         let metrics = sort_exec.metrics().unwrap();
         assert!(metrics.elapsed_compute().unwrap() > 0);
         assert_eq!(metrics.output_rows().unwrap(), 8);
@@ -906,7 +912,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -920,7 +927,7 @@ mod tests {
             blocking_exec,
         )?);
 
-        let fut = collect(sort_exec, runtime);
+        let fut = collect(sort_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

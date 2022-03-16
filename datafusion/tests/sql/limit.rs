@@ -19,10 +19,10 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_limit() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 2";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec!["+----+", "| c1 |", "+----+", "| c  |", "| d  |", "+----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -30,10 +30,10 @@ async fn csv_query_limit() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 200";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     // println!("{}", pretty_format_batches(&a).unwrap());
     let expected = vec![
         "+----+", "| c2 |", "+----+", "| 2  |", "| 5  |", "| 1  |", "| 1  |", "| 5  |",
@@ -56,10 +56,10 @@ async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 100";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+", "| c2 |", "+----+", "| 2  |", "| 5  |", "| 1  |", "| 1  |", "| 5  |",
         "| 4  |", "| 3  |", "| 3  |", "| 1  |", "| 4  |", "| 1  |", "| 4  |", "| 3  |",
@@ -81,10 +81,10 @@ async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_zero() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 0";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec!["++", "++"];
     assert_batches_eq!(expected, &actual);
     Ok(())

@@ -24,12 +24,12 @@ mod data_utils;
 use crate::criterion::Criterion;
 use data_utils::create_table_provider;
 use datafusion::error::Result;
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::SessionContext;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-fn query(ctx: Arc<Mutex<ExecutionContext>>, sql: &str) {
+fn query(ctx: Arc<Mutex<SessionContext>>, sql: &str) {
     let rt = Runtime::new().unwrap();
     let df = rt.block_on(ctx.lock().sql(sql)).unwrap();
     criterion::black_box(rt.block_on(df.collect()).unwrap());
@@ -39,8 +39,8 @@ fn create_context(
     partitions_len: usize,
     array_len: usize,
     batch_size: usize,
-) -> Result<Arc<Mutex<ExecutionContext>>> {
-    let mut ctx = ExecutionContext::new();
+) -> Result<Arc<Mutex<SessionContext>>> {
+    let mut ctx = SessionContext::new();
     let provider = create_table_provider(partitions_len, array_len, batch_size)?;
     ctx.register_table("t", provider)?;
     Ok(Arc::new(Mutex::new(ctx)))
