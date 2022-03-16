@@ -226,11 +226,11 @@ unary_scalar_expr!(Exp, exp);
 unary_scalar_expr!(Log2, log2);
 unary_scalar_expr!(Log10, log10);
 unary_scalar_expr!(Ln, ln);
+unary_scalar_expr!(NullIf, nullif);
 
 // string functions
 scalar_expr!(Ascii, ascii, string);
 scalar_expr!(BitLength, bit_length, string);
-nary_scalar_expr!(Btrim, btrim);
 scalar_expr!(CharacterLength, character_length, string);
 scalar_expr!(CharacterLength, length, string);
 scalar_expr!(Chr, chr, string);
@@ -238,17 +238,13 @@ scalar_expr!(Digest, digest, string, algorithm);
 scalar_expr!(InitCap, initcap, string);
 scalar_expr!(Left, left, string, count);
 scalar_expr!(Lower, lower, string);
-nary_scalar_expr!(Lpad, lpad);
 scalar_expr!(Ltrim, ltrim, string);
 scalar_expr!(MD5, md5, string);
 scalar_expr!(OctetLength, octet_length, string);
-nary_scalar_expr!(RegexpMatch, regexp_match);
-nary_scalar_expr!(RegexpReplace, regexp_replace);
 scalar_expr!(Replace, replace, string, from, to);
 scalar_expr!(Repeat, repeat, string, count);
 scalar_expr!(Reverse, reverse, string);
 scalar_expr!(Right, right, string, count);
-nary_scalar_expr!(Rpad, rpad);
 scalar_expr!(Rtrim, rtrim, string);
 scalar_expr!(SHA224, sha224, string);
 scalar_expr!(SHA256, sha256, string);
@@ -262,10 +258,23 @@ scalar_expr!(ToHex, to_hex, string);
 scalar_expr!(Translate, translate, string, from, to);
 scalar_expr!(Trim, trim, string);
 scalar_expr!(Upper, upper, string);
+//use vec as parameter
+nary_scalar_expr!(Lpad, lpad);
+nary_scalar_expr!(Rpad, rpad);
+nary_scalar_expr!(RegexpReplace, regexp_replace);
+nary_scalar_expr!(RegexpMatch, regexp_match);
+nary_scalar_expr!(Btrim, btrim);
+//there is a func concat_ws before, so use concat_ws_expr as name.c
+nary_scalar_expr!(ConcatWithSeparator, concat_ws_expr);
+nary_scalar_expr!(Concat, concat_expr);
+nary_scalar_expr!(Now, now_expr);
 
 // date functions
 scalar_expr!(DatePart, date_part, part, date);
 scalar_expr!(DateTrunc, date_trunc, part, date);
+scalar_expr!(ToTimestampMillis, to_timestamp_millis, date);
+scalar_expr!(ToTimestampMicros, to_timestamp_micros, date);
+scalar_expr!(ToTimestampSeconds, to_timestamp_seconds, date);
 
 /// Returns an array of fixed size with each argument on it.
 pub fn array(args: Vec<Expr>) -> Expr {
