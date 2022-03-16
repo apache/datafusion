@@ -34,6 +34,7 @@ use crate::{
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_filter::EliminateFilter,
     optimizer::eliminate_limit::EliminateLimit,
+    optimizer::merge_adjacent_filter::MergeAdjacentFilter,
     physical_optimizer::{
         aggregate_statistics::AggregateStatistics,
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
@@ -865,6 +866,7 @@ impl Default for SessionConfig {
                 Arc::new(ProjectionPushDown::new()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
+                Arc::new(MergeAdjacentFilter::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
                 // ToApproxPerc must be applied last because
                 // it rewrites only the function and may interfere with
