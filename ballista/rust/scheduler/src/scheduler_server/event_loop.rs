@@ -38,7 +38,6 @@ pub(crate) struct SchedulerServerEventAction<
 > {
     state: Arc<SchedulerState<T, U>>,
     executors_client: ExecutorsClient,
-    is_test: bool,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
@@ -47,23 +46,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     pub fn new(
         state: Arc<SchedulerState<T, U>>,
         executors_client: ExecutorsClient,
-        is_test: bool,
     ) -> Self {
         Self {
             state,
             executors_client,
-            is_test,
         }
     }
 
     async fn offer_resources(&self, n: u32) -> Result<Option<SchedulerServerEvent>> {
-        let mut available_executors = if self.is_test {
-            self.state
-                .executor_manager
-                .get_available_executors_data_for_test()
-        } else {
-            self.state.executor_manager.get_available_executors_data()
-        };
+        let mut available_executors =
+            self.state.executor_manager.get_available_executors_data();
         // In case of there's no enough resources, reschedule the tasks of the job
         if available_executors.is_empty() {
             // TODO Maybe it's better to use an exclusive runtime for this kind task scheduling
@@ -92,7 +84,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 data.available_task_slots as i32 - data_change.task_slots;
         }
 
-        if num_tasks > 0 && !self.is_test {
+        #[cfg(not(test))]
+        if num_tasks > 0 {
             self.launch_tasks(&executors_data_change, tasks_assigment)
                 .await?;
         }
@@ -134,12 +127,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         .unwrap()
                         .clone()
                 };
-                // Update the resources first
+                // TODO check whether launching task is successful or not
+                client.launch_task(LaunchTaskParams { task: tasks }).await?;
                 self.state
                     .executor_manager
                     .update_executor_data(executor_data_change);
-                // TODO check whether launching task is successful or not
-                client.launch_task(LaunchTaskParams { task: tasks }).await?;
             } else {
                 // Since the task assignment policy is round robin,
                 // if find tasks for one executor is empty, just break fast

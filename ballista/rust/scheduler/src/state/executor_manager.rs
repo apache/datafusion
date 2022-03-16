@@ -115,6 +115,7 @@ impl ExecutorManager {
     /// There are two checks:
     /// 1. firstly alive
     /// 2. secondly available task slots > 0
+    #[cfg(not(test))]
     pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
         let mut res = {
             let alive_executors = self.get_alive_executors_within_one_minute();
@@ -131,7 +132,8 @@ impl ExecutorManager {
         res
     }
 
-    pub(crate) fn get_available_executors_data_for_test(&self) -> Vec<ExecutorData> {
+    #[cfg(test)]
+    pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
         let mut res: Vec<ExecutorData> =
             self.executors_data.read().values().cloned().collect();
         res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));

@@ -85,27 +85,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         ctx: Arc<RwLock<SessionContext>>,
         codec: BallistaCodec<T, U>,
     ) -> Self {
-        SchedulerServer::new_inner(config, namespace, policy, ctx, codec, false)
-    }
-
-    pub fn new_for_test(
-        config: Arc<dyn StateBackendClient>,
-        namespace: String,
-        policy: TaskSchedulingPolicy,
-        ctx: Arc<RwLock<ExecutionContext>>,
-        codec: BallistaCodec<T, U>,
-    ) -> Self {
-        SchedulerServer::new_inner(config, namespace, policy, ctx, codec, true)
-    }
-
-    pub fn new_inner(
-        config: Arc<dyn StateBackendClient>,
-        namespace: String,
-        policy: TaskSchedulingPolicy,
-        ctx: Arc<RwLock<ExecutionContext>>,
-        codec: BallistaCodec<T, U>,
-        is_test: bool,
-    ) -> Self {
         let state = Arc::new(SchedulerState::new(config, namespace, codec.clone()));
 
         let (executors_client, event_loop) =
@@ -115,7 +94,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
                     Arc::new(SchedulerServerEventAction::new(
                         state.clone(),
                         executors_client.clone(),
-                        is_test,
                     ));
                 let event_loop =
                     EventLoop::new("scheduler".to_owned(), 10000, event_action);
@@ -456,7 +434,7 @@ mod test {
     ) -> Result<SchedulerServer<LogicalPlanNode, PhysicalPlanNode>> {
         let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
         let mut scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
-            SchedulerServer::new_for_test(
+            SchedulerServer::new_with_policy(
                 state_storage.clone(),
                 "default".to_owned(),
                 policy,
