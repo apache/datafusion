@@ -2007,7 +2007,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 let mut rewrite =
                     DFParser::parse_sql("SELECT * FROM information_schema.tables;")?;
                 assert_eq!(rewrite.len(), 1);
-                self.statement_to_plan(rewrite.pop().unwrap())
+                self.statement_to_plan(rewrite.pop_front().unwrap())
             } else {
                 Err(DataFusionError::Plan(
                     "SHOW TABLES is not supported unless information_schema is enabled"
@@ -2078,7 +2078,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         let mut rewrite = DFParser::parse_sql(&query)?;
         assert_eq!(rewrite.len(), 1);
-        self.statement_to_plan(rewrite.pop().unwrap())
+        self.statement_to_plan(rewrite.pop_front().unwrap())
     }
 
     /// Return true if there is a table provider available for "schema.table"
@@ -3881,7 +3881,7 @@ mod tests {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(sql);
         let mut ast = result.unwrap();
-        planner.statement_to_plan(ast.remove(0))
+        planner.statement_to_plan(ast.pop_front().unwrap())
     }
 
     /// Create logical plan, write with formatter, compare to expected output
