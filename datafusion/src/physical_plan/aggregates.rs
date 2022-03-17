@@ -288,6 +288,7 @@ pub fn create_aggregate_expr(
                 coerced_exprs_types[0].clone(),
             ))
         }
+        #[cfg(not(feature = "roaring_bitmap"))]
         (AggregateFunction::BitMapCountDistinct, _) => {
             return Err(DataFusionError::NotImplemented(
                 "BitMapCountDistinct aggregations are not available".to_string(),
