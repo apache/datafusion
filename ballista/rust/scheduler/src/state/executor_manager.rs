@@ -15,32 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use ballista_core::serde::protobuf::{ExecutorHeartbeat, TaskStatus};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use ballista_core::serde::protobuf::ExecutorHeartbeat;
 use ballista_core::serde::scheduler::{ExecutorData, ExecutorDataChange};
 use log::{error, info, warn};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-type JobTasks = HashMap<u32, HashMap<u32, TaskStatus>>;
 
 #[derive(Clone)]
-pub(crate) struct InMemorySchedulerState {
+pub(crate) struct ExecutorManager {
     executors_heartbeat: Arc<RwLock<HashMap<String, ExecutorHeartbeat>>>,
     executors_data: Arc<RwLock<HashMap<String, ExecutorData>>>,
-
-    // job -> stage -> partition
-    tasks: Arc<RwLock<HashMap<String, JobTasks>>>,
 }
 
-/// For in-memory state, we don't use async to provide related services
-impl InMemorySchedulerState {
+impl ExecutorManager {
     pub(crate) fn new() -> Self {
         Self {
             executors_heartbeat: Arc::new(RwLock::new(HashMap::new())),
             executors_data: Arc::new(RwLock::new(HashMap::new())),
-            tasks: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -71,6 +65,7 @@ impl InMemorySchedulerState {
             .collect()
     }
 
+    #[allow(dead_code)]
     fn get_alive_executors_within_one_minute(&self) -> HashSet<String> {
         let now_epoch_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -121,6 +116,8 @@ impl InMemorySchedulerState {
     /// There are two checks:
     /// 1. firstly alive
     /// 2. secondly available task slots > 0
+    #[cfg(not(test))]
+    #[allow(dead_code)]
     pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
         let mut res = {
             let alive_executors = self.get_alive_executors_within_one_minute();
@@ -137,72 +134,12 @@ impl InMemorySchedulerState {
         res
     }
 
-    pub(crate) fn save_task_status(&self, status: &TaskStatus) {
-        let task_id = status.task_id.as_ref().unwrap();
-        let mut tasks = self.tasks.write();
-        let job_tasks = tasks
-            .entry(task_id.job_id.clone())
-            .or_insert_with(HashMap::new);
-        let stage_tasks = job_tasks
-            .entry(task_id.stage_id)
-            .or_insert_with(HashMap::new);
-        stage_tasks.insert(task_id.partition_id, status.clone());
-    }
-
-    pub(crate) fn _get_task(
-        &self,
-        job_id: &str,
-        stage_id: usize,
-        partition_id: usize,
-    ) -> Option<TaskStatus> {
-        let tasks = self.tasks.read();
-        let job_tasks = tasks.get(job_id);
-        if let Some(job_tasks) = job_tasks {
-            let stage_id = stage_id as u32;
-            let stage_tasks = job_tasks.get(&stage_id);
-            if let Some(stage_tasks) = stage_tasks {
-                let partition_id = partition_id as u32;
-                stage_tasks.get(&partition_id).cloned()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn get_job_tasks(&self, job_id: &str) -> Option<Vec<TaskStatus>> {
-        let tasks = self.tasks.read();
-        let job_tasks = tasks.get(job_id);
-
-        if let Some(job_tasks) = job_tasks {
-            let mut res = vec![];
-            fill_job_tasks(&mut res, job_tasks);
-            Some(res)
-        } else {
-            None
-        }
-    }
-
-    pub(crate) fn get_tasks(&self) -> Vec<TaskStatus> {
-        let mut res = vec![];
-
-        let tasks = self.tasks.read();
-        for (_job_id, job_tasks) in tasks.iter() {
-            fill_job_tasks(&mut res, job_tasks);
-        }
-
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn get_available_executors_data(&self) -> Vec<ExecutorData> {
+        let mut res: Vec<ExecutorData> =
+            self.executors_data.read().values().cloned().collect();
+        res.sort_by(|a, b| Ord::cmp(&b.available_task_slots, &a.available_task_slots));
         res
-    }
-}
-
-fn fill_job_tasks(
-    res: &mut Vec<TaskStatus>,
-    job_tasks: &HashMap<u32, HashMap<u32, TaskStatus>>,
-) {
-    for stage_tasks in job_tasks.values() {
-        for task_status in stage_tasks.values() {
-            res.push(task_status.clone());
-        }
     }
 }
