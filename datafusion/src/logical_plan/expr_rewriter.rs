@@ -218,15 +218,9 @@ impl ExprRewritable for Expr {
                 negated,
             },
             Expr::Wildcard => Expr::Wildcard,
-            Expr::QualifiedWildcard {
-                catalog,
-                schema,
-                table,
-            } => Expr::QualifiedWildcard {
-                catalog,
-                schema,
-                table,
-            },
+            Expr::QualifiedWildcard { qualifier } => {
+                Expr::QualifiedWildcard { qualifier }
+            }
             Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
                 expr: rewrite_boxed(expr, rewriter)?,
                 key,

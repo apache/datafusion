@@ -1091,7 +1091,7 @@ pub(crate) fn expand_wildcard(
 }
 
 pub(crate) fn expand_qualified_wildcard(
-    table: &str,
+    qualifier: &str,
     table_provider: Option<Arc<dyn TableProvider>>,
     schema: &DFSchema,
     plan: &LogicalPlan,
@@ -1099,8 +1099,9 @@ pub(crate) fn expand_qualified_wildcard(
     if let Some(table_provider) = table_provider {
         expand_wildcard(&table_provider.schema().to_dfschema()?, plan)
     } else {
+        // if it doesnt exist in table_provider, it should be an alias
         let qualified_fields = schema
-            .fields_with_qualified(table)
+            .fields_with_qualified(qualifier)
             .into_iter()
             .cloned()
             .collect();

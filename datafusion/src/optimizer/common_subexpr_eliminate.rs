@@ -460,19 +460,9 @@ impl ExprIdentifierVisitor<'_> {
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");
             }
-            Expr::QualifiedWildcard {
-                catalog,
-                schema,
-                table,
-            } => {
+            Expr::QualifiedWildcard { qualifier } => {
                 desc.push_str("QualifiedWildcard-");
-                if let Some(catalog) = catalog {
-                    desc.push_str(&format!("{}.", catalog.clone()));
-                }
-                if let Some(schema) = schema {
-                    desc.push_str(&format!("{}.", schema.clone()));
-                }
-                desc.push_str(table);
+                desc.push_str(qualifier);
             }
             Expr::GetIndexedField { key, .. } => {
                 desc.push_str("GetIndexedField-");

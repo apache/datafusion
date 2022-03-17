@@ -1011,33 +1011,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         expand_wildcard(input_schema, plan)?
                     }
-                    Expr::QualifiedWildcard {
-                        catalog,
-                        schema,
-                        table,
-                    } => {
-                        let table_ref = match (&catalog, &schema, &table) {
-                            (None, None, table) => TableReference::Bare { table },
-                            (None, Some(schema), table) => {
-                                TableReference::Partial { schema, table }
-                            }
-                            (Some(catalog), Some(schema), table) => {
-                                TableReference::Full {
-                                    catalog,
-                                    schema,
-                                    table,
-                                }
-                            }
-                            _ => {
-                                return Err(DataFusionError::Plan(
-                                    "invalid qualified wildcard".to_string(),
-                                ))
-                            }
-                        };
+                    Expr::QualifiedWildcard { ref qualifier } => {
+                        let table_ref = TableReference::from(qualifier.as_ref());
                         let table_provider =
                             self.schema_provider.get_table_provider(table_ref);
                         expand_qualified_wildcard(
-                            &table,
+                            qualifier,
                             table_provider,
                             input_schema,
                             plan,
@@ -1244,23 +1223,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )),
             SelectItem::Wildcard => Ok(Expr::Wildcard),
             SelectItem::QualifiedWildcard(ref object_name) => {
-                let table_ref: TableReference = object_name.try_into()?;
-                let (catalog, schema, table) = match table_ref {
-                    TableReference::Bare { table } => (None, None, table),
-                    TableReference::Partial { schema, table } => {
-                        (None, Some(schema.to_string()), table)
-                    }
-                    TableReference::Full {
-                        catalog,
-                        schema,
-                        table,
-                    } => (Some(catalog.to_string()), Some(schema.to_string()), table),
-                };
-                Ok(Expr::QualifiedWildcard {
-                    catalog,
-                    schema,
-                    table: table.to_string(),
-                })
+                let qualifier = format!("{}", object_name);
+                Ok(Expr::QualifiedWildcard { qualifier })
             }
         }
     }
