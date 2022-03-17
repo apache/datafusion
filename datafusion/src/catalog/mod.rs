@@ -105,7 +105,21 @@ impl<'a> TableReference<'a> {
 
 impl<'a> From<&'a str> for TableReference<'a> {
     fn from(s: &'a str) -> Self {
-        Self::Bare { table: s }
+        let parts: Vec<&str> = s.split('.').collect();
+
+        match parts.len() {
+            1 => Self::Bare { table: s },
+            2 => Self::Partial {
+                schema: parts[0],
+                table: parts[1],
+            },
+            3 => Self::Full {
+                catalog: parts[0],
+                schema: parts[1],
+                table: parts[2],
+            },
+            _ => Self::Bare { table: s },
+        }
     }
 }
 

@@ -221,6 +221,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
         | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
