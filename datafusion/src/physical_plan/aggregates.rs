@@ -280,12 +280,18 @@ pub fn create_aggregate_expr(
                 "MEDIAN(DISTINCT) aggregations are not available".to_string(),
             ));
         }
+        #[cfg(feature = "roaring_bitmap")]
         (AggregateFunction::BitMapCountDistinct, _) => {
             Arc::new(expressions::BitMapDistinct::new(
                 coerced_phy_exprs[0].clone(),
                 name,
                 coerced_exprs_types[0].clone(),
             ))
+        }
+        (AggregateFunction::BitMapCountDistinct, _) => {
+            return Err(DataFusionError::NotImplemented(
+                "BitMapCountDistinct aggregations are not available".to_string(),
+            ));
         }
     })
 }

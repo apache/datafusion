@@ -312,6 +312,7 @@ impl From<&AggregateFunction> for protobuf::AggregateFunction {
             AggregateFunction::Correlation => Self::Correlation,
             AggregateFunction::ApproxPercentileCont => Self::ApproxPercentileCont,
             AggregateFunction::ApproxMedian => Self::ApproxMedian,
+            AggregateFunction::BitMapCountDistinct => Self::BitmapDistinct,
         }
     }
 }
@@ -775,9 +776,8 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                                 scalar, datatype,
                                             ))
                                         }
-            AggregateFunction::BitMapCountDistinct => Self::BitmapDistinct,
-        }
-    (
+                                    }
+                                    (
                                         scalar::ScalarValue::Boolean(_),
                                         DataType::Boolean,
                                     ) => scalar.try_into(),
