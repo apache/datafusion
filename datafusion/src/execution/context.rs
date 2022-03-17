@@ -3036,8 +3036,8 @@ mod tests {
     #[tokio::test]
     async fn sql_create_schema() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
-        let mut ctx = ExecutionContext::with_config(
-            ExecutionConfig::new().with_information_schema(true),
+        let mut ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
         );
 
         // Create schema
