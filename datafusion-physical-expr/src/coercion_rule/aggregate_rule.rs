@@ -19,9 +19,9 @@
 
 use crate::expressions::{
     is_approx_percentile_cont_supported_arg_type, is_avg_support_arg_type,
-    is_correlation_support_arg_type, is_covariance_support_arg_type,
-    is_stddev_support_arg_type, is_sum_support_arg_type, is_variance_support_arg_type,
-    try_cast,
+    is_bitmap_count_distinct_supported_arg_type, is_correlation_support_arg_type,
+    is_covariance_support_arg_type, is_stddev_support_arg_type, is_sum_support_arg_type,
+    is_variance_support_arg_type, try_cast,
 };
 use crate::PhysicalExpr;
 use arrow::datatypes::DataType;
@@ -154,6 +154,15 @@ pub fn coerce_types(
         }
         AggregateFunction::ApproxMedian => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
+        AggregateFunction::BitMapCountDistinct => {
+            if !is_bitmap_count_distinct_supported_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(
                     "The function {:?} does not support inputs of type {:?}.",
                     agg_fun, input_types[0]
