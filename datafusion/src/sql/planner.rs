@@ -29,9 +29,9 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
-    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
-    ToDFSchema, ToStringifiedPlan,
+    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, LogicalPlan,
+    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -172,7 +172,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 "Only `CREATE TABLE table_name AS SELECT ...` statement is supported"
                     .to_string(),
             )),
-
+            Statement::CreateSchema {
+                schema_name,
+                if_not_exists,
+            } => Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                schema_name: schema_name.to_string(),
+                if_not_exists,
+                schema: Arc::new(DFSchema::empty()),
+            })),
             Statement::Drop {
                 object_type: ObjectType::Table,
                 if_exists,

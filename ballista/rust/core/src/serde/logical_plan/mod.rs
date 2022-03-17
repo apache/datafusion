@@ -33,8 +33,8 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan,
-    LogicalPlanBuilder, Repartition, TableScan, Values,
+    Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
+    Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan, Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -320,6 +320,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
+                }))
+            }
+            LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
+                let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
+                    BallistaError::General(String::from(
+                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema.",
+                    ))
+                })?;
+
+                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                    schema_name: create_catalog_schema.schema_name.clone(),
+                    if_not_exists: create_catalog_schema.if_not_exists,
+                    schema: pb_schema.try_into()?,
                 }))
             }
             LogicalPlanType::Analyze(analyze) => {
@@ -755,6 +768,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
+            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                schema_name,
+                if_not_exists,
+                schema: df_schema,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
+                    protobuf::CreateCatalogSchemaNode {
+                        schema_name: schema_name.clone(),
+                        if_not_exists: *if_not_exists,
+                        schema: Some(df_schema.into()),
+                    },
+                )),
+            }),
             LogicalPlan::Analyze(a) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),

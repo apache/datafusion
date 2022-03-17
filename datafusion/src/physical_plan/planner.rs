@@ -806,6 +806,15 @@ impl DefaultPhysicalPlanner {
                         "Unsupported logical plan: CreateExternalTable".to_string(),
                     ))
                 }
+                LogicalPlan::CreateCatalogSchema(_) => {
+                    // There is no default plan for "CREATE SCHEMA".
+                    // It must be handled at a higher level (so
+                    // that the schema can be registered with
+                    // the context)
+                    Err(DataFusionError::Internal(
+                        "Unsupported logical plan: CreateCatalogSchema".to_string(),
+                    ))
+                }
                 | LogicalPlan::CreateMemoryTable(_) | LogicalPlan::DropTable (_) => {
                     // Create a dummy exec.
                     Ok(Arc::new(EmptyExec::new(

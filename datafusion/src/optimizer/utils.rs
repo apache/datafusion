@@ -267,7 +267,8 @@ pub fn from_plan(
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::DropTable(_) => {
+        | LogicalPlan::DropTable(_)
+        | LogicalPlan::CreateCatalogSchema(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{:?} should have no exprs", plan);
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
