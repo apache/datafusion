@@ -176,6 +176,26 @@ impl DistributedPlanner {
     }
 }
 
+/// Returns the unresolved shuffles in the execution plan
+pub fn find_unresolved_shuffles(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Vec<UnresolvedShuffleExec>> {
+    if let Some(unresolved_shuffle) =
+        plan.as_any().downcast_ref::<UnresolvedShuffleExec>()
+    {
+        Ok(vec![unresolved_shuffle.clone()])
+    } else {
+        Ok(plan
+            .children()
+            .iter()
+            .map(find_unresolved_shuffles)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+}
+
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
     partition_locations: &HashMap<usize, HashMap<usize, Vec<PartitionLocation>>>,
