@@ -134,38 +134,56 @@ impl Accumulator for BitmapDistinctCountAccumulator {
         match value.data_type() {
             DataType::Int8 => {
                 let array = value.as_any().downcast_ref::<Int8Array>().unwrap();
-                for i in 0..array.len() {
-                    self.bitmap.insert(array.value(i) as u32);
+                for value in array.iter() {
+                    match value {
+                        Some(v) => self.bitmap.insert(v as u32),
+                        None => false,
+                    };
                 }
             }
             DataType::Int16 => {
                 let array = value.as_any().downcast_ref::<Int16Array>().unwrap();
-                for i in 0..array.len() {
-                    self.bitmap.insert(array.value(i) as u32);
+                for value in array.iter() {
+                    match value {
+                        Some(v) => self.bitmap.insert(v as u32),
+                        None => false,
+                    };
                 }
             }
             DataType::Int32 => {
                 let array = value.as_any().downcast_ref::<Int32Array>().unwrap();
-                for i in 0..array.len() {
-                    self.bitmap.insert(array.value(i) as u32);
+                for value in array.iter() {
+                    match value {
+                        Some(v) => self.bitmap.insert(v as u32),
+                        None => false,
+                    };
                 }
             }
             DataType::UInt8 => {
                 let array = value.as_any().downcast_ref::<UInt8Array>().unwrap();
-                for i in 0..array.len() {
-                    self.bitmap.insert(array.value(i) as u32);
+                for value in array.iter() {
+                    match value {
+                        Some(v) => self.bitmap.insert(v as u32),
+                        None => false,
+                    };
                 }
             }
             DataType::UInt16 => {
                 let array = value.as_any().downcast_ref::<UInt16Array>().unwrap();
-                for i in 0..array.len() {
-                    self.bitmap.insert(array.value(i) as u32);
+                for value in array.iter() {
+                    match value {
+                        Some(v) => self.bitmap.insert(v as u32),
+                        None => false,
+                    };
                 }
             }
             DataType::UInt32 => {
                 let array = value.as_any().downcast_ref::<UInt32Array>().unwrap();
-                for i in 0..array.len() {
-                    self.bitmap.insert(array.value(i));
+                for value in array.iter() {
+                    match value {
+                        Some(v) => self.bitmap.insert(v as u32),
+                        None => false,
+                    };
                 }
             }
             e => {
