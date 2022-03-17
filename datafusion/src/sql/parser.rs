@@ -25,6 +25,7 @@ use sqlparser::{
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
+use std::collections::VecDeque;
 use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
@@ -116,7 +117,7 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a SQL statement and produce a set of statements with dialect
-    pub fn parse_sql(sql: &str) -> Result<Vec<Statement>, ParserError> {
+    pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
         let dialect = &GenericDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
     }
@@ -125,9 +126,9 @@ impl<'a> DFParser<'a> {
     pub fn parse_sql_with_dialect(
         sql: &str,
         dialect: &dyn Dialect,
-    ) -> Result<Vec<Statement>, ParserError> {
+    ) -> Result<VecDeque<Statement>, ParserError> {
         let mut parser = DFParser::new_with_dialect(sql, dialect)?;
-        let mut stmts = Vec::new();
+        let mut stmts = VecDeque::new();
         let mut expecting_statement_delimiter = false;
         loop {
             // ignore empty statements (between successive statement delimiters)
@@ -143,7 +144,7 @@ impl<'a> DFParser<'a> {
             }
 
             let statement = parser.parse_statement()?;
-            stmts.push(statement);
+            stmts.push_back(statement);
             expecting_statement_delimiter = true;
         }
         Ok(stmts)

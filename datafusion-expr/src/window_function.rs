@@ -84,7 +84,7 @@ pub enum BuiltInWindowFunction {
     RowNumber,
     /// rank of the current row with gaps; same as row_number of its first peer
     Rank,
-    /// ank of the current row without gaps; this function counts peer groups
+    /// rank of the current row without gaps; this function counts peer groups
     DenseRank,
     /// relative rank of the current row: (rank - 1) / (total rows - 1)
     PercentRank,

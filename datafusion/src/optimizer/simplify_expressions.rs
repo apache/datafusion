@@ -373,7 +373,7 @@ impl<'a> ConstEvaluator<'a> {
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. }
-            | Expr::ScalarVariable(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }

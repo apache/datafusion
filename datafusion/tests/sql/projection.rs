@@ -22,10 +22,10 @@ use super::*;
 
 #[tokio::test]
 async fn projection_same_fields() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
     let sql = "select (1+1) as a from (select 1 as a) as b;";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec!["+---+", "| a |", "+---+", "| 2 |", "+---+"];
     assert_batches_eq!(expected, &actual);
@@ -35,13 +35,13 @@ async fn projection_same_fields() -> Result<()> {
 
 #[tokio::test]
 async fn projection_type_alias() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
 
     // Query that aliases one column to the name of a different column
     // that also has a different type (c1 == float32, c3 == boolean)
     let sql = "SELECT c1 as c3 FROM aggregate_simple ORDER BY c3 LIMIT 2";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+---------+",
@@ -58,10 +58,10 @@ async fn projection_type_alias() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_avg_with_projection() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------------------+----+",
         "| AVG(aggregate_test_100.c12) | c1 |",
@@ -139,7 +139,6 @@ async fn projection_on_table_scan() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
-    let runtime = ctx.state.lock().runtime_env.clone();
 
     let table = ctx.table("test")?;
     let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
@@ -170,8 +169,8 @@ async fn projection_on_table_scan() -> Result<()> {
 
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
-
-    let batches = collect(physical_plan, runtime).await?;
+    let task_ctx = ctx.task_ctx();
+    let batches = collect(physical_plan, task_ctx).await?;
     assert_eq!(40, batches.iter().map(|x| x.num_rows()).sum::<usize>());
 
     Ok(())
@@ -218,7 +217,7 @@ async fn projection_on_memory_scan() -> Result<()> {
         .build()?;
     assert_fields_eq(&plan, vec!["b"]);
 
-    let ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
     let optimized_plan = ctx.optimize(&plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
@@ -247,8 +246,8 @@ async fn projection_on_memory_scan() -> Result<()> {
     assert_eq!(1, physical_plan.schema().fields().len());
     assert_eq!("b", physical_plan.schema().field(0).name().as_str());
 
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let batches = collect(physical_plan, runtime).await?;
+    let task_ctx = ctx.task_ctx();
+    let batches = collect(physical_plan, task_ctx).await?;
     assert_eq!(1, batches.len());
     assert_eq!(1, batches[0].num_columns());
     assert_eq!(4, batches[0].num_rows());

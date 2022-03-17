@@ -20,7 +20,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     let mem_table = create_memtable()?;
 
     // create local execution context
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // Register the in-memory table containing the data
     ctx.register_table("users", Arc::new(mem_table))?;

@@ -32,7 +32,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 use futures::Stream;
 
@@ -99,7 +99,7 @@ impl ExecutionPlan for MemoryExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(MemoryStream::try_new(
             self.partitions[partition].clone(),
@@ -223,6 +223,7 @@ mod tests {
     use super::*;
     use crate::from_slice::FromSlice;
     use crate::physical_plan::ColumnStatistics;
+    use crate::prelude::SessionContext;
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use futures::StreamExt;
@@ -250,7 +251,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&[vec![batch]], schema, Some(vec![2, 1]))?;
@@ -276,7 +278,7 @@ mod tests {
         );
 
         // scan with projection
-        let mut it = executor.execute(0, runtime).await?;
+        let mut it = executor.execute(0, task_ctx).await?;
         let batch2 = it.next().await.unwrap()?;
         assert_eq!(2, batch2.schema().fields().len());
         assert_eq!("c", batch2.schema().field(0).name());
@@ -288,7 +290,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_without_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let (schema, batch) = mock_data()?;
 
         let executor = MemoryExec::try_new(&[vec![batch]], schema, None)?;
@@ -325,7 +328,7 @@ mod tests {
             ])
         );
 
-        let mut it = executor.execute(0, runtime).await?;
+        let mut it = executor.execute(0, task_ctx).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(4, batch1.schema().fields().len());
         assert_eq!(4, batch1.num_columns());

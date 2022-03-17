@@ -19,7 +19,7 @@
 use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -95,11 +95,11 @@ impl ExecutionPlan for NdJsonExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = runtime.batch_size();
+        let batch_size = context.runtime.batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
@@ -156,6 +156,7 @@ mod tests {
             local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
+    use crate::prelude::SessionContext;
 
     use super::*;
 
@@ -169,7 +170,8 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_without_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(FileScanConfig {
@@ -206,7 +208,7 @@ mod tests {
             &DataType::Utf8
         );
 
-        let mut it = exec.execute(0, runtime).await?;
+        let mut it = exec.execute(0, task_ctx).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -224,7 +226,8 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_with_missing_column() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         use arrow::datatypes::DataType;
         let path = format!("{}/1.json", TEST_DATA_BASE);
 
@@ -246,7 +249,7 @@ mod tests {
             table_partition_cols: vec![],
         });
 
-        let mut it = exec.execute(0, runtime).await?;
+        let mut it = exec.execute(0, task_ctx).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 3);
@@ -265,7 +268,8 @@ mod tests {
 
     #[tokio::test]
     async fn nd_json_exec_file_projection() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let path = format!("{}/1.json", TEST_DATA_BASE);
         let exec = NdJsonExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
@@ -284,7 +288,7 @@ mod tests {
         inferred_schema.field_with_name("c").unwrap();
         inferred_schema.field_with_name("d").unwrap_err();
 
-        let mut it = exec.execute(0, runtime).await?;
+        let mut it = exec.execute(0, task_ctx).await?;
         let batch = it.next().await.unwrap()?;
 
         assert_eq!(batch.num_rows(), 4);
