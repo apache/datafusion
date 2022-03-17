@@ -360,6 +360,7 @@ mod tests {
     use prost::Message;
     use std::any::Any;
 
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use std::convert::TryInto;
     use std::fmt;
     use std::fmt::{Debug, Formatter};
@@ -692,10 +693,11 @@ mod tests {
     #[tokio::test]
     async fn test_extension_plan() -> crate::error::Result<()> {
         let store = Arc::new(LocalFileSystem {});
-        let config =
-            SessionConfig::new().with_query_planner(Arc::new(TopKQueryPlanner {}));
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let session_state = SessionState::with_config(SessionConfig::new(), runtime)
+            .with_query_planner(Arc::new(TopKQueryPlanner {}));
 
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::with_state(session_state);
 
         let scan = LogicalPlanBuilder::scan_csv(
             store,

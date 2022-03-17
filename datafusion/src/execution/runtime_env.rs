@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Execution runtime environment that tracks memory, disk and various configurations
-//! that are used during physical plan execution.
+//! Execution runtime environment that holds object Store, memory manager, disk manager
+//! and various system level components that are used during physical plan execution.
 
 use crate::{
     error::Result,
@@ -26,19 +26,21 @@ use crate::{
     },
 };
 
+use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
+use datafusion_common::DataFusionError;
 use std::fmt::{Debug, Formatter};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Clone)]
-/// Execution runtime environment. This structure is passed to the
-/// physical plans when they are run.
+/// Execution runtime environment.
 pub struct RuntimeEnv {
-    /// Default batch size while creating new batches
-    pub batch_size: usize,
     /// Runtime memory management
     pub memory_manager: Arc<MemoryManager>,
     /// Manage temporary files during query execution
     pub disk_manager: Arc<DiskManager>,
+    /// Object Store Registry
+    pub object_store_registry: Arc<ObjectStoreRegistry>,
 }
 
 impl Debug for RuntimeEnv {
@@ -51,21 +53,15 @@ impl RuntimeEnv {
     /// Create env based on configuration
     pub fn new(config: RuntimeConfig) -> Result<Self> {
         let RuntimeConfig {
-            batch_size,
             memory_manager,
             disk_manager,
         } = config;
 
         Ok(Self {
-            batch_size,
             memory_manager: MemoryManager::new(memory_manager),
             disk_manager: DiskManager::try_new(disk_manager)?,
+            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
         })
-    }
-
-    /// Get execution batch size based on config
-    pub fn batch_size(&self) -> usize {
-        self.batch_size
     }
 
     /// Register the consumer to get it tracked
@@ -87,6 +83,30 @@ impl RuntimeEnv {
     pub fn shrink_tracker_usage(&self, delta: usize) {
         self.memory_manager.shrink_tracker_usage(delta)
     }
+
+    /// Registers a object store with scheme using a custom `ObjectStore` so that
+    /// an external file system or object storage system could be used against this context.
+    ///
+    /// Returns the `ObjectStore` previously registered for this scheme, if any
+    pub fn register_object_store(
+        &self,
+        scheme: impl Into<String>,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        let scheme = scheme.into();
+        self.object_store_registry
+            .register_store(scheme, object_store)
+    }
+
+    /// Retrieves a `ObjectStore` instance by scheme
+    pub fn object_store<'a>(
+        &self,
+        uri: &'a str,
+    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
+        self.object_store_registry
+            .get_by_uri(uri)
+            .map_err(DataFusionError::from)
+    }
 }
 
 impl Default for RuntimeEnv {
@@ -95,13 +115,9 @@ impl Default for RuntimeEnv {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 /// Execution runtime configuration
 pub struct RuntimeConfig {
-    /// Default batch size while creating new batches, it's especially useful
-    /// for buffer-in-memory batches since creating tiny batches would results
-    /// in too much metadata memory consumption.
-    pub batch_size: usize,
     /// DiskManager to manage temporary disk file usage
     pub disk_manager: DiskManagerConfig,
     /// MemoryManager to limit access to memory
@@ -112,14 +128,6 @@ impl RuntimeConfig {
     /// New with default values
     pub fn new() -> Self {
         Default::default()
-    }
-
-    /// Customize batch size
-    pub fn with_batch_size(mut self, n: usize) -> Self {
-        // batch size must be greater than zero
-        assert!(n > 0);
-        self.batch_size = n;
-        self
     }
 
     /// Customize disk manager
@@ -133,14 +141,19 @@ impl RuntimeConfig {
         self.memory_manager = memory_manager;
         self
     }
-}
 
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: 8192,
-            disk_manager: DiskManagerConfig::default(),
-            memory_manager: MemoryManagerConfig::default(),
-        }
+    /// Specify the total memory to use while running the DataFusion
+    /// plan to `max_memory * memory_fraction` in bytes.
+    ///
+    /// Note DataFusion does not yet respect this limit in all cases.
+    pub fn with_memory_limit(self, max_memory: usize, memory_fraction: f64) -> Self {
+        self.with_memory_manager(
+            MemoryManagerConfig::try_new_limit(max_memory, memory_fraction).unwrap(),
+        )
+    }
+
+    /// Use the specified path to create any needed temporary files
+    pub fn with_temp_file_path(self, path: impl Into<PathBuf>) -> Self {
+        self.with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]))
     }
 }

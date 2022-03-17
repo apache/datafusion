@@ -42,7 +42,6 @@ use crate::{
 use log::{debug, trace};
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 use std::string::String;
 use std::sync::Arc;
 
@@ -55,7 +54,6 @@ use crate::catalog::{
 };
 use crate::dataframe::DataFrame;
 use crate::datasource::listing::ListingTableConfig;
-use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
@@ -93,12 +91,7 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::{
-    disk_manager::DiskManagerConfig,
-    memory_manager::MemoryManagerConfig,
-    options::{AvroReadOptions, CsvReadOptions},
-    DiskManager, MemoryManager,
-};
+use super::options::{AvroReadOptions, CsvReadOptions};
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -145,7 +138,9 @@ use super::{
 pub struct SessionContext {
     /// Uuid for the session
     session_id: String,
-    /// Internal state for the context
+    /// Session start time
+    pub session_start_time: DateTime<Utc>,
+    /// Shared session state for the session
     pub state: Arc<Mutex<SessionState>>,
 }
 
@@ -156,49 +151,32 @@ impl Default for SessionContext {
 }
 
 impl SessionContext {
-    /// Creates a new execution context using a default configuration.
+    /// Creates a new execution context using a default session configuration.
     pub fn new() -> Self {
         Self::with_config(SessionConfig::new())
     }
 
-    /// Creates a new session context using the provided configuration.
+    /// Creates a new session context using the provided session configuration.
     pub fn with_config(config: SessionConfig) -> Self {
-        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        Self::with_config_rt(config, runtime)
+    }
 
-        if config.create_default_catalog_and_schema {
-            let default_catalog = MemoryCatalogProvider::new();
-
-            default_catalog.register_schema(
-                config.default_schema.clone(),
-                Arc::new(MemorySchemaProvider::new()),
-            );
-
-            let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
-                Arc::new(CatalogWithInformationSchema::new(
-                    Arc::downgrade(&catalog_list),
-                    Arc::new(default_catalog),
-                ))
-            } else {
-                Arc::new(default_catalog)
-            };
-
-            catalog_list
-                .register_catalog(config.default_catalog.clone(), default_catalog);
-        }
-
-        let runtime_env = Arc::new(RuntimeEnv::new(config.runtime.clone()).unwrap());
-        let state = SessionState {
-            session_id: Uuid::new_v4().to_string(),
-            catalog_list,
-            scalar_functions: HashMap::new(),
-            aggregate_functions: HashMap::new(),
-            config,
-            execution_props: ExecutionProps::new(),
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
-            runtime_env,
-        };
+    /// Creates a new session context using the provided configuration and RuntimeEnv.
+    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+        let state = SessionState::with_config(config, runtime);
         Self {
             session_id: state.session_id.clone(),
+            session_start_time: chrono::Utc::now(),
+            state: Arc::new(Mutex::new(state)),
+        }
+    }
+
+    /// Creates a new session context using the provided session state.
+    pub fn with_state(state: SessionState) -> Self {
+        Self {
+            session_id: state.session_id.clone(),
+            session_start_time: chrono::Utc::now(),
             state: Arc::new(Mutex::new(state)),
         }
     }
@@ -206,6 +184,11 @@ impl SessionContext {
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
         self.state.lock().runtime_env.clone()
+    }
+
+    /// Return a copied version of config for this Session
+    pub fn copied_config(&self) -> SessionConfig {
+        self.state.lock().config.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -246,7 +229,7 @@ impl SessionContext {
                     format: file_format,
                     collect_stat: false,
                     file_extension: file_extension.to_owned(),
-                    target_partitions: self.state.lock().config.target_partitions,
+                    target_partitions: self.copied_config().target_partitions,
                     table_partition_cols: vec![],
                 };
 
@@ -366,8 +349,8 @@ impl SessionContext {
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
-        let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().config.target_partitions;
+        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let target_partitions = self.copied_config().target_partitions;
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
@@ -397,8 +380,8 @@ impl SessionContext {
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
-        let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().config.target_partitions;
+        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let target_partitions = self.copied_config().target_partitions;
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_csv(
@@ -419,8 +402,8 @@ impl SessionContext {
         uri: impl Into<String>,
     ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
-        let (object_store, path) = self.object_store(&uri)?;
-        let target_partitions = self.state.lock().config.target_partitions;
+        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let target_partitions = self.copied_config().target_partitions;
         let logical_plan =
             LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
                 .await?
@@ -449,7 +432,7 @@ impl SessionContext {
         options: ListingOptions,
         provided_schema: Option<SchemaRef>,
     ) -> Result<()> {
-        let (object_store, path) = self.object_store(uri)?;
+        let (object_store, path) = self.runtime_env().object_store(uri)?;
         let resolved_schema = match provided_schema {
             None => {
                 options
@@ -475,7 +458,7 @@ impl SessionContext {
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
-            options.to_listing_options(self.state.lock().config.target_partitions);
+            options.to_listing_options(self.copied_config().target_partitions);
 
         self.register_listing_table(
             name,
@@ -492,8 +475,8 @@ impl SessionContext {
     /// executed against this context.
     pub async fn register_parquet(&mut self, name: &str, uri: &str) -> Result<()> {
         let (target_partitions, enable_pruning) = {
-            let m = self.state.lock();
-            (m.config.target_partitions, m.config.parquet_pruning)
+            let conf = self.copied_config();
+            (conf.target_partitions, conf.parquet_pruning)
         };
         let file_format = ParquetFormat::default().with_enable_pruning(enable_pruning);
 
@@ -519,7 +502,7 @@ impl SessionContext {
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
         let listing_options =
-            options.to_listing_options(self.state.lock().config.target_partitions);
+            options.to_listing_options(self.copied_config().target_partitions);
 
         self.register_listing_table(name, uri, listing_options, options.schema)
             .await?;
@@ -538,9 +521,9 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-
+        let information_schema = self.copied_config().information_schema;
         let state = self.state.lock();
-        let catalog = if state.config.information_schema {
+        let catalog = if information_schema {
             Arc::new(CatalogWithInformationSchema::new(
                 Arc::downgrade(&state.catalog_list),
                 catalog,
@@ -555,35 +538,6 @@ impl SessionContext {
     /// Retrieves a `CatalogProvider` instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
         self.state.lock().catalog_list.catalog(name)
-    }
-
-    /// Registers a object store with scheme using a custom `ObjectStore` so that
-    /// an external file system or object storage system could be used against this context.
-    ///
-    /// Returns the `ObjectStore` previously registered for this scheme, if any
-    pub fn register_object_store(
-        &self,
-        scheme: impl Into<String>,
-        object_store: Arc<dyn ObjectStore>,
-    ) -> Option<Arc<dyn ObjectStore>> {
-        let scheme = scheme.into();
-
-        self.state
-            .lock()
-            .object_store_registry
-            .register_store(scheme, object_store)
-    }
-
-    /// Retrieves a `ObjectStore` instance by scheme
-    pub fn object_store<'a>(
-        &self,
-        uri: &'a str,
-    ) -> Result<(Arc<dyn ObjectStore>, &'a str)> {
-        self.state
-            .lock()
-            .object_store_registry
-            .get_by_uri(uri)
-            .map_err(DataFusionError::from)
     }
 
     /// Registers a table using a custom `TableProvider` so that
@@ -616,6 +570,20 @@ impl SessionContext {
             .lock()
             .schema_for_ref(table_ref)?
             .deregister_table(table_ref.table())
+    }
+
+    /// Check whether the given table exists in the schema provider or not
+    /// Returns true if the table exists.
+    pub fn table_exist<'a>(
+        &'a self,
+        table_ref: impl Into<TableReference<'a>>,
+    ) -> Result<bool> {
+        let table_ref = table_ref.into();
+        Ok(self
+            .state
+            .lock()
+            .schema_for_ref(table_ref)?
+            .table_exist(table_ref.table()))
     }
 
     /// Retrieves a DataFrame representing a table previously registered by calling the
@@ -667,26 +635,7 @@ impl SessionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        if let LogicalPlan::Explain(e) = plan {
-            let mut stringified_plans = e.stringified_plans.clone();
-
-            // optimize the child plan, capturing the output of each optimizer
-            let plan =
-                self.optimize_internal(e.plan.as_ref(), |optimized_plan, optimizer| {
-                    let optimizer_name = optimizer.name().to_string();
-                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
-                    stringified_plans.push(optimized_plan.to_stringified(plan_type));
-                })?;
-
-            Ok(LogicalPlan::Explain(Explain {
-                verbose: e.verbose,
-                plan: Arc::new(plan),
-                stringified_plans,
-                schema: e.schema.clone(),
-            }))
-        } else {
-            self.optimize_internal(plan, |_, _| {})
-        }
+        self.state.lock().optimize(plan)
     }
 
     /// Creates a physical plan from a logical plan.
@@ -694,7 +643,7 @@ impl SessionContext {
         &self,
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let (state, planner) = {
+        let state_cloned = {
             let mut state = self.state.lock();
             state.execution_props.start_execution();
 
@@ -707,10 +656,10 @@ impl SessionContext {
             // original state after it has been cloned, they will not be picked up by the
             // clone but that is okay, as it is equivalent to postponing the state update
             // by keeping the lock until the end of the function scope.
-            (state.clone(), Arc::clone(&state.config.query_planner))
+            state.clone()
         };
 
-        planner.create_physical_plan(logical_plan, &state).await
+        state_cloned.create_physical_plan(logical_plan).await
     }
 
     /// Executes a query and writes the results to a partitioned CSV file.
@@ -719,7 +668,8 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        plan_to_csv(self, plan, path).await
+        let state = self.state.lock().clone();
+        plan_to_csv(&state, plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
@@ -729,47 +679,13 @@ impl SessionContext {
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        plan_to_parquet(self, plan, path, writer_properties).await
-    }
-
-    /// Optimizes the logical plan by applying optimizer rules, and
-    /// invoking observer function after each call
-    fn optimize_internal<F>(
-        &self,
-        plan: &LogicalPlan,
-        mut observer: F,
-    ) -> Result<LogicalPlan>
-    where
-        F: FnMut(&LogicalPlan, &dyn OptimizerRule),
-    {
-        let state = &mut self.state.lock();
-        let execution_props = &mut state.execution_props.clone();
-        let optimizers = &state.config.optimizers;
-
-        let execution_props = execution_props.start_execution();
-
-        let mut new_plan = plan.clone();
-        debug!("Input logical plan:\n{}\n", plan.display_indent());
-        trace!("Full input logical plan:\n{:?}", plan);
-        for optimizer in optimizers {
-            new_plan = optimizer.optimize(&new_plan, execution_props)?;
-            observer(&new_plan, optimizer.as_ref());
-        }
-        debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
-        trace!("Full Optimized logical plan:\n {:?}", plan);
-        Ok(new_plan)
+        let state = self.state.lock().clone();
+        plan_to_parquet(&state, plan, path, writer_properties).await
     }
 
     /// Get a new TaskContext to run in this session
     pub fn task_ctx(&self) -> Arc<TaskContext> {
         Arc::new(TaskContext::from(self))
-    }
-}
-
-impl From<Arc<Mutex<SessionState>>> for SessionContext {
-    fn from(state: Arc<Mutex<SessionState>>) -> Self {
-        let session_id = state.lock().session_id.clone();
-        SessionContext { session_id, state }
     }
 }
 
@@ -816,17 +732,28 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Configuration options for execution context
+/// Session Configuration entry name
+pub const BATCH_SIZE: &str = "batch_size";
+/// Session Configuration entry name
+pub const TARGET_PARTITIONS: &str = "target_partitions";
+/// Session Configuration entry name
+pub const REPARTITION_JOINS: &str = "repartition_joins";
+/// Session Configuration entry name
+pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
+/// Session Configuration entry name
+pub const REPARTITION_WINDOWS: &str = "repartition_windows";
+/// Session Configuration entry name
+pub const PARQUET_PRUNING: &str = "parquet_pruning";
+
+/// Configuration options for session context
 #[derive(Clone)]
 pub struct SessionConfig {
+    /// Default batch size while creating new batches, it's especially useful
+    /// for buffer-in-memory batches since creating tiny batches would results
+    /// in too much metadata memory consumption.
+    pub batch_size: usize,
     /// Number of partitions for query execution. Increasing partitions can increase concurrency.
     pub target_partitions: usize,
-    /// Responsible for optimizing a logical plan
-    optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    /// Responsible for optimizing a physical execution plan
-    pub physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
-    /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
-    query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Default catalog name for table resolution
     default_catalog: String,
     /// Default schema name for table resolution
@@ -846,39 +773,14 @@ pub struct SessionConfig {
     /// parallel using the provided `target_partitions` level
     pub repartition_windows: bool,
     /// Should DataFusion parquet reader using the predicate to prune data
-    parquet_pruning: bool,
-    /// Runtime configurations such as memory threshold and local disk for spill
-    pub runtime: RuntimeConfig,
+    pub parquet_pruning: bool,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
+            batch_size: 8192,
             target_partitions: num_cpus::get(),
-            optimizers: vec![
-                // Simplify expressions first to maximize the chance
-                // of applying other optimizations
-                Arc::new(SimplifyExpressions::new()),
-                Arc::new(EliminateFilter::new()),
-                Arc::new(CommonSubexprEliminate::new()),
-                Arc::new(EliminateLimit::new()),
-                Arc::new(ProjectionPushDown::new()),
-                Arc::new(FilterPushDown::new()),
-                Arc::new(LimitPushDown::new()),
-                Arc::new(SingleDistinctToGroupBy::new()),
-                // ToApproxPerc must be applied last because
-                // it rewrites only the function and may interfere with
-                // other rules
-                Arc::new(ToApproxPerc::new()),
-            ],
-            physical_optimizers: vec![
-                Arc::new(AggregateStatistics::new()),
-                Arc::new(HashBuildProbeOrder::new()),
-                Arc::new(CoalesceBatches::new()),
-                Arc::new(Repartition::new()),
-                Arc::new(AddCoalescePartitionsExec::new()),
-            ],
-            query_planner: Arc::new(DefaultQueryPlanner {}),
             default_catalog: "datafusion".to_owned(),
             default_schema: "public".to_owned(),
             create_default_catalog_and_schema: true,
@@ -887,7 +789,6 @@ impl Default for SessionConfig {
             repartition_aggregations: true,
             repartition_windows: true,
             parquet_pruning: true,
-            runtime: RuntimeConfig::default(),
         }
     }
 }
@@ -898,64 +799,19 @@ impl SessionConfig {
         Default::default()
     }
 
+    /// Customize batch size
+    pub fn with_batch_size(mut self, n: usize) -> Self {
+        // batch size must be greater than zero
+        assert!(n > 0);
+        self.batch_size = n;
+        self
+    }
+
     /// Customize target_partitions
     pub fn with_target_partitions(mut self, n: usize) -> Self {
         // partition count must be greater than zero
         assert!(n > 0);
         self.target_partitions = n;
-        self
-    }
-
-    /// Customize batch size
-    pub fn with_batch_size(mut self, n: usize) -> Self {
-        // batch size must be greater than zero
-        assert!(n > 0);
-        self.runtime.batch_size = n;
-        self
-    }
-
-    /// Replace the default query planner
-    pub fn with_query_planner(
-        mut self,
-        query_planner: Arc<dyn QueryPlanner + Send + Sync>,
-    ) -> Self {
-        self.query_planner = query_planner;
-        self
-    }
-
-    /// Replace the optimizer rules
-    pub fn with_optimizer_rules(
-        mut self,
-        optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
-    ) -> Self {
-        self.optimizers = optimizers;
-        self
-    }
-
-    /// Replace the physical optimizer rules
-    pub fn with_physical_optimizer_rules(
-        mut self,
-        physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
-    ) -> Self {
-        self.physical_optimizers = physical_optimizers;
-        self
-    }
-
-    /// Adds a new [`OptimizerRule`]
-    pub fn add_optimizer_rule(
-        mut self,
-        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
-    ) -> Self {
-        self.optimizers.push(optimizer_rule);
-        self
-    }
-
-    /// Adds a new [`PhysicalOptimizerRule`]
-    pub fn add_physical_optimizer_rule(
-        mut self,
-        optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
-    ) -> Self {
-        self.physical_optimizers.push(optimizer_rule);
         self
     }
 
@@ -1003,54 +859,6 @@ impl SessionConfig {
     /// Enables or disables the use of pruning predicate for parquet readers to skip row groups
     pub fn with_parquet_pruning(mut self, enabled: bool) -> Self {
         self.parquet_pruning = enabled;
-        self
-    }
-
-    /// Customize runtime config
-    pub fn with_runtime_config(mut self, config: RuntimeConfig) -> Self {
-        self.runtime = config;
-        self
-    }
-
-    /// Use an an existing [MemoryManager]
-    pub fn with_existing_memory_manager(mut self, existing: Arc<MemoryManager>) -> Self {
-        self.runtime = self
-            .runtime
-            .with_memory_manager(MemoryManagerConfig::new_existing(existing));
-        self
-    }
-
-    /// Specify the total memory to use while running the DataFusion
-    /// plan to `max_memory * memory_fraction` in bytes.
-    ///
-    /// Note DataFusion does not yet respect this limit in all cases.
-    pub fn with_memory_limit(
-        mut self,
-        max_memory: usize,
-        memory_fraction: f64,
-    ) -> Result<Self> {
-        self.runtime =
-            self.runtime
-                .with_memory_manager(MemoryManagerConfig::try_new_limit(
-                    max_memory,
-                    memory_fraction,
-                )?);
-        Ok(self)
-    }
-
-    /// Use an an existing [DiskManager]
-    pub fn with_existing_disk_manager(mut self, existing: Arc<DiskManager>) -> Self {
-        self.runtime = self
-            .runtime
-            .with_disk_manager(DiskManagerConfig::new_existing(existing));
-        self
-    }
-
-    /// Use the specified path to create any needed temporary files
-    pub fn with_temp_file_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.runtime = self
-            .runtime
-            .with_disk_manager(DiskManagerConfig::new_specified(vec![path.into()]));
         self
     }
 }
@@ -1122,41 +930,84 @@ impl ExecutionProps {
 pub struct SessionState {
     /// Uuid for the session
     session_id: String,
+    /// Responsible for optimizing a logical plan
+    pub optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    /// Responsible for optimizing a physical execution plan
+    pub physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
+    pub query_planner: Arc<dyn QueryPlanner + Send + Sync>,
     /// Collection of catalogs containing schemas and ultimately TableProviders
     pub catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
     pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
     /// Aggregate functions registered in the context
     pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
-    /// Context configuration
+    /// Session configuration
     pub config: SessionConfig,
     /// Execution properties
     pub execution_props: ExecutionProps,
-    /// Object Store that are registered with the context
-    pub object_store_registry: Arc<ObjectStoreRegistry>,
     /// Runtime environment
     pub runtime_env: Arc<RuntimeEnv>,
 }
 
-impl Default for SessionState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SessionState {
-    /// Returns new SessionState
-    pub fn new() -> Self {
+    /// Returns new SessionState using the provided configuration and runtime
+    pub fn with_config(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let session_id = Uuid::new_v4().to_string();
+
+        let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
+        if config.create_default_catalog_and_schema {
+            let default_catalog = MemoryCatalogProvider::new();
+
+            default_catalog.register_schema(
+                config.default_schema.clone(),
+                Arc::new(MemorySchemaProvider::new()),
+            );
+
+            let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
+                Arc::new(CatalogWithInformationSchema::new(
+                    Arc::downgrade(&catalog_list),
+                    Arc::new(default_catalog),
+                ))
+            } else {
+                Arc::new(default_catalog)
+            };
+            catalog_list
+                .register_catalog(config.default_catalog.clone(), default_catalog);
+        }
+
         SessionState {
             session_id,
-            catalog_list: Arc::new(MemoryCatalogList::new()),
+            optimizers: vec![
+                // Simplify expressions first to maximize the chance
+                // of applying other optimizations
+                Arc::new(SimplifyExpressions::new()),
+                Arc::new(EliminateFilter::new()),
+                Arc::new(CommonSubexprEliminate::new()),
+                Arc::new(EliminateLimit::new()),
+                Arc::new(ProjectionPushDown::new()),
+                Arc::new(FilterPushDown::new()),
+                Arc::new(LimitPushDown::new()),
+                Arc::new(SingleDistinctToGroupBy::new()),
+                // ToApproxPerc must be applied last because
+                // it rewrites only the function and may interfere with
+                // other rules
+                Arc::new(ToApproxPerc::new()),
+            ],
+            physical_optimizers: vec![
+                Arc::new(AggregateStatistics::new()),
+                Arc::new(HashBuildProbeOrder::new()),
+                Arc::new(CoalesceBatches::new()),
+                Arc::new(Repartition::new()),
+                Arc::new(AddCoalescePartitionsExec::new()),
+            ],
+            query_planner: Arc::new(DefaultQueryPlanner {}),
+            catalog_list,
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
-            config: SessionConfig::new(),
+            config,
             execution_props: ExecutionProps::new(),
-            object_store_registry: Arc::new(ObjectStoreRegistry::new()),
-            runtime_env: Arc::new(RuntimeEnv::default()),
+            runtime_env: runtime,
         }
     }
 
@@ -1173,7 +1024,7 @@ impl SessionState {
         &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<dyn SchemaProvider>> {
-        let resolved_ref = self.resolve_table_ref(table_ref.into());
+        let resolved_ref = self.resolve_table_ref(table_ref);
 
         self.catalog_list
             .catalog(resolved_ref.catalog)
@@ -1190,6 +1041,111 @@ impl SessionState {
                     resolved_ref.schema
                 ))
             })
+    }
+
+    /// Replace the default query planner
+    pub fn with_query_planner(
+        mut self,
+        query_planner: Arc<dyn QueryPlanner + Send + Sync>,
+    ) -> Self {
+        self.query_planner = query_planner;
+        self
+    }
+
+    /// Replace the optimizer rules
+    pub fn with_optimizer_rules(
+        mut self,
+        optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
+    ) -> Self {
+        self.optimizers = optimizers;
+        self
+    }
+
+    /// Replace the physical optimizer rules
+    pub fn with_physical_optimizer_rules(
+        mut self,
+        physical_optimizers: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>,
+    ) -> Self {
+        self.physical_optimizers = physical_optimizers;
+        self
+    }
+
+    /// Adds a new [`OptimizerRule`]
+    pub fn add_optimizer_rule(
+        mut self,
+        optimizer_rule: Arc<dyn OptimizerRule + Send + Sync>,
+    ) -> Self {
+        self.optimizers.push(optimizer_rule);
+        self
+    }
+
+    /// Adds a new [`PhysicalOptimizerRule`]
+    pub fn add_physical_optimizer_rule(
+        mut self,
+        optimizer_rule: Arc<dyn PhysicalOptimizerRule + Send + Sync>,
+    ) -> Self {
+        self.physical_optimizers.push(optimizer_rule);
+        self
+    }
+
+    /// Optimizes the logical plan by applying optimizer rules.
+    pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
+        if let LogicalPlan::Explain(e) = plan {
+            let mut stringified_plans = e.stringified_plans.clone();
+
+            // optimize the child plan, capturing the output of each optimizer
+            let plan =
+                self.optimize_internal(e.plan.as_ref(), |optimized_plan, optimizer| {
+                    let optimizer_name = optimizer.name().to_string();
+                    let plan_type = PlanType::OptimizedLogicalPlan { optimizer_name };
+                    stringified_plans.push(optimized_plan.to_stringified(plan_type));
+                })?;
+
+            Ok(LogicalPlan::Explain(Explain {
+                verbose: e.verbose,
+                plan: Arc::new(plan),
+                stringified_plans,
+                schema: e.schema.clone(),
+            }))
+        } else {
+            self.optimize_internal(plan, |_, _| {})
+        }
+    }
+
+    /// Optimizes the logical plan by applying optimizer rules, and
+    /// invoking observer function after each call
+    fn optimize_internal<F>(
+        &self,
+        plan: &LogicalPlan,
+        mut observer: F,
+    ) -> Result<LogicalPlan>
+    where
+        F: FnMut(&LogicalPlan, &dyn OptimizerRule),
+    {
+        let execution_props = &mut self.execution_props.clone();
+        let optimizers = &self.optimizers;
+
+        let execution_props = execution_props.start_execution();
+
+        let mut new_plan = plan.clone();
+        debug!("Input logical plan:\n{}\n", plan.display_indent());
+        trace!("Full input logical plan:\n{:?}", plan);
+        for optimizer in optimizers {
+            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            observer(&new_plan, optimizer.as_ref());
+        }
+        debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());
+        trace!("Full Optimized logical plan:\n {:?}", plan);
+        Ok(new_plan)
+    }
+
+    /// Creates a physical plan from a logical plan.
+    pub async fn create_physical_plan(
+        &self,
+        logical_plan: &LogicalPlan,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let planner = self.query_planner.clone();
+        planner.create_physical_plan(logical_plan, self).await
     }
 }
 
@@ -1289,14 +1245,45 @@ impl TaskContext {
             runtime,
         }
     }
+
+    /// Return the SessionConfig associated with the Task
+    pub fn session_config(&self) -> SessionConfig {
+        let task_settings = &self.task_settings;
+        match task_settings {
+            TaskProperties::KVPairs(props) => {
+                let session_config = SessionConfig::new();
+                session_config
+                    .with_batch_size(props.get(BATCH_SIZE).unwrap().parse().unwrap())
+                    .with_target_partitions(
+                        props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
+                    )
+                    .with_repartition_joins(
+                        props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
+                    )
+                    .with_repartition_aggregations(
+                        props
+                            .get(REPARTITION_AGGREGATIONS)
+                            .unwrap()
+                            .parse()
+                            .unwrap(),
+                    )
+                    .with_repartition_windows(
+                        props.get(REPARTITION_WINDOWS).unwrap().parse().unwrap(),
+                    )
+                    .with_parquet_pruning(
+                        props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                    )
+            }
+            TaskProperties::SessionConfig(session_config) => session_config.clone(),
+        }
+    }
 }
 
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
-        let state_clone = session.state.lock().clone();
         let session_id = session.session_id.clone();
-        let config = state_clone.config;
+        let config = session.state.lock().config.clone();
         let runtime = session.runtime_env();
         Self {
             task_id: None,
@@ -1362,11 +1349,9 @@ mod tests {
         // configure with same memory / disk manager
         let memory_manager = ctx1.runtime_env().memory_manager.clone();
         let disk_manager = ctx1.runtime_env().disk_manager.clone();
-        let config = SessionConfig::new()
-            .with_existing_memory_manager(memory_manager.clone())
-            .with_existing_disk_manager(disk_manager.clone());
 
-        let ctx2 = SessionContext::with_config(config);
+        let ctx2 =
+            SessionContext::with_config_rt(SessionConfig::new(), ctx1.runtime_env());
 
         assert!(std::ptr::eq(
             Arc::as_ptr(&memory_manager),
@@ -2864,9 +2849,10 @@ mod tests {
 
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
-        let mut ctx = SessionContext::with_config(
-            SessionConfig::new().with_query_planner(Arc::new(MyQueryPlanner {})),
-        );
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let session_state = SessionState::with_config(SessionConfig::new(), runtime)
+            .with_query_planner(Arc::new(MyQueryPlanner {}));
+        let mut ctx = SessionContext::with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;
         df.collect().await.expect_err("query not supported");

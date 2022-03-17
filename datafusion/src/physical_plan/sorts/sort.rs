@@ -37,6 +37,7 @@ use crate::physical_plan::{
     common, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+use crate::prelude::SessionConfig;
 use arrow::array::ArrayRef;
 pub use arrow::compute::SortOptions;
 use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
@@ -75,6 +76,7 @@ struct ExternalSorter {
     spills: Mutex<Vec<NamedTempFile>>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
+    session_config: Arc<SessionConfig>,
     runtime: Arc<RuntimeEnv>,
     metrics_set: CompositeMetricsSet,
     metrics: BaselineMetrics,
@@ -86,6 +88,7 @@ impl ExternalSorter {
         schema: SchemaRef,
         expr: Vec<PhysicalSortExpr>,
         metrics_set: CompositeMetricsSet,
+        session_config: Arc<SessionConfig>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
@@ -95,6 +98,7 @@ impl ExternalSorter {
             in_mem_batches: Mutex::new(vec![]),
             spills: Mutex::new(vec![]),
             expr,
+            session_config,
             runtime,
             metrics_set,
             metrics,
@@ -152,7 +156,7 @@ impl ExternalSorter {
                 self.schema.clone(),
                 &self.expr,
                 tracking_metrics,
-                self.runtime.clone(),
+                self.session_config.batch_size,
             )))
         } else if in_mem_batches.len() > 0 {
             let tracking_metrics = self
@@ -577,6 +581,7 @@ async fn do_sort(
         schema.clone(),
         expr,
         metrics_set,
+        Arc::new(context.session_config()),
         context.runtime.clone(),
     );
     context.runtime.register_requester(sorter.id());
@@ -592,6 +597,7 @@ mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::SessionConfig;
+    use crate::execution::runtime_env::RuntimeConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::memory::MemoryExec;
@@ -678,8 +684,9 @@ mod tests {
     #[tokio::test]
     async fn test_sort_spill() -> Result<()> {
         // trigger spill there will be 4 batches with 5.5KB for each
-        let config = SessionConfig::new().with_memory_limit(12288, 1.0)?;
-        let session_ctx = SessionContext::with_config(config);
+        let config = RuntimeConfig::new().with_memory_limit(12288, 1.0);
+        let runtime = Arc::new(RuntimeEnv::new(config)?);
+        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
 
         let schema = test_util::aggr_test_schema();
         let partitions = 4;

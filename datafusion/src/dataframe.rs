@@ -34,7 +34,7 @@ use crate::arrow::datatypes::SchemaRef;
 use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
-use crate::execution::context::{SessionContext, SessionState, TaskContext};
+use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
@@ -85,9 +85,8 @@ impl DataFrame {
     /// Create a physical plan
     pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let state = self.session_state.lock().clone();
-        let ctx = SessionContext::from(Arc::new(Mutex::new(state)));
-        let plan = ctx.optimize(&self.plan)?;
-        ctx.create_physical_plan(&plan).await
+        let optimized_plan = state.optimize(&self.plan)?;
+        state.create_physical_plan(&optimized_plan).await
     }
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
@@ -564,8 +563,7 @@ impl DataFrame {
     pub async fn write_csv(&self, path: &str) -> Result<()> {
         let plan = self.create_physical_plan().await?;
         let state = self.session_state.lock().clone();
-        let ctx = SessionContext::from(Arc::new(Mutex::new(state)));
-        plan_to_csv(&ctx, plan, path).await
+        plan_to_csv(&state, plan, path).await
     }
 
     /// Write a `DataFrame` to a Parquet file.
@@ -576,8 +574,7 @@ impl DataFrame {
     ) -> Result<()> {
         let plan = self.create_physical_plan().await?;
         let state = self.session_state.lock().clone();
-        let ctx = SessionContext::from(Arc::new(Mutex::new(state)));
-        plan_to_parquet(&ctx, plan, path, writer_properties).await
+        plan_to_parquet(&state, plan, path, writer_properties).await
     }
 }
 
