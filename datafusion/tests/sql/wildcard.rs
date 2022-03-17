@@ -19,11 +19,11 @@ use super::*;
 
 #[tokio::test]
 async fn select_qualified_wildcard() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_simple_csv(&mut ctx).await?;
 
     let sql = "SELECT agg.* FROM aggregate_simple as agg order by c1";
-    let results = execute_to_batches(&mut ctx, sql).await;
+    let results = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+---------+----------------+-------+",
@@ -54,7 +54,7 @@ async fn select_qualified_wildcard() -> Result<()> {
 
 #[tokio::test]
 async fn select_qualified_wildcard_join() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT tb1.*, tb2.* FROM t1 tb1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id";
     let expected = vec![
@@ -67,7 +67,7 @@ async fn select_qualified_wildcard_join() -> Result<()> {
         "+-------+---------+-------+---------+",
     ];
 
-    let results = execute_to_batches(&mut ctx, sql).await;
+    let results = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &results);
 
@@ -76,7 +76,7 @@ async fn select_qualified_wildcard_join() -> Result<()> {
 
 #[tokio::test]
 async fn select_non_alias_qualified_wildcard_join() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1.*, tb2.* FROM t1 tb1 JOIN t2 tb2 ON t2_id = t1_id ORDER BY t1_id";
     let expected = vec![
@@ -89,7 +89,7 @@ async fn select_non_alias_qualified_wildcard_join() -> Result<()> {
         "+-------+---------+-------+---------+",
     ];
 
-    let results = execute_to_batches(&mut ctx, sql).await;
+    let results = execute_to_batches(&ctx, sql).await;
 
     assert_batches_eq!(expected, &results);
 
