@@ -483,7 +483,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
     let sql = "SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
         "| c1 | c3_p95 |",
@@ -498,7 +498,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT c1, approx_percentile_cont_with_weight(c3, 1, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
         "| c1 | c3_p95 |",
@@ -513,7 +513,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let sql = "SELECT c1, approx_percentile_cont_with_weight(c3, c2, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+--------+",
         "| c1 | c3_p95 |",
