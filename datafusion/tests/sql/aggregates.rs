@@ -478,7 +478,7 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
