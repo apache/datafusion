@@ -51,6 +51,7 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
     type Error = BallistaError;
 
     fn try_into(self) -> Result<protobuf::PhysicalExprNode, Self::Error> {
+        use datafusion::physical_plan::expressions;
         use datafusion_proto::protobuf::AggregateFunction;
         let aggr_function = if self.as_any().downcast_ref::<Avg>().is_some() {
             Ok(AggregateFunction::Avg.into())
@@ -62,6 +63,72 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             Ok(AggregateFunction::Min.into())
         } else if self.as_any().downcast_ref::<Max>().is_some() {
             Ok(AggregateFunction::Max.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxDistinct>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxDistinct.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ArrayAgg>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ArrayAgg.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Variance>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Variance.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::VariancePop>()
+            .is_some()
+        {
+            Ok(AggregateFunction::VariancePop.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Covariance>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Covariance.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::CovariancePop>()
+            .is_some()
+        {
+            Ok(AggregateFunction::CovariancePop.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Stddev>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Stddev.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::StddevPop>()
+            .is_some()
+        {
+            Ok(AggregateFunction::StddevPop.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::Correlation>()
+            .is_some()
+        {
+            Ok(AggregateFunction::Correlation.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxPercentileCont>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxPercentileCont.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxMedian>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxMedian.into())
         } else {
             Err(BallistaError::NotImplemented(format!(
                 "Aggregate function not supported: {:?}",

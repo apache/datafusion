@@ -16,7 +16,7 @@
 .. under the License.
 
 =======================
-Apache Arrow Datafusion
+Apache Arrow DataFusion
 =======================
 
 Table of content
@@ -63,7 +63,7 @@ Table of content
    :maxdepth: 1
    :caption: README
 
-   Datafusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
+   DataFusion <https://github.com/apache/arrow-datafusion/blob/master/README.md>
    Ballista <https://github.com/apache/arrow-datafusion/tree/master/ballista/README.md>
 
 .. _toc.community:

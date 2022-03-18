@@ -36,7 +36,7 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
   // register the table
-  let mut ctx = ExecutionContext::new();
+  let mut ctx = SessionContext::new();
   ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query
@@ -56,7 +56,7 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
   // create the dataframe
-  let mut ctx = ExecutionContext::new();
+  let mut ctx = SessionContext::new();
   let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 
   let df = df.filter(col("a").lt_eq(col("b")))?

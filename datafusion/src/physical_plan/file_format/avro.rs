@@ -27,7 +27,7 @@ use arrow::datatypes::SchemaRef;
 #[cfg(feature = "avro")]
 use arrow::error::ArrowError;
 
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
@@ -105,7 +105,7 @@ impl ExecutionPlan for AvroExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::NotImplemented(
             "Cannot execute avro plan without avro feature enabled".to_string(),
@@ -116,11 +116,11 @@ impl ExecutionPlan for AvroExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = runtime.batch_size();
+        let batch_size = context.runtime.batch_size();
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The avro reader cannot limit the number of records, so `remaining` is ignored.

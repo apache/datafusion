@@ -43,7 +43,7 @@ use super::{
     coalesce_batches::concat_batches, memory::MemoryStream, DisplayFormatType,
     ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
 };
-use crate::execution::runtime_env::RuntimeEnv;
+use crate::execution::context::TaskContext;
 use log::debug;
 
 /// Data of the left side
@@ -149,7 +149,7 @@ impl ExecutionPlan for CrossJoinExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         // we only want to compute the build side once
         let left_data = {
@@ -162,7 +162,7 @@ impl ExecutionPlan for CrossJoinExec {
 
                     // merge all left parts into a single stream
                     let merge = CoalescePartitionsExec::new(self.left.clone());
-                    let stream = merge.execute(0, runtime.clone()).await?;
+                    let stream = merge.execute(0, context.clone()).await?;
 
                     // Load all batches and count the rows
                     let (batches, num_rows) = stream
@@ -187,7 +187,7 @@ impl ExecutionPlan for CrossJoinExec {
             }
         };
 
-        let stream = self.right.execute(partition, runtime.clone()).await?;
+        let stream = self.right.execute(partition, context.clone()).await?;
 
         if left_data.num_rows() == 0 {
             return Ok(Box::pin(MemoryStream::try_new(

@@ -90,9 +90,9 @@ impl FlightService for FlightServiceImpl {
                 println!("do_get: {}", sql);
 
                 // create local execution context
-                let mut ctx = ExecutionContext::new();
+                let mut ctx = SessionContext::new();
 
-                let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+                let testdata = datafusion::test_util::parquet_test_data();
 
                 // register parquet file with the execution context
                 ctx.register_parquet(

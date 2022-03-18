@@ -49,7 +49,7 @@ fn is_open_quote_for_location(line: &str, pos: usize) -> bool {
     let mut sql = line[..pos].to_string();
     sql.push('\'');
     if let Ok(stmts) = DFParser::parse_sql(&sql) {
-        if let Some(Statement::CreateExternalTable(_)) = stmts.last() {
+        if let Some(Statement::CreateExternalTable(_)) = stmts.back() {
             return true;
         }
     }

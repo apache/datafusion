@@ -55,6 +55,7 @@ tower = { version = "0.4" }
 warp = "0.3"
 parking_lot = "0.12"
 async-trait = "0.1.41"
+async-recursion = "1.0.0"
 
 [dev-dependencies]
 ballista-core = { path = "../core", version = "0.6.0" }

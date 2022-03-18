@@ -27,7 +27,7 @@ Authors:
 
 RFC PR: #
 
-Datafusion Issue: #
+DataFusion Issue: #
 
 ---
 
