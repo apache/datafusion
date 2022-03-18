@@ -38,7 +38,7 @@ use datafusion::arrow::{
 };
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
-    ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
+    QueryPlanner, SessionConfig, SessionContext, SessionState,
 };
 use datafusion::logical_plan::LogicalPlan;
 
@@ -226,12 +226,12 @@ fn build_exec_plan_diagram(
 }
 
 /// Create a DataFusion context that is compatible with Ballista
-pub fn create_datafusion_context(config: &BallistaConfig) -> ExecutionContext {
-    let exe_config = ExecutionConfig::new()
+pub fn create_datafusion_context(config: &BallistaConfig) -> SessionContext {
+    let exe_config = SessionConfig::new()
         .with_target_partitions(config.default_shuffle_partitions())
         .with_information_schema(config.default_with_information_schema());
 
-    let mut context = ExecutionContext::with_config(exe_config);
+    let mut context = SessionContext::with_config(exe_config);
     load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
     context
 }
@@ -242,21 +242,21 @@ pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
     scheduler_host: &str,
     scheduler_port: u16,
     config: &BallistaConfig,
-) -> ExecutionContext {
+) -> SessionContext {
     let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
     let planner: Arc<BallistaQueryPlanner<T>> =
         Arc::new(BallistaQueryPlanner::new(scheduler_url, config.clone()));
-    let exe_config = ExecutionConfig::new()
+    let exe_config = SessionConfig::new()
         .with_query_planner(planner)
         .with_target_partitions(config.default_shuffle_partitions())
         .with_information_schema(config.default_with_information_schema());
-    let mut context = ExecutionContext::with_config(exe_config);
+    let mut context = SessionContext::with_config(exe_config);
     load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
     context
 }
 
-/// load udf from plugin and register to ExecutionContext
-pub fn load_udf_from_plugin(ctx: &mut ExecutionContext, plugin_dir: &str) {
+/// load udf from plugin and register to SessionContext
+pub fn load_udf_from_plugin(ctx: &mut SessionContext, plugin_dir: &str) {
     if let Some(udf_plugin_manager) = get_udf_plugin_manager(plugin_dir) {
         udf_plugin_manager
             .scalar_udfs
@@ -320,7 +320,7 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        _ctx_state: &ExecutionContextState,
+        _session_state: &SessionState,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         match logical_plan {
             LogicalPlan::CreateExternalTable(_) => {

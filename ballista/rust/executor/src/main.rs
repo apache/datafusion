@@ -43,7 +43,7 @@ use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
 use config::prelude::*;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 #[macro_use]
 extern crate configure_me;
@@ -113,7 +113,8 @@ async fn main() -> Result<()> {
             .into(),
         ),
     };
-    let mut context = ExecutionContext::new();
+
+    let mut context = SessionContext::new();
     load_udf_from_plugin(&mut context, &plugin_dir);
     let executor = Arc::new(Executor::new(executor_meta, &work_dir, Arc::new(context)));
 

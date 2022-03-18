@@ -84,6 +84,15 @@ impl CatalogProvider for CatalogWithInformationSchema {
             self.inner.schema(name)
         }
     }
+
+    fn register_schema(
+        &self,
+        name: &str,
+        schema: Arc<dyn SchemaProvider>,
+    ) -> Option<Arc<dyn SchemaProvider>> {
+        let catalog = &self.inner;
+        catalog.register_schema(name, schema)
+    }
 }
 
 /// Implements the `information_schema` virtual schema and tables

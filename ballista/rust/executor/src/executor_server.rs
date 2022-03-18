@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -36,6 +37,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::scheduler::ExecutorState;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::as_task_status;
@@ -177,6 +179,20 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         );
         info!("Start to run task {}", task_id_log);
 
+        let runtime = self.executor.ctx.runtime_env();
+
+        //TODO get session_id from TaskDefinition
+        let session_id = "mock_session".to_owned();
+        //TODO get task_props from TaskDefinition
+        let task_props = HashMap::new();
+
+        let task_context = Arc::new(TaskContext::new(
+            task_id_log.clone(),
+            session_id,
+            task_props,
+            runtime,
+        ));
+
         let encoded_plan = &task.plan.as_slice();
 
         let plan: Arc<dyn ExecutionPlan> =
@@ -197,6 +213,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                task_context,
                 shuffle_output_partitioning,
             )
             .await;

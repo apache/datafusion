@@ -29,7 +29,7 @@ use ballista_core::{
     serde::protobuf::{scheduler_grpc_client::SchedulerGrpcClient, ExecutorRegistration},
     BALLISTA_VERSION,
 };
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 use log::info;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -74,7 +74,7 @@ pub async fn new_standalone_executor<
         .into_string()
         .unwrap();
     info!("work_dir: {}", work_dir);
-    let mut context = ExecutionContext::new();
+    let mut context = SessionContext::new();
     load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
     let ctx = Arc::new(context);
     let executor = Arc::new(Executor::new(executor_meta, &work_dir, ctx));

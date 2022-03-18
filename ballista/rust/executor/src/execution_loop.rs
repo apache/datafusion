@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::{sync::Arc, time::Duration};
@@ -34,6 +35,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use datafusion::execution::context::TaskContext;
 
 pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
@@ -124,6 +126,20 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
     info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
 
+    let runtime = executor.ctx.runtime_env();
+
+    //TODO get session_id from TaskDefinition
+    let session_id = "mock_session".to_owned();
+    //TODO get task_props from TaskDefinition
+    let task_props = HashMap::new();
+
+    let task_context = Arc::new(TaskContext::new(
+        task_id_log.clone(),
+        session_id,
+        task_props,
+        runtime,
+    ));
+
     let plan: Arc<dyn ExecutionPlan> =
         U::try_decode(task.plan.as_slice()).and_then(|proto| {
             proto.try_into_physical_plan(
@@ -142,6 +158,7 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                task_context,
                 shuffle_output_partitioning,
             )
             .await;

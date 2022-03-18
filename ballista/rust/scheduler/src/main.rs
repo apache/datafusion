@@ -63,7 +63,7 @@ mod config {
 }
 
 use config::prelude::*;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 async fn start_server(
     config_backend: Arc<dyn StateBackendClient>,
@@ -82,7 +82,7 @@ async fn start_server(
         policy
     );
 
-    let mut context = ExecutionContext::new();
+    let mut context = SessionContext::new();
     load_udf_from_plugin(&mut context, plugin_dir.as_str());
     let mut scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         match policy {

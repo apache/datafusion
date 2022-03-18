@@ -84,6 +84,7 @@ mod tests {
 
     use super::*;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
         BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         TimestampMicrosecondArray,
@@ -92,10 +93,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
+        let config = SessionConfig::new().with_batch_size(2);
+        let ctx = SessionContext::with_config(config);
+        let task_ctx = session_ctx.task_ctx();
         let projection = None;
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
-        let stream = exec.execute(0, runtime).await?;
+        let stream = exec.execute(0, task_ctx).await?;
 
         let tt_batches = stream
             .map(|batch| {
@@ -113,10 +116,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = None;
         let exec = get_exec("alltypes_plain.avro", &projection, Some(1)).await?;
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(11, batches[0].num_columns());
         assert_eq!(1, batches[0].num_rows());
@@ -126,7 +130,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = None;
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
@@ -153,7 +158,7 @@ mod tests {
             x
         );
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
 
         let expected =  vec![
@@ -177,11 +182,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_bool_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![1]);
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -206,11 +212,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_i32_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0]);
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -232,11 +239,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_i96_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![10]);
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -258,11 +266,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_f32_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![6]);
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -287,11 +296,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_f64_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![7]);
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());
@@ -316,11 +326,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_binary_alltypes_plain_avro() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![9]);
         let exec = get_exec("alltypes_plain.avro", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(batches.len(), 1);
         assert_eq!(1, batches[0].num_columns());
         assert_eq!(8, batches[0].num_rows());

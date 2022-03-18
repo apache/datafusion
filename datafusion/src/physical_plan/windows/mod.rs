@@ -153,11 +153,11 @@ fn create_built_in_window_expr(
 mod tests {
     use super::*;
     use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{collect, Statistics};
+    use crate::prelude::SessionContext;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::test_util::{self, aggr_test_schema};
@@ -190,7 +190,8 @@ mod tests {
 
     #[tokio::test]
     async fn window_function() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let (input, schema) = create_test_schema(1)?;
 
         let window_exec = Arc::new(WindowAggExec::try_new(
@@ -227,7 +228,7 @@ mod tests {
             schema.clone(),
         )?);
 
-        let result: Vec<RecordBatch> = collect(window_exec, runtime).await?;
+        let result: Vec<RecordBatch> = collect(window_exec, task_ctx).await?;
         assert_eq!(result.len(), 1);
 
         let columns = result[0].columns();
@@ -251,7 +252,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
 
@@ -271,7 +273,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = collect(window_agg_exec, runtime);
+        let fut = collect(window_agg_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

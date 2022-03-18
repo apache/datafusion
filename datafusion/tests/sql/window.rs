@@ -20,7 +20,7 @@ use super::*;
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_empty_over() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
@@ -30,7 +30,7 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
                from aggregate_test_100 \
                order by c9 \
                limit 5";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------+------------------------------+----------------------------+----------------------------+",
         "| c9        | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) |",
@@ -49,7 +49,7 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_partition_by() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
@@ -61,7 +61,7 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
                from aggregate_test_100 \
                order by c9 \
                limit 5";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------+-------------------------------------------+-------------------------------------------+---------------------------------------------+-------------------------------------------+-------------------------------------------+",
         "| c9        | SUM(CAST(aggregate_test_100.c4 AS Int32)) | AVG(CAST(aggregate_test_100.c4 AS Int32)) | COUNT(CAST(aggregate_test_100.c4 AS Int32)) | MAX(CAST(aggregate_test_100.c4 AS Int32)) | MIN(CAST(aggregate_test_100.c4 AS Int32)) |",
@@ -79,7 +79,7 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_window_with_order_by() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
@@ -94,7 +94,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
                from aggregate_test_100 \
                order by c9 \
                limit 5";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
         "| c9        | SUM(aggregate_test_100.c5) | AVG(aggregate_test_100.c5) | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) | FIRST_VALUE(aggregate_test_100.c5) | LAST_VALUE(aggregate_test_100.c5) | NTH_VALUE(aggregate_test_100.c5,Int64(2)) |",
@@ -112,7 +112,7 @@ async fn csv_query_window_with_order_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
     let sql = "select \
                c9, \
@@ -127,7 +127,7 @@ async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
                from aggregate_test_100 \
                order by c9 \
                limit 5";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------+----------------------------+----------------------------+------------------------------+----------------------------+----------------------------+------------------------------------+-----------------------------------+-------------------------------------------+",
         "| c9        | SUM(aggregate_test_100.c5) | AVG(aggregate_test_100.c5) | COUNT(aggregate_test_100.c5) | MAX(aggregate_test_100.c5) | MIN(aggregate_test_100.c5) | FIRST_VALUE(aggregate_test_100.c5) | LAST_VALUE(aggregate_test_100.c5) | NTH_VALUE(aggregate_test_100.c5,Int64(2)) |",

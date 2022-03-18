@@ -19,13 +19,13 @@
 
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use std::sync::Arc;
 
 /// The CLI supports using a local DataFusion context or a distributed BallistaContext
 pub enum Context {
     /// In-process execution with DataFusion
-    Local(ExecutionContext),
+    Local(SessionContext),
     /// Distributed execution with Ballista (if available)
     Remote(BallistaContext),
 }
@@ -37,12 +37,12 @@ impl Context {
     }
 
     /// create a local context using the given config
-    pub fn new_local(config: &ExecutionConfig) -> Context {
-        Context::Local(ExecutionContext::with_config(config.clone()))
+    pub fn new_local(config: &SessionConfig) -> Context {
+        Context::Local(SessionContext::with_config(config.clone()))
     }
 
     /// execute an SQL statement against the context
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
         match self {
             Context::Local(datafusion) => datafusion.sql(sql).await,
             Context::Remote(ballista) => ballista.sql(sql).await,
@@ -63,7 +63,7 @@ impl BallistaContext {
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
         Ok(Self(BallistaContext::remote(host, port, &config)))
     }
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
         self.0.sql(sql).await
     }
 }
@@ -78,7 +78,7 @@ impl BallistaContext {
                 .to_string(),
         ))
     }
-    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&mut self, _sql: &str) -> Result<Arc<DataFrame>> {
         unreachable!()
     }
 }

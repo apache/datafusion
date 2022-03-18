@@ -22,13 +22,13 @@ use arrow::{
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 use datafusion::from_slice::FromSlice;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 use datafusion::{datasource::MemTable, error::Result};
 use futures::executor::block_on;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 
-async fn query(ctx: &mut ExecutionContext, sql: &str) {
+async fn query(ctx: &mut SessionContext, sql: &str) {
     let rt = Runtime::new().unwrap();
 
     // execute the query
@@ -36,7 +36,7 @@ async fn query(ctx: &mut ExecutionContext, sql: &str) {
     criterion::black_box(rt.block_on(df.collect()).unwrap());
 }
 
-fn create_context(array_len: usize, batch_size: usize) -> Result<ExecutionContext> {
+fn create_context(array_len: usize, batch_size: usize) -> Result<SessionContext> {
     // define a schema.
     let schema = Arc::new(Schema::new(vec![
         Field::new("f32", DataType::Float32, false),
@@ -57,7 +57,7 @@ fn create_context(array_len: usize, batch_size: usize) -> Result<ExecutionContex
         })
         .collect::<Vec<_>>();
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;

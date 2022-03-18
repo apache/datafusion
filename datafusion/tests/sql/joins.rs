@@ -20,7 +20,7 @@ use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn equijoin() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
@@ -35,11 +35,11 @@ async fn equijoin() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
 
-    let mut ctx = create_join_context_qualified()?;
+    let ctx = create_join_context_qualified()?;
     let equivalent_sql = [
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t1.a = t2.a ORDER BY t1.a",
         "SELECT t1.a, t2.b FROM t1 INNER JOIN t2 ON t2.a = t1.a ORDER BY t1.a",
@@ -54,7 +54,7 @@ async fn equijoin() -> Result<()> {
         "+---+-----+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -62,7 +62,7 @@ async fn equijoin() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_multiple_condition_ordering() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t1_name <> t2_name ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name <> t1_name ORDER BY t1_id",
@@ -79,7 +79,7 @@ async fn equijoin_multiple_condition_ordering() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -87,10 +87,10 @@ async fn equijoin_multiple_condition_ordering() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_and_other_condition() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -105,12 +105,12 @@ async fn equijoin_and_other_condition() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_left_and_condition_from_right() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id AND t2_name >= 'y' ORDER BY t1_id";
     let res = ctx.create_logical_plan(sql);
     assert!(res.is_ok());
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -128,12 +128,12 @@ async fn equijoin_left_and_condition_from_right() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_right_and_condition_from_left() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id AND t1_id >= 22 ORDER BY t2_name";
     let res = ctx.create_logical_plan(sql);
     assert!(res.is_ok());
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -163,7 +163,7 @@ async fn equijoin_and_unsupported_condition() -> Result<()> {
 
 #[tokio::test]
 async fn left_join() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
@@ -179,7 +179,7 @@ async fn left_join() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -188,7 +188,7 @@ async fn left_join() -> Result<()> {
 #[tokio::test]
 async fn left_join_unbalanced() -> Result<()> {
     // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
-    let mut ctx = create_join_context_unbalanced("t1_id", "t2_id")?;
+    let ctx = create_join_context_unbalanced("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 LEFT JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
@@ -205,7 +205,7 @@ async fn left_join_unbalanced() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -216,7 +216,7 @@ async fn left_join_null_filter() -> Result<()> {
     // Since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
     // Note that this is only true because IS NULL does not remove nulls. For filters that
     // remove nulls, we can rewrite the join as an inner join and then push down the filter.
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -229,7 +229,7 @@ async fn left_join_null_filter() -> Result<()> {
         "+-------+-------+---------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -237,7 +237,7 @@ async fn left_join_null_filter() -> Result<()> {
 #[tokio::test]
 async fn left_join_null_filter_on_join_column() -> Result<()> {
     // Again, since t2 is the non-preserved side of the join, we cannot push down a NULL filter.
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -249,14 +249,14 @@ async fn left_join_null_filter_on_join_column() -> Result<()> {
         "+-------+-------+---------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn left_join_not_null_filter() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_name IS NOT NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -268,14 +268,14 @@ async fn left_join_not_null_filter() -> Result<()> {
         "+-------+-------+---------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn left_join_not_null_filter_on_join_column() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t2_id, t2_name FROM t1 LEFT JOIN t2 ON t1_id = t2_id WHERE t2_id IS NOT NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+-------+---------+",
@@ -288,14 +288,14 @@ async fn left_join_not_null_filter_on_join_column() -> Result<()> {
         "+-------+-------+---------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn right_join_null_filter() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -306,14 +306,14 @@ async fn right_join_null_filter() -> Result<()> {
         "+-------+---------+-------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn right_join_null_filter_on_join_column() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_id IS NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -323,14 +323,14 @@ async fn right_join_null_filter_on_join_column() -> Result<()> {
         "+-------+---------+-------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn right_join_not_null_filter() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NOT NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -342,14 +342,14 @@ async fn right_join_not_null_filter() -> Result<()> {
         "+-------+---------+-------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn right_join_not_null_filter_on_join_column() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_id IS NOT NULL ORDER BY t2_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -362,14 +362,14 @@ async fn right_join_not_null_filter_on_join_column() -> Result<()> {
         "+-------+---------+-------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn full_join_null_filter() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -381,14 +381,14 @@ async fn full_join_null_filter() -> Result<()> {
         "+-------+---------+-------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn full_join_not_null_filter() -> Result<()> {
-    let mut ctx = create_join_context_with_nulls()?;
+    let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 FULL OUTER JOIN t2 ON t1_id = t2_id WHERE t1_name IS NOT NULL ORDER BY t1_id";
     let expected = vec![
         "+-------+---------+-------+",
@@ -402,14 +402,14 @@ async fn full_join_not_null_filter() -> Result<()> {
         "+-------+---------+-------+",
     ];
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
 
 #[tokio::test]
 async fn right_join() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 RIGHT JOIN t2 ON t2_id = t1_id ORDER BY t1_id"
@@ -425,7 +425,7 @@ async fn right_join() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -433,7 +433,7 @@ async fn right_join() -> Result<()> {
 
 #[tokio::test]
 async fn full_join() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
@@ -450,7 +450,7 @@ async fn full_join() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
 
@@ -459,7 +459,7 @@ async fn full_join() -> Result<()> {
         "SELECT t1_id, t1_name, t2_name FROM t1 FULL OUTER JOIN t2 ON t2_id = t1_id ORDER BY t1_id",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
 
@@ -468,9 +468,9 @@ async fn full_join() -> Result<()> {
 
 #[tokio::test]
 async fn left_join_using() -> Result<()> {
-    let mut ctx = create_join_context("id", "id")?;
+    let ctx = create_join_context("id", "id")?;
     let sql = "SELECT id, t1_name, t2_name FROM t1 LEFT JOIN t2 USING (id) ORDER BY id";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+---------+---------+",
         "| id | t1_name | t2_name |",
@@ -487,7 +487,7 @@ async fn left_join_using() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_implicit_syntax() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let equivalent_sql = [
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t1_id = t2_id ORDER BY t1_id",
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id",
@@ -502,7 +502,7 @@ async fn equijoin_implicit_syntax() -> Result<()> {
         "+-------+---------+---------+",
     ];
     for sql in equivalent_sql.iter() {
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -510,14 +510,14 @@ async fn equijoin_implicit_syntax() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1_id, t1_name, t2_name \
         FROM t1, t2 \
         WHERE t1_id > 0 \
         AND t1_id = t2_id \
         AND t2_id < 99 \
         ORDER BY t1_id";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -533,10 +533,10 @@ async fn equijoin_implicit_syntax_with_filter() -> Result<()> {
 
 #[tokio::test]
 async fn equijoin_implicit_syntax_reversed() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE t2_id = t1_id ORDER BY t1_id";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -569,7 +569,7 @@ async fn cross_join() {
     let actual = execute(&mut ctx, sql).await;
     assert_eq!(4 * 4, actual.len());
 
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -611,12 +611,12 @@ async fn cross_join() {
 #[tokio::test]
 async fn cross_join_unbalanced() {
     // the t1_id is larger than t2_id so the hash_build_probe_order optimizer should kick in
-    let mut ctx = create_join_context_unbalanced("t1_id", "t2_id").unwrap();
+    let ctx = create_join_context_unbalanced("t1_id", "t2_id").unwrap();
 
     // the order of the values is not determinisitic, so we need to sort to check the values
     let sql =
         "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2 ORDER BY t1_id, t1_name, t2_name";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+---------+---------+",
         "| t1_id | t1_name | t2_name |",
@@ -648,7 +648,7 @@ async fn cross_join_unbalanced() {
 
 #[tokio::test]
 async fn test_join_timestamp() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // register time table
     let timestamp_schema = Arc::new(Schema::new(vec![Field::new(
@@ -673,7 +673,7 @@ async fn test_join_timestamp() -> Result<()> {
                      JOIN (SELECT * FROM timestamp) as b \
                      ON a.time = b.time \
                      ORDER BY a.time";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+-------------------------------+-------------------------------+",
@@ -691,7 +691,7 @@ async fn test_join_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn test_join_float32() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // register population table
     let population_schema = Arc::new(Schema::new(vec![
@@ -714,7 +714,7 @@ async fn test_join_float32() -> Result<()> {
                      JOIN (SELECT * FROM population) as b \
                      ON a.population = b.population \
                      ORDER BY a.population";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+------+------------+------+------------+",
@@ -732,7 +732,7 @@ async fn test_join_float32() -> Result<()> {
 
 #[tokio::test]
 async fn test_join_float64() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // register population table
     let population_schema = Arc::new(Schema::new(vec![
@@ -755,7 +755,7 @@ async fn test_join_float64() -> Result<()> {
                      JOIN (SELECT * FROM population) as b \
                      ON a.population = b.population \
                      ORDER BY a.population";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
         "+------+------------+------+------------+",
@@ -799,8 +799,8 @@ async fn inner_join_qualified_names() -> Result<()> {
     ];
 
     for sql in equivalent_sql.iter() {
-        let mut ctx = create_join_context_qualified()?;
-        let actual = execute_to_batches(&mut ctx, sql).await;
+        let ctx = create_join_context_qualified()?;
+        let actual = execute_to_batches(&ctx, sql).await;
         assert_batches_eq!(expected, &actual);
     }
     Ok(())
@@ -813,8 +813,8 @@ async fn inner_join_nulls() {
 
     let expected = vec!["++", "++"];
 
-    let mut ctx = create_join_context_qualified().unwrap();
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let ctx = create_join_context_qualified().unwrap();
+    let actual = execute_to_batches(&ctx, sql).await;
 
     // left and right shouldn't match anything
     assert_batches_eq!(expected, &actual);
@@ -857,14 +857,14 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
     .unwrap();
     let cities = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("countries", Arc::new(countries))?;
     ctx.register_table("cities", Arc::new(cities))?;
 
     // city.id is not in the on constraint, but the output result will contain both city.id and
     // country.id
     let sql = "SELECT t1.id, t2.id, t1.city, t2.country FROM cities AS t1 JOIN countries AS t2 ON t1.country_id = t2.id ORDER BY t1.id";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----+----+-----------+---------+",
         "| id | id | city      | country |",
@@ -885,7 +885,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
 
 #[tokio::test]
 async fn join_timestamp() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let expected = vec![
@@ -899,7 +899,7 @@ async fn join_timestamp() -> Result<()> {
     ];
 
     let results = execute_to_batches(
-        &mut ctx,
+        &ctx,
         "SELECT * FROM t as t1  \
          JOIN (SELECT * FROM t) as t2 \
          ON t1.nanos = t2.nanos",
@@ -909,7 +909,7 @@ async fn join_timestamp() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     let results = execute_to_batches(
-        &mut ctx,
+        &ctx,
         "SELECT * FROM t as t1  \
          JOIN (SELECT * FROM t) as t2 \
          ON t1.micros = t2.micros",
@@ -919,7 +919,7 @@ async fn join_timestamp() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     let results = execute_to_batches(
-        &mut ctx,
+        &ctx,
         "SELECT * FROM t as t1  \
          JOIN (SELECT * FROM t) as t2 \
          ON t1.millis = t2.millis",

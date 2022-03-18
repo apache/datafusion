@@ -34,9 +34,10 @@ use datafusion::catalog::TableReference;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
-use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
+use datafusion::prelude::{
+    AvroReadOptions, CsvReadOptions, SessionConfig, SessionContext,
+};
 use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
 
 struct BallistaContextState {
@@ -149,7 +150,7 @@ impl BallistaContext {
         &self,
         path: &str,
         options: AvroReadOptions<'_>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    ) -> Result<Arc<DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
@@ -169,7 +170,7 @@ impl BallistaContext {
 
     /// Create a DataFrame representing a Parquet table scan
     /// TODO fetch schema from scheduler instead of resolving locally
-    pub async fn read_parquet(&self, path: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn read_parquet(&self, path: &str) -> Result<Arc<DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
@@ -193,7 +194,7 @@ impl BallistaContext {
         &self,
         path: &str,
         options: CsvReadOptions<'_>,
-    ) -> Result<Arc<dyn DataFrame>> {
+    ) -> Result<Arc<DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
@@ -292,7 +293,7 @@ impl BallistaContext {
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
-    pub async fn sql(&self, sql: &str) -> Result<Arc<dyn DataFrame>> {
+    pub async fn sql(&self, sql: &str) -> Result<Arc<DataFrame>> {
         let mut ctx = {
             let state = self.state.lock();
             create_df_ctx_with_ballista_query_planner::<LogicalPlanNode>(
@@ -339,16 +340,16 @@ impl BallistaContext {
                             .has_header(*has_header),
                     )
                     .await?;
-                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
+                    Ok(Arc::new(DataFrame::new(ctx.state, &plan)))
                 }
                 FileType::Parquet => {
                     self.register_parquet(name, location).await?;
-                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
+                    Ok(Arc::new(DataFrame::new(ctx.state, &plan)))
                 }
                 FileType::Avro => {
                     self.register_avro(name, location, AvroReadOptions::default())
                         .await?;
-                    Ok(Arc::new(DataFrameImpl::new(ctx.state, &plan)))
+                    Ok(Arc::new(DataFrame::new(ctx.state, &plan)))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
                     "Unsupported file type {:?}.",

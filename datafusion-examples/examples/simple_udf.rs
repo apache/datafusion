@@ -30,7 +30,7 @@ use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use std::sync::Arc;
 
 // create local execution context with an in-memory table
-fn create_context() -> Result<ExecutionContext> {
+fn create_context() -> Result<SessionContext> {
     use datafusion::arrow::datatypes::{Field, Schema};
     use datafusion::datasource::MemTable;
     // define a schema.
@@ -49,7 +49,7 @@ fn create_context() -> Result<ExecutionContext> {
     )?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![vec![batch]])?;

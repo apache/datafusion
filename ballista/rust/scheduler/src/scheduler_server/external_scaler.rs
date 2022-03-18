@@ -20,7 +20,6 @@ use crate::scheduler_server::externalscaler::{
     GetMetricsResponse, IsActiveResponse, MetricSpec, MetricValue, ScaledObjectRef,
 };
 use crate::scheduler_server::SchedulerServer;
-use ballista_core::serde::protobuf::task_status;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use log::debug;
 use tonic::{Request, Response};
@@ -35,14 +34,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExternalScaler
         &self,
         _request: Request<ScaledObjectRef>,
     ) -> Result<Response<IsActiveResponse>, tonic::Status> {
-        let tasks = self.state.get_all_tasks();
-        let result = tasks.iter().any(|task| {
-            !matches!(
-                task.status,
-                Some(task_status::Status::Completed(_))
-                    | Some(task_status::Status::Failed(_))
-            )
-        });
+        let result = self.state.stage_manager.has_running_tasks();
         debug!("Are there active tasks? {}", result);
         Ok(Response::new(IsActiveResponse { result }))
     }

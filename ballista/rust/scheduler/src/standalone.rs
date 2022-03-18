@@ -23,7 +23,7 @@ use ballista_core::{
     error::Result, serde::protobuf::scheduler_grpc_server::SchedulerGrpcServer,
     BALLISTA_VERSION,
 };
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 use log::info;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
@@ -37,7 +37,7 @@ use crate::{
 pub async fn new_standalone_scheduler(config: &BallistaConfig) -> Result<SocketAddr> {
     let client = StandaloneClient::try_new_temporary()?;
 
-    let mut context = ExecutionContext::new();
+    let mut context = SessionContext::new();
     load_udf_from_plugin(&mut context, config.default_plugin_dir().as_str());
     let mut scheduler_server: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
         SchedulerServer::new(

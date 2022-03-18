@@ -42,7 +42,6 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -55,6 +54,7 @@ use datafusion::physical_plan::{
 };
 use futures::StreamExt;
 
+use datafusion::execution::context::TaskContext;
 use log::{debug, info};
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -138,11 +138,11 @@ impl ShuffleWriterExec {
     pub async fn execute_shuffle_write(
         &self,
         input_partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<Vec<ShuffleWritePartition>> {
         let now = Instant::now();
 
-        let mut stream = self.plan.execute(input_partition, runtime).await?;
+        let mut stream = self.plan.execute(input_partition, context).await?;
 
         let mut path = PathBuf::from(&self.work_dir);
         path.push(&self.job_id);
@@ -358,9 +358,9 @@ impl ExecutionPlan for ShuffleWriterExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let part_loc = self.execute_shuffle_write(partition, runtime).await?;
+        let part_loc = self.execute_shuffle_write(partition, context).await?;
 
         // build metadata result batch
         let num_writers = part_loc.len();
@@ -448,11 +448,13 @@ mod tests {
     use datafusion::physical_plan::expressions::Column;
 
     use datafusion::physical_plan::memory::MemoryExec;
+    use datafusion::prelude::SessionContext;
     use tempfile::TempDir;
 
     #[tokio::test]
     async fn test() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
 
         let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?));
         let work_dir = TempDir::new()?;
@@ -463,7 +465,7 @@ mod tests {
             work_dir.into_path().to_str().unwrap().to_owned(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
-        let mut stream = query_stage.execute(0, runtime).await?;
+        let mut stream = query_stage.execute(0, task_ctx).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
@@ -506,7 +508,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_partitioned() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
 
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
@@ -517,7 +520,7 @@ mod tests {
             work_dir.into_path().to_str().unwrap().to_owned(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
-        let mut stream = query_stage.execute(0, runtime).await?;
+        let mut stream = query_stage.execute(0, task_ctx).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
