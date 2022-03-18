@@ -769,7 +769,7 @@ mod tests {
             .map(|v| OrderedFloat::from(v as f64))
             .collect();
         for _ in 0..400_000 {
-            values.push(OrderedFloat::from(1_000_000 as f64));
+            values.push(OrderedFloat::from(1_000_000_f64));
         }
 
         let t = t.merge_unsorted_f64(values);
