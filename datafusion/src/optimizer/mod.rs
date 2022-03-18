@@ -24,7 +24,7 @@ pub mod eliminate_filter;
 pub mod eliminate_limit;
 pub mod filter_push_down;
 pub mod limit_push_down;
-pub mod merge_adjacent_filter;
+pub mod combine_adjacent_filter;
 pub mod optimizer;
 pub mod projection_push_down;
 pub mod simplify_expressions;

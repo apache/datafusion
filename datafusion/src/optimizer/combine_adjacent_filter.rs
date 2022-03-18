@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Optimizer rule to replace `where false` on a plan with an empty relation.
-//! This saves time in planning and executing the query.
-//! Note that this rule should be applied after simplify expressions optimizer rule.
+//! Optimizer rule to combine the adjacent filter.
+//! Example: [Filter: (a > 1)]->[Filter: (a < 10)] => [Filter: (a > 1) AND (a < 10)]
+//! Note that this rule should be applied after filter push optimizer rule.
 use datafusion_expr::{Expr, Operator};
 use std::sync::Arc;
 
@@ -28,11 +28,11 @@ use crate::optimizer::optimizer::OptimizerRule;
 use super::utils;
 use crate::execution::context::ExecutionProps;
 
-/// Optimization rule that merge adjacent filter
+/// Optimization rule that combine adjacent filter
 #[derive(Default)]
-pub struct MergeAdjacentFilter;
+pub struct CombineAdjacentFilter;
 
-impl MergeAdjacentFilter {
+impl CombineAdjacentFilter {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
@@ -65,7 +65,7 @@ fn optimize(plan: &LogicalPlan) -> LogicalPlan {
     }
 }
 
-impl OptimizerRule for MergeAdjacentFilter {
+impl OptimizerRule for CombineAdjacentFilter {
     fn optimize(
         &self,
         plan: &LogicalPlan,
@@ -84,7 +84,7 @@ impl OptimizerRule for MergeAdjacentFilter {
     }
 
     fn name(&self) -> &str {
-        "merge_adjacent_filter"
+        "combine_adjacent_filter"
     }
 }
 
@@ -99,7 +99,7 @@ mod tests {
     use crate::test::*;
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
-        let rule = MergeAdjacentFilter::new();
+        let rule = CombineAdjacentFilter::new();
         let optimized_plan = rule
             .optimize(plan, &ExecutionProps::new())
             .expect("failed to optimize plan");
@@ -112,7 +112,7 @@ mod tests {
     fn double_filter() {
         let table_scan = test_table_scan().unwrap();
         let plan =
-            LogicalPlanBuilder::from(table_scan.clone())
+            LogicalPlanBuilder::from(table_scan)
                 .project(vec![col("a")])
                 .unwrap()
                 .filter(col("a").eq(lit(1_i32)))
@@ -134,7 +134,7 @@ mod tests {
     fn thrice_filter() {
         let table_scan = test_table_scan().unwrap();
         let plan =
-            LogicalPlanBuilder::from(table_scan.clone())
+            LogicalPlanBuilder::from(table_scan)
                 .project(vec![col("a")])
                 .unwrap()
                 .filter(col("a").eq(lit(1_i32)))
@@ -158,7 +158,7 @@ mod tests {
     fn nested_double_filter() {
         let table_scan = test_table_scan().unwrap();
         let plan =
-            LogicalPlanBuilder::from(table_scan.clone())
+            LogicalPlanBuilder::from(table_scan)
                 .project(vec![col("a")])
                 .unwrap()
                 .filter(col("a").eq(lit(1_i32)))
