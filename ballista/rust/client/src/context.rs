@@ -35,9 +35,7 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
-use datafusion::prelude::{
-    AvroReadOptions, CsvReadOptions, SessionConfig, SessionContext,
-};
+use datafusion::prelude::{AvroReadOptions, CsvReadOptions};
 use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
 
 struct BallistaContextState {

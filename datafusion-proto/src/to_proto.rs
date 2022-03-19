@@ -523,40 +523,6 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { ref fun, ref args } => {
-                let args: Vec<protobuf::LogicalExprNode> = args
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<protobuf::LogicalExprNode>, Error>>()?;
-                Self {
-                    expr_type: Some(
-                        protobuf::logical_expr_node::ExprType::ScalarUdfProtoExpr(
-                            protobuf::ScalarUdfProtoExprNode {
-                                fun_name: fun.name.clone(),
-                                args,
-                            },
-                        ),
-                    ),
-                }
-            }
-            Expr::AggregateUDF { ref fun, ref args } => {
-                let args: Vec<protobuf::LogicalExprNode> = args
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<protobuf::LogicalExprNode>, Error>>()?;
-
-                Self {
-                    expr_type: Some(
-                        protobuf::logical_expr_node::ExprType::AggregateUdfExpr(
-                            protobuf::AggregateUdfExprNode {
-                                fun_name: fun.name.clone(),
-                                args,
-                            },
-                        ),
-                    ),
-                }
-            }
-
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),

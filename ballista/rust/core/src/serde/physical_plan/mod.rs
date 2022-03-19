@@ -24,7 +24,6 @@ use crate::serde::protobuf::physical_expr_node::ExprType;
 use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
 
-use crate::plugin::udf::get_udf_plugin_manager;
 use crate::serde::protobuf::{PhysicalExtensionNode, PhysicalPlanNode};
 use crate::serde::scheduler::PartitionLocation;
 use crate::serde::{
@@ -53,7 +52,6 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::udaf::create_aggregate_expr as create_aggregate_udf_expr;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
@@ -323,40 +321,6 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &physical_schema,
                                     name.to_string(),
                                 )?)
-                            }
-                            ExprType::AggregateUdfExpr(agg_node) => {
-                                let name = agg_node.fun_name.as_str();
-                                let udaf_fun_name = &name[0..name.find('(').unwrap()];
-
-                                if let Some(udf_plugin_manager) = get_udf_plugin_manager("") {
-                                    let fun = udf_plugin_manager
-                                        .aggregate_udfs
-                                        .get(udaf_fun_name)
-                                        .ok_or_else(|| {
-                                        proto_error(format!(
-                                            "can not get udf:{} from UDFPluginMananger.aggregate_udfs!",
-                                            udaf_fun_name
-                                        ))
-                                    })?;
-
-                                    let fun = fun.as_ref();
-
-                                    let args: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr
-                                        .iter()
-                                        .map(|e| e.try_into())
-                                        .collect::<Result<Vec<_>, BallistaError>>()?;
-
-                                    Ok(create_aggregate_udf_expr(
-                                        fun,
-                                        &args,
-                                        &physical_schema,
-                                        udaf_fun_name.to_string(),
-                                    )?)
-                                } else {
-                                    Err(BallistaError::General(
-                                        "no udf plugin be found".to_string()
-                                    ))
-                                }
                             }
                             _ => Err(BallistaError::General(
                                 "Invalid aggregate  expression for HashAggregateExec"

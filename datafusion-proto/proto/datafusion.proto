@@ -78,22 +78,7 @@ message LogicalExprNode {
     // window expressions
     WindowExprNode window_expr = 18;
 
-    // AggregateUDF expressions
-    AggregateUDFExprNode aggregate_udf_expr = 19;
-
-    // Scalar UDF expressions
-    ScalarUDFProtoExprNode scalar_udf_proto_expr = 20;
   }
-}
-
-message AggregateUDFExprNode {
-  string fun_name = 1;
-  repeated LogicalExprNode args = 2;
-}
-
-message ScalarUDFProtoExprNode {
-  string fun_name = 1;
-  repeated LogicalExprNode args = 2;
 }
 
 message IsNull {

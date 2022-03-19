@@ -936,50 +936,7 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     distinct: false, //TODO
                 })
             }
-            ExprType::AggregateUdfExpr(expr) => {
-                if let Some(udf_plugin_manager) = get_udf_plugin_manager("") {
-                    let fun = udf_plugin_manager
-                        .aggregate_udfs
-                        .get(expr.fun_name.as_str())
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                                "can not get udaf:{} from UDFPluginMananger.aggregate_udfs!",
-                                expr.fun_name.to_string()
-                            ))
-                        })?;
-                    let fun_arc = fun.clone();
-                    let fun_args = &expr.args;
-                    let args: Vec<Expr> = fun_args
-                        .iter()
-                        .map(|e| e.try_into())
-                        .collect::<Result<Vec<Expr>, Error>>()?;
-                    Ok(Expr::AggregateUDF { fun: fun_arc, args })
-                } else {
-                    Err(proto_error("no udf plugin be found"))
-                }
-            }
-            ExprType::ScalarUdfProtoExpr(expr) => {
-                if let Some(udf_plugin_manager) = get_udf_plugin_manager("") {
-                    let fun = udf_plugin_manager
-                        .scalar_udfs
-                        .get(expr.fun_name.as_str())
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                                "can not get udf:{} from UDFPluginMananger.scalar_udfs!",
-                                expr.fun_name.to_string()
-                            ))
-                        })?;
-                    let fun_arc = fun.clone();
-                    let fun_args = &expr.args;
-                    let args: Vec<Expr> = fun_args
-                        .iter()
-                        .map(|e| e.try_into())
-                        .collect::<Result<Vec<Expr>, Error>>()?;
-                    Ok(Expr::ScalarUDF { fun: fun_arc, args })
-                } else {
-                    Err(proto_error("no udf plugin be found"))
-                }
-            }
+
             ExprType::Alias(alias) => Ok(Self::Alias(
                 Box::new(alias.expr.as_deref().required("expr")?),
                 alias.alias.clone(),

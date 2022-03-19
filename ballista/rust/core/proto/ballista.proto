@@ -290,25 +290,7 @@ message PhysicalExprNode {
 
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
-
-    // AggregateUDFExprNode
-    PhysicalAggregateUDFExprNode aggregate_udf_expr = 16;
-
-    // ScalarUDFProtoExprNode
-    PhysicalScalarUDFProtoExprNode scalar_udf_proto_expr = 17;
-
   }
-}
-
-message PhysicalAggregateUDFExprNode {
-  string fun_name = 1;
-  repeated PhysicalExprNode expr = 2;
-}
-
-message PhysicalScalarUDFProtoExprNode {
-  string fun_name = 1;
-  repeated PhysicalExprNode expr = 2;
-  datafusion.ArrowType return_type = 3;
 }
 
 message PhysicalAggregateExprNode {
