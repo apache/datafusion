@@ -434,7 +434,7 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target"
 
   cargo-toml-formatting-checks:
-    name: Check all Cargo.toml formatting
+    name: Check Cargo.toml formatting
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
     strategy:
