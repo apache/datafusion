@@ -23,8 +23,8 @@ A simple way to start a local cluster for testing purposes is to use cargo to in
 the scheduler and executor crates.
 
 ```bash
-cargo install ballista-scheduler
-cargo install ballista-executor
+cargo install --locked ballista-scheduler
+cargo install --locked ballista-executor
 ```
 
 With these crates installed, it is now possible to start a scheduler process.
