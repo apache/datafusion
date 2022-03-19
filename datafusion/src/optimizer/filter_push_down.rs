@@ -523,7 +523,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     // Don't add expression again if it's already present in
                     // pushed down filters.
                     if new_filters.contains(filter_expr) {
-                        break;
+                        continue;
                     }
                     new_filters.push(filter_expr.clone());
                 }
