@@ -523,6 +523,8 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
+            Expr::ScalarUDF { .. } => unimplemented!(),
+            Expr::AggregateUDF { .. } => unimplemented!(),
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),

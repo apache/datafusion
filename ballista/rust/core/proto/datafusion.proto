@@ -76,7 +76,6 @@ message LogicalExprNode {
 
     // window expressions
     WindowExprNode window_expr = 18;
-
   }
 }
 

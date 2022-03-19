@@ -936,7 +936,6 @@ impl TryFrom<&protobuf::LogicalExprNode> for Expr {
                     distinct: false, //TODO
                 })
             }
-
             ExprType::Alias(alias) => Ok(Self::Alias(
                 Box::new(alias.expr.as_deref().required("expr")?),
                 alias.alias.clone(),
