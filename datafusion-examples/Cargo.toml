@@ -35,10 +35,10 @@ required-features = ["datafusion/avro"]
 
 [dev-dependencies]
 arrow-flight = { version = "10.0" }
+async-trait = "0.1.41"
 datafusion = { path = "../datafusion" }
-prost = "0.9"
-tonic = "0.6"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
 futures = "0.3"
 num_cpus = "1.13.0"
-async-trait = "0.1.41"
+prost = "0.9"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
+tonic = "0.6"
