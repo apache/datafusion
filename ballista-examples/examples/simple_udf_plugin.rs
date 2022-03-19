@@ -28,7 +28,7 @@ use lazy_static::lazy_static;
 use std::any::Any;
 use std::sync::Arc;
 
-/// this examples show how to implements a udf plugin
+/// this examples show how to implements a udf plugin for Ballista
 #[derive(Default)]
 struct SimpleUDF {}
 
