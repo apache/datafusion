@@ -2226,6 +2226,14 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     }
 }
 
+// Parse number in sql string, convert to Expr::Literal
+fn parse_sql_number(n: &str) -> Result<Expr> {
+    match n.parse::<i64>() {
+        Ok(n) => Ok(lit(n)),
+        Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::datasource::empty::EmptyTable;
@@ -4017,12 +4025,5 @@ mod tests {
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
         let result = logical_plan(sql).err().unwrap();
         assert_eq!(expected, format!("{}", result));
-    }
-}
-
-fn parse_sql_number(n: &str) -> Result<Expr> {
-    match n.parse::<i64>() {
-        Ok(n) => Ok(lit(n)),
-        Err(_) => Ok(lit(n.parse::<f64>().unwrap())),
     }
 }
