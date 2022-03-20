@@ -1376,6 +1376,11 @@ mod tests {
                     arrow::datatypes::DataType::Int32,
                     true,
                 ),
+                arrow::datatypes::Field::new(
+                    "b",
+                    arrow::datatypes::DataType::Int32,
+                    true,
+                ),
             ]))
         }
 
@@ -1474,18 +1479,29 @@ mod tests {
 
     #[test]
     fn multi_combined_filter() -> Result<()> {
-        let table_scan =
-            test_table_scan_with_name_projection("test", Some(vec![0, 1, 2]))?;
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Inexact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".to_string(),
+            filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            limit: None,
+        });
+
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(and(col("c").eq(lit(10i64)), col("b").eq(lit(10i64))))?
-            .filter(col("b").gt(lit(11i64)))?
-            .project(vec![col("a").alias("b"), col("c")])?
-            .filter(col("a").gt(lit(10i64)))?
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
             .build()?;
 
-        let expected = "Projection: #test.a AS b, #test.c\
-        \n  Filter: #test.a > Int64(10) AND #test.b > Int64(11) AND #test.c = Int64(10) AND #test.b = Int64(10)\
-        \n    TableScan: test projection=Some([0, 1, 2])";
+        let expected ="Projection: #a, #b\
+            \n  Filter: #a = Int64(10) AND #b > Int64(11)\
+            \n    TableScan: test projection=Some([0]), filters=[#a = Int64(10), #b > Int64(11)]";
 
         assert_optimized_plan_eq(&plan, expected);
 
