@@ -1471,4 +1471,24 @@ mod tests {
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
+
+    #[test]
+    fn multi_combined_filter() -> Result<()> {
+        let table_scan =
+            test_table_scan_with_name_projection("test", Some(vec![0, 1, 2]))?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("c").eq(lit(10i64)), col("b").eq(lit(10i64))))?
+            .filter(col("b").gt(lit(11i64)))?
+            .project(vec![col("a").alias("b"), col("c")])?
+            .filter(col("a").gt(lit(10i64)))?
+            .build()?;
+
+        let expected = "Projection: #test.a AS b, #test.c\
+        \n  Filter: #test.a > Int64(10) AND #test.b > Int64(11) AND #test.c = Int64(10) AND #test.b = Int64(10)\
+        \n    TableScan: test projection=Some([0, 1, 2])";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
 }
