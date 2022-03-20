@@ -77,6 +77,12 @@ message LogicalExprNode {
 
     // window expressions
     WindowExprNode window_expr = 18;
+
+    // AggregateUDF expressions
+    AggregateUDFExprNode aggregate_udf_expr = 19;
+
+    // Scalar UDF expressions
+    ScalarUDFExprNode scalar_udf_expr = 20;
   }
 }
 
@@ -206,6 +212,16 @@ enum AggregateFunction {
 message AggregateExprNode {
   AggregateFunction aggr_function = 1;
   repeated LogicalExprNode expr = 2;
+}
+
+message AggregateUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
+}
+
+message ScalarUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
 }
 
 enum BuiltInWindowFunction {

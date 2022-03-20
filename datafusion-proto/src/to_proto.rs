@@ -20,6 +20,7 @@
 //! processes.
 
 use crate::protobuf;
+
 use datafusion::{
     arrow::datatypes::{
         DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
@@ -523,8 +524,27 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { .. } => unimplemented!(),
-            Expr::AggregateUDF { .. } => unimplemented!(),
+            Expr::ScalarUDF { fun, args } => Self {
+                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
+                    fun_name: fun.name.clone(),
+                    args: args
+                        .iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, Error>>()?,
+                })),
+            },
+            Expr::AggregateUDF { fun, args } => Self {
+                expr_type: Some(ExprType::AggregateUdfExpr(
+                    protobuf::AggregateUdfExprNode {
+                        fun_name: fun.name.clone(),
+                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                            Vec<_>,
+                            Error,
+                        >>(
+                        )?,
+                    },
+                )),
+            },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
