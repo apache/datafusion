@@ -228,9 +228,8 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
-    QualifiedWildcard {
-        qualifier: String,
-    },
+    /// Represents a reference to all fields in a specific schema.
+    QualifiedWildcard { qualifier: String },
 }
 
 /// Fixed seed for the hashing so that Ords are consistent across runs
