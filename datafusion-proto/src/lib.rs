@@ -26,6 +26,12 @@ pub mod to_proto;
 
 #[cfg(test)]
 mod roundtrip_tests {
+    use super::from_proto::parse_expr;
+    use super::protobuf;
+    use datafusion::arrow::array::ArrayRef;
+    use datafusion::logical_plan::create_udaf;
+    use datafusion::physical_plan::functions::{make_scalar_function, Volatility};
+    use datafusion::physical_plan::Accumulator;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
         logical_plan::{col, Expr},
@@ -33,14 +39,15 @@ mod roundtrip_tests {
         prelude::*,
         scalar::ScalarValue,
     };
+    use std::sync::Arc;
 
-    // Given a DataFusion type, convert it to protobuf and back, using debug formatting to test
+    // Given a DataFusion logical Expr, convert it to protobuf and back, using debug formatting to test
     // equality.
-    macro_rules! roundtrip_test {
-        ($initial_struct:ident, $proto_type:ty, $struct_type:ty) => {
-            let proto: $proto_type = (&$initial_struct).try_into().unwrap();
+    macro_rules! roundtrip_expr_test {
+        ($initial_struct:ident, $ctx:ident) => {
+            let proto: protobuf::LogicalExprNode = (&$initial_struct).try_into().unwrap();
 
-            let round_trip: $struct_type = (&proto).try_into().unwrap();
+            let round_trip: Expr = parse_expr(&proto, &$ctx).unwrap();
 
             assert_eq!(
                 format!("{:?}", $initial_struct),
@@ -575,95 +582,102 @@ mod roundtrip_tests {
 
     #[test]
     fn roundtrip_not() {
-        let test_expr = Expr::Not(Box::new(Expr::Literal((1.0).into())));
+        let test_expr = Expr::Not(Box::new(lit(1.0_f32)));
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_is_null() {
         let test_expr = Expr::IsNull(Box::new(col("id")));
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_is_not_null() {
         let test_expr = Expr::IsNotNull(Box::new(col("id")));
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_between() {
         let test_expr = Expr::Between {
-            expr: Box::new(Expr::Literal((1.0).into())),
+            expr: Box::new(lit(1.0_f32)),
             negated: true,
-            low: Box::new(Expr::Literal((2.0).into())),
-            high: Box::new(Expr::Literal((3.0).into())),
+            low: Box::new(lit(2.0_f32)),
+            high: Box::new(lit(3.0_f32)),
         };
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_case() {
         let test_expr = Expr::Case {
-            expr: Some(Box::new(Expr::Literal((1.0).into()))),
-            when_then_expr: vec![(
-                Box::new(Expr::Literal((2.0).into())),
-                Box::new(Expr::Literal((3.0).into())),
-            )],
-            else_expr: Some(Box::new(Expr::Literal((4.0).into()))),
+            expr: Some(Box::new(lit(1.0_f32))),
+            when_then_expr: vec![(Box::new(lit(2.0_f32)), Box::new(lit(3.0_f32)))],
+            else_expr: Some(Box::new(lit(4.0_f32))),
         };
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_cast() {
         let test_expr = Expr::Cast {
-            expr: Box::new(Expr::Literal((1.0).into())),
+            expr: Box::new(lit(1.0_f32)),
             data_type: DataType::Boolean,
         };
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_sort_expr() {
         let test_expr = Expr::Sort {
-            expr: Box::new(Expr::Literal((1.0).into())),
+            expr: Box::new(lit(1.0_f32)),
             asc: true,
             nulls_first: true,
         };
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_negative() {
-        let test_expr = Expr::Negative(Box::new(Expr::Literal((1.0).into())));
+        let test_expr = Expr::Negative(Box::new(lit(1.0_f32)));
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_inlist() {
         let test_expr = Expr::InList {
-            expr: Box::new(Expr::Literal((1.0).into())),
-            list: vec![Expr::Literal((2.0).into())],
+            expr: Box::new(lit(1.0_f32)),
+            list: vec![lit(2.0_f32)],
             negated: true,
         };
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_wildcard() {
         let test_expr = Expr::Wildcard;
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
@@ -672,17 +686,98 @@ mod roundtrip_tests {
             fun: Sqrt,
             args: vec![col("col")],
         };
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
     }
 
     #[test]
     fn roundtrip_approx_percentile_cont() {
         let test_expr = Expr::AggregateFunction {
             fun: aggregates::AggregateFunction::ApproxPercentileCont,
-            args: vec![col("bananas"), lit(0.42)],
+            args: vec![col("bananas"), lit(0.42_f32)],
             distinct: false,
         };
 
-        roundtrip_test!(test_expr, super::protobuf::LogicalExprNode, Expr);
+        let ctx = SessionContext::new();
+        roundtrip_expr_test!(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_aggregate_udf() {
+        #[derive(Debug)]
+        struct Dummy {}
+
+        impl Accumulator for Dummy {
+            fn state(&self) -> datafusion::error::Result<Vec<ScalarValue>> {
+                Ok(vec![])
+            }
+
+            fn update_batch(
+                &mut self,
+                _values: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn merge_batch(
+                &mut self,
+                _states: &[ArrayRef],
+            ) -> datafusion::error::Result<()> {
+                Ok(())
+            }
+
+            fn evaluate(&self) -> datafusion::error::Result<ScalarValue> {
+                Ok(ScalarValue::Float64(None))
+            }
+        }
+
+        let dummy_agg = create_udaf(
+            // the name; used to represent it in plan descriptions and in the registry, to use in SQL.
+            "dummy_agg",
+            // the input type; DataFusion guarantees that the first entry of `values` in `update` has this type.
+            DataType::Float64,
+            // the return type; DataFusion expects this to match the type returned by `evaluate`.
+            Arc::new(DataType::Float64),
+            Volatility::Immutable,
+            // This is the accumulator factory; DataFusion uses it to create new accumulators.
+            Arc::new(|| Ok(Box::new(Dummy {}))),
+            // This is the description of the state. `state()` must match the types here.
+            Arc::new(vec![DataType::Float64, DataType::UInt32]),
+        );
+
+        let test_expr = Expr::AggregateUDF {
+            fun: Arc::new(dummy_agg.clone()),
+            args: vec![lit(1.0_f64)],
+        };
+
+        let mut ctx = SessionContext::new();
+        ctx.register_udaf(dummy_agg);
+
+        roundtrip_expr_test!(test_expr, ctx);
+    }
+
+    #[test]
+    fn roundtrip_scalar_udf() {
+        let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
+
+        let scalar_fn = make_scalar_function(fn_impl);
+
+        let udf = create_udf(
+            "dummy",
+            vec![DataType::Utf8],
+            Arc::new(DataType::Utf8),
+            Volatility::Immutable,
+            scalar_fn,
+        );
+
+        let test_expr = Expr::ScalarUDF {
+            fun: Arc::new(udf.clone()),
+            args: vec![lit("")],
+        };
+
+        let mut ctx = SessionContext::new();
+        ctx.register_udf(udf);
+
+        roundtrip_expr_test!(test_expr, ctx);
     }
 }

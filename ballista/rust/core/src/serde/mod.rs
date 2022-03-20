@@ -84,6 +84,7 @@ pub trait LogicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[LogicalPlan],
+        ctx: &SessionContext,
     ) -> Result<Extension, BallistaError>;
 
     fn try_encode(
@@ -101,6 +102,7 @@ impl LogicalExtensionCodec for DefaultLogicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[LogicalPlan],
+        _ctx: &SessionContext,
     ) -> Result<Extension, BallistaError> {
         Err(BallistaError::NotImplemented(
             "LogicalExtensionCodec is not provided".to_string(),
@@ -147,6 +149,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
+        ctx: &SessionContext,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
 
     fn try_encode(
@@ -164,6 +167,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
+        _ctx: &SessionContext,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         Err(BallistaError::NotImplemented(
             "PhysicalExtensionCodec is not provided".to_string(),
@@ -360,6 +364,7 @@ mod tests {
     use prost::Message;
     use std::any::Any;
 
+    use datafusion_proto::from_proto::parse_expr;
     use std::convert::TryInto;
     use std::fmt;
     use std::fmt::{Debug, Formatter};
@@ -596,6 +601,7 @@ mod tests {
             &self,
             buf: &[u8],
             inputs: &[LogicalPlan],
+            ctx: &SessionContext,
         ) -> Result<Extension, BallistaError> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = TopKPlanProto::decode(buf).map_err(|e| {
@@ -609,7 +615,7 @@ mod tests {
                     let node = TopKPlanNode::new(
                         proto.k as usize,
                         input.clone(),
-                        expr.try_into()?,
+                        parse_expr(expr, ctx)?,
                     );
 
                     Ok(Extension {
@@ -653,6 +659,7 @@ mod tests {
             &self,
             buf: &[u8],
             inputs: &[Arc<dyn ExecutionPlan>],
+            _ctx: &SessionContext,
         ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = TopKExecProto::decode(buf).map_err(|e| {

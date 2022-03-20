@@ -38,6 +38,7 @@ use datafusion::logical_plan::{
 };
 use datafusion::prelude::SessionContext;
 
+use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
@@ -95,10 +96,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .values_list
                         .chunks_exact(n_cols)
                         .map(|r| {
-                            r.iter().map(|v| v.try_into()).collect::<Result<
+                            r.iter().map(|expr| parse_expr(expr, ctx)).collect::<Result<
                                 Vec<_>,
                                 datafusion_proto::from_proto::Error,
-                            >>()
+                            >>(
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
@@ -113,7 +115,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let x: Vec<Expr> = projection
                     .expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .project_with_alias(
@@ -133,10 +135,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Expr = selection
                     .expr
                     .as_ref()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .transpose()?
                     .ok_or_else(|| {
                         BallistaError::General("expression required".to_string())
-                    })?
-                    .try_into()?;
+                    })?;
+                // .try_into()?;
                 LogicalPlanBuilder::from(input)
                     .filter(expr)?
                     .build()
@@ -148,7 +152,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let window_expr = window
                     .window_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .window(window_expr)?
@@ -161,12 +165,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let group_expr = aggregate
                     .group_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 let aggr_expr = aggregate
                     .aggr_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .aggregate(group_expr, aggr_expr)?
@@ -189,7 +193,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters = scan
                     .filters
                     .iter()
-                    .map(|e| e.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let file_format: Arc<dyn FileFormat> =
@@ -260,7 +264,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let sort_expr: Vec<Expr> = sort
                     .expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .sort(sort_expr)?
@@ -285,7 +289,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }) => Partitioning::Hash(
                         pb_hash_expr
                             .iter()
-                            .map(|pb_expr| pb_expr.try_into())
+                            .map(|expr| parse_expr(expr, ctx))
                             .collect::<Result<Vec<_>, _>>()?,
                         partition_count as usize,
                     ),
@@ -416,7 +420,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
                     .collect::<Result<_, BallistaError>>()?;
 
-                let extension_node = extension_codec.try_decode(node, &input_plans)?;
+                let extension_node =
+                    extension_codec.try_decode(node, &input_plans, ctx)?;
                 Ok(LogicalPlan::Extension(extension_node))
             }
         }

@@ -16,6 +16,8 @@
 // under the License.
 
 use crate::protobuf;
+use datafusion::prelude::{bit_length, SessionContext};
+use datafusion::sql::planner::ContextProvider;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
@@ -832,330 +834,364 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
     }
 }
 
-impl TryFrom<&protobuf::LogicalExprNode> for Expr {
-    type Error = Error;
+pub fn parse_expr(
+    proto: &protobuf::LogicalExprNode,
+    ctx: &SessionContext,
+) -> Result<Expr, Error> {
+    use datafusion::physical_plan::window_functions;
+    use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
 
-    fn try_from(expr: &protobuf::LogicalExprNode) -> Result<Self, Self::Error> {
-        use datafusion::physical_plan::window_functions;
-        use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
+    let expr_type = proto
+        .expr_type
+        .as_ref()
+        .ok_or_else(|| Error::required("expr_type"))?;
 
-        let expr_type = expr
-            .expr_type
-            .as_ref()
-            .ok_or_else(|| Error::required("expr_type"))?;
-
-        match expr_type {
-            ExprType::BinaryExpr(binary_expr) => Ok(Self::BinaryExpr {
-                left: Box::new(binary_expr.l.as_deref().required("l")?),
-                op: from_proto_binary_op(&binary_expr.op)?,
-                right: Box::new(binary_expr.r.as_deref().required("r")?),
-            }),
-            ExprType::Column(column) => Ok(Self::Column(column.into())),
-            ExprType::Literal(literal) => {
-                let scalar_value: ScalarValue = literal.try_into()?;
-                Ok(Self::Literal(scalar_value))
-            }
-            ExprType::WindowExpr(expr) => {
-                let window_function = expr
-                    .window_function
-                    .as_ref()
-                    .ok_or_else(|| Error::required("window_function"))?;
-                let partition_by = expr
-                    .partition_by
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                let order_by = expr
-                    .order_by
-                    .iter()
-                    .map(|e| e.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-                let window_frame = expr
-                    .window_frame
-                    .as_ref()
-                    .map::<Result<WindowFrame, _>, _>(|e| match e {
-                        window_expr_node::WindowFrame::Frame(frame) => {
-                            let window_frame: WindowFrame = frame.clone().try_into()?;
-                            if WindowFrameUnits::Range == window_frame.units
-                                && order_by.len() != 1
-                            {
-                                Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
-                            } else {
-                                Ok(window_frame)
-                            }
+    match expr_type {
+        ExprType::BinaryExpr(binary_expr) => Ok(Expr::BinaryExpr {
+            left: Box::new(parse_required_expr(&binary_expr.l, ctx, "l")?),
+            op: from_proto_binary_op(&binary_expr.op)?,
+            right: Box::new(parse_required_expr(&binary_expr.r, ctx, "r")?),
+        }),
+        ExprType::Column(column) => Ok(Expr::Column(column.into())),
+        ExprType::Literal(literal) => {
+            let scalar_value: ScalarValue = literal.try_into()?;
+            Ok(Expr::Literal(scalar_value))
+        }
+        ExprType::WindowExpr(expr) => {
+            let window_function = expr
+                .window_function
+                .as_ref()
+                .ok_or_else(|| Error::required("window_function"))?;
+            let partition_by = expr
+                .partition_by
+                .iter()
+                .map(|e| parse_expr(e, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            let order_by = expr
+                .order_by
+                .iter()
+                .map(|e| parse_expr(e, ctx))
+                .collect::<Result<Vec<_>, _>>()?;
+            let window_frame = expr
+                .window_frame
+                .as_ref()
+                .map::<Result<WindowFrame, _>, _>(|e| match e {
+                    window_expr_node::WindowFrame::Frame(frame) => {
+                        let window_frame: WindowFrame = frame.clone().try_into()?;
+                        if WindowFrameUnits::Range == window_frame.units
+                            && order_by.len() != 1
+                        {
+                            Err(proto_error("With window frame of type RANGE, the order by expression must be of length 1"))
+                        } else {
+                            Ok(window_frame)
                         }
+                    }
+                })
+                .transpose()?;
+
+            match window_function {
+                window_expr_node::WindowFunction::AggrFunction(i) => {
+                    let aggr_function = protobuf::AggregateFunction::try_from(i)?.into();
+
+                    Ok(Expr::WindowFunction {
+                        fun: window_functions::WindowFunction::AggregateFunction(
+                            aggr_function,
+                        ),
+                        args: vec![parse_required_expr(&expr.expr, ctx, "expr")?],
+                        partition_by,
+                        order_by,
+                        window_frame,
                     })
-                    .transpose()?;
+                }
+                window_expr_node::WindowFunction::BuiltInFunction(i) => {
+                    let built_in_function = protobuf::BuiltInWindowFunction::from_i32(*i)
+                        .ok_or_else(|| Error::unknown("BuiltInWindowFunction", *i))?
+                        .into();
 
-                match window_function {
-                    window_expr_node::WindowFunction::AggrFunction(i) => {
-                        let aggr_function =
-                            protobuf::AggregateFunction::try_from(i)?.into();
-
-                        Ok(Self::WindowFunction {
-                            fun: window_functions::WindowFunction::AggregateFunction(
-                                aggr_function,
-                            ),
-                            args: vec![expr.expr.as_deref().required("expr")?],
-                            partition_by,
-                            order_by,
-                            window_frame,
-                        })
-                    }
-                    window_expr_node::WindowFunction::BuiltInFunction(i) => {
-                        let built_in_function =
-                            protobuf::BuiltInWindowFunction::from_i32(*i)
-                                .ok_or_else(|| {
-                                    Error::unknown("BuiltInWindowFunction", *i)
-                                })?
-                                .into();
-
-                        Ok(Self::WindowFunction {
-                            fun: window_functions::WindowFunction::BuiltInWindowFunction(
-                                built_in_function,
-                            ),
-                            args: vec![expr.expr.as_deref().required("expr")?],
-                            partition_by,
-                            order_by,
-                            window_frame,
-                        })
-                    }
+                    Ok(Expr::WindowFunction {
+                        fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                            built_in_function,
+                        ),
+                        args: vec![parse_required_expr(&expr.expr, ctx, "expr")?],
+                        partition_by,
+                        order_by,
+                        window_frame,
+                    })
                 }
             }
-            ExprType::AggregateExpr(expr) => {
-                let fun =
-                    protobuf::AggregateFunction::try_from(&expr.aggr_function)?.into();
+        }
+        ExprType::AggregateExpr(expr) => {
+            let fun = protobuf::AggregateFunction::try_from(&expr.aggr_function)?.into();
 
-                Ok(Self::AggregateFunction {
-                    fun,
-                    args: expr
-                        .expr
-                        .iter()
-                        .map(|e| e.try_into())
-                        .collect::<Result<Vec<_>, _>>()?,
-                    distinct: false, //TODO
-                })
-            }
-            ExprType::Alias(alias) => Ok(Self::Alias(
-                Box::new(alias.expr.as_deref().required("expr")?),
-                alias.alias.clone(),
-            )),
-            ExprType::IsNullExpr(is_null) => Ok(Self::IsNull(Box::new(
-                is_null.expr.as_deref().required("expr")?,
-            ))),
-            ExprType::IsNotNullExpr(is_not_null) => Ok(Self::IsNotNull(Box::new(
-                is_not_null.expr.as_deref().required("expr")?,
-            ))),
-            ExprType::NotExpr(not) => {
-                Ok(Self::Not(Box::new(not.expr.as_deref().required("expr")?)))
-            }
-            ExprType::Between(between) => Ok(Self::Between {
-                expr: Box::new(between.expr.as_deref().required("expr")?),
-                negated: between.negated,
-                low: Box::new(between.low.as_deref().required("low")?),
-                high: Box::new(between.high.as_deref().required("high")?),
-            }),
-            ExprType::Case(case) => {
-                let when_then_expr = case
-                    .when_then_expr
+            Ok(Expr::AggregateFunction {
+                fun,
+                args: expr
+                    .expr
                     .iter()
-                    .map(|e| {
-                        let when_expr = e.when_expr.as_ref().required("when_expr")?;
-                        let then_expr = e.then_expr.as_ref().required("then_expr")?;
-                        Ok((Box::new(when_expr), Box::new(then_expr)))
-                    })
-                    .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
-                Ok(Self::Case {
-                    expr: parse_optional_expr(&case.expr)?.map(Box::new),
-                    when_then_expr,
-                    else_expr: parse_optional_expr(&case.else_expr)?.map(Box::new),
-                })
-            }
-            ExprType::Cast(cast) => {
-                let expr = Box::new(cast.expr.as_deref().required("expr")?);
-                let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-                Ok(Self::Cast { expr, data_type })
-            }
-            ExprType::TryCast(cast) => {
-                let expr = Box::new(cast.expr.as_deref().required("expr")?);
-                let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
-                Ok(Self::TryCast { expr, data_type })
-            }
-            ExprType::Sort(sort) => Ok(Self::Sort {
-                expr: Box::new(sort.expr.as_deref().required("expr")?),
-                asc: sort.asc,
-                nulls_first: sort.nulls_first,
-            }),
-            ExprType::Negative(negative) => Ok(Self::Negative(Box::new(
-                negative.expr.as_deref().required("expr")?,
-            ))),
-            ExprType::InList(in_list) => Ok(Self::InList {
-                expr: Box::new(in_list.expr.as_deref().required("expr")?),
-                list: in_list
-                    .list
-                    .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|e| parse_expr(e, ctx))
                     .collect::<Result<Vec<_>, _>>()?,
-                negated: in_list.negated,
-            }),
-            ExprType::Wildcard(_) => Ok(Self::Wildcard),
-            ExprType::ScalarFunction(expr) => {
-                let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)
-                    .ok_or_else(|| Error::unknown("ScalarFunction", expr.fun))?;
-                let args = &expr.args;
+                distinct: false, //TODO
+            })
+        }
+        ExprType::Alias(alias) => Ok(Expr::Alias(
+            Box::new(parse_required_expr(&alias.expr, ctx, "expr")?),
+            alias.alias.clone(),
+        )),
+        ExprType::IsNullExpr(is_null) => Ok(Expr::IsNull(Box::new(parse_required_expr(
+            &is_null.expr,
+            ctx,
+            "expr",
+        )?))),
+        ExprType::IsNotNullExpr(is_not_null) => Ok(Expr::IsNotNull(Box::new(
+            parse_required_expr(&is_not_null.expr, ctx, "expr")?,
+        ))),
+        ExprType::NotExpr(not) => Ok(Expr::Not(Box::new(parse_required_expr(
+            &not.expr, ctx, "expr",
+        )?))),
+        ExprType::Between(between) => Ok(Expr::Between {
+            expr: Box::new(parse_required_expr(&between.expr, ctx, "expr")?),
+            negated: between.negated,
+            low: Box::new(parse_required_expr(&between.low, ctx, "expr")?),
+            high: Box::new(parse_required_expr(&between.high, ctx, "expr")?),
+        }),
+        ExprType::Case(case) => {
+            let when_then_expr = case
+                .when_then_expr
+                .iter()
+                .map(|e| {
+                    let when_expr =
+                        parse_required_expr_inner(&e.when_expr, ctx, "when_expr")?;
+                    let then_expr =
+                        parse_required_expr_inner(&e.then_expr, ctx, "then_expr")?;
+                    Ok((Box::new(when_expr), Box::new(then_expr)))
+                })
+                .collect::<Result<Vec<(Box<Expr>, Box<Expr>)>, Error>>()?;
+            Ok(Expr::Case {
+                expr: parse_optional_expr(&case.expr, ctx)?.map(Box::new),
+                when_then_expr,
+                else_expr: parse_optional_expr(&case.else_expr, ctx)?.map(Box::new),
+            })
+        }
+        ExprType::Cast(cast) => {
+            let expr = Box::new(parse_required_expr(&cast.expr, ctx, "expr")?);
+            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
+            Ok(Expr::Cast { expr, data_type })
+        }
+        ExprType::TryCast(cast) => {
+            let expr = Box::new(parse_required_expr(&cast.expr, ctx, "expr")?);
+            let data_type = cast.arrow_type.as_ref().required("arrow_type")?;
+            Ok(Expr::TryCast { expr, data_type })
+        }
+        ExprType::Sort(sort) => Ok(Expr::Sort {
+            expr: Box::new(parse_required_expr(&sort.expr, ctx, "expr")?),
+            asc: sort.asc,
+            nulls_first: sort.nulls_first,
+        }),
+        ExprType::Negative(negative) => Ok(Expr::Negative(Box::new(
+            parse_required_expr(&negative.expr, ctx, "expr")?,
+        ))),
+        ExprType::InList(in_list) => Ok(Expr::InList {
+            expr: Box::new(parse_required_expr(&in_list.expr, ctx, "expr")?),
+            list: in_list
+                .list
+                .iter()
+                .map(|expr| parse_expr(expr, ctx))
+                .collect::<Result<Vec<_>, _>>()?,
+            negated: in_list.negated,
+        }),
+        ExprType::Wildcard(_) => Ok(Expr::Wildcard),
+        ExprType::ScalarFunction(expr) => {
+            let scalar_function = protobuf::ScalarFunction::from_i32(expr.fun)
+                .ok_or_else(|| Error::unknown("ScalarFunction", expr.fun))?;
+            let args = &expr.args;
 
-                match scalar_function {
-                    ScalarFunction::Asin => Ok(asin((&args[0]).try_into()?)),
-                    ScalarFunction::Acos => Ok(acos((&args[0]).try_into()?)),
-                    ScalarFunction::Array => Ok(array(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::Sqrt => Ok(sqrt((&args[0]).try_into()?)),
-                    ScalarFunction::Sin => Ok(sin((&args[0]).try_into()?)),
-                    ScalarFunction::Cos => Ok(cos((&args[0]).try_into()?)),
-                    ScalarFunction::Tan => Ok(tan((&args[0]).try_into()?)),
-                    ScalarFunction::Atan => Ok(atan((&args[0]).try_into()?)),
-                    ScalarFunction::Exp => Ok(exp((&args[0]).try_into()?)),
-                    ScalarFunction::Log2 => Ok(log2((&args[0]).try_into()?)),
-                    ScalarFunction::Ln => Ok(ln((&args[0]).try_into()?)),
-                    ScalarFunction::Log10 => Ok(log10((&args[0]).try_into()?)),
-                    ScalarFunction::Floor => Ok(floor((&args[0]).try_into()?)),
-                    ScalarFunction::Ceil => Ok(ceil((&args[0]).try_into()?)),
-                    ScalarFunction::Round => Ok(round((&args[0]).try_into()?)),
-                    ScalarFunction::Trunc => Ok(trunc((&args[0]).try_into()?)),
-                    ScalarFunction::Abs => Ok(abs((&args[0]).try_into()?)),
-                    ScalarFunction::Signum => Ok(signum((&args[0]).try_into()?)),
-                    ScalarFunction::OctetLength => {
-                        Ok(octet_length((&args[0]).try_into()?))
-                    }
-                    ScalarFunction::Lower => Ok(lower((&args[0]).try_into()?)),
-                    ScalarFunction::Upper => Ok(upper((&args[0]).try_into()?)),
-                    ScalarFunction::Trim => Ok(trim((&args[0]).try_into()?)),
-                    ScalarFunction::Ltrim => Ok(ltrim((&args[0]).try_into()?)),
-                    ScalarFunction::Rtrim => Ok(rtrim((&args[0]).try_into()?)),
-                    ScalarFunction::DatePart => {
-                        Ok(date_part((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::DateTrunc => {
-                        Ok(date_trunc((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Sha224 => Ok(sha224((&args[0]).try_into()?)),
-                    ScalarFunction::Sha256 => Ok(sha256((&args[0]).try_into()?)),
-                    ScalarFunction::Sha384 => Ok(sha384((&args[0]).try_into()?)),
-                    ScalarFunction::Sha512 => Ok(sha512((&args[0]).try_into()?)),
-                    ScalarFunction::Md5 => Ok(md5((&args[0]).try_into()?)),
-                    ScalarFunction::NullIf => Ok(nullif((&args[0]).try_into()?)),
-                    ScalarFunction::Digest => {
-                        Ok(digest((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Ascii => Ok(ascii((&args[0]).try_into()?)),
-                    ScalarFunction::BitLength => Ok((&args[0]).try_into()?),
-                    ScalarFunction::CharacterLength => {
-                        Ok(character_length((&args[0]).try_into()?))
-                    }
-                    ScalarFunction::Chr => Ok(chr((&args[0]).try_into()?)),
-                    ScalarFunction::InitCap => Ok(ascii((&args[0]).try_into()?)),
-                    ScalarFunction::Left => {
-                        Ok(left((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Random => Ok(random()),
-                    ScalarFunction::Repeat => {
-                        Ok(repeat((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Replace => Ok(replace(
-                        (&args[0]).try_into()?,
-                        (&args[1]).try_into()?,
-                        (&args[2]).try_into()?,
-                    )),
-                    ScalarFunction::Reverse => Ok(reverse((&args[0]).try_into()?)),
-                    ScalarFunction::Right => {
-                        Ok(right((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Concat => Ok(concat_expr(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::Lpad => Ok(lpad(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::Rpad => Ok(rpad(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::RegexpReplace => Ok(regexp_replace(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::RegexpMatch => Ok(regexp_match(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::Btrim => Ok(btrim(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::SplitPart => Ok(split_part(
-                        (&args[0]).try_into()?,
-                        (&args[1]).try_into()?,
-                        (&args[2]).try_into()?,
-                    )),
-                    ScalarFunction::StartsWith => {
-                        Ok(starts_with((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Strpos => {
-                        Ok(strpos((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::Substr => {
-                        Ok(substr((&args[0]).try_into()?, (&args[1]).try_into()?))
-                    }
-                    ScalarFunction::ToHex => Ok(to_hex((&args[0]).try_into()?)),
-                    ScalarFunction::ToTimestampMillis => {
-                        Ok(to_timestamp_millis((&args[0]).try_into()?))
-                    }
-                    ScalarFunction::ToTimestampMicros => {
-                        Ok(to_timestamp_micros((&args[0]).try_into()?))
-                    }
-                    ScalarFunction::ToTimestampSeconds => {
-                        Ok(to_timestamp_seconds((&args[0]).try_into()?))
-                    }
-                    ScalarFunction::Now => Ok(now_expr(
-                        args.to_owned()
-                            .iter()
-                            .map(|e| e.try_into())
-                            .collect::<Result<Vec<_>, _>>()?,
-                    )),
-                    ScalarFunction::Translate => Ok(translate(
-                        (&args[0]).try_into()?,
-                        (&args[1]).try_into()?,
-                        (&args[2]).try_into()?,
-                    )),
-                    _ => Err(proto_error(
-                        "Protobuf deserialization error: Unsupported scalar function",
-                    )),
+            match scalar_function {
+                ScalarFunction::Asin => Ok(asin(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Acos => Ok(acos(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Array => Ok(array(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::Sqrt => Ok(sqrt(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Sin => Ok(sin(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Cos => Ok(cos(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Tan => Ok(tan(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Atan => Ok(atan(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Exp => Ok(exp(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Log2 => Ok(log2(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Ln => Ok(ln(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Log10 => Ok(log10(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Floor => Ok(floor(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Ceil => Ok(ceil(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Round => Ok(round(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Trunc => Ok(trunc(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Abs => Ok(abs(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Signum => Ok(signum(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::OctetLength => {
+                    Ok(octet_length(parse_expr(&args[0], ctx)?))
                 }
+                ScalarFunction::Lower => Ok(lower(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Upper => Ok(upper(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Trim => Ok(trim(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Ltrim => Ok(ltrim(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Rtrim => Ok(rtrim(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::DatePart => Ok(date_part(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::DateTrunc => Ok(date_trunc(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::Sha224 => Ok(sha224(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Sha256 => Ok(sha256(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Sha384 => Ok(sha384(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Sha512 => Ok(sha512(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Md5 => Ok(md5(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::NullIf => Ok(nullif(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Digest => Ok(digest(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::Ascii => Ok(ascii(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::BitLength => Ok(bit_length(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::CharacterLength => {
+                    Ok(character_length(parse_expr(&args[0], ctx)?))
+                }
+                ScalarFunction::Chr => Ok(chr(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::InitCap => Ok(ascii(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Left => {
+                    Ok(left(parse_expr(&args[0], ctx)?, parse_expr(&args[1], ctx)?))
+                }
+                ScalarFunction::Random => Ok(random()),
+                ScalarFunction::Repeat => Ok(repeat(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::Replace => Ok(replace(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                    parse_expr(&args[2], ctx)?,
+                )),
+                ScalarFunction::Reverse => Ok(reverse(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::Right => Ok(right(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::Concat => Ok(concat_expr(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::ConcatWithSeparator => Ok(concat_ws_expr(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::Lpad => Ok(lpad(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::Rpad => Ok(rpad(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::RegexpReplace => Ok(regexp_replace(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::RegexpMatch => Ok(regexp_match(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::Btrim => Ok(btrim(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::SplitPart => Ok(split_part(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                    parse_expr(&args[2], ctx)?,
+                )),
+                ScalarFunction::StartsWith => Ok(starts_with(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::Strpos => Ok(strpos(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::Substr => Ok(substr(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                )),
+                ScalarFunction::ToHex => Ok(to_hex(parse_expr(&args[0], ctx)?)),
+                ScalarFunction::ToTimestampMillis => {
+                    Ok(to_timestamp_millis(parse_expr(&args[0], ctx)?))
+                }
+                ScalarFunction::ToTimestampMicros => {
+                    Ok(to_timestamp_micros(parse_expr(&args[0], ctx)?))
+                }
+                ScalarFunction::ToTimestampSeconds => {
+                    Ok(to_timestamp_seconds(parse_expr(&args[0], ctx)?))
+                }
+                ScalarFunction::Now => Ok(now_expr(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, ctx))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::Translate => Ok(translate(
+                    parse_expr(&args[0], ctx)?,
+                    parse_expr(&args[1], ctx)?,
+                    parse_expr(&args[2], ctx)?,
+                )),
+                _ => Err(proto_error(
+                    "Protobuf deserialization error: Unsupported scalar function",
+                )),
             }
+        }
+        ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
+            let scalar_fn = ctx
+                .state
+                .lock()
+                .get_function_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
+
+            Ok(Expr::ScalarUDF {
+                fun: scalar_fn,
+                args: args
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, Error>>()?,
+            })
+        }
+        ExprType::AggregateUdfExpr(protobuf::AggregateUdfExprNode { fun_name, args }) => {
+            let agg_fn = ctx
+                .state
+                .lock()
+                .get_aggregate_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
+
+            Ok(Expr::AggregateUDF {
+                fun: agg_fn,
+                args: args
+                    .iter()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .collect::<Result<Vec<_>, Error>>()?,
+            })
         }
     }
 }
@@ -1425,10 +1461,33 @@ fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {
 
 fn parse_optional_expr(
     p: &Option<Box<protobuf::LogicalExprNode>>,
+    ctx: &SessionContext,
 ) -> Result<Option<Expr>, Error> {
     match p {
-        Some(expr) => expr.as_ref().try_into().map(Some),
+        Some(expr) => parse_expr(expr.as_ref(), ctx).map(Some),
         None => Ok(None),
+    }
+}
+
+fn parse_required_expr(
+    p: &Option<Box<protobuf::LogicalExprNode>>,
+    ctx: &SessionContext,
+    field: impl Into<String>,
+) -> Result<Expr, Error> {
+    match p {
+        Some(expr) => parse_expr(expr.as_ref(), ctx),
+        None => Err(Error::required(field)),
+    }
+}
+
+fn parse_required_expr_inner(
+    p: &Option<protobuf::LogicalExprNode>,
+    ctx: &SessionContext,
+    field: impl Into<String>,
+) -> Result<Expr, Error> {
+    match p {
+        Some(expr) => parse_expr(expr, ctx),
+        None => Err(Error::required(field)),
     }
 }
 
