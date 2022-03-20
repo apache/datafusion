@@ -477,22 +477,9 @@ jobs:
         run: |
           # if you encounter error, try rerun the command below, finally run 'git diff' to
           # check which Cargo.toml introduces formatting violation
-          cargo tomlfmt -p Cargo.toml
-          cargo tomlfmt -p datafusion-cli/Cargo.toml
-          cargo tomlfmt -p ballista/rust/core/Cargo.toml
-          cargo tomlfmt -p ballista/rust/scheduler/Cargo.toml
-          cargo tomlfmt -p ballista/rust/executor/Cargo.toml
-          cargo tomlfmt -p ballista/rust/client/Cargo.toml
-          cargo tomlfmt -p datafusion/Cargo.toml
-          cargo tomlfmt -p datafusion/fuzz-utils/Cargo.toml
-          cargo tomlfmt -p ballista-examples/Cargo.toml
-          cargo tomlfmt -p datafusion-examples/Cargo.toml
-          cargo tomlfmt -p datafusion-expr/Cargo.toml
-          cargo tomlfmt -p datafusion-physical-expr/Cargo.toml
-          cargo tomlfmt -p benchmarks/Cargo.toml
-          cargo tomlfmt -p datafusion-common/Cargo.toml
-          cargo tomlfmt -p datafusion-proto/Cargo.toml
-          cargo tomlfmt -p datafusion-jit/Cargo.toml
+          #
+          # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
+          find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
           git diff --exit-code
         env:
           CARGO_HOME: "/github/home/.cargo"
