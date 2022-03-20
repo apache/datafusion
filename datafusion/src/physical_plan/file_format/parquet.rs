@@ -50,7 +50,7 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use log::debug;
+use log::{debug, info};
 use parquet::arrow::ArrowWriter;
 use parquet::file::{
     metadata::RowGroupMetaData,
@@ -249,7 +249,7 @@ impl ExecutionPlan for ParquetExec {
                 limit,
                 partition_col_proj,
             ) {
-                println!(
+                info!(
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
                 );
