@@ -47,6 +47,7 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::empty::EmptyExec;
 
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::file_format::{CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
@@ -234,11 +235,16 @@ pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
     let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
     let planner: Arc<BallistaQueryPlanner<T>> =
         Arc::new(BallistaQueryPlanner::new(scheduler_url, config.clone()));
-    let config = SessionConfig::new()
-        .with_query_planner(planner)
+
+    let session_config = SessionConfig::new()
         .with_target_partitions(config.default_shuffle_partitions())
         .with_information_schema(true);
-    SessionContext::with_config(config)
+    let session_state = SessionState::with_config(
+        session_config,
+        Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap()),
+    )
+    .with_query_planner(planner);
+    SessionContext::with_state(session_state)
 }
 
 pub struct BallistaQueryPlanner<T: AsLogicalPlan> {

@@ -29,7 +29,7 @@ use chrono::{TimeZone, Utc};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::object_store::{FileMeta, SizedFile};
 use datafusion::datasource::PartitionedFile;
-use datafusion::execution::context::SessionState;
+use datafusion::execution::context::ExecutionProps;
 
 use datafusion::physical_plan::file_format::FileScanConfig;
 
@@ -153,12 +153,12 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     .map(|x| x.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                // TODO Do not create new the SessionState
-                let session_state = SessionState::new();
+                // TODO Do not create new the ExecutionProps
+                let execution_props = ExecutionProps::new();
 
                 let fun_expr = functions::create_physical_fun(
                     &(&scalar_function).into(),
-                    &session_state.execution_props,
+                    &execution_props,
                 )?;
 
                 Arc::new(ScalarFunctionExpr::new(

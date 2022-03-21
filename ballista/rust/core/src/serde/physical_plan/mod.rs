@@ -909,7 +909,7 @@ fn decode_scan_config(
         .collect::<Result<Vec<_>, _>>()?;
 
     let object_store = if let Some(file) = file_groups.get(0).and_then(|h| h.get(0)) {
-        ctx.object_store(file.file_meta.path())?.0
+        ctx.runtime_env().object_store(file.file_meta.path())?.0
     } else {
         Arc::new(LocalFileSystem {})
     };

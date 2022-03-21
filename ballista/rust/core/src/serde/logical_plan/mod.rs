@@ -228,6 +228,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let object_store = ctx
+                    .runtime_env()
                     .object_store(scan.path.as_str())
                     .map_err(|e| {
                         BallistaError::NotImplemented(format!(
@@ -1287,9 +1288,10 @@ mod roundtrip_tests {
         let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
             BallistaCodec::default();
         let custom_object_store = Arc::new(TestObjectStore {});
-        ctx.register_object_store("test", custom_object_store.clone());
+        ctx.runtime_env()
+            .register_object_store("test", custom_object_store.clone());
 
-        let (os, _) = ctx.object_store("test://foo.csv")?;
+        let (os, _) = ctx.runtime_env().object_store("test://foo.csv")?;
 
         println!("Object Store {:?}", os);
 

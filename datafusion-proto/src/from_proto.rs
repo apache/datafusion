@@ -1168,7 +1168,7 @@ pub fn parse_expr(
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = ctx
                 .state
-                .lock()
+                .read()
                 .get_function_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
 
             Ok(Expr::ScalarUDF {
@@ -1182,7 +1182,7 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(protobuf::AggregateUdfExprNode { fun_name, args }) => {
             let agg_fn = ctx
                 .state
-                .lock()
+                .read()
                 .get_aggregate_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
 
             Ok(Expr::AggregateUDF {
