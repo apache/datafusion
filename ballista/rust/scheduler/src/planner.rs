@@ -176,6 +176,26 @@ impl DistributedPlanner {
     }
 }
 
+/// Returns the unresolved shuffles in the execution plan
+pub fn find_unresolved_shuffles(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Vec<UnresolvedShuffleExec>> {
+    if let Some(unresolved_shuffle) =
+        plan.as_any().downcast_ref::<UnresolvedShuffleExec>()
+    {
+        Ok(vec![unresolved_shuffle.clone()])
+    } else {
+        Ok(plan
+            .children()
+            .iter()
+            .map(find_unresolved_shuffles)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+}
+
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
     partition_locations: &HashMap<usize, HashMap<usize, Vec<PartitionLocation>>>,
@@ -509,7 +529,7 @@ order by
         let join_input_2 = join_input_2.children()[0].clone();
         let unresolved_shuffle_reader_2 =
             downcast_exec!(join_input_2, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); //orders
+        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); // orders
         assert_eq!(unresolved_shuffle_reader_2.output_partition_count, 2);
 
         // final partitioned hash aggregate

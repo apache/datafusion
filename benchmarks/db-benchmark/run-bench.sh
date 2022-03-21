@@ -1,3 +1,4 @@
+#!/bin/bash
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -14,31 +15,7 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+set -e
 
-[package]
-name = "datafusion-examples"
-description = "DataFusion usage examples"
-version = "5.0.0"
-homepage = "https://github.com/apache/arrow-datafusion"
-repository = "https://github.com/apache/arrow-datafusion"
-authors = ["Apache Arrow <dev@arrow.apache.org>"]
-license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
-edition = "2021"
-publish = false
-rust-version = "1.59"
-
-[[example]]
-name = "avro_sql"
-path = "examples/avro_sql.rs"
-required-features = ["datafusion/avro"]
-
-[dev-dependencies]
-arrow-flight = { version = "10.0" }
-async-trait = "0.1.41"
-datafusion = { path = "../datafusion" }
-futures = "0.3"
-num_cpus = "1.13.0"
-prost = "0.9"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-tonic = "0.6"
+SRC_DATANAME=G1_1e7_1e2_0_0 python3 datafusion/groupby-datafusion.py
+SRC_DATANAME=J1_1e7_NA_0_0 python3 datafusion/join-datafusion.py

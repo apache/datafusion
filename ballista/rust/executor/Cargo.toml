@@ -25,37 +25,37 @@ repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2018"
 
+[package.metadata.configure_me.bin]
+executor = "executor_config_spec.toml"
+
 [features]
 snmalloc = ["snmalloc-rs"]
 
 [dependencies]
-arrow = { version = "10.0"  }
-arrow-flight = { version = "10.0"  }
 anyhow = "1"
+arrow = { version = "10.0" }
+arrow-flight = { version = "10.0" }
 async-trait = "0.1.41"
 ballista-core = { path = "../core", version = "0.6.0" }
+chrono = { version = "0.4", default-features = false }
 configure_me = "0.4.0"
 datafusion = { path = "../../../datafusion", version = "7.0.0" }
 env_logger = "0.9"
 futures = "0.3"
+hyper = "0.14.4"
 log = "0.4"
-snmalloc-rs = {version = "0.2", optional = true}
+parking_lot = "0.12"
+snmalloc-rs = { version = "0.2", optional = true }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 tokio-stream = { version = "0.1", features = ["net"] }
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
-hyper = "0.14.4"
-parking_lot = "0.12"
-chrono = { version = "0.4", default-features = false }
 
 [dev-dependencies]
 
 [build-dependencies]
 configure_me_codegen = "0.4.0"
-
-[package.metadata.configure_me.bin]
-executor = "executor_config_spec.toml"
 
 # use libc on unix like platforms to set worker priority in DedicatedExecutor
 [target."cfg(unix)".dependencies.libc]

@@ -181,9 +181,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
 
         let runtime = self.executor.ctx.runtime_env();
 
-        //TODO get session_id from TaskDefinition
+        // TODO get session_id from TaskDefinition
         let session_id = "mock_session".to_owned();
-        //TODO get task_props from TaskDefinition
+        // TODO get task_props from TaskDefinition
         let task_props = HashMap::new();
 
         let task_context = Arc::new(TaskContext::new(
@@ -281,7 +281,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
             info!("Starting the task runner pool");
             // Use a dedicated executor for CPU bound tasks so that the main tokio
             // executor can still answer requests even when under load
-            //TODO make it configurable
+            // TODO make it configurable
             let dedicated_executor = DedicatedExecutor::new("task_runner", 4);
             loop {
                 if let Some(task) = rx_task.recv().await {

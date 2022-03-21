@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     // connect to Ballista scheduler
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     let filename = &format!("{}/alltypes_plain.parquet", testdata);
 
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     // connect to Ballista scheduler
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
-    let testdata = datafusion::arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::test_util::arrow_test_data();
 
     // register csv file with the execution context
     ctx.register_csv(
