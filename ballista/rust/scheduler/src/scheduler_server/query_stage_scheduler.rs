@@ -435,7 +435,7 @@ fn get_job_status_from_tasks(
         .map(|info| {
             let mut partition_location = vec![];
             for (status, executor_id, partitions) in info {
-                let input_partition_id = status.task_id.as_ref().unwrap(); //TODO unwrap
+                let input_partition_id = status.task_id.as_ref().unwrap(); // TODO unwrap
                 let executor_meta = executors.get(executor_id).map(|e| e.clone().into());
                 for shuffle_write_partition in partitions {
                     let shuffle_input_partition_id = Some(protobuf::PartitionId {

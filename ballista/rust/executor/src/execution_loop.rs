@@ -128,9 +128,9 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
 
     let runtime = executor.ctx.runtime_env();
 
-    //TODO get session_id from TaskDefinition
+    // TODO get session_id from TaskDefinition
     let session_id = "mock_session".to_owned();
-    //TODO get task_props from TaskDefinition
+    // TODO get task_props from TaskDefinition
     let task_props = HashMap::new();
 
     let task_context = Arc::new(TaskContext::new(

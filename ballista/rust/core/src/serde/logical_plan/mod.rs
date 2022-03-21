@@ -704,8 +704,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         extension_codec,
                     )?;
 
-                //Assumed common usize field was batch size
-                //Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Assumed common usize field was batch size
+                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
                 let pb_partition_method =
@@ -935,7 +935,7 @@ mod roundtrip_tests {
         }
     }
 
-    //Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
+    // Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
     macro_rules! roundtrip_test {
         ($initial_struct:ident, $proto_type:ty, $struct_type:ty) => {
             let proto: $proto_type = (&$initial_struct).try_into()?;
