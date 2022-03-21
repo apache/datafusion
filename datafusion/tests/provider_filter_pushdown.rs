@@ -21,8 +21,7 @@ use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::datasource::datasource::{TableProvider, TableProviderFilterPushDown};
 use datafusion::error::Result;
-use datafusion::execution::context::ExecutionContext;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::common::SizedRecordBatchStream;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -88,7 +87,7 @@ impl ExecutionPlan for CustomPlan {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let metrics = ExecutionPlanMetricsSet::new();
         let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
@@ -174,7 +173,7 @@ async fn assert_provider_row_count(value: i64, expected_count: u64) -> Result<()
         one_batch: create_batch(1, 5)?,
     };
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     let df = ctx
         .read_table(Arc::new(provider.clone()))?
         .filter(col("flag").eq(lit(value)))?

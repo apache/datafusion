@@ -17,7 +17,7 @@
 
 use clap::Parser;
 use datafusion::error::Result;
-use datafusion::execution::context::ExecutionConfig;
+use datafusion::execution::context::SessionConfig;
 use datafusion_cli::{
     context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
@@ -98,15 +98,15 @@ pub async fn main() -> Result<()> {
         env::set_current_dir(&p).unwrap();
     };
 
-    let mut execution_config = ExecutionConfig::new().with_information_schema(true);
+    let mut session_config = SessionConfig::new().with_information_schema(true);
 
     if let Some(batch_size) = args.batch_size {
-        execution_config = execution_config.with_batch_size(batch_size);
+        session_config = session_config.with_batch_size(batch_size);
     };
 
     let mut ctx: Context = match (args.host, args.port) {
         (Some(ref h), Some(p)) => Context::new_remote(h, p)?,
-        _ => Context::new_local(&execution_config),
+        _ => Context::new_local(&session_config),
     };
 
     let mut print_options = PrintOptions {

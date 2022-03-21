@@ -20,6 +20,7 @@
 //! processes.
 
 use crate::protobuf;
+
 use datafusion::{
     arrow::datatypes::{
         DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
@@ -118,10 +119,6 @@ impl Error {
 
     fn invalid_time_unit(time_unit: &TimeUnit) -> Self {
         Self::InvalidTimeUnit(time_unit.to_owned())
-    }
-
-    fn unsupported_scalar_function(function: &BuiltinScalarFunction) -> Self {
-        Self::UnsupportedScalarFunction(function.to_owned())
     }
 }
 
@@ -290,7 +287,10 @@ impl From<&DFField> for protobuf::DfField {
 impl From<&DFSchemaRef> for protobuf::DfSchema {
     fn from(s: &DFSchemaRef) -> protobuf::DfSchema {
         let columns = s.fields().iter().map(|f| f.into()).collect::<Vec<_>>();
-        protobuf::DfSchema { columns }
+        protobuf::DfSchema {
+            columns,
+            metadata: s.metadata().clone(),
+        }
     }
 }
 
@@ -508,7 +508,7 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     expr_type: Some(ExprType::AggregateExpr(aggregate_expr)),
                 }
             }
-            Expr::ScalarVariable(_) => unimplemented!(),
+            Expr::ScalarVariable(_, _) => unimplemented!(),
             Expr::ScalarFunction { ref fun, ref args } => {
                 let fun: protobuf::ScalarFunction = fun.try_into()?;
                 let args: Vec<Self> = args
@@ -524,8 +524,27 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     )),
                 }
             }
-            Expr::ScalarUDF { .. } => unimplemented!(),
-            Expr::AggregateUDF { .. } => unimplemented!(),
+            Expr::ScalarUDF { fun, args } => Self {
+                expr_type: Some(ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
+                    fun_name: fun.name.clone(),
+                    args: args
+                        .iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, Error>>()?,
+                })),
+            },
+            Expr::AggregateUDF { fun, args } => Self {
+                expr_type: Some(ExprType::AggregateUdfExpr(
+                    protobuf::AggregateUdfExprNode {
+                        fun_name: fun.name.clone(),
+                        args: args.iter().map(|expr| expr.try_into()).collect::<Result<
+                            Vec<_>,
+                            Error,
+                        >>(
+                        )?,
+                    },
+                )),
+            },
             Expr::Not(expr) => {
                 let expr = Box::new(protobuf::Not {
                     expr: Some(Box::new(expr.as_ref().try_into()?)),
@@ -930,26 +949,53 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::Round => Self::Round,
             BuiltinScalarFunction::Trunc => Self::Trunc,
             BuiltinScalarFunction::Abs => Self::Abs,
-            BuiltinScalarFunction::OctetLength => Self::Octetlength,
+            BuiltinScalarFunction::OctetLength => Self::OctetLength,
             BuiltinScalarFunction::Concat => Self::Concat,
             BuiltinScalarFunction::Lower => Self::Lower,
             BuiltinScalarFunction::Upper => Self::Upper,
             BuiltinScalarFunction::Trim => Self::Trim,
             BuiltinScalarFunction::Ltrim => Self::Ltrim,
             BuiltinScalarFunction::Rtrim => Self::Rtrim,
-            BuiltinScalarFunction::ToTimestamp => Self::Totimestamp,
+            BuiltinScalarFunction::ToTimestamp => Self::ToTimestamp,
             BuiltinScalarFunction::Array => Self::Array,
-            BuiltinScalarFunction::NullIf => Self::Nullif,
-            BuiltinScalarFunction::DatePart => Self::Datepart,
-            BuiltinScalarFunction::DateTrunc => Self::Datetrunc,
+            BuiltinScalarFunction::NullIf => Self::NullIf,
+            BuiltinScalarFunction::DatePart => Self::DatePart,
+            BuiltinScalarFunction::DateTrunc => Self::DateTrunc,
             BuiltinScalarFunction::MD5 => Self::Md5,
             BuiltinScalarFunction::SHA224 => Self::Sha224,
             BuiltinScalarFunction::SHA256 => Self::Sha256,
             BuiltinScalarFunction::SHA384 => Self::Sha384,
             BuiltinScalarFunction::SHA512 => Self::Sha512,
             BuiltinScalarFunction::Digest => Self::Digest,
-            BuiltinScalarFunction::ToTimestampMillis => Self::Totimestampmillis,
-            _ => return Err(Error::unsupported_scalar_function(scalar)),
+            BuiltinScalarFunction::ToTimestampMillis => Self::ToTimestampMillis,
+            BuiltinScalarFunction::Log2 => Self::Log2,
+            BuiltinScalarFunction::Signum => Self::Signum,
+            BuiltinScalarFunction::Ascii => Self::Ascii,
+            BuiltinScalarFunction::BitLength => Self::BitLength,
+            BuiltinScalarFunction::Btrim => Self::Btrim,
+            BuiltinScalarFunction::CharacterLength => Self::CharacterLength,
+            BuiltinScalarFunction::Chr => Self::Chr,
+            BuiltinScalarFunction::ConcatWithSeparator => Self::ConcatWithSeparator,
+            BuiltinScalarFunction::InitCap => Self::InitCap,
+            BuiltinScalarFunction::Left => Self::Left,
+            BuiltinScalarFunction::Lpad => Self::Lpad,
+            BuiltinScalarFunction::Random => Self::Random,
+            BuiltinScalarFunction::RegexpReplace => Self::RegexpReplace,
+            BuiltinScalarFunction::Repeat => Self::Repeat,
+            BuiltinScalarFunction::Replace => Self::Replace,
+            BuiltinScalarFunction::Reverse => Self::Reverse,
+            BuiltinScalarFunction::Right => Self::Right,
+            BuiltinScalarFunction::Rpad => Self::Rpad,
+            BuiltinScalarFunction::SplitPart => Self::SplitPart,
+            BuiltinScalarFunction::StartsWith => Self::StartsWith,
+            BuiltinScalarFunction::Strpos => Self::Strpos,
+            BuiltinScalarFunction::Substr => Self::Substr,
+            BuiltinScalarFunction::ToHex => Self::ToHex,
+            BuiltinScalarFunction::ToTimestampMicros => Self::ToTimestampMicros,
+            BuiltinScalarFunction::ToTimestampSeconds => Self::ToTimestampSeconds,
+            BuiltinScalarFunction::Now => Self::Now,
+            BuiltinScalarFunction::Translate => Self::Translate,
+            BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
         };
 
         Ok(scalar_function)

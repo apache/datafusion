@@ -19,7 +19,7 @@ use super::*;
 
 #[tokio::test]
 async fn qualified_table_references() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv(&mut ctx).await?;
 
     for table_ref in &[
@@ -28,7 +28,7 @@ async fn qualified_table_references() -> Result<()> {
         "datafusion.public.aggregate_test_100",
     ] {
         let sql = format!("SELECT COUNT(*) FROM {}", table_ref);
-        let actual = execute_to_batches(&mut ctx, &sql).await;
+        let actual = execute_to_batches(&ctx, &sql).await;
         let expected = vec![
             "+-----------------+",
             "| COUNT(UInt8(1)) |",
@@ -43,7 +43,7 @@ async fn qualified_table_references() -> Result<()> {
 
 #[tokio::test]
 async fn qualified_table_references_and_fields() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     let c1: StringArray = vec!["foofoo", "foobar", "foobaz"]
         .into_iter()
@@ -73,7 +73,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
     // however, enclosing it in double quotes is ok
     let sql = r#"SELECT "f.c1" from test"#;
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------+",
         "| f.c1   |",
@@ -86,12 +86,12 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     // Works fully qualified too
     let sql = r#"SELECT test."f.c1" from test"#;
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
     // check that duplicated table name and column name are ok
     let sql = r#"SELECT "test.c2" as expr1, test."test.c2" as expr2 from test"#;
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-------+-------+",
         "| expr1 | expr2 |",
@@ -107,7 +107,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
     // datafusion should run the query, not that someone should write
     // this
     let sql = r#"SELECT "....", "...." as c3 from test order by "....""#;
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+------+----+",
         "| .... | c3 |",
@@ -123,7 +123,7 @@ async fn qualified_table_references_and_fields() -> Result<()> {
 
 #[tokio::test]
 async fn test_partial_qualified_name() -> Result<()> {
-    let mut ctx = create_join_context("t1_id", "t2_id")?;
+    let ctx = create_join_context("t1_id", "t2_id")?;
     let sql = "SELECT t1.t1_id, t1_name FROM public.t1";
     let expected = vec![
         "+-------+---------+",
@@ -135,7 +135,7 @@ async fn test_partial_qualified_name() -> Result<()> {
         "| 44    | d       |",
         "+-------+---------+",
     ];
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
     Ok(())
 }

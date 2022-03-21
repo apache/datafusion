@@ -36,9 +36,9 @@ path = "src/lib.rs"
 jit = []
 
 [dependencies]
-datafusion-common = { path = "../datafusion-common", version = "7.0.0", features = ["jit"] }
 cranelift = "0.82.0"
-cranelift-module = "0.82.0"
 cranelift-jit = "0.82.0"
+cranelift-module = "0.82.0"
 cranelift-native = "0.82.0"
+datafusion-common = { path = "../datafusion-common", version = "7.0.0", features = ["jit"] }
 parking_lot = "0.12"

@@ -56,7 +56,8 @@ use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
+use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
 use std::convert::TryInto;
@@ -87,7 +88,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &ExecutionContext,
+        ctx: &SessionContext,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
@@ -133,7 +134,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let predicate = scan
                     .pruning_predicate
                     .as_ref()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
                     decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
@@ -483,8 +484,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .map(|i| i.try_into_physical_plan(ctx, extension_codec))
                     .collect::<Result<_, BallistaError>>()?;
 
-                let extension_node =
-                    extension_codec.try_decode(extension.node.as_slice(), &inputs)?;
+                let extension_node = extension_codec.try_decode(
+                    extension.node.as_slice(),
+                    &inputs,
+                    ctx,
+                )?;
 
                 Ok(extension_node)
             }
@@ -883,7 +887,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
 fn decode_scan_config(
     proto: &protobuf::FileScanExecConf,
-    ctx: &ExecutionContext,
+    ctx: &SessionContext,
 ) -> Result<FileScanConfig, BallistaError> {
     let schema = Arc::new(convert_required!(proto.schema)?);
     let projection = proto
@@ -940,7 +944,7 @@ mod roundtrip_tests {
     use datafusion::datasource::object_store::local::LocalFileSystem;
     use datafusion::datasource::PartitionedFile;
     use datafusion::physical_plan::sorts::sort::SortExec;
-    use datafusion::prelude::ExecutionContext;
+    use datafusion::prelude::SessionContext;
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
@@ -969,7 +973,7 @@ mod roundtrip_tests {
     use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =

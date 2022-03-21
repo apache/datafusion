@@ -25,7 +25,6 @@ use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -39,6 +38,7 @@ use datafusion::{
 };
 use futures::{future, StreamExt};
 
+use datafusion::execution::context::TaskContext;
 use log::info;
 
 /// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
@@ -106,7 +106,7 @@ impl ExecutionPlan for ShuffleReaderExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         info!("ShuffleReaderExec::execute({})", partition);
 

@@ -18,18 +18,17 @@
 use ballista_core::error::Result;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use datafusion::execution::context::{SessionConfig, SessionContext};
 use datafusion::prelude::CsvReadOptions;
 
 pub const TPCH_TABLES: &[&str] = &[
     "part", "supplier", "partsupp", "customer", "orders", "lineitem", "nation", "region",
 ];
 
-pub async fn datafusion_test_context(path: &str) -> Result<ExecutionContext> {
+pub async fn datafusion_test_context(path: &str) -> Result<SessionContext> {
     let default_shuffle_partitions = 2;
-    let config =
-        ExecutionConfig::new().with_target_partitions(default_shuffle_partitions);
-    let mut ctx = ExecutionContext::with_config(config);
+    let config = SessionConfig::new().with_target_partitions(default_shuffle_partitions);
+    let mut ctx = SessionContext::with_config(config);
     for table in TPCH_TABLES {
         let schema = get_tpch_schema(table);
         let options = CsvReadOptions::new()

@@ -33,11 +33,12 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan,
-    LogicalPlanBuilder, Repartition, TableScan, Values,
+    Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
+    Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan, Values,
 };
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
+use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
@@ -70,7 +71,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &ExecutionContext,
+        ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan, BallistaError> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
@@ -95,10 +96,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .values_list
                         .chunks_exact(n_cols)
                         .map(|r| {
-                            r.iter().map(|v| v.try_into()).collect::<Result<
+                            r.iter().map(|expr| parse_expr(expr, ctx)).collect::<Result<
                                 Vec<_>,
                                 datafusion_proto::from_proto::Error,
-                            >>()
+                            >>(
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| e.into())
@@ -113,7 +115,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let x: Vec<Expr> = projection
                     .expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .project_with_alias(
@@ -133,10 +135,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Expr = selection
                     .expr
                     .as_ref()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .transpose()?
                     .ok_or_else(|| {
                         BallistaError::General("expression required".to_string())
-                    })?
-                    .try_into()?;
+                    })?;
+                // .try_into()?;
                 LogicalPlanBuilder::from(input)
                     .filter(expr)?
                     .build()
@@ -148,7 +152,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let window_expr = window
                     .window_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .window(window_expr)?
@@ -161,12 +165,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let group_expr = aggregate
                     .group_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 let aggr_expr = aggregate
                     .aggr_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .aggregate(group_expr, aggr_expr)?
@@ -189,7 +193,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters = scan
                     .filters
                     .iter()
-                    .map(|e| e.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let file_format: Arc<dyn FileFormat> =
@@ -260,7 +264,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let sort_expr: Vec<Expr> = sort
                     .expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .sort(sort_expr)?
@@ -285,7 +289,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }) => Partitioning::Hash(
                         pb_hash_expr
                             .iter()
-                            .map(|pb_expr| pb_expr.try_into())
+                            .map(|expr| parse_expr(expr, ctx))
                             .collect::<Result<Vec<_>, _>>()?,
                         partition_count as usize,
                     ),
@@ -320,6 +324,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
+                }))
+            }
+            LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
+                let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
+                    BallistaError::General(String::from(
+                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema.",
+                    ))
+                })?;
+
+                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                    schema_name: create_catalog_schema.schema_name.clone(),
+                    if_not_exists: create_catalog_schema.if_not_exists,
+                    schema: pb_schema.try_into()?,
                 }))
             }
             LogicalPlanType::Analyze(analyze) => {
@@ -403,7 +420,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
                     .collect::<Result<_, BallistaError>>()?;
 
-                let extension_node = extension_codec.try_decode(node, &input_plans)?;
+                let extension_node =
+                    extension_codec.try_decode(node, &input_plans, ctx)?;
                 Ok(LogicalPlan::Extension(extension_node))
             }
         }
@@ -755,6 +773,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
+            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                schema_name,
+                if_not_exists,
+                schema: df_schema,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
+                    protobuf::CreateCatalogSchemaNode {
+                        schema_name: schema_name.clone(),
+                        if_not_exists: *if_not_exists,
+                        schema: Some(df_schema.into()),
+                    },
+                )),
+            }),
             LogicalPlan::Analyze(a) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),
@@ -920,7 +951,7 @@ mod roundtrip_tests {
             roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
         };
         ($initial_struct:ident) => {
-            let ctx = ExecutionContext::new();
+            let ctx = SessionContext::new();
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
                 protobuf::PhysicalPlanNode,
@@ -1252,7 +1283,7 @@ mod roundtrip_tests {
 
     #[tokio::test]
     async fn roundtrip_logical_plan_custom_ctx() -> Result<()> {
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
             BallistaCodec::default();
         let custom_object_store = Arc::new(TestObjectStore {});

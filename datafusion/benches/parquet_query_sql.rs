@@ -24,7 +24,7 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distributions::uniform::SampleUniform;
@@ -193,7 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     assert!(Path::new(&file_path).exists(), "path not found");
     println!("Using parquet file {}", file_path);
 
-    let mut context = ExecutionContext::new();
+    let mut context = SessionContext::new();
 
     let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
     rt.block_on(context.register_parquet("t", file_path.as_str()))

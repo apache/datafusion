@@ -21,18 +21,18 @@
 
 ## Sub-projects
 
-The Datafusion repo contains 2 different releasable sub-projects: Datafusion, Ballista
+The DataFusion repo contains 2 different releasable sub-projects: DataFusion, Ballista
 
-We use Datafusion release to drive the release for the other sub-projects. As a
-result, Datafusion version bump is required for every release while version
+We use DataFusion release to drive the release for the other sub-projects. As a
+result, DataFusion version bump is required for every release while version
 bumps for the Python binding and Ballista are optional. In other words, we can
-release a new version of Datafusion without releasing a new version of the
+release a new version of DataFusion without releasing a new version of the
 Python binding or Ballista. On the other hand, releasing a new version of the
-Python binding or Ballista always requires a new Datafusion version release.
+Python binding or Ballista always requires a new DataFusion version release.
 
 ## Branching
 
-Datafusion currently only releases from the `master` branch. Given the project
+DataFusion currently only releases from the `master` branch. Given the project
 is still in early development state, we are not maintaining an active stable
 release backport branch.
 
@@ -177,11 +177,11 @@ Send the email output from the script to dev@arrow.apache.org. The email should 
 
 ```
 To: dev@arrow.apache.org
-Subject: [VOTE][Datafusion] Release Apache Arrow Datafusion 5.1.0 RC0
+Subject: [VOTE][DataFusion] Release Apache Arrow DataFusion 5.1.0 RC0
 
 Hi,
 
-I would like to propose a release of Apache Arrow Datafusion Implementation,
+I would like to propose a release of Apache Arrow DataFusion Implementation,
 version 5.1.0.
 
 This release candidate is based on commit: a5dd428f57e62db20a945e8b1895de91405958c4 [1]
@@ -193,9 +193,9 @@ and vote on the release.
 
 The vote will be open for at least 72 hours.
 
-[ ] +1 Release this as Apache Arrow Datafusion 5.1.0
+[ ] +1 Release this as Apache Arrow DataFusion 5.1.0
 [ ] +0
-[ ] -1 Do not release this as Apache Arrow Datafusion 5.1.0 because...
+[ ] -1 Do not release this as Apache Arrow DataFusion 5.1.0 because...
 
 [1]: https://github.com/apache/arrow-datafusion/tree/a5dd428f57e62db20a945e8b1895de91405958c4
 [2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-datafusion-5.1.0

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module contains execution plans that are needed to distribute Datafusion's execution plans into
+//! This module contains execution plans that are needed to distribute DataFusion's execution plans into
 //! several Ballista executors.
 
 mod distributed_query;

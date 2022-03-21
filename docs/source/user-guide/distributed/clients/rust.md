@@ -20,7 +20,7 @@
 # Ballista Rust Client
 
 Ballista usage is very similar to DataFusion. Tha main difference is that the starting point is a `BallistaContext`
-instead of the DataFusion `ExecutionContext`. Ballista uses the same DataFrame API as DataFusion.
+instead of the DataFusion `SessionContext`. Ballista uses the same DataFrame API as DataFusion.
 
 The following code sample demonstrates how to create a `BallistaContext` to connect to a Ballista scheduler process.
 
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     // connect to Ballista scheduler
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     let filename = &format!("{}/alltypes_plain.parquet", testdata);
 
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
     // connect to Ballista scheduler
     let ctx = BallistaContext::remote("localhost", 50050, &config);
 
-    let testdata = datafusion::arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::test_util::arrow_test_data();
 
     // register csv file with the execution context
     ctx.register_csv(

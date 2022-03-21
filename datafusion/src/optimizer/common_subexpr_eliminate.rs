@@ -111,13 +111,19 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             }))
         }
         LogicalPlan::Filter(Filter { predicate, input }) => {
-            let schemas = plan.all_schemas();
-            let all_schema =
-                schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
-                    lhs.merge(rhs);
-                    lhs
-                });
-            let data_type = predicate.get_type(&all_schema)?;
+            let schema = plan.schema().as_ref().clone();
+            let data_type = if let Ok(data_type) = predicate.get_type(&schema) {
+                data_type
+            } else {
+                // predicate type could not be resolved in schema, fall back to all schemas
+                let schemas = plan.all_schemas();
+                let all_schema =
+                    schemas.into_iter().fold(DFSchema::empty(), |mut lhs, rhs| {
+                        lhs.merge(rhs);
+                        lhs
+                    });
+                predicate.get_type(&all_schema)?
+            };
 
             let mut id_array = vec![];
             expr_to_identifier(predicate, &mut expr_set, &mut id_array, data_type)?;
@@ -215,6 +221,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
         | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
@@ -271,7 +278,7 @@ fn build_project_plan(
         project_exprs.push(Expr::Column(field.qualified_column()));
     });
 
-    let mut schema = DFSchema::new(fields)?;
+    let mut schema = DFSchema::new_with_metadata(fields, HashMap::new())?;
     schema.merge(input.schema());
 
     Ok(LogicalPlan::Projection(Projection {
@@ -373,7 +380,7 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("Column-");
                 desc.push_str(&column.flat_name());
             }
-            Expr::ScalarVariable(var_names) => {
+            Expr::ScalarVariable(_, var_names) => {
                 desc.push_str("ScalarVariable-");
                 desc.push_str(&var_names.join("."));
             }
