@@ -99,7 +99,7 @@ impl ExecutionPlan for NdJsonExec {
     ) -> Result<SendableRecordBatchStream> {
         let proj = self.base_config.projected_file_column_names();
 
-        let batch_size = context.runtime.batch_size();
+        let batch_size = context.session_config().batch_size;
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.

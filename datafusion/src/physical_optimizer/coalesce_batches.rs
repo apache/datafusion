@@ -75,7 +75,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
                 // we should do that once https://issues.apache.org/jira/browse/ARROW-11059 is
                 // implemented. For now, we choose half the configured batch size to avoid copies
                 // when a small number of rows are removed from a batch
-                let target_batch_size = config.runtime.batch_size / 2;
+                let target_batch_size = config.batch_size / 2;
                 Arc::new(CoalesceBatchesExec::new(plan.clone(), target_batch_size))
             } else {
                 plan.clone()
