@@ -354,13 +354,13 @@ macro_rules! get_min_max_values {
         let null_scalar: ScalarValue = data_type.try_into().ok()?;
 
         $self.row_group_metadata
-        .column(column_index)
-        .statistics()
-        .map(|stats| get_statistic!(stats, $func, $bytes_func))
-        .flatten()
-        // column either didn't have statistics at all or didn't have min/max values
-        .or_else(|| Some(null_scalar.clone()))
-        .map(|s| s.to_array())
+            .column(column_index)
+            .statistics()
+            .map(|stats| get_statistic!(stats, $func, $bytes_func))
+            .flatten()
+            // column either didn't have statistics at all or didn't have min/max values
+            .or_else(|| Some(null_scalar.clone()))
+            .map(|s| s.to_array())
     }}
 }
 
