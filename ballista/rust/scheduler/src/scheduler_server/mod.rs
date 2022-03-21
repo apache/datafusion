@@ -172,7 +172,7 @@ pub fn update_datafusion_context(
     session_ctx: Arc<SessionContext>,
     config: &BallistaConfig,
 ) -> Arc<SessionContext> {
-    session_ctx.state.lock().config.target_partitions =
+    session_ctx.state.write().config.target_partitions =
         config.default_shuffle_partitions();
     session_ctx
 }

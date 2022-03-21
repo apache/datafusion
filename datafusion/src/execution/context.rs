@@ -40,7 +40,7 @@ use crate::{
     },
 };
 use log::{debug, trace};
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::string::String;
 use std::sync::Arc;
@@ -141,7 +141,7 @@ pub struct SessionContext {
     /// Session start time
     pub session_start_time: DateTime<Utc>,
     /// Shared session state for the session
-    pub state: Arc<Mutex<SessionState>>,
+    pub state: Arc<RwLock<SessionState>>,
 }
 
 impl Default for SessionContext {
@@ -168,7 +168,7 @@ impl SessionContext {
         Self {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(RwLock::new(state)),
         }
     }
 
@@ -177,18 +177,18 @@ impl SessionContext {
         Self {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
-            state: Arc::new(Mutex::new(state)),
+            state: Arc::new(RwLock::new(state)),
         }
     }
 
     /// Return the [RuntimeEnv] used to run queries with this [SessionContext]
     pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
-        self.state.lock().runtime_env.clone()
+        self.state.read().runtime_env.clone()
     }
 
     /// Return a copied version of config for this Session
     pub fn copied_config(&self) -> SessionConfig {
-        self.state.lock().config.clone()
+        self.state.read().config.clone()
     }
 
     /// Creates a dataframe that will execute a SQL query.
@@ -296,7 +296,7 @@ impl SessionContext {
         }
 
         // create a query planner
-        let state = self.state.lock().clone();
+        let state = self.state.read().clone();
         let query_planner = SqlToRel::new(&state);
         query_planner.statement_to_plan(statements.pop_front().unwrap())
     }
@@ -308,7 +308,7 @@ impl SessionContext {
         provider: Arc<dyn VarProvider + Send + Sync>,
     ) {
         self.state
-            .lock()
+            .write()
             .execution_props
             .add_var_provider(variable_type, provider);
     }
@@ -322,7 +322,7 @@ impl SessionContext {
     /// `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
     pub fn register_udf(&mut self, f: ScalarUDF) {
         self.state
-            .lock()
+            .write()
             .scalar_functions
             .insert(f.name.clone(), Arc::new(f));
     }
@@ -336,7 +336,7 @@ impl SessionContext {
     /// `SELECT "my_UDAF"(x)` will look for an aggregate named `"my_UDAF"`
     pub fn register_udaf(&mut self, f: AggregateUDF) {
         self.state
-            .lock()
+            .write()
             .aggregate_functions
             .insert(f.name.clone(), Arc::new(f));
     }
@@ -522,7 +522,7 @@ impl SessionContext {
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
         let information_schema = self.copied_config().information_schema;
-        let state = self.state.lock();
+        let state = self.state.read();
         let catalog = if information_schema {
             Arc::new(CatalogWithInformationSchema::new(
                 Arc::downgrade(&state.catalog_list),
@@ -537,7 +537,7 @@ impl SessionContext {
 
     /// Retrieves a `CatalogProvider` instance by name
     pub fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
-        self.state.lock().catalog_list.catalog(name)
+        self.state.read().catalog_list.catalog(name)
     }
 
     /// Registers a table using a custom `TableProvider` so that
@@ -553,7 +553,7 @@ impl SessionContext {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         self.state
-            .lock()
+            .read()
             .schema_for_ref(table_ref)?
             .register_table(table_ref.table().to_owned(), provider)
     }
@@ -567,7 +567,7 @@ impl SessionContext {
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
         self.state
-            .lock()
+            .read()
             .schema_for_ref(table_ref)?
             .deregister_table(table_ref.table())
     }
@@ -581,7 +581,7 @@ impl SessionContext {
         let table_ref = table_ref.into();
         Ok(self
             .state
-            .lock()
+            .read()
             .schema_for_ref(table_ref)?
             .table_exist(table_ref.table()))
     }
@@ -595,7 +595,7 @@ impl SessionContext {
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Arc<DataFrame>> {
         let table_ref = table_ref.into();
-        let schema = self.state.lock().schema_for_ref(table_ref)?;
+        let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
                 let plan = LogicalPlanBuilder::scan(
@@ -624,7 +624,7 @@ impl SessionContext {
     pub fn tables(&self) -> Result<HashSet<String>> {
         Ok(self
             .state
-            .lock()
+            .read()
             // a bare reference will always resolve to the default catalog and schema
             .schema_for_ref(TableReference::Bare { table: "" })?
             .table_names()
@@ -635,7 +635,7 @@ impl SessionContext {
 
     /// Optimizes the logical plan by applying optimizer rules.
     pub fn optimize(&self, plan: &LogicalPlan) -> Result<LogicalPlan> {
-        self.state.lock().optimize(plan)
+        self.state.read().optimize(plan)
     }
 
     /// Creates a physical plan from a logical plan.
@@ -644,7 +644,7 @@ impl SessionContext {
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let state_cloned = {
-            let mut state = self.state.lock();
+            let mut state = self.state.write();
             state.execution_props.start_execution();
 
             // We need to clone `state` to release the lock that is not `Send`. We could
@@ -668,7 +668,7 @@ impl SessionContext {
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let state = self.state.lock().clone();
+        let state = self.state.read().clone();
         plan_to_csv(&state, plan, path).await
     }
 
@@ -679,7 +679,7 @@ impl SessionContext {
         path: impl AsRef<str>,
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
-        let state = self.state.lock().clone();
+        let state = self.state.read().clone();
         plan_to_parquet(&state, plan, path, writer_properties).await
     }
 
@@ -691,15 +691,15 @@ impl SessionContext {
 
 impl FunctionRegistry for SessionContext {
     fn udfs(&self) -> HashSet<String> {
-        self.state.lock().udfs()
+        self.state.read().udfs()
     }
 
     fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        self.state.lock().udf(name)
+        self.state.read().udf(name)
     }
 
     fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        self.state.lock().udaf(name)
+        self.state.read().udaf(name)
     }
 }
 
@@ -732,17 +732,17 @@ impl QueryPlanner for DefaultQueryPlanner {
     }
 }
 
-/// Session Configuration entry name
+/// Session Configuration entry name for 'BATCH_SIZE'
 pub const BATCH_SIZE: &str = "batch_size";
-/// Session Configuration entry name
+/// Session Configuration entry name for 'TARGET_PARTITIONS'
 pub const TARGET_PARTITIONS: &str = "target_partitions";
-/// Session Configuration entry name
+/// Session Configuration entry name for 'REPARTITION_JOINS'
 pub const REPARTITION_JOINS: &str = "repartition_joins";
-/// Session Configuration entry name
+/// Session Configuration entry name for 'REPARTITION_AGGREGATIONS'
 pub const REPARTITION_AGGREGATIONS: &str = "repartition_aggregations";
-/// Session Configuration entry name
+/// Session Configuration entry name for 'REPARTITION_WINDOWS'
 pub const REPARTITION_WINDOWS: &str = "repartition_windows";
-/// Session Configuration entry name
+/// Session Configuration entry name for 'PARQUET_PRUNING'
 pub const PARQUET_PRUNING: &str = "parquet_pruning";
 
 /// Configuration options for session context
@@ -1224,8 +1224,8 @@ pub struct TaskContext {
     pub session_id: String,
     /// Optional Task Identify
     pub task_id: Option<String>,
-    /// Task settings
-    pub task_settings: TaskProperties,
+    /// Task properties
+    pub properties: TaskProperties,
     /// Runtime environment associated with this task context
     pub runtime: Arc<RuntimeEnv>,
 }
@@ -1241,15 +1241,15 @@ impl TaskContext {
         Self {
             task_id: Some(task_id),
             session_id,
-            task_settings: TaskProperties::KVPairs(task_settings),
+            properties: TaskProperties::KVPairs(task_settings),
             runtime,
         }
     }
 
     /// Return the SessionConfig associated with the Task
     pub fn session_config(&self) -> SessionConfig {
-        let task_settings = &self.task_settings;
-        match task_settings {
+        let task_props = &self.properties;
+        match task_props {
             TaskProperties::KVPairs(props) => {
                 let session_config = SessionConfig::new();
                 session_config
@@ -1283,12 +1283,12 @@ impl TaskContext {
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
         let session_id = session.session_id.clone();
-        let config = session.state.lock().config.clone();
+        let config = session.state.read().config.clone();
         let runtime = session.runtime_env();
         Self {
             task_id: None,
             session_id,
-            task_settings: TaskProperties::SessionConfig(config),
+            properties: TaskProperties::SessionConfig(config),
             runtime,
         }
     }
@@ -1303,7 +1303,7 @@ impl From<&SessionState> for TaskContext {
         Self {
             task_id: None,
             session_id,
-            task_settings: TaskProperties::SessionConfig(config),
+            properties: TaskProperties::SessionConfig(config),
             runtime,
         }
     }
@@ -2969,7 +2969,7 @@ mod tests {
         ctx.register_catalog("my_catalog", catalog);
 
         let catalog_list_weak = {
-            let state = ctx.state.lock();
+            let state = ctx.state.read();
             Arc::downgrade(&state.catalog_list)
         };
 

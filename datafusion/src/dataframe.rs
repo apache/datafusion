@@ -40,7 +40,7 @@ use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::scalar::ScalarValue;
 use crate::sql::utils::find_window_exprs;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::any::Any;
 
 /// DataFrame represents a logical set of rows with the same named columns.
@@ -69,13 +69,13 @@ use std::any::Any;
 /// # }
 /// ```
 pub struct DataFrame {
-    session_state: Arc<Mutex<SessionState>>,
+    session_state: Arc<RwLock<SessionState>>,
     plan: LogicalPlan,
 }
 
 impl DataFrame {
     /// Create a new Table based on an existing logical plan
-    pub fn new(session_state: Arc<Mutex<SessionState>>, plan: &LogicalPlan) -> Self {
+    pub fn new(session_state: Arc<RwLock<SessionState>>, plan: &LogicalPlan) -> Self {
         Self {
             session_state,
             plan: plan.clone(),
@@ -84,7 +84,7 @@ impl DataFrame {
 
     /// Create a physical plan
     pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let state = self.session_state.lock().clone();
+        let state = self.session_state.read().clone();
         let optimized_plan = state.optimize(&self.plan)?;
         state.create_physical_plan(&optimized_plan).await
     }
@@ -350,7 +350,7 @@ impl DataFrame {
     /// ```
     pub async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
+        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
         Ok(collect(plan, task_ctx).await?)
     }
 
@@ -405,7 +405,7 @@ impl DataFrame {
     /// ```
     pub async fn execute_stream(&self) -> Result<SendableRecordBatchStream> {
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
+        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
         execute_stream(plan, task_ctx).await
     }
 
@@ -425,7 +425,7 @@ impl DataFrame {
     /// ```
     pub async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
+        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
         Ok(collect_partitioned(plan, task_ctx).await?)
     }
 
@@ -446,7 +446,7 @@ impl DataFrame {
         &self,
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
-        let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
+        let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
         Ok(execute_stream_partitioned(plan, task_ctx).await?)
     }
 
@@ -510,7 +510,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn registry(&self) -> Arc<dyn FunctionRegistry> {
-        let registry = self.session_state.lock().clone();
+        let registry = self.session_state.read().clone();
         Arc::new(registry)
     }
 
@@ -562,7 +562,7 @@ impl DataFrame {
     /// Write a `DataFrame` to a CSV file.
     pub async fn write_csv(&self, path: &str) -> Result<()> {
         let plan = self.create_physical_plan().await?;
-        let state = self.session_state.lock().clone();
+        let state = self.session_state.read().clone();
         plan_to_csv(&state, plan, path).await
     }
 
@@ -573,7 +573,7 @@ impl DataFrame {
         writer_properties: Option<WriterProperties>,
     ) -> Result<()> {
         let plan = self.create_physical_plan().await?;
-        let state = self.session_state.lock().clone();
+        let state = self.session_state.read().clone();
         plan_to_parquet(&state, plan, path, writer_properties).await
     }
 }
