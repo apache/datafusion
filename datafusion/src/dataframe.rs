@@ -352,7 +352,7 @@ impl DataFrame {
     pub async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let plan = self.create_physical_plan().await?;
         let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
-        Ok(collect(plan, task_ctx).await?)
+        collect(plan, task_ctx).await
     }
 
     /// Print results.
@@ -427,7 +427,7 @@ impl DataFrame {
     pub async fn collect_partitioned(&self) -> Result<Vec<Vec<RecordBatch>>> {
         let plan = self.create_physical_plan().await?;
         let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
-        Ok(collect_partitioned(plan, task_ctx).await?)
+        collect_partitioned(plan, task_ctx).await
     }
 
     /// Executes this DataFrame and returns one stream per partition.
@@ -448,7 +448,7 @@ impl DataFrame {
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let plan = self.create_physical_plan().await?;
         let task_ctx = Arc::new(TaskContext::from(&self.session_state.lock().clone()));
-        Ok(execute_stream_partitioned(plan, task_ctx).await?)
+        execute_stream_partitioned(plan, task_ctx).await
     }
 
     /// Returns the schema describing the output of this DataFrame in terms of columns returned,
