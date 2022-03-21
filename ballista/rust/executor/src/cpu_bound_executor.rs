@@ -97,8 +97,8 @@ impl DedicatedExecutor {
 
         let (tx, rx) = std::sync::mpsc::channel();
 
-        //Cannot create a separated tokio runtime in another tokio runtime,
-        //So use std::thread to spawn a thread
+        // Cannot create a separated tokio runtime in another tokio runtime,
+        // So use std::thread to spawn a thread
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()

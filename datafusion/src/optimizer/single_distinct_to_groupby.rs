@@ -121,7 +121,7 @@ fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
                     schema: final_agg_schema.clone(),
                 });
 
-                //so the aggregates are displayed in the same way even after the rewrite
+                // so the aggregates are displayed in the same way even after the rewrite
                 let mut alias_expr: Vec<Expr> = Vec::new();
                 final_agg
                     .expressions()
