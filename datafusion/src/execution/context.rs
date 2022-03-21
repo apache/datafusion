@@ -992,7 +992,7 @@ impl SessionState {
             let default_catalog = MemoryCatalogProvider::new();
 
             default_catalog.register_schema(
-                config.default_schema.clone(),
+                &config.default_schema,
                 Arc::new(MemorySchemaProvider::new()),
             );
 

@@ -350,6 +350,7 @@ mod tests {
     use datafusion::datasource::object_store::local::LocalFileSystem;
     use datafusion::error::DataFusionError;
     use datafusion::execution::context::{QueryPlanner, SessionState, TaskContext};
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::logical_plan::plan::Extension;
     use datafusion::logical_plan::{
         col, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
