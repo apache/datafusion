@@ -289,7 +289,7 @@ mod tests {
             .unwrap();
 
         let catalog = MemoryCatalogProvider::new();
-        catalog.register_schema("active", Arc::new(schema));
+        catalog.register_schema("active", Arc::new(schema)).unwrap();
 
         let mut ctx = SessionContext::new();
 

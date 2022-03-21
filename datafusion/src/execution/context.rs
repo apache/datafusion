@@ -302,7 +302,7 @@ impl SessionContext {
                     }
                     (true, None) | (false, None) => {
                         let schema = Arc::new(MemorySchemaProvider::new());
-                        catalog.register_schema(&schema_name, schema);
+                        catalog.register_schema(&schema_name, schema)?;
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
@@ -996,10 +996,12 @@ impl SessionState {
         if config.create_default_catalog_and_schema {
             let default_catalog = MemoryCatalogProvider::new();
 
-            default_catalog.register_schema(
-                &config.default_schema,
-                Arc::new(MemorySchemaProvider::new()),
-            );
+            default_catalog
+                .register_schema(
+                    &config.default_schema,
+                    Arc::new(MemorySchemaProvider::new()),
+                )
+                .expect("memory catalog provider can register schema");
 
             let default_catalog: Arc<dyn CatalogProvider> = if config.information_schema {
                 Arc::new(CatalogWithInformationSchema::new(
@@ -2948,7 +2950,9 @@ mod tests {
         schema
             .register_table("test".to_owned(), test::table_with_sequence(1, 1).unwrap())
             .unwrap();
-        catalog.register_schema("my_schema", Arc::new(schema));
+        catalog
+            .register_schema("my_schema", Arc::new(schema))
+            .unwrap();
         ctx.register_catalog("my_catalog", Arc::new(catalog));
 
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
@@ -2978,14 +2982,18 @@ mod tests {
         let schema_a = MemorySchemaProvider::new();
         schema_a
             .register_table("table_a".to_owned(), test::table_with_sequence(1, 1)?)?;
-        catalog_a.register_schema("schema_a", Arc::new(schema_a));
+        catalog_a
+            .register_schema("schema_a", Arc::new(schema_a))
+            .unwrap();
         ctx.register_catalog("catalog_a", Arc::new(catalog_a));
 
         let catalog_b = MemoryCatalogProvider::new();
         let schema_b = MemorySchemaProvider::new();
         schema_b
             .register_table("table_b".to_owned(), test::table_with_sequence(1, 2)?)?;
-        catalog_b.register_schema("schema_b", Arc::new(schema_b));
+        catalog_b
+            .register_schema("schema_b", Arc::new(schema_b))
+            .unwrap();
         ctx.register_catalog("catalog_b", Arc::new(catalog_b));
 
         let result = plan_and_collect(

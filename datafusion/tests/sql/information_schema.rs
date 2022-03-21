@@ -117,7 +117,9 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     schema
         .register_table("t2".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
-    catalog.register_schema("my_schema", Arc::new(schema));
+    catalog
+        .register_schema("my_schema", Arc::new(schema))
+        .unwrap();
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
     let catalog = MemoryCatalogProvider::new();
@@ -125,7 +127,9 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     schema
         .register_table("t3".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
-    catalog.register_schema("my_other_schema", Arc::new(schema));
+    catalog
+        .register_schema("my_other_schema", Arc::new(schema))
+        .unwrap();
     ctx.register_catalog("my_other_catalog", Arc::new(catalog));
 
     let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
@@ -460,7 +464,9 @@ async fn information_schema_columns() {
     schema
         .register_table("t2".to_owned(), table_with_many_types())
         .unwrap();
-    catalog.register_schema("my_schema", Arc::new(schema));
+    catalog
+        .register_schema("my_schema", Arc::new(schema))
+        .unwrap();
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
     let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
