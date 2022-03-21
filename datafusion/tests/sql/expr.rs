@@ -726,7 +726,7 @@ async fn test_extract_date_part() -> Result<()> {
     );
     test_expression!("date_part('WEEK', CAST('2003-01-01' AS DATE))", "1");
 
-    //TODO Creating logical plan for 'SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))'
+    // TODO Creating logical plan for 'SELECT EXTRACT(WEEK FROM to_timestamp('2020-09-08T12:00:00+00:00'))'
     // SQL(ParserError("Expected date/time field, found: WEEK"))'
     // will fix in sqlparser
 

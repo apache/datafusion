@@ -40,7 +40,7 @@ pub enum BallistaError {
     SqlError(parser::ParserError),
     IoError(io::Error),
     // ReqwestError(reqwest::Error),
-    //HttpError(http::Error),
+    // HttpError(http::Error),
     // KubeAPIError(kube::error::Error),
     // KubeAPIRequestError(k8s_openapi::RequestError),
     // KubeAPIResponseError(k8s_openapi::ResponseError),

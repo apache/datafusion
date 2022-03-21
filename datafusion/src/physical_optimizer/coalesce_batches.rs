@@ -53,7 +53,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             .collect::<Result<Vec<_>>>()?;
 
         let plan_any = plan.as_any();
-        //TODO we should do this in a more generic way either by wrapping all operators
+        // TODO we should do this in a more generic way either by wrapping all operators
         // or having an API so that operators can declare when their inputs or outputs
         // need to be wrapped in a coalesce batches operator.
         // See https://issues.apache.org/jira/browse/ARROW-11068
@@ -61,7 +61,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             || plan_any.downcast_ref::<HashJoinExec>().is_some()
             || plan_any.downcast_ref::<RepartitionExec>().is_some();
 
-        //TODO we should also do this for HashAggregateExec but we need to update tests
+        // TODO we should also do this for HashAggregateExec but we need to update tests
         // as part of this work - see https://issues.apache.org/jira/browse/ARROW-11068
         // || plan_any.downcast_ref::<HashAggregateExec>().is_some();
 
@@ -71,7 +71,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
         } else {
             let plan = plan.with_new_children(children)?;
             Ok(if wrap_in_coalesce {
-                //TODO we should add specific configuration settings for coalescing batches and
+                // TODO we should add specific configuration settings for coalescing batches and
                 // we should do that once https://issues.apache.org/jira/browse/ARROW-11059 is
                 // implemented. For now, we choose half the configured batch size to avoid copies
                 // when a small number of rows are removed from a batch
