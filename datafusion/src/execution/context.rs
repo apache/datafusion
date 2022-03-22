@@ -2982,16 +2982,14 @@ mod tests {
         let schema_a = MemorySchemaProvider::new();
         schema_a
             .register_table("table_a".to_owned(), test::table_with_sequence(1, 1)?)?;
-        catalog_a
-            .register_schema("schema_a", Arc::new(schema_a))?;
+        catalog_a.register_schema("schema_a", Arc::new(schema_a))?;
         ctx.register_catalog("catalog_a", Arc::new(catalog_a));
 
         let catalog_b = MemoryCatalogProvider::new();
         let schema_b = MemorySchemaProvider::new();
         schema_b
             .register_table("table_b".to_owned(), test::table_with_sequence(1, 2)?)?;
-        catalog_b
-            .register_schema("schema_b", Arc::new(schema_b))?;
+        catalog_b.register_schema("schema_b", Arc::new(schema_b))?;
         ctx.register_catalog("catalog_b", Arc::new(catalog_b));
 
         let result = plan_and_collect(
