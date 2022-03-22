@@ -222,13 +222,11 @@ impl DFSchema {
         }
     }
 
+    /// Find all fields having the given qualifier
     pub fn fields_with_qualified(&self, qualifier: &str) -> Vec<&DFField> {
         self.fields
             .iter()
-            .filter(|field| {
-                field.qualifier().is_some()
-                    && field.qualifier.as_ref().unwrap().eq(qualifier)
-            })
+            .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
             .collect()
     }
 

@@ -1029,6 +1029,8 @@ pub fn project_with_alias(
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)
             }
+            Expr::QualifiedWildcard { ref qualifier } => projected_expr
+                .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1092,23 +1094,23 @@ pub(crate) fn expand_wildcard(
 
 pub(crate) fn expand_qualified_wildcard(
     qualifier: &str,
-    table_provider: Option<Arc<dyn TableProvider>>,
     schema: &DFSchema,
     plan: &LogicalPlan,
 ) -> Result<Vec<Expr>> {
-    if let Some(table_provider) = table_provider {
-        expand_wildcard(&table_provider.schema().to_dfschema()?, plan)
-    } else {
-        // if it doesnt exist in table_provider, it should be an alias
-        let qualified_fields = schema
-            .fields_with_qualified(qualifier)
-            .into_iter()
-            .cloned()
-            .collect();
-        let qualifier_schema =
-            DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
-        expand_wildcard(&qualifier_schema, plan)
+    let qualified_fields: Vec<DFField> = schema
+        .fields_with_qualified(qualifier)
+        .into_iter()
+        .cloned()
+        .collect();
+    if qualified_fields.is_empty() {
+        return Err(DataFusionError::Plan(format!(
+            "Invalid qualifier {}",
+            qualifier
+        )));
     }
+    let qualifier_schema =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+    expand_wildcard(&qualifier_schema, plan)
 }
 
 #[cfg(test)]

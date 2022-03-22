@@ -1012,15 +1012,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         expand_wildcard(input_schema, plan)?
                     }
                     Expr::QualifiedWildcard { ref qualifier } => {
-                        let table_ref = TableReference::from(qualifier.as_ref());
-                        let table_provider =
-                            self.schema_provider.get_table_provider(table_ref);
-                        expand_qualified_wildcard(
-                            qualifier,
-                            table_provider,
-                            input_schema,
-                            plan,
-                        )?
+                        expand_qualified_wildcard(qualifier, input_schema, plan)?
                     }
                     _ => vec![normalize_col(expr, plan)?],
                 })
