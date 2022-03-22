@@ -168,7 +168,7 @@ impl BuiltinScalarFunction {
     /// Returns the [Volatility] of the builtin function.
     pub fn volatility(&self) -> Volatility {
         match self {
-            //Immutable scalar builtins
+            // Immutable scalar builtins
             BuiltinScalarFunction::Abs => Volatility::Immutable,
             BuiltinScalarFunction::Acos => Volatility::Immutable,
             BuiltinScalarFunction::Asin => Volatility::Immutable,
@@ -231,10 +231,10 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Upper => Volatility::Immutable,
             BuiltinScalarFunction::RegexpMatch => Volatility::Immutable,
 
-            //Stable builtin functions
+            // Stable builtin functions
             BuiltinScalarFunction::Now => Volatility::Stable,
 
-            //Volatile builtin functions
+            // Volatile builtin functions
             BuiltinScalarFunction::Random => Volatility::Volatile,
         }
     }

@@ -1411,7 +1411,7 @@ impl DefaultPhysicalPlanner {
     where
         F: FnMut(&dyn ExecutionPlan, &dyn PhysicalOptimizerRule),
     {
-        let optimizers = &session_state.config.physical_optimizers;
+        let optimizers = &session_state.physical_optimizers;
         debug!(
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent()
@@ -1447,10 +1447,12 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
+    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::logical_plan::plan::Extension;
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
+    use crate::prelude::SessionConfig;
     use crate::scalar::ScalarValue;
     use crate::{
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
@@ -1466,7 +1468,8 @@ mod tests {
     use std::{any::Any, fmt};
 
     fn make_session_state() -> SessionState {
-        SessionState::new()
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        SessionState::with_config(SessionConfig::new(), runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {

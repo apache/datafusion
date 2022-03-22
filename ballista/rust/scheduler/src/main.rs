@@ -74,7 +74,7 @@ async fn start_server(
         "Ballista v{} Scheduler listening on {:?}",
         BALLISTA_VERSION, addr
     );
-    //should only call SchedulerServer::new() once in the process
+    // Should only call SchedulerServer::new() once in the process
     info!(
         "Starting Scheduler grpc server with task scheduling policy of {:?}",
         policy

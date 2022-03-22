@@ -529,7 +529,7 @@ order by
         let join_input_2 = join_input_2.children()[0].clone();
         let unresolved_shuffle_reader_2 =
             downcast_exec!(join_input_2, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); //orders
+        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); // orders
         assert_eq!(unresolved_shuffle_reader_2.output_partition_count, 2);
 
         // final partitioned hash aggregate
