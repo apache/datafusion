@@ -93,6 +93,11 @@ use uuid::Uuid;
 
 use super::options::{AvroReadOptions, CsvReadOptions};
 
+/// The default catalog name - this impacts what SQL queries use if not specified
+const DEFAULT_CATALOG: &str = "datafusion";
+/// The default schema name - this impacts what SQL queries use if not specified
+const DEFAULT_SCHEMA: &str = "public";
+
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
 /// The context provides the following functionality
@@ -280,11 +285,11 @@ impl SessionContext {
                 ..
             }) => {
                 // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
-                // so for now, we default to "datafusion" catalog
-                let default_catalog = "datafusion";
-                let catalog = self.catalog(default_catalog).ok_or_else(|| {
-                    DataFusionError::Execution(String::from(
-                        "Missing 'datafusion' catalog",
+                // so for now, we default to default catalog
+                let catalog = self.catalog(DEFAULT_CATALOG).ok_or_else(|| {
+                    DataFusionError::Execution(format!(
+                        "Missing '{}' catalog",
+                        DEFAULT_CATALOG
                     ))
                 })?;
 
@@ -813,8 +818,8 @@ impl Default for SessionConfig {
         Self {
             batch_size: 8192,
             target_partitions: num_cpus::get(),
-            default_catalog: "datafusion".to_owned(),
-            default_schema: "public".to_owned(),
+            default_catalog: DEFAULT_CATALOG.to_owned(),
+            default_schema: DEFAULT_SCHEMA.to_owned(),
             create_default_catalog_and_schema: true,
             information_schema: false,
             repartition_joins: true,
@@ -2911,16 +2916,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_catalog_and_schema() -> Result<()> {
-        let mut ctx = SessionContext::with_config(
-            SessionConfig::new()
-                .create_default_catalog_and_schema(false)
-                .with_default_catalog_and_schema("my_catalog", "my_schema"),
-        );
+    async fn custom_catalog_and_schema() {
+        let config = SessionConfig::new()
+            .create_default_catalog_and_schema(true)
+            .with_default_catalog_and_schema("my_catalog", "my_schema");
+        catalog_and_schema_test(config).await;
+    }
+
+    #[tokio::test]
+    async fn custom_catalog_and_schema_no_default() {
+        let config = SessionConfig::new()
+            .create_default_catalog_and_schema(false)
+            .with_default_catalog_and_schema("my_catalog", "my_schema");
+        catalog_and_schema_test(config).await;
+    }
+
+    #[tokio::test]
+    async fn custom_catalog_and_schema_and_information_schema() {
+        let config = SessionConfig::new()
+            .create_default_catalog_and_schema(true)
+            .with_information_schema(true)
+            .with_default_catalog_and_schema("my_catalog", "my_schema");
+        catalog_and_schema_test(config).await;
+    }
+
+    async fn catalog_and_schema_test(config: SessionConfig) {
+        let mut ctx = SessionContext::with_config(config);
 
         let catalog = MemoryCatalogProvider::new();
         let schema = MemorySchemaProvider::new();
-        schema.register_table("test".to_owned(), test::table_with_sequence(1, 1)?)?;
+        schema
+            .register_table("test".to_owned(), test::table_with_sequence(1, 1).unwrap())
+            .unwrap();
         catalog.register_schema("my_schema", Arc::new(schema));
         ctx.register_catalog("my_catalog", Arc::new(catalog));
 
@@ -2929,7 +2956,8 @@ mod tests {
                 &mut ctx,
                 &format!("SELECT COUNT(*) AS count FROM {}", table_ref),
             )
-            .await?;
+            .await
+            .unwrap();
 
             let expected = vec![
                 "+-------+",
@@ -2940,8 +2968,6 @@ mod tests {
             ];
             assert_batches_eq!(expected, &result);
         }
-
-        Ok(())
     }
 
     #[tokio::test]
