@@ -27,12 +27,11 @@ use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf::JobStatus;
 
 use crate::state::backend::StateBackendClient;
+use crate::state::stage_manager::StageKey;
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-
-type StageKey = (String, u32);
 
 #[derive(Clone)]
 pub(crate) struct PersistentSchedulerState<

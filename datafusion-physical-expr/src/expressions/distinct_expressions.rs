@@ -538,7 +538,7 @@ mod tests {
         }};
     }
 
-    //Used trait to create associated constant for f32 and f64
+    // Used trait to create associated constant for f32 and f64
     trait SubNormal: 'static {
         const SUBNORMAL: Self;
     }

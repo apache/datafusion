@@ -17,115 +17,53 @@
 
 use super::*;
 
-async fn register_alltypes_avro(ctx: &mut SessionContext) {
-    let testdata = datafusion::test_util::arrow_test_data();
-    ctx.register_avro(
-        "alltypes_plain",
-        &format!("{}/avro/alltypes_plain.avro", testdata),
-        NdJsonReadOptions::default(),
-    )
-    .await
-    .unwrap();
-}
+const TEST_DATA_BASE: &str = "tests/jsons";
 
 #[tokio::test]
-async fn avro_query() {
+async fn json_query() {
     let mut ctx = SessionContext::new();
-    register_alltypes_avro(&mut ctx).await;
-    // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
-    // so we need an explicit cast
-    let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
+    let path = format!("{}/2.json", TEST_DATA_BASE);
+    ctx.register_json("t1", &path, NdJsonReadOptions::default())
+        .await
+        .unwrap();
+
+    let sql = "SELECT a, b FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+----+-----------------------------------------+",
-        "| id | CAST(alltypes_plain.string_col AS Utf8) |",
-        "+----+-----------------------------------------+",
-        "| 4  | 0                                       |",
-        "| 5  | 1                                       |",
-        "| 6  | 0                                       |",
-        "| 7  | 1                                       |",
-        "| 2  | 0                                       |",
-        "| 3  | 1                                       |",
-        "| 0  | 0                                       |",
-        "| 1  | 1                                       |",
-        "+----+-----------------------------------------+",
+        "+-----------------+------+",
+        "| a               | b    |",
+        "+-----------------+------+",
+        "| 1               | 2    |",
+        "| -10             | -3.5 |",
+        "| 2               | 0.6  |",
+        "| 1               | 2    |",
+        "| 7               | -3.5 |",
+        "| 1               | 0.6  |",
+        "| 1               | 2    |",
+        "| 5               | -3.5 |",
+        "| 1               | 0.6  |",
+        "| 1               | 2    |",
+        "| 1               | -3.5 |",
+        "| 100000000000000 | 0.6  |",
+        "+-----------------+------+",
     ];
 
     assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
-async fn avro_query_multiple_files() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let table_path = tempdir.path();
-    let testdata = datafusion::test_util::arrow_test_data();
-    let alltypes_plain_file = format!("{}/avro/alltypes_plain.avro", testdata);
-    std::fs::copy(
-        &alltypes_plain_file,
-        format!("{}/alltypes_plain1.avro", table_path.display()),
-    )
-    .unwrap();
-    std::fs::copy(
-        &alltypes_plain_file,
-        format!("{}/alltypes_plain2.avro", table_path.display()),
-    )
-    .unwrap();
-
+async fn json_single_nan_schema() {
     let mut ctx = SessionContext::new();
-    ctx.register_avro(
-        "alltypes_plain",
-        table_path.display().to_string().as_str(),
-        AvroReadOptions::default(),
-    )
-    .await
-    .unwrap();
-    // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
-    // so we need an explicit cast
-    let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----+-----------------------------------------+",
-        "| id | CAST(alltypes_plain.string_col AS Utf8) |",
-        "+----+-----------------------------------------+",
-        "| 4  | 0                                       |",
-        "| 5  | 1                                       |",
-        "| 6  | 0                                       |",
-        "| 7  | 1                                       |",
-        "| 2  | 0                                       |",
-        "| 3  | 1                                       |",
-        "| 0  | 0                                       |",
-        "| 1  | 1                                       |",
-        "| 4  | 0                                       |",
-        "| 5  | 1                                       |",
-        "| 6  | 0                                       |",
-        "| 7  | 1                                       |",
-        "| 2  | 0                                       |",
-        "| 3  | 1                                       |",
-        "| 0  | 0                                       |",
-        "| 1  | 1                                       |",
-        "+----+-----------------------------------------+",
-    ];
-
-    assert_batches_eq!(expected, &actual);
-}
-
-#[tokio::test]
-async fn avro_single_nan_schema() {
-    let mut ctx = SessionContext::new();
-    let testdata = datafusion::test_util::arrow_test_data();
-    ctx.register_avro(
-        "single_nan",
-        &format!("{}/avro/single_nan.avro", testdata),
-        AvroReadOptions::default(),
-    )
-    .await
-    .unwrap();
+    let path = format!("{}/3.json", TEST_DATA_BASE);
+    ctx.register_json("single_nan", &path, NdJsonReadOptions::default())
+        .await
+        .unwrap();
     let sql = "SELECT mycol FROM single_nan";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.unwrap();
     for batch in results {
         assert_eq!(1, batch.num_rows());
         assert_eq!(1, batch.num_columns());
@@ -133,30 +71,32 @@ async fn avro_single_nan_schema() {
 }
 
 #[tokio::test]
-async fn avro_explain() {
+async fn json_explain() {
     let mut ctx = SessionContext::new();
-    register_alltypes_avro(&mut ctx).await;
+    let path = format!("{}/2.json", TEST_DATA_BASE);
+    ctx.register_json("t1", &path, NdJsonReadOptions::default())
+        .await
+        .unwrap();
 
-    let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
+    let sql = "EXPLAIN SELECT count(*) from t1";
     let actual = execute(&mut ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
     let expected = vec![
         vec![
-            "logical_plan",
+            "logical_plan", 
             "Projection: #COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    TableScan: alltypes_plain projection=Some([0])",
-        ],
+            \n    TableScan: t1 projection=Some([0])"
+            ],
         vec![
-            "physical_plan",
+            "physical_plan", 
             "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
             \n  HashAggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
             \n    CoalescePartitionsExec\
             \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          AvroExec: files=[ARROW_TEST_DATA/avro/alltypes_plain.avro], limit=None\
-            \n",
-        ],
+            \n          JsonExec: limit=None, files=[tests/jsons/2.json]\n"
+            ],
     ];
     assert_eq!(expected, actual);
 }

@@ -421,7 +421,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     impl ExprRewriter for RemoveQualifier {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             if let Expr::Column(col) = expr {
-                //let Column { relation: _, name } = col;
+                // let Column { relation: _, name } = col;
                 Ok(Expr::Column(Column {
                     relation: None,
                     name: col.name,

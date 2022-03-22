@@ -21,6 +21,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use log::{debug, warn};
 
+use crate::scheduler_server::event::SchedulerServerEvent;
 use ballista_core::error::{BallistaError, Result};
 use ballista_core::event_loop::EventAction;
 use ballista_core::serde::protobuf::{LaunchTaskParams, TaskDefinition};
@@ -30,11 +31,6 @@ use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
 use crate::scheduler_server::ExecutorsClient;
 use crate::state::task_scheduler::TaskScheduler;
 use crate::state::SchedulerState;
-
-#[derive(Clone)]
-pub(crate) enum SchedulerServerEvent {
-    JobSubmitted(String),
-}
 
 pub(crate) struct SchedulerServerEventAction<
     T: 'static + AsLogicalPlan,
@@ -57,17 +53,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         }
     }
 
-    async fn offer_resources(
-        &self,
-        job_id: String,
-    ) -> Result<Option<SchedulerServerEvent>> {
-        let mut available_executors = self.state.get_available_executors_data();
+    #[allow(unused_variables)]
+    async fn offer_resources(&self, n: u32) -> Result<Option<SchedulerServerEvent>> {
+        let mut available_executors =
+            self.state.executor_manager.get_available_executors_data();
         // In case of there's no enough resources, reschedule the tasks of the job
         if available_executors.is_empty() {
             // TODO Maybe it's better to use an exclusive runtime for this kind task scheduling
             warn!("Not enough available executors for task running");
             tokio::time::sleep(Duration::from_millis(100)).await;
-            return Ok(Some(SchedulerServerEvent::JobSubmitted(job_id)));
+            return Ok(Some(SchedulerServerEvent::ReviveOffers(1)));
         }
 
         let mut executors_data_change: Vec<ExecutorDataChange> = available_executors
@@ -80,7 +75,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
         let (tasks_assigment, num_tasks) = self
             .state
-            .fetch_tasks(&mut available_executors, &job_id)
+            .fetch_schedulable_tasks(&mut available_executors, n)
             .await?;
         for (data_change, data) in executors_data_change
             .iter_mut()
@@ -90,6 +85,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                 data.available_task_slots as i32 - data_change.task_slots;
         }
 
+        #[cfg(not(test))]
         if num_tasks > 0 {
             self.launch_tasks(&executors_data_change, tasks_assigment)
                 .await?;
@@ -98,6 +94,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         Ok(None)
     }
 
+    #[allow(dead_code)]
     async fn launch_tasks(
         &self,
         executors: &[ExecutorDataChange],
@@ -132,10 +129,11 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                         .unwrap()
                         .clone()
                 };
-                // Update the resources first
-                self.state.update_executor_data(executor_data_change);
                 // TODO check whether launching task is successful or not
                 client.launch_task(LaunchTaskParams { task: tasks }).await?;
+                self.state
+                    .executor_manager
+                    .update_executor_data(executor_data_change);
             } else {
                 // Since the task assignment policy is round robin,
                 // if find tasks for one executor is empty, just break fast
@@ -162,9 +160,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         event: SchedulerServerEvent,
     ) -> Result<Option<SchedulerServerEvent>> {
         match event {
-            SchedulerServerEvent::JobSubmitted(job_id) => {
-                self.offer_resources(job_id).await
-            }
+            SchedulerServerEvent::ReviveOffers(n) => self.offer_resources(n).await,
         }
     }
 

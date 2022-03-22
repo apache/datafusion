@@ -17,34 +17,13 @@
   under the License.
 -->
 
-# Deploying a standalone Ballista cluster using cargo install
+# Run db-benchmark
 
-A simple way to start a local cluster for testing purposes is to use cargo to install
-the scheduler and executor crates.
+## Directions
 
-```bash
-cargo install --locked ballista-scheduler
-cargo install --locked ballista-executor
-```
-
-With these crates installed, it is now possible to start a scheduler process.
+Run the following from root `arrow-datafusion` directory
 
 ```bash
-RUST_LOG=info ballista-scheduler
-```
-
-The scheduler will bind to port 50050 by default.
-
-Next, start an executor processes in a new terminal session with the specified concurrency
-level.
-
-```bash
-RUST_LOG=info ballista-executor -c 4
-```
-
-The executor will bind to port 50051 by default. Additional executors can be started by
-manually specifying a bind port. For example:
-
-```bash
-RUST_LOG=info ballista-executor --bind-port 50052 -c 4
+$ docker buildx build -t db-benchmark -f benchmarks/db-benchmark/db-benchmark.dockerfile .
+$ docker run --privileged db-benchmark
 ```

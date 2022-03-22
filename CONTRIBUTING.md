@@ -52,8 +52,6 @@ Testing setup:
 - `rustup update stable` DataFusion uses the latest stable release of rust
 - `git submodule init`
 - `git submodule update`
-- `export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data/`
-- `export ARROW_TEST_DATA=$(pwd)/testing/data/`
 
 ## Test Organization
 

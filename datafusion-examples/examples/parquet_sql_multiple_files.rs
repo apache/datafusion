@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     // create local execution context
     let mut ctx = SessionContext::new();
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     // Configure listing options
     let file_format = ParquetFormat::default().with_enable_pruning(true);
