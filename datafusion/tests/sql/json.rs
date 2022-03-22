@@ -52,6 +52,7 @@ async fn json_query() {
 }
 
 #[tokio::test]
+#[should_panic]
 async fn json_single_nan_schema() {
     let mut ctx = SessionContext::new();
     let path = format!("{}/3.json", TEST_DATA_BASE);

@@ -133,7 +133,7 @@ async fn avro_single_nan_schema() {
 }
 
 #[tokio::test]
-async fn json_explain() {
+async fn avro_explain() {
     let mut ctx = SessionContext::new();
     register_alltypes_avro(&mut ctx).await;
 
