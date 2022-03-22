@@ -35,7 +35,7 @@ use crate::arrow::util::pretty;
 use crate::datasource::TableProvider;
 use crate::datasource::TableType;
 use crate::execution::context::{SessionState, TaskContext};
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
+use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::{collect, collect_partitioned};
 use crate::physical_plan::{execute_stream, execute_stream_partitioned, ExecutionPlan};
 use crate::scalar::ScalarValue;
@@ -575,6 +575,13 @@ impl DataFrame {
         let plan = self.create_physical_plan().await?;
         let state = self.session_state.read().clone();
         plan_to_parquet(&state, plan, path, writer_properties).await
+    }
+
+    /// Executes a query and writes the results to a partitioned JSON file.
+    pub async fn write_json(&self, path: impl AsRef<str>) -> Result<()> {
+        let plan = self.create_physical_plan().await?;
+        let state = self.session_state.read().clone();
+        plan_to_json(&state, plan, path).await
     }
 }
 

@@ -46,10 +46,6 @@ use std::string::String;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
-use futures::{StreamExt, TryStreamExt};
-use tokio::task::{self, JoinHandle};
-
-use arrow::{csv, json};
 
 use crate::catalog::{
     catalog::{CatalogProvider, MemoryCatalogProvider},
@@ -79,7 +75,7 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
+use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
@@ -95,7 +91,7 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::options::{AvroReadOptions, CsvReadOptions};
+use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
@@ -437,6 +433,29 @@ impl SessionContext {
         )))
     }
 
+    /// Creates a DataFrame for reading an Json data source.
+    pub async fn read_json(
+        &mut self,
+        uri: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
+    ) -> Result<Arc<DataFrame>> {
+        let uri: String = uri.into();
+        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let target_partitions = self.copied_config().target_partitions;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_json(
+                object_store,
+                path,
+                options,
+                None,
+                target_partitions,
+            )
+            .await?
+            .build()?,
+        )))
+    }
+
     /// Creates a DataFrame for reading a Parquet data source.
     pub async fn read_parquet(
         &mut self,
@@ -509,6 +528,22 @@ impl SessionContext {
         )
         .await?;
 
+        Ok(())
+    }
+
+    // Registers a Json data source so that it can be referenced from SQL statements
+    /// executed against this context.
+    pub async fn register_json(
+        &mut self,
+        name: &str,
+        uri: &str,
+        options: NdJsonReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options =
+            options.to_listing_options(self.copied_config().target_partitions);
+
+        self.register_listing_table(name, uri, listing_options, options.schema)
+            .await?;
         Ok(())
     }
 
@@ -713,44 +748,14 @@ impl SessionContext {
         plan_to_csv(&state, plan, path).await
     }
 
+    /// Executes a query and writes the results to a partitioned JSON file.
     pub async fn write_json(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         path: impl AsRef<str>,
     ) -> Result<()> {
-        let path = path.as_ref();
-        // create directory to contain the CSV files (one per partition)
-        let fs_path = Path::new(path);
-        let runtime = self.runtime_env();
-        match fs::create_dir(fs_path) {
-            Ok(()) => {
-                let mut tasks = vec![];
-                for i in 0..plan.output_partitioning().partition_count() {
-                    let plan = plan.clone();
-                    let filename = format!("part-{}.csv", i);
-                    let path = fs_path.join(&filename);
-                    let file = fs::File::create(path)?;
-                    let mut writer = json::Writer::new(file);
-                    let stream = plan.execute(i, runtime.clone()).await?;
-                    let mut batches = Vec::new();
-
-                    let handle: JoinHandle<Result<()>> = task::spawn(async move {
-                        stream
-                            .map(|batch| batches.push(&batch))
-                            .try_collect()
-                            .await
-                            .map_err(DataFusionError::from)
-                    });
-                    tasks.push(handle);
-                }
-                futures::future::join_all(tasks).await;
-                Ok(())
-            }
-            Err(e) => Err(DataFusionError::Execution(format!(
-                "Could not create directory {}: {:?}",
-                path, e
-            ))),
-        }
+        let state = self.state.read().clone();
+        plan_to_json(&state, plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.

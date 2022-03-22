@@ -353,6 +353,55 @@ impl LogicalPlanBuilder {
         Self::scan(table_name, Arc::new(provider), projection)
     }
 
+    /// Scan an Json data source
+    pub async fn scan_json(
+        object_store: Arc<dyn ObjectStore>,
+        path: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
+        projection: Option<Vec<usize>>,
+        target_partitions: usize,
+    ) -> Result<Self> {
+        let path = path.into();
+        Self::scan_json_with_name(
+            object_store,
+            path.clone(),
+            options,
+            projection,
+            path,
+            target_partitions,
+        )
+        .await
+    }
+
+    /// Scan an Json data source and register it with a given table name
+    pub async fn scan_json_with_name(
+        object_store: Arc<dyn ObjectStore>,
+        path: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
+        projection: Option<Vec<usize>>,
+        table_name: impl Into<String>,
+        target_partitions: usize,
+    ) -> Result<Self> {
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        Self::scan(table_name, Arc::new(provider), projection)
+    }
+
     /// Scan an empty data source, mainly used in tests
     pub fn scan_empty(
         name: Option<&str>,

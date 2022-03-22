@@ -19,14 +19,19 @@
 use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
+use crate::execution::context::SessionState;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::{datatypes::SchemaRef, json};
+use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
+use tokio::task::{self, JoinHandle};
 
 use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
@@ -144,6 +149,44 @@ impl ExecutionPlan for NdJsonExec {
     }
 }
 
+pub async fn plan_to_json(
+    state: &SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    path: impl AsRef<str>,
+) -> Result<()> {
+    let path = path.as_ref();
+    // create directory to contain the CSV files (one per partition)
+    let fs_path = Path::new(path);
+    match fs::create_dir(fs_path) {
+        Ok(()) => {
+            let mut tasks = vec![];
+            for i in 0..plan.output_partitioning().partition_count() {
+                let plan = plan.clone();
+                let filename = format!("part-{}.json", i);
+                let path = fs_path.join(&filename);
+                let file = fs::File::create(path)?;
+                let mut writer = json::LineDelimitedWriter::new(file);
+                let task_ctx = Arc::new(TaskContext::from(state));
+                let stream = plan.execute(i, task_ctx).await?;
+                let handle: JoinHandle<Result<()>> = task::spawn(async move {
+                    stream
+                        .map(|batch| writer.write(batch?))
+                        .try_collect()
+                        .await
+                        .map_err(DataFusionError::from)
+                });
+                tasks.push(handle);
+            }
+            futures::future::join_all(tasks).await;
+            Ok(())
+        }
+        Err(e) => Err(DataFusionError::Execution(format!(
+            "Could not create directory {}: {:?}",
+            path, e
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::Array;
@@ -156,7 +199,9 @@ mod tests {
             local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
         },
     };
-    use crate::prelude::SessionContext;
+    use crate::prelude::NdJsonReadOptions;
+    use crate::prelude::*;
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -300,6 +345,54 @@ mod tests {
         assert_eq!(values.value(0), 1);
         assert_eq!(values.value(1), -10);
         assert_eq!(values.value(2), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn write_json_results() -> Result<()> {
+        // create partitioned input file and context
+        let tmp_dir = TempDir::new()?;
+        let mut ctx =
+            SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+
+        let path = format!("{}/1.json", TEST_DATA_BASE);
+
+        // register json file with the execution context
+        ctx.register_json("test", path.as_str(), NdJsonReadOptions::default())
+            .await?;
+
+        // execute a simple query and write the results to CSV
+        let out_dir = tmp_dir.as_ref().to_str().unwrap().to_string() + "/out";
+        let df = ctx.sql("SELECT a, b FROM test").await?;
+        df.write_json(&out_dir).await?;
+
+        // create a new context and verify that the results were saved to a partitioned csv file
+        let mut ctx = SessionContext::new();
+
+        // register each partition as well as the top level dir
+        let json_read_option = NdJsonReadOptions::default();
+        ctx.register_json(
+            "part0",
+            &format!("{}/part-0.json", out_dir),
+            json_read_option.clone(),
+        )
+        .await?;
+        ctx.register_json("allparts", &out_dir, json_read_option)
+            .await?;
+
+        let part0 = ctx.sql("SELECT a, b FROM part0").await?.collect().await?;
+        let allparts = ctx
+            .sql("SELECT a, b FROM allparts")
+            .await?
+            .collect()
+            .await?;
+
+        let allparts_count: usize = allparts.iter().map(|batch| batch.num_rows()).sum();
+
+        assert_eq!(part0[0].schema(), allparts[0].schema());
+
+        assert_eq!(allparts_count, 4);
+
         Ok(())
     }
 }

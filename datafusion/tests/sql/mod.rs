@@ -84,6 +84,7 @@ pub mod functions;
 pub mod group_by;
 pub mod intersection;
 pub mod joins;
+pub mod json;
 pub mod limit;
 pub mod order;
 pub mod parquet;
