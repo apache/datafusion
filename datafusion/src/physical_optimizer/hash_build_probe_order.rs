@@ -32,6 +32,8 @@ use super::optimizer::PhysicalOptimizerRule;
 use super::utils::optimize_children;
 use crate::error::Result;
 
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+
 /// BuildProbeOrder reorders the build and probe phase of
 /// hash joins. This uses the amount of rows that a datasource has.
 /// The rule optimizes the order such that the left (build) side of the join

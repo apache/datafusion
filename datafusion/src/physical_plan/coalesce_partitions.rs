@@ -27,7 +27,7 @@ use futures::Stream;
 
 use async_trait::async_trait;
 
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
 use super::common::AbortOnDropMany;
@@ -227,6 +227,7 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test::{self, assert_is_pending};
     use crate::test_util;
+    use datafusion_common::field_util::SchemaExt;
 
     #[tokio::test]
     async fn merge() -> Result<()> {

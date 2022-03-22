@@ -23,15 +23,14 @@ use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
 use async_trait::async_trait;
-use datafusion::arrow::{
-    datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
-};
+use datafusion::arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 use datafusion::error::DataFusionError;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion::record_batch::RecordBatch;
 use datafusion::{error::Result, physical_plan::RecordBatchStream};
 use futures::stream::SelectAll;
 use futures::Stream;

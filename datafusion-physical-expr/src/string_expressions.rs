@@ -21,28 +21,24 @@
 
 //! String expressions
 
-use arrow::{
-    array::{
-        Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
-        PrimitiveArray, StringArray, StringOffsetSizeTrait,
-    },
-    datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
-};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
 use std::any::type_name;
 use std::sync::Arc;
+
+use arrow::{array::*, datatypes::DataType};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_expr::ColumnarValue;
+
+type StringArray = Utf8Array<i32>;
 
 macro_rules! downcast_string_arg {
     ($ARG:expr, $NAME:expr, $T:ident) => {{
         $ARG.as_any()
-            .downcast_ref::<GenericStringArray<T>>()
+            .downcast_ref::<Utf8Array<T>>()
             .ok_or_else(|| {
                 DataFusionError::Internal(format!(
                     "could not cast {} to {}",
                     $NAME,
-                    type_name::<GenericStringArray<T>>()
+                    type_name::<Utf8Array<T>>()
                 ))
             })?
     }};
@@ -86,20 +82,20 @@ macro_rules! downcast_vec {
 }
 
 /// applies a unary expression to `args[0]` that is expected to be downcastable to
-/// a `GenericStringArray` and returns a `GenericStringArray` (which may have a different offset)
+/// a `Utf8Array` and returns a `Utf8Array` (which may have a different offset)
 /// # Errors
 /// This function errors when:
 /// * the number of arguments is not 1
-/// * the first argument is not castable to a `GenericStringArray`
+/// * the first argument is not castable to a `Utf8Array`
 pub(crate) fn unary_string_function<'a, T, O, F, R>(
     args: &[&'a dyn Array],
     op: F,
     name: &str,
-) -> Result<GenericStringArray<O>>
+) -> Result<Utf8Array<O>>
 where
     R: AsRef<str>,
-    O: StringOffsetSizeTrait,
-    T: StringOffsetSizeTrait,
+    O: Offset,
+    T: Offset,
     F: Fn(&'a str) -> R,
 {
     if args.len() != 1 {
@@ -167,7 +163,7 @@ where
 
 /// Returns the numeric code of the first character of the argument.
 /// ascii('x') = 120
-pub fn ascii<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn ascii<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     let result = string_array
@@ -185,7 +181,7 @@ pub fn ascii<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn btrim<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -197,7 +193,7 @@ pub fn btrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         string.trim_start_matches(' ').trim_end_matches(' ')
                     })
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Utf8Array<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -220,7 +216,7 @@ pub fn btrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                         )
                     }
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Utf8Array<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -239,15 +235,15 @@ pub fn chr(args: &[ArrayRef]) -> Result<ArrayRef> {
     // first map is the iterator, second is for the `Option<_>`
     let result = integer_array
         .iter()
-        .map(|integer: Option<i64>| {
+        .map(|integer| {
             integer
                 .map(|integer| {
-                    if integer == 0 {
+                    if *integer == 0 {
                         Err(DataFusionError::Execution(
                             "null character not permitted.".to_string(),
                         ))
                     } else {
-                        match core::char::from_u32(integer as u32) {
+                        match core::char::from_u32(*integer as u32) {
                             Some(integer) => Ok(integer.to_string()),
                             None => Err(DataFusionError::Execution(
                                 "requested character too large for encoding.".to_string(),
@@ -301,7 +297,7 @@ pub fn concat(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 }
                 Some(owned_string)
             })
-            .collect::<StringArray>();
+            .collect::<Utf8Array<i32>>();
 
         Ok(ColumnarValue::Array(Arc::new(result)))
     } else {
@@ -364,7 +360,7 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
 /// initcap('hi THOMAS') = 'Hi Thomas'
-pub fn initcap<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn initcap<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     // first map is the iterator, second is for the `Option<_>`
@@ -387,7 +383,7 @@ pub fn initcap<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
                 char_vector.iter().collect::<String>()
             })
         })
-        .collect::<GenericStringArray<T>>();
+        .collect::<Utf8Array<T>>();
 
     Ok(Arc::new(result) as ArrayRef)
 }
@@ -400,7 +396,7 @@ pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// Removes the longest string containing only characters in characters (a space by default) from the start of string.
 /// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn ltrim<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -408,7 +404,7 @@ pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result = string_array
                 .iter()
                 .map(|string| string.map(|string: &str| string.trim_start_matches(' ')))
-                .collect::<GenericStringArray<T>>();
+                .collect::<Utf8Array<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -426,7 +422,7 @@ pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                     _ => None,
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Utf8Array<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -439,7 +435,7 @@ pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
-pub fn repeat<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn repeat<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let number_array = downcast_arg!(args[1], "number", Int64Array);
 
@@ -447,17 +443,17 @@ pub fn repeat<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .zip(number_array.iter())
         .map(|(string, number)| match (string, number) {
-            (Some(string), Some(number)) => Some(string.repeat(number as usize)),
+            (Some(string), Some(number)) => Some(string.repeat(*number as usize)),
             _ => None,
         })
-        .collect::<GenericStringArray<T>>();
+        .collect::<Utf8Array<T>>();
 
     Ok(Arc::new(result) as ArrayRef)
 }
 
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
-pub fn replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn replace<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let from_array = downcast_string_arg!(args[1], "from", T);
     let to_array = downcast_string_arg!(args[2], "to", T);
@@ -470,14 +466,14 @@ pub fn replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
             (Some(string), Some(from), Some(to)) => Some(string.replace(from, to)),
             _ => None,
         })
-        .collect::<GenericStringArray<T>>();
+        .collect::<Utf8Array<T>>();
 
     Ok(Arc::new(result) as ArrayRef)
 }
 
 /// Removes the longest string containing only characters in characters (a space by default) from the end of string.
 /// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn rtrim<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -485,7 +481,7 @@ pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
             let result = string_array
                 .iter()
                 .map(|string| string.map(|string: &str| string.trim_end_matches(' ')))
-                .collect::<GenericStringArray<T>>();
+                .collect::<Utf8Array<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -503,7 +499,7 @@ pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
                     }
                     _ => None,
                 })
-                .collect::<GenericStringArray<T>>();
+                .collect::<Utf8Array<T>>();
 
             Ok(Arc::new(result) as ArrayRef)
         }
@@ -516,7 +512,7 @@ pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
 /// split_part('abc~@~def~@~ghi', '~@~', 2) = 'def'
-pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn split_part<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let delimiter_array = downcast_string_arg!(args[1], "delimiter", T);
     let n_array = downcast_arg!(args[2], "n", Int64Array);
@@ -527,13 +523,13 @@ pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRe
         .zip(n_array.iter())
         .map(|((string, delimiter), n)| match (string, delimiter, n) {
             (Some(string), Some(delimiter), Some(n)) => {
-                if n <= 0 {
+                if *n <= 0 {
                     Err(DataFusionError::Execution(
                         "field position must be greater than zero".to_string(),
                     ))
                 } else {
                     let split_string: Vec<&str> = string.split(delimiter).collect();
-                    match split_string.get(n as usize - 1) {
+                    match split_string.get(*n as usize - 1) {
                         Some(s) => Ok(Some(*s)),
                         None => Ok(Some("")),
                     }
@@ -541,14 +537,14 @@ pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRe
             }
             _ => Ok(None),
         })
-        .collect::<Result<GenericStringArray<T>>>()?;
+        .collect::<Result<Utf8Array<T>>>()?;
 
     Ok(Arc::new(result) as ArrayRef)
 }
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
-pub fn starts_with<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn starts_with<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let prefix_array = downcast_string_arg!(args[1], "prefix", T);
 
@@ -566,18 +562,13 @@ pub fn starts_with<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayR
 
 /// Converts the number to its equivalent hexadecimal representation.
 /// to_hex(2147483647) = '7fffffff'
-pub fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
-where
-    T::Native: StringOffsetSizeTrait,
-{
+pub fn to_hex<T: Offset>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let integer_array = downcast_primitive_array_arg!(args[0], "integer", T);
 
     let result = integer_array
         .iter()
-        .map(|integer| {
-            integer.map(|integer| format!("{:x}", integer.to_usize().unwrap()))
-        })
-        .collect::<GenericStringArray<i32>>();
+        .map(|integer| integer.map(|integer| format!("{:x}", integer.to_usize())))
+        .collect::<StringArray>();
 
     Ok(Arc::new(result) as ArrayRef)
 }

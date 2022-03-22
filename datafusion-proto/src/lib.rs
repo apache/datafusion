@@ -26,6 +26,8 @@ pub mod to_proto;
 
 #[cfg(test)]
 mod roundtrip_tests {
+    use datafusion::arrow::datatypes::IntegerType;
+    use datafusion::arrow::datatypes::IntegerType::UInt64;
     use datafusion::{
         arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit, UnionMode},
         logical_plan::{col, Expr},
@@ -290,7 +292,6 @@ mod roundtrip_tests {
             DataType::Binary,
             DataType::FixedSizeBinary(0),
             DataType::FixedSizeBinary(1234),
-            DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
             DataType::Decimal(1345, 5431),
             //Recursive list tests
@@ -344,6 +345,7 @@ mod roundtrip_tests {
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
+                None,
                 UnionMode::Dense,
             ),
             DataType::Union(
@@ -361,22 +363,25 @@ mod roundtrip_tests {
                         true,
                     ),
                 ],
+                None,
                 UnionMode::Sparse,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Utf8),
+                IntegerType::UInt8,
                 Box::new(DataType::Struct(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ])),
+                false,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Decimal(10, 50)),
+                UInt64,
                 Box::new(DataType::FixedSizeList(
                     new_box_field("Level1", DataType::Binary, true),
                     4,
                 )),
+                false,
             ),
         ];
 
@@ -440,7 +445,6 @@ mod roundtrip_tests {
             DataType::Binary,
             DataType::FixedSizeBinary(0),
             DataType::FixedSizeBinary(1234),
-            DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
             DataType::Utf8,
             DataType::LargeUtf8,
@@ -496,6 +500,7 @@ mod roundtrip_tests {
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ],
+                None,
                 UnionMode::Sparse,
             ),
             DataType::Union(
@@ -513,22 +518,25 @@ mod roundtrip_tests {
                         true,
                     ),
                 ],
+                None,
                 UnionMode::Dense,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Utf8),
+                IntegerType::UInt8,
                 Box::new(DataType::Struct(vec![
                     Field::new("nullable", DataType::Boolean, false),
                     Field::new("name", DataType::Utf8, false),
                     Field::new("datatype", DataType::Binary, false),
                 ])),
+                false,
             ),
             DataType::Dictionary(
-                Box::new(DataType::Decimal(10, 50)),
+                IntegerType::UInt64,
                 Box::new(DataType::FixedSizeList(
                     new_box_field("Level1", DataType::Binary, true),
                     4,
                 )),
+                false,
             ),
         ];
 

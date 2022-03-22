@@ -26,6 +26,7 @@ use datafusion::{
     logical_plan::{DFSchema, Expr, SimplifyInfo},
     prelude::*,
 };
+use datafusion_common::field_util::SchemaExt;
 
 /// In order to simplify expressions, DataFusion must have information
 /// about the expressions.

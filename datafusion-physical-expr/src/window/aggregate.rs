@@ -20,9 +20,9 @@
 use crate::window::partition_evaluator::find_ranges_in_range;
 use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
 use crate::{window::WindowExpr, AggregateExpr};
-use arrow::compute::concat;
-use arrow::record_batch::RecordBatch;
+use arrow::compute::concatenate;
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
@@ -95,7 +95,9 @@ impl AggregateWindowExpr {
             .flatten()
             .collect::<Vec<ArrayRef>>();
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concatenate::concatenate(&results)
+            .map(ArrayRef::from)
+            .map_err(DataFusionError::ArrowError)
     }
 
     fn group_based_evaluate(&self, _batch: &RecordBatch) -> Result<ArrayRef> {
@@ -172,7 +174,7 @@ impl AggregateWindowAccumulator {
         let len = value_range.end - value_range.start;
         let values = values
             .iter()
-            .map(|v| v.slice(value_range.start, len))
+            .map(|v| ArrayRef::from(v.slice(value_range.start, len)))
             .collect::<Vec<_>>();
         self.accumulator.update_batch(&values)?;
         let value = self.accumulator.evaluate()?;

@@ -18,11 +18,15 @@
 mod column;
 mod dfschema;
 mod error;
+pub mod field_util;
 #[cfg(feature = "pyarrow")]
 mod pyarrow;
+pub mod record_batch;
 mod scalar;
 
 pub use column::Column;
-pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
+pub use dfschema::{
+    convert_metadata, DFField, DFMetadata, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema,
+};
 pub use error::{DataFusionError, Result};
-pub use scalar::{ScalarType, ScalarValue};
+pub use scalar::{ScalarValue, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};

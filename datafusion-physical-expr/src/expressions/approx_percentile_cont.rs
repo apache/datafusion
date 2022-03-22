@@ -171,7 +171,7 @@ impl AggregateExpr for ApproxPercentileCont {
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {:?} is not implemented",
                     other
                 )))
             }

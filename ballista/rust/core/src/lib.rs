@@ -18,6 +18,9 @@
 #![doc = include_str!("../README.md")]
 pub const BALLISTA_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+#[macro_use]
+extern crate async_trait;
+
 pub fn print_version() {
     println!("Ballista version: {}", BALLISTA_VERSION)
 }

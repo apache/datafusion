@@ -33,14 +33,12 @@ name = "datafusion_common"
 path = "src/lib.rs"
 
 [features]
-avro = ["avro-rs"]
 pyarrow = ["pyo3"]
 jit = ["cranelift-module"]
 
 [dependencies]
-arrow = { version = "10.0", features = ["prettyprint"] }
-parquet = { version = "10.0", features = ["arrow"], optional = true }
-avro-rs = { version = "0.13", features = ["snappy"], optional = true }
+arrow = { package = "arrow2", version = "0.10", default-features = false }
+parquet = { package = "parquet2", version = "0.10", default_features = false, features = ["stream"], optional = true }
 pyo3 = { version = "0.16", optional = true }
 sqlparser = "0.15"
 ordered-float = "2.10"

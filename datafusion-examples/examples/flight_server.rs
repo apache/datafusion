@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::chunk::Chunk;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use arrow_flight::SchemaAsIpc;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use datafusion::datasource::object_store::local::LocalFileSystem;
@@ -28,10 +28,13 @@ use tonic::{Request, Response, Status, Streaming};
 
 use datafusion::prelude::*;
 
-use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
+use arrow::io::ipc::write::WriteOptions;
+use arrow_format::flight::data::{
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
     HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
+};
+use arrow_format::flight::service::flight_service_server::{
+    FlightService, FlightServiceServer,
 };
 
 #[derive(Clone)]
@@ -50,7 +53,7 @@ impl FlightService for FlightServiceImpl {
         Pin<Box<dyn Stream<Item = Result<PutResult, Status>> + Send + Sync + 'static>>;
     type DoActionStream = Pin<
         Box<
-            dyn Stream<Item = Result<arrow_flight::Result, Status>>
+            dyn Stream<Item = Result<arrow_format::flight::data::Result, Status>>
                 + Send
                 + Sync
                 + 'static,
@@ -74,8 +77,8 @@ impl FlightService for FlightServiceImpl {
             .await
             .unwrap();
 
-        let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-        let schema_result = SchemaAsIpc::new(&schema, &options).into();
+        let schema_result =
+            arrow::io::flight::serialize_schema_to_result(schema.as_ref(), None);
 
         Ok(Response::new(schema_result))
     }
@@ -92,7 +95,7 @@ impl FlightService for FlightServiceImpl {
                 // create local execution context
                 let mut ctx = ExecutionContext::new();
 
-                let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+                let testdata = datafusion::test_util::parquet_test_data();
 
                 // register parquet file with the execution context
                 ctx.register_parquet(
@@ -112,20 +115,21 @@ impl FlightService for FlightServiceImpl {
                 }
 
                 // add an initial FlightData message that sends schema
-                let options = datafusion::arrow::ipc::writer::IpcWriteOptions::default();
-                let schema_flight_data =
-                    SchemaAsIpc::new(&df.schema().clone().into(), &options).into();
+                let options = WriteOptions::default();
+                let schema_flight_data = arrow::io::flight::serialize_schema(
+                    &df.schema().clone().into(),
+                    None,
+                );
 
                 let mut flights: Vec<Result<FlightData, Status>> =
                     vec![Ok(schema_flight_data)];
 
                 let mut batches: Vec<Result<FlightData, Status>> = results
-                    .iter()
+                    .into_iter()
                     .flat_map(|batch| {
+                        let chunk = Chunk::new(batch.columns().to_vec());
                         let (flight_dictionaries, flight_batch) =
-                            arrow_flight::utils::flight_data_from_arrow_batch(
-                                batch, &options,
-                            );
+                            arrow::io::flight::serialize_batch(&chunk, &[], &options);
                         flight_dictionaries
                             .into_iter()
                             .chain(std::iter::once(flight_batch))

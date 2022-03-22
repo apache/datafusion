@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration as Core_Duration;
 
 use anyhow::{Context, Result};
-use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_format::flight::service::flight_service_server::FlightServiceServer;
 use ballista_executor::{execution_loop, executor_server};
 use log::{error, info};
 use tempfile::TempDir;

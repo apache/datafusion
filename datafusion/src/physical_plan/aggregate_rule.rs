@@ -25,8 +25,8 @@ pub use datafusion_physical_expr::coercion_rule::aggregate_rule::{
 mod tests {
     use super::*;
     use crate::physical_plan::aggregates;
+    use crate::physical_plan::aggregates::AggregateFunction;
     use arrow::datatypes::DataType;
-    use datafusion_expr::AggregateFunction;
 
     #[test]
     fn test_aggregate_coerce_types() {

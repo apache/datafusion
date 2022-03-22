@@ -17,9 +17,9 @@
 
 //! Coercion rules for matching argument types for binary operators
 
-use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
-use datafusion_common::DataFusionError;
+use arrow::datatypes::DataType;
 use datafusion_common::Result;
+use datafusion_common::{DataFusionError, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use datafusion_expr::Operator;
 
 /// Coercion rules for all binary operators. Returns the output type
@@ -356,13 +356,13 @@ fn dictionary_value_coercion(
 fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
         (
-            DataType::Dictionary(_lhs_index_type, lhs_value_type),
-            DataType::Dictionary(_rhs_index_type, rhs_value_type),
+            DataType::Dictionary(_lhs_index_type, lhs_value_type, _),
+            DataType::Dictionary(_rhs_index_type, rhs_value_type, _),
         ) => dictionary_value_coercion(lhs_value_type, rhs_value_type),
-        (DataType::Dictionary(_index_type, value_type), _) => {
+        (DataType::Dictionary(_index_type, value_type, _), _) => {
             dictionary_value_coercion(value_type, rhs_type)
         }
-        (_, DataType::Dictionary(_index_type, value_type)) => {
+        (_, DataType::Dictionary(_index_type, value_type, _)) => {
             dictionary_value_coercion(lhs_type, value_type)
         }
         _ => None,
@@ -429,7 +429,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
                 (TimeUnit::Nanosecond, TimeUnit::Microsecond) => TimeUnit::Microsecond,
                 (l, r) => {
                     assert_eq!(l, r);
-                    l.clone()
+                    *l
                 }
             };
 
@@ -440,7 +440,7 @@ fn temporal_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataTyp
 }
 
 pub(crate) fn is_dictionary(t: &DataType) -> bool {
-    matches!(t, DataType::Dictionary(_, _))
+    matches!(t, DataType::Dictionary(_, _, _))
 }
 
 /// Coercion rule for numerical types: The type that both lhs and rhs
@@ -494,7 +494,7 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, IntegerType};
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
     use datafusion_expr::Operator;
@@ -628,20 +628,20 @@ mod tests {
         use DataType::*;
 
         // TODO: In the future, this would ideally return Dictionary types and avoid unpacking
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Int32));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
+        let lhs_type = Dictionary(IntegerType::Int8, Box::new(Int32), false);
+        let rhs_type = Dictionary(IntegerType::Int8, Box::new(Int16), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Int32));
 
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Int16));
+        let lhs_type = Dictionary(IntegerType::Int8, Box::new(Utf8), false);
+        let rhs_type = Dictionary(IntegerType::Int8, Box::new(Int16), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), None);
 
-        let lhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
+        let lhs_type = Dictionary(IntegerType::Int8, Box::new(Utf8), false);
         let rhs_type = Utf8;
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
 
         let lhs_type = Utf8;
-        let rhs_type = Dictionary(Box::new(Int8), Box::new(Utf8));
+        let rhs_type = Dictionary(IntegerType::Int8, Box::new(Utf8), false);
         assert_eq!(dictionary_coercion(&lhs_type, &rhs_type), Some(Utf8));
     }
 }

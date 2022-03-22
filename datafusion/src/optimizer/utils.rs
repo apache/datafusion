@@ -29,11 +29,11 @@ use crate::logical_plan::{
     Repartition, Union, Values,
 };
 use crate::prelude::lit;
-use crate::scalar::ScalarValue;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::ExpressionVisitor,
 };
+use datafusion_common::ScalarValue;
 use std::{collections::HashSet, sync::Arc};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";

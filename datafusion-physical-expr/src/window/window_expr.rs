@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::sort_expr::SortColumn;
 use crate::{PhysicalExpr, PhysicalSortExpr};
-use arrow::compute::kernels::partition::lexicographical_partition_ranges;
-use arrow::compute::kernels::sort::{SortColumn, SortOptions};
-use arrow::record_batch::RecordBatch;
+
+use arrow::compute::partition::lexicographical_partition_ranges;
+use arrow::compute::sort::{SortColumn as ArrowSortColumn, SortOptions};
 use arrow::{array::ArrayRef, datatypes::Field};
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::fmt::Debug;
@@ -73,9 +75,18 @@ pub trait WindowExpr: Send + Sync + Debug {
                 end: num_rows,
             }])
         } else {
-            Ok(lexicographical_partition_ranges(partition_columns)
-                .map_err(DataFusionError::ArrowError)?
-                .collect::<Vec<_>>())
+            Ok(lexicographical_partition_ranges(
+                partition_columns
+                    .iter()
+                    .map(|col| ArrowSortColumn {
+                        values: col.values.as_ref(),
+                        options: col.options,
+                    })
+                    .collect::<Vec<ArrowSortColumn>>()
+                    .as_slice(),
+            )
+            .map_err(DataFusionError::ArrowError)?
+            .collect::<Vec<_>>())
         }
     }
 
@@ -95,6 +106,7 @@ pub trait WindowExpr: Send + Sync + Debug {
                     options: SortOptions::default(),
                 }
                 .evaluate_to_sort_column(batch)
+                .map(Into::into)
             })
             .collect()
     }

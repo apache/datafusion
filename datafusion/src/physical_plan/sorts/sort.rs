@@ -36,14 +36,17 @@ use crate::physical_plan::{
     common, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
     Partitioning, SendableRecordBatchStream, Statistics,
 };
+use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
-pub use arrow::compute::SortOptions;
-use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
+pub use arrow::compute::sort::{
+    lexsort_to_indices, SortColumn as ArrowSortColumn, SortOptions,
+};
+use arrow::compute::take;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::ipc::reader::FileReader;
-use arrow::record_batch::RecordBatch;
+use arrow::io::ipc::read::{read_file_metadata, FileReader};
 use async_trait::async_trait;
+use datafusion_physical_expr::SortColumn;
 use futures::lock::Mutex;
 use futures::StreamExt;
 use log::{debug, error};
@@ -356,11 +359,14 @@ fn write_sorted(
 }
 
 fn read_spill(sender: Sender<ArrowResult<RecordBatch>>, path: &Path) -> Result<()> {
-    let file = BufReader::new(File::open(&path)?);
-    let reader = FileReader::try_new(file)?;
-    for batch in reader {
+    let mut file = BufReader::new(File::open(&path)?);
+    let metadata = read_file_metadata(&mut file)?;
+    let reader = FileReader::new(file, metadata, None);
+    let reader_schema = Arc::new(reader.schema().clone());
+    for chunk in reader {
+        let rb = RecordBatch::try_new(reader_schema.clone(), chunk?.into_arrays());
         sender
-            .blocking_send(batch)
+            .blocking_send(rb)
             .map_err(|e| DataFusionError::Execution(format!("{}", e)))?;
     }
     Ok(())
@@ -534,11 +540,15 @@ fn sort_batch(
     expr: &[PhysicalSortExpr],
 ) -> ArrowResult<RecordBatch> {
     // TODO: pushup the limit expression to sort
-    let indices = lexsort_to_indices(
-        &expr
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(&batch))
-            .collect::<Result<Vec<SortColumn>>>()?,
+    let vec = expr
+        .iter()
+        .map(|e| e.evaluate_to_sort_column(&batch))
+        .collect::<Result<Vec<SortColumn>>>()?;
+    let indices = lexsort_to_indices::<i32>(
+        vec.iter()
+            .map(|sc| sc.into())
+            .collect::<Vec<ArrowSortColumn>>()
+            .as_slice(),
         None,
     )?;
 
@@ -548,17 +558,7 @@ fn sort_batch(
         batch
             .columns()
             .iter()
-            .map(|column| {
-                take(
-                    column.as_ref(),
-                    &indices,
-                    // disable bound check overhead since indices are already generated from
-                    // the same record batch
-                    Some(TakeOptions {
-                        check_bounds: false,
-                    }),
-                )
-            })
+            .map(|column| take::take(column.as_ref(), &indices).map(Arc::from))
             .collect::<ArrowResult<Vec<ArrayRef>>>()?,
     )
 }
@@ -589,6 +589,7 @@ async fn do_sort(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cast::{as_primitive_array, as_string_array};
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::ExecutionConfig;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -603,10 +604,11 @@ mod tests {
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};
     use crate::test_util;
     use arrow::array::*;
-    use arrow::compute::SortOptions;
+    use arrow::compute::sort::SortOptions;
     use arrow::datatypes::*;
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::FutureExt;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_in_mem_sort() -> Result<()> {
@@ -657,15 +659,15 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = as_string_array(columns[0].as_ref());
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        let c2 = as_primitive_array::<u32>(columns[1].as_ref());
         assert_eq!(c2.value(0), 1);
         assert_eq!(c2.value(c2.len() - 1), 5,);
 
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        let c7 = as_primitive_array::<u8>(columns[6].as_ref());
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
@@ -732,15 +734,15 @@ mod tests {
 
         let columns = result[0].columns();
 
-        let c1 = as_string_array(&columns[0]);
+        let c1 = as_string_array(columns[0].as_ref());
         assert_eq!(c1.value(0), "a");
         assert_eq!(c1.value(c1.len() - 1), "e");
 
-        let c2 = as_primitive_array::<UInt32Type>(&columns[1]);
+        let c2 = as_primitive_array::<u32>(columns[1].as_ref());
         assert_eq!(c2.value(0), 1);
         assert_eq!(c2.value(c2.len() - 1), 5,);
 
-        let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
+        let c7 = as_primitive_array::<u8>(columns[6].as_ref());
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
@@ -754,7 +756,7 @@ mod tests {
             vec![("foo".to_string(), "bar".to_string())]
                 .into_iter()
                 .collect();
-        let schema_metadata: HashMap<String, String> =
+        let schema_metadata: BTreeMap<String, String> =
             vec![("baz".to_string(), "barf".to_string())]
                 .into_iter()
                 .collect();
@@ -790,10 +792,7 @@ mod tests {
         assert_eq!(&vec![expected_batch], &result);
 
         // explicitlty ensure the metadata is present
-        assert_eq!(
-            result[0].schema().fields()[0].metadata(),
-            &Some(field_metadata)
-        );
+        assert_eq!(result[0].schema().fields()[0].metadata(), &field_metadata);
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
         Ok(())
@@ -811,7 +810,7 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(Float32Array::from(vec![
+                Arc::new(Float32Array::from_iter(vec![
                     Some(f32::NAN),
                     None,
                     None,
@@ -821,7 +820,7 @@ mod tests {
                     Some(2.0_f32),
                     Some(3.0_f32),
                 ])),
-                Arc::new(Float64Array::from(vec![
+                Arc::new(Float64Array::from_iter(vec![
                     Some(200.0_f64),
                     Some(20.0_f64),
                     Some(10.0_f64),
@@ -868,8 +867,8 @@ mod tests {
         assert_eq!(DataType::Float32, *columns[0].data_type());
         assert_eq!(DataType::Float64, *columns[1].data_type());
 
-        let a = as_primitive_array::<Float32Type>(&columns[0]);
-        let b = as_primitive_array::<Float64Type>(&columns[1]);
+        let a = as_primitive_array::<f32>(columns[0].as_ref());
+        let b = as_primitive_array::<f64>(columns[1].as_ref());
 
         // convert result to strings to allow comparing to expected result containing NaN
         let result: Vec<(Option<String>, Option<String>)> = (0..result[0].num_rows())

@@ -383,8 +383,7 @@ jobs:
         run: |
           cargo miri setup
           cargo clean
-          # Ignore MIRI errors until we can get a clean run
-          cargo miri test || true
+          cargo miri test
 
   # Check answers are correct when hash values collide
   hash-collisions:

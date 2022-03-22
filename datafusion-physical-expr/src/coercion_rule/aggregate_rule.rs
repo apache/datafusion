@@ -223,7 +223,7 @@ fn get_min_max_result_type(input_types: &[DataType]) -> Result<Vec<DataType>> {
     // min and max support the dictionary data type
     // unpack the dictionary to get the value
     match &input_types[0] {
-        DataType::Dictionary(_, dict_value_type) => {
+        DataType::Dictionary(_, dict_value_type, _) => {
             // TODO add checker, if the value type is complex data type
             Ok(vec![dict_value_type.deref().clone()])
         }

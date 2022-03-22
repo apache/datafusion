@@ -20,10 +20,10 @@
 use crate::error;
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
-use arrow::array::{ArrayRef, DynComparator};
-use arrow::compute::SortOptions;
+use crate::record_batch::RecordBatch;
+use arrow::array::{ord::DynComparator, ArrayRef};
+use arrow::compute::sort::SortOptions;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
 use futures::stream::FusedStream;
 use futures::Stream;
@@ -185,7 +185,7 @@ impl SortKeyCursor {
             for (i, ((l, r), _)) in zipped.iter().enumerate() {
                 if i >= cmp.len() {
                     // initialise comparators
-                    cmp.push(arrow::array::build_compare(l.as_ref(), r.as_ref())?);
+                    cmp.push(arrow::array::ord::build_compare(l.as_ref(), r.as_ref())?);
                 }
             }
         }

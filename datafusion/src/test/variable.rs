@@ -18,9 +18,9 @@
 //! System variable provider
 
 use crate::error::Result;
-use crate::scalar::ScalarValue;
 use crate::variable::VarProvider;
 use arrow::datatypes::DataType;
+use datafusion_common::ScalarValue;
 
 /// System variable
 #[derive(Default)]

@@ -22,11 +22,28 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
 use crate::Column;
+use crate::{DataFusionError, Result};
 
+use crate::field_util::{FieldExt, SchemaExt};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
+
+pub type DFMetadata = HashMap<String, String>;
+
+pub fn convert_metadata<
+    'a,
+    M1: Clone + IntoIterator<Item = (String, String)>,
+    M2: FromIterator<(String, String)>,
+>(
+    metadata: &M1,
+) -> M2 {
+    metadata
+        .clone()
+        .into_iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
 
 /// A reference-counted reference to a `DFSchema`.
 pub type DFSchemaRef = Arc<DFSchema>;
@@ -37,7 +54,7 @@ pub struct DFSchema {
     /// Fields
     fields: Vec<DFField>,
     /// Additional metadata in form of key value pairs
-    metadata: HashMap<String, String>,
+    metadata: DFMetadata,
 }
 
 impl DFSchema {
@@ -45,14 +62,14 @@ impl DFSchema {
     pub fn empty() -> Self {
         Self {
             fields: vec![],
-            metadata: HashMap::new(),
+            metadata: DFMetadata::new(),
         }
     }
 
     #[deprecated(since = "7.0.0", note = "please use `new_with_metadata` instead")]
     /// Create a new `DFSchema`
     pub fn new(fields: Vec<DFField>) -> Result<Self> {
-        Self::new_with_metadata(fields, HashMap::new())
+        Self::new_with_metadata(fields, DFMetadata::new())
     }
 
     /// Create a new `DFSchema`
@@ -84,8 +101,8 @@ impl DFSchema {
         // deterministic
         let mut qualified_names = qualified_names
             .iter()
-            .map(|(l, r)| (l.to_owned(), r.to_owned()))
-            .collect::<Vec<(&String, &String)>>();
+            .map(|(l, r)| (l.as_str(), r.to_owned()))
+            .collect::<Vec<(&str, &str)>>();
         qualified_names.sort_by(|a, b| {
             let a = format!("{}.{}", a.0, a.1);
             let b = format!("{}.{}", b.0, b.1);
@@ -111,7 +128,7 @@ impl DFSchema {
                 .iter()
                 .map(|f| DFField::from_qualified(qualifier, f.clone()))
                 .collect(),
-            schema.metadata().clone(),
+            convert_metadata(schema.metadata()),
         )
     }
 
@@ -331,17 +348,13 @@ impl From<DFSchema> for Schema {
                 .into_iter()
                 .map(|f| {
                     if f.qualifier().is_some() {
-                        Field::new(
-                            f.name().as_str(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
+                        Field::new(f.name(), f.data_type().to_owned(), f.is_nullable())
                     } else {
                         f.field
                     }
                 })
                 .collect(),
-            df_schema.metadata,
+            convert_metadata(&df_schema.metadata),
         )
     }
 }
@@ -351,7 +364,7 @@ impl From<&DFSchema> for Schema {
     fn from(df_schema: &DFSchema) -> Self {
         Schema::new_with_metadata(
             df_schema.fields.iter().map(|f| f.field.clone()).collect(),
-            df_schema.metadata.clone(),
+            convert_metadata(&df_schema.metadata),
         )
     }
 }
@@ -366,7 +379,7 @@ impl TryFrom<Schema> for DFSchema {
                 .iter()
                 .map(|f| DFField::from(f.clone()))
                 .collect(),
-            schema.metadata().clone(),
+            convert_metadata(schema.metadata()),
         )
     }
 }
@@ -414,7 +427,7 @@ impl ToDFSchema for SchemaRef {
 
 impl ToDFSchema for Vec<DFField> {
     fn to_dfschema(self) -> Result<DFSchema> {
-        DFSchema::new_with_metadata(self, HashMap::new())
+        DFSchema::new_with_metadata(self, DFMetadata::new())
     }
 }
 
@@ -507,7 +520,7 @@ impl DFField {
     }
 
     /// Returns an immutable reference to the `DFField`'s unqualified name
-    pub fn name(&self) -> &String {
+    pub fn name(&self) -> &str {
         self.field.name()
     }
 
@@ -602,9 +615,10 @@ mod tests {
     fn from_qualified_schema_into_arrow_schema() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let arrow_schema: Schema = schema.into();
-        let expected = "Field { name: \"c0\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }, \
-        Field { name: \"c1\", data_type: Boolean, nullable: true, dict_id: 0, dict_is_ordered: false, metadata: None }";
-        assert_eq!(expected, arrow_schema.to_string());
+        let expected =
+            "[Field { name: \"c0\", data_type: Boolean, is_nullable: true, metadata: {} }, \
+        Field { name: \"c1\", data_type: Boolean, is_nullable: true, metadata: {} }]";
+        assert_eq!(expected, format!("{:?}", arrow_schema.fields));
         Ok(())
     }
 
@@ -718,7 +732,7 @@ mod tests {
         let metadata = test_metadata();
         let arrow_schema = Schema::new_with_metadata(
             vec![Field::new("c0", DataType::Int64, true)],
-            metadata.clone(),
+            convert_metadata(&metadata),
         );
         let arrow_schema_ref = Arc::new(arrow_schema.clone());
 

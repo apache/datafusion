@@ -17,12 +17,12 @@
 
 //! Optimizer rule to replace `LIMIT 0` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
-use crate::error::Result;
-use crate::logical_plan::{EmptyRelation, Limit, LogicalPlan};
-use crate::optimizer::optimizer::OptimizerRule;
 
 use super::utils;
+use crate::error::Result;
 use crate::execution::context::ExecutionProps;
+use crate::logical_plan::{EmptyRelation, Limit, LogicalPlan};
+use crate::optimizer::optimizer::OptimizerRule;
 
 /// Optimization rule that replaces LIMIT 0 with an [LogicalPlan::EmptyRelation]
 #[derive(Default)]

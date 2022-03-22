@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::print_format::PrintFormat;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
+use datafusion::record_batch::RecordBatch;
 use std::time::Instant;
 
 #[derive(Debug, Clone)]

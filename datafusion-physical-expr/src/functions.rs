@@ -31,7 +31,8 @@
 
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::BuiltinScalarFunction;
 use datafusion_expr::ColumnarValue;

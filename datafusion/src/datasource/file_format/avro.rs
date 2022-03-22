@@ -20,7 +20,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::{self, datatypes::SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -31,8 +30,7 @@ use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
-use crate::physical_plan::ExecutionPlan;
-use crate::physical_plan::Statistics;
+use crate::physical_plan::{ExecutionPlan, Statistics};
 
 /// The default file extension of avro files
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
@@ -48,13 +46,12 @@ impl FileFormat for AvroFormat {
 
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        while let Some(obj_reader) = readers.next().await {
+        if let Some(obj_reader) = readers.next().await {
             let mut reader = obj_reader?.sync_reader()?;
             let schema = read_avro_schema_from_reader(&mut reader)?;
             schemas.push(schema);
         }
-        let merged_schema = Schema::try_merge(schemas)?;
-        Ok(Arc::new(merged_schema))
+        Ok(Arc::new(schemas.first().unwrap().clone()))
     }
 
     async fn infer_stats(&self, _reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
@@ -85,9 +82,9 @@ mod tests {
     use super::*;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use arrow::array::{
-        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
-        TimestampMicrosecondArray,
+        BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array, UInt64Array,
     };
+    use datafusion_common::field_util::{FieldExt, SchemaExt};
     use futures::StreamExt;
 
     #[tokio::test]
@@ -148,7 +145,7 @@ mod tests {
                 "double_col: Float64",
                 "date_string_col: Binary",
                 "string_col: Binary",
-                "timestamp_col: Timestamp(Microsecond, None)",
+                "timestamp_col: Timestamp(Microsecond, Some(\"00:00\"))",
             ],
             x
         );
@@ -244,9 +241,9 @@ mod tests {
         let array = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
+            .downcast_ref::<UInt64Array>()
             .unwrap();
-        let mut values: Vec<i64> = vec![];
+        let mut values: Vec<u64> = vec![];
         for i in 0..batches[0].num_rows() {
             values.push(array.value(i));
         }
@@ -328,7 +325,7 @@ mod tests {
         let array = batches[0]
             .column(0)
             .as_any()
-            .downcast_ref::<BinaryArray>()
+            .downcast_ref::<BinaryArray<i32>>()
             .unwrap();
         let mut values: Vec<&str> = vec![];
         for i in 0..batches[0].num_rows() {

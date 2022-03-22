@@ -18,6 +18,7 @@
 
 use super::{LogicalPlan, PlanVisitor};
 use arrow::datatypes::Schema;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use std::fmt;
 
 /// Formats plans with a single line per node. For example:

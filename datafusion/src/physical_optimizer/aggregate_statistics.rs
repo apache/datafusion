@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::Schema;
+use datafusion_common::field_util::SchemaExt;
 
 use crate::execution::context::ExecutionConfig;
 use crate::physical_plan::empty::EmptyExec;
@@ -254,9 +255,9 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    use crate::record_batch::RecordBatch;
     use arrow::array::{Int32Array, UInt64Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
 
     use crate::error::Result;
     use crate::execution::runtime_env::RuntimeEnv;
@@ -278,8 +279,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(Int32Array::from(vec![Some(1), Some(2), None])),
-                Arc::new(Int32Array::from(vec![Some(4), None, Some(6)])),
+                Arc::new(Int32Array::from_iter(vec![Some(1), Some(2), None])),
+                Arc::new(Int32Array::from_iter(vec![Some(4), None, Some(6)])),
             ],
         )?;
 
@@ -307,14 +308,15 @@ mod tests {
         // A ProjectionExec is a sign that the count optimization was applied
         assert!(optimized.as_any().is::<ProjectionExec>());
         let result = common::collect(optimized.execute(0, runtime).await?).await?;
-        assert_eq!(result[0].schema(), Arc::new(Schema::new(vec![col])));
+        assert_eq!(result[0].schema().as_ref(), &Schema::new(vec![col]));
         assert_eq!(
             result[0]
                 .column(0)
                 .as_any()
                 .downcast_ref::<UInt64Array>()
                 .unwrap()
-                .values(),
+                .values()
+                .as_slice(),
             &[count]
         );
         Ok(())

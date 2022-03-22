@@ -17,9 +17,14 @@
 
 //! Defines the EXPLAIN operator
 
+use arrow::array::MutableUtf8Array;
 use std::any::Any;
 use std::sync::Arc;
 
+use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
+use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::StringifiedPlan,
@@ -28,11 +33,7 @@ use crate::{
         Statistics,
     },
 };
-use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
-
-use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
-use crate::execution::runtime_env::RuntimeEnv;
-use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
@@ -123,8 +124,10 @@ impl ExecutionPlan for ExplainExec {
             )));
         }
 
-        let mut type_builder = StringBuilder::new(self.stringified_plans.len());
-        let mut plan_builder = StringBuilder::new(self.stringified_plans.len());
+        let mut type_builder =
+            MutableUtf8Array::<i32>::with_capacity(self.stringified_plans.len());
+        let mut plan_builder =
+            MutableUtf8Array::<i32>::with_capacity(self.stringified_plans.len());
 
         let plans_to_print = self
             .stringified_plans
@@ -135,13 +138,13 @@ impl ExecutionPlan for ExplainExec {
         let mut prev: Option<&StringifiedPlan> = None;
 
         for p in plans_to_print {
-            type_builder.append_value(p.plan_type.to_string())?;
+            type_builder.push(Some(p.plan_type.to_string()));
             match prev {
                 Some(prev) if !should_show(prev, p) => {
-                    plan_builder.append_value("SAME TEXT AS ABOVE")?;
+                    plan_builder.push(Some("SAME TEXT AS ABOVE"));
                 }
                 Some(_) | None => {
-                    plan_builder.append_value(&*p.plan)?;
+                    plan_builder.push(Some(p.plan.to_string()));
                 }
             }
             prev = Some(p);
@@ -149,10 +152,7 @@ impl ExecutionPlan for ExplainExec {
 
         let record_batch = RecordBatch::try_new(
             self.schema.clone(),
-            vec![
-                Arc::new(type_builder.finish()),
-                Arc::new(plan_builder.finish()),
-            ],
+            vec![type_builder.into_arc(), plan_builder.into_arc()],
         )?;
 
         let metrics = ExecutionPlanMetricsSet::new();

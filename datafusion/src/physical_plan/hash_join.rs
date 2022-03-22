@@ -20,15 +20,7 @@
 
 use ahash::RandomState;
 
-use arrow::{
-    array::{
-        ArrayData, ArrayRef, BooleanArray, LargeStringArray, PrimitiveArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampSecondArray,
-        UInt32BufferBuilder, UInt32Builder, UInt64BufferBuilder, UInt64Builder,
-    },
-    compute,
-    datatypes::{UInt32Type, UInt64Type},
-};
+use arrow::array::*;
 use smallvec::{smallvec, SmallVec};
 use std::sync::Arc;
 use std::{any::Any, usize};
@@ -38,16 +30,15 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::sync::Mutex;
 
+use crate::record_batch::RecordBatch;
 use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use arrow::array::{
     Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array, UInt8Array, Utf8Array,
 };
 
 use hashbrown::raw::RawTable;
@@ -69,13 +60,18 @@ use super::{
     DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream,
 };
-use crate::arrow::array::BooleanBufferBuilder;
-use crate::arrow::datatypes::TimeUnit;
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::coalesce_batches::concat_batches;
 use crate::physical_plan::PhysicalExpr;
+use arrow::bitmap::MutableBitmap;
+use arrow::buffer::Buffer;
+use arrow::compute::take;
+use datafusion_common::field_util::SchemaExt;
 use log::debug;
 use std::fmt;
+
+type StringArray = Utf8Array<i32>;
+type LargeStringArray = Utf8Array<i64>;
 
 // Maps a `u64` hash value based on the left ["on" values] to a list of indices with this key's value.
 //
@@ -416,13 +412,9 @@ impl ExecutionPlan for HashJoinExec {
         let num_rows = left_data.1.num_rows();
         let visited_left_side = match self.join_type {
             JoinType::Left | JoinType::Full | JoinType::Semi | JoinType::Anti => {
-                let mut buffer = BooleanBufferBuilder::new(num_rows);
-
-                buffer.append_n(num_rows, false);
-
-                buffer
+                MutableBitmap::from_iter((0..num_rows).map(|_| false))
             }
-            JoinType::Inner | JoinType::Right => BooleanBufferBuilder::new(0),
+            JoinType::Inner | JoinType::Right => MutableBitmap::with_capacity(0),
         };
         Ok(Box::pin(HashJoinStream::new(
             self.schema.clone(),
@@ -521,7 +513,7 @@ struct HashJoinStream {
     /// Random state used for hashing initialization
     random_state: RandomState,
     /// Keeps track of the left side rows whether they are visited
-    visited_left_side: BooleanBufferBuilder,
+    visited_left_side: MutableBitmap,
     /// There is nothing to process anymore and left side is processed in case of left join
     is_exhausted: bool,
     /// Metrics
@@ -543,7 +535,7 @@ impl HashJoinStream {
         right: SendableRecordBatchStream,
         column_indices: Vec<ColumnIndex>,
         random_state: RandomState,
-        visited_left_side: BooleanBufferBuilder,
+        visited_left_side: MutableBitmap,
         join_metrics: HashJoinMetrics,
         null_equals_null: bool,
     ) -> Self {
@@ -592,11 +584,11 @@ fn build_batch_from_indices(
         let array = match column_index.side {
             JoinSide::Left => {
                 let array = left.column(column_index.index);
-                compute::take(array.as_ref(), &left_indices, None)?
+                take::take(array.as_ref(), &left_indices)?.into()
             }
             JoinSide::Right => {
                 let array = right.column(column_index.index);
-                compute::take(array.as_ref(), &right_indices, None)?
+                take::take(array.as_ref(), &right_indices)?.into()
             }
         };
         columns.push(array);
@@ -695,8 +687,8 @@ fn build_join_indexes(
     match join_type {
         JoinType::Inner | JoinType::Semi | JoinType::Anti => {
             // Using a buffer builder to avoid slower normal builder
-            let mut left_indices = UInt64BufferBuilder::new(0);
-            let mut right_indices = UInt32BufferBuilder::new(0);
+            let mut left_indices = Vec::<u64>::new();
+            let mut right_indices = Vec::<u32>::new();
 
             // Visit all of the right rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -717,31 +709,29 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append(i);
-                            right_indices.append(row as u32);
+                            left_indices.push(i);
+                            right_indices.push(row as u32);
                         }
                     }
                 }
             }
-            let left = ArrayData::builder(DataType::UInt64)
-                .len(left_indices.len())
-                .add_buffer(left_indices.finish())
-                .build()
-                .unwrap();
-            let right = ArrayData::builder(DataType::UInt32)
-                .len(right_indices.len())
-                .add_buffer(right_indices.finish())
-                .build()
-                .unwrap();
 
             Ok((
-                PrimitiveArray::<UInt64Type>::from(left),
-                PrimitiveArray::<UInt32Type>::from(right),
+                PrimitiveArray::<u64>::from_data(
+                    DataType::UInt64,
+                    left_indices.into(),
+                    None,
+                ),
+                PrimitiveArray::<u32>::from_data(
+                    DataType::UInt32,
+                    right_indices.into(),
+                    None,
+                ),
             ))
         }
         JoinType::Left => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = Vec::<u64>::new();
+            let mut right_indices = Vec::<u32>::new();
 
             // First visit all of the rows
             for (row, hash_value) in hash_values.iter().enumerate() {
@@ -757,17 +747,28 @@ fn build_join_indexes(
                             &keys_values,
                             *null_equals_null,
                         )? {
-                            left_indices.append_value(i)?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.push(i);
+                            right_indices.push(row as u32);
                         }
                     }
                 };
             }
-            Ok((left_indices.finish(), right_indices.finish()))
+            Ok((
+                PrimitiveArray::<u64>::from_data(
+                    DataType::UInt64,
+                    left_indices.into(),
+                    None,
+                ),
+                PrimitiveArray::<u32>::from_data(
+                    DataType::UInt32,
+                    right_indices.into(),
+                    None,
+                ),
+            ))
         }
         JoinType::Right | JoinType::Full => {
-            let mut left_indices = UInt64Builder::new(0);
-            let mut right_indices = UInt32Builder::new(0);
+            let mut left_indices = MutablePrimitiveArray::<u64>::new();
+            let mut right_indices = MutablePrimitiveArray::<u32>::new();
 
             for (row, hash_value) in hash_values.iter().enumerate() {
                 match left.0.get(*hash_value, |(hash, _)| *hash_value == *hash) {
@@ -781,26 +782,26 @@ fn build_join_indexes(
                                 &keys_values,
                                 *null_equals_null,
                             )? {
-                                left_indices.append_value(i)?;
-                                right_indices.append_value(row as u32)?;
+                                left_indices.push(Some(i as u64));
+                                right_indices.push(Some(row as u32));
                                 no_match = false;
                             }
                         }
                         // If no rows matched left, still must keep the right
                         // with all nulls for left
                         if no_match {
-                            left_indices.append_null()?;
-                            right_indices.append_value(row as u32)?;
+                            left_indices.push(None);
+                            right_indices.push(Some(row as u32));
                         }
                     }
                     None => {
                         // when no match, add the row with None for the left side
-                        left_indices.append_null()?;
-                        right_indices.append_value(row as u32)?;
+                        left_indices.push(None);
+                        right_indices.push(Some(row as u32));
                     }
                 }
             }
-            Ok((left_indices.finish(), right_indices.finish()))
+            Ok((left_indices.into(), right_indices.into()))
         }
     }
 }
@@ -865,48 +866,9 @@ fn equal_rows(
             DataType::Float64 => {
                 equal_rows_elem!(Float64Array, l, r, left, right, null_equals_null)
             }
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => {
-                    equal_rows_elem!(
-                        TimestampSecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Millisecond => {
-                    equal_rows_elem!(
-                        TimestampMillisecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Microsecond => {
-                    equal_rows_elem!(
-                        TimestampMicrosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-                TimeUnit::Nanosecond => {
-                    equal_rows_elem!(
-                        TimestampNanosecondArray,
-                        l,
-                        r,
-                        left,
-                        right,
-                        null_equals_null
-                    )
-                }
-            },
+            DataType::Timestamp(_, None) => {
+                equal_rows_elem!(Int64Array, l, r, left, right, null_equals_null)
+            }
             DataType::Utf8 => {
                 equal_rows_elem!(StringArray, l, r, left, right, null_equals_null)
             }
@@ -927,36 +889,38 @@ fn equal_rows(
 
 // Produces a batch for left-side rows that have/have not been matched during the whole join
 fn produce_from_matched(
-    visited_left_side: &BooleanBufferBuilder,
+    visited_left_side: &MutableBitmap,
     schema: &SchemaRef,
     column_indices: &[ColumnIndex],
     left_data: &JoinLeftData,
     unmatched: bool,
 ) -> ArrowResult<RecordBatch> {
     let indices = if unmatched {
-        UInt64Array::from_iter_values(
+        Buffer::from_iter(
             (0..visited_left_side.len())
-                .filter_map(|v| (!visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (!visited_left_side.get(v)).then(|| v as u64)),
         )
     } else {
-        UInt64Array::from_iter_values(
+        Buffer::from_iter(
             (0..visited_left_side.len())
-                .filter_map(|v| (visited_left_side.get_bit(v)).then(|| v as u64)),
+                .filter_map(|v| (visited_left_side.get(v)).then(|| v as u64)),
         )
     };
 
     // generate batches by taking values from the left side and generating columns filled with null on the right side
+    let indices = UInt64Array::from_data(DataType::UInt64, indices, None);
+
     let num_rows = indices.len();
     let mut columns: Vec<Arc<dyn Array>> = Vec::with_capacity(schema.fields().len());
     for (idx, column_index) in column_indices.iter().enumerate() {
         let array = match column_index.side {
             JoinSide::Left => {
                 let array = left_data.1.column(column_index.index);
-                compute::take(array.as_ref(), &indices, None).unwrap()
+                take::take(array.as_ref(), &indices)?.into()
             }
             JoinSide::Right => {
                 let datatype = schema.field(idx).data_type();
-                arrow::array::new_null_array(datatype, num_rows)
+                new_null_array(datatype.clone(), num_rows).into()
             }
         };
 
@@ -1001,7 +965,7 @@ impl Stream for HashJoinStream {
                             | JoinType::Semi
                             | JoinType::Anti => {
                                 left_side.iter().flatten().for_each(|x| {
-                                    self.visited_left_side.set_bit(x as usize, true);
+                                    self.visited_left_side.set(*x as usize, true);
                                 });
                             }
                             JoinType::Inner | JoinType::Right => {}
@@ -1071,7 +1035,7 @@ mod tests {
         c: (&str, &Vec<i32>),
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
     }
 
@@ -1345,7 +1309,7 @@ mod tests {
         );
         let batch2 =
             build_table_i32(("a1", &vec![2]), ("b2", &vec![2]), ("c1", &vec![9]));
-        let schema = batch1.schema();
+        let schema = batch1.schema().clone();
         let left = Arc::new(
             MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
         );
@@ -1405,7 +1369,7 @@ mod tests {
         );
         let batch2 =
             build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
-        let schema = batch1.schema();
+        let schema = batch1.schema().clone();
         let right = Arc::new(
             MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
         );
@@ -1458,7 +1422,7 @@ mod tests {
         c: (&str, &Vec<i32>),
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         Arc::new(
             MemoryExec::try_new(&[vec![batch.clone(), batch]], schema, None).unwrap(),
         )
@@ -1560,9 +1524,9 @@ mod tests {
         let right = build_table_i32(("a2", &vec![]), ("b1", &vec![]), ("c2", &vec![]));
         let on = vec![(
             Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b1", &right.schema()).unwrap(),
+            Column::new_with_schema("b1", right.schema()).unwrap(),
         )];
-        let schema = right.schema();
+        let schema = right.schema().clone();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
         let join = join(left, right, on, &JoinType::Left, false).unwrap();
 
@@ -1596,9 +1560,9 @@ mod tests {
         let right = build_table_i32(("a2", &vec![]), ("b2", &vec![]), ("c2", &vec![]));
         let on = vec![(
             Column::new_with_schema("b1", &left.schema()).unwrap(),
-            Column::new_with_schema("b2", &right.schema()).unwrap(),
+            Column::new_with_schema("b2", right.schema()).unwrap(),
         )];
-        let schema = right.schema();
+        let schema = right.schema().clone();
         let right = Arc::new(MemoryExec::try_new(&[vec![right]], schema, None).unwrap());
         let join = join(left, right, on, &JoinType::Full, false).unwrap();
 
@@ -1938,17 +1902,11 @@ mod tests {
             &false,
         )?;
 
-        let mut left_ids = UInt64Builder::new(0);
-        left_ids.append_value(0)?;
-        left_ids.append_value(1)?;
+        let left_ids = UInt64Array::from_slice(&[0, 1]);
+        let right_ids = UInt32Array::from_slice(&[0, 1]);
 
-        let mut right_ids = UInt32Builder::new(0);
-        right_ids.append_value(0)?;
-        right_ids.append_value(1)?;
-
-        assert_eq!(left_ids.finish(), l);
-
-        assert_eq!(right_ids.finish(), r);
+        assert_eq!(left_ids, l);
+        assert_eq!(right_ids, r);
 
         Ok(())
     }

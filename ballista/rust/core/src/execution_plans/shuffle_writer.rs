@@ -20,8 +20,6 @@
 //! partition is re-partitioned and streamed to disk in Arrow IPC format. Future stages of the query
 //! will use the ShuffleReaderExec to read these results.
 
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
-
 use std::any::Any;
 use std::iter::Iterator;
 use std::path::PathBuf;
@@ -33,16 +31,12 @@ use crate::utils;
 use crate::serde::protobuf::ShuffleWritePartition;
 use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
-use datafusion::arrow::array::{
-    Array, ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder,
-    UInt64Builder,
-};
+use datafusion::arrow::array::*;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::field_util::SchemaExt;
 use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -53,8 +47,10 @@ use datafusion::physical_plan::metrics::{
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion::record_batch::RecordBatch;
 use futures::StreamExt;
 
+use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use log::{debug, info};
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -230,21 +226,24 @@ impl ShuffleWriterExec {
                     for (output_partition, partition_indices) in
                         indices.into_iter().enumerate()
                     {
-                        let indices = partition_indices.into();
-
                         // Produce batches based on indices
                         let columns = input_batch
                             .columns()
                             .iter()
                             .map(|c| {
-                                take(c.as_ref(), &indices, None).map_err(|e| {
-                                    DataFusionError::Execution(e.to_string())
-                                })
+                                take::take(
+                                    c.as_ref(),
+                                    &PrimitiveArray::<u64>::from_slice(
+                                        &partition_indices,
+                                    ),
+                                )
+                                .map_err(|e| DataFusionError::Execution(e.to_string()))
+                                .map(ArrayRef::from)
                             })
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
 
                         let output_batch =
-                            RecordBatch::try_new(input_batch.schema(), columns)?;
+                            RecordBatch::try_new(input_batch.schema().clone(), columns)?;
 
                         // write non-empty batch out
 
@@ -364,36 +363,34 @@ impl ExecutionPlan for ShuffleWriterExec {
 
         // build metadata result batch
         let num_writers = part_loc.len();
-        let mut partition_builder = UInt32Builder::new(num_writers);
-        let mut path_builder = StringBuilder::new(num_writers);
-        let mut num_rows_builder = UInt64Builder::new(num_writers);
-        let mut num_batches_builder = UInt64Builder::new(num_writers);
-        let mut num_bytes_builder = UInt64Builder::new(num_writers);
+        let mut partition_builder = UInt32Vec::with_capacity(num_writers);
+        let mut path_builder = MutableUtf8Array::<i32>::with_capacity(num_writers);
+        let mut num_rows_builder = UInt64Vec::with_capacity(num_writers);
+        let mut num_batches_builder = UInt64Vec::with_capacity(num_writers);
+        let mut num_bytes_builder = UInt64Vec::with_capacity(num_writers);
 
         for loc in &part_loc {
-            path_builder.append_value(loc.path.clone())?;
-            partition_builder.append_value(loc.partition_id as u32)?;
-            num_rows_builder.append_value(loc.num_rows)?;
-            num_batches_builder.append_value(loc.num_batches)?;
-            num_bytes_builder.append_value(loc.num_bytes)?;
+            path_builder.push(Some(loc.path.clone()));
+            partition_builder.push(Some(loc.partition_id as u32));
+            num_rows_builder.push(Some(loc.num_rows));
+            num_batches_builder.push(Some(loc.num_batches));
+            num_bytes_builder.push(Some(loc.num_bytes));
         }
 
         // build arrays
-        let partition_num: ArrayRef = Arc::new(partition_builder.finish());
-        let path: ArrayRef = Arc::new(path_builder.finish());
-        let field_builders: Vec<Box<dyn ArrayBuilder>> = vec![
-            Box::new(num_rows_builder),
-            Box::new(num_batches_builder),
-            Box::new(num_bytes_builder),
+        let partition_num: ArrayRef = partition_builder.into_arc();
+        let path: ArrayRef = path_builder.into_arc();
+        let field_builders: Vec<Arc<dyn Array>> = vec![
+            num_rows_builder.into_arc(),
+            num_batches_builder.into_arc(),
+            num_bytes_builder.into_arc(),
         ];
-        let mut stats_builder = StructBuilder::new(
-            PartitionStats::default().arrow_struct_fields(),
+        let stats_builder = StructArray::from_data(
+            DataType::Struct(PartitionStats::default().arrow_struct_fields()),
             field_builders,
+            None,
         );
-        for _ in 0..num_writers {
-            stats_builder.append(true)?;
-        }
-        let stats = Arc::new(stats_builder.finish());
+        let stats = Arc::new(stats_builder);
 
         // build result batch containing metadata
         let schema = result_schema();
@@ -443,9 +440,11 @@ fn result_schema() -> SchemaRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
+    use datafusion::arrow::array::{StructArray, UInt32Array, UInt64Array, Utf8Array};
+    use datafusion::field_util::StructArrayExt;
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
+    use std::iter::FromIterator;
 
     use datafusion::physical_plan::memory::MemoryExec;
     use tempfile::TempDir;
@@ -473,7 +472,7 @@ mod tests {
         assert_eq!(2, batch.num_rows());
         let path = batch.columns()[1]
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<Utf8Array<i32>>()
             .unwrap();
 
         let file0 = path.value(0);
@@ -551,8 +550,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt32Array::from(vec![Some(1), Some(2)])),
-                Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
+                Arc::new(UInt32Array::from_iter(vec![Some(1), Some(2)])),
+                Arc::new(Utf8Array::<i32>::from(vec![Some("hello"), Some("world")])),
             ],
         )?;
         let partition = vec![batch.clone(), batch];

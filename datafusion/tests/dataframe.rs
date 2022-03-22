@@ -15,19 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::{
-    array::{Int32Array, StringArray},
-    record_batch::RecordBatch,
-};
-use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
+
+use arrow::array::{Int32Array, Utf8Array};
+use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::record_batch::RecordBatch;
 
 use datafusion::assert_batches_eq;
 use datafusion::error::Result;
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::{col, Expr};
 use datafusion::{datasource::MemTable, prelude::JoinType};
+use datafusion_common::field_util::SchemaExt;
 use datafusion_expr::lit;
 
 #[tokio::test]
@@ -45,7 +44,7 @@ async fn join() -> Result<()> {
     let batch1 = RecordBatch::try_new(
         schema1.clone(),
         vec![
-            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a", "b", "c", "d"])),
             Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;
@@ -53,7 +52,7 @@ async fn join() -> Result<()> {
     let batch2 = RecordBatch::try_new(
         schema2.clone(),
         vec![
-            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a", "b", "c", "d"])),
             Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
         ],
     )?;

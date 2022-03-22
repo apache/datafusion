@@ -18,13 +18,11 @@
 //! Line delimited JSON format abstractions
 
 use std::any::Any;
-use std::io::BufReader;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema;
 use arrow::datatypes::SchemaRef;
-use arrow::json::reader::infer_json_schema_from_iterator;
-use arrow::json::reader::ValueIter;
+use arrow::datatypes::{DataType, Schema};
+use arrow::io::ndjson;
 use async_trait::async_trait;
 use futures::StreamExt;
 
@@ -36,6 +34,8 @@ use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+
+use datafusion_common::field_util::SchemaExt;
 
 /// The default file extension of json files
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
@@ -61,23 +61,19 @@ impl FileFormat for JsonFormat {
     }
 
     async fn infer_schema(&self, mut readers: ObjectReaderStream) -> Result<SchemaRef> {
-        let mut schemas = Vec::new();
-        let mut records_to_read = self.schema_infer_max_rec.unwrap_or(usize::MAX);
+        let mut fields = Vec::new();
+        let records_to_read = self.schema_infer_max_rec;
         while let Some(obj_reader) = readers.next().await {
-            let mut reader = BufReader::new(obj_reader?.sync_reader()?);
-            let iter = ValueIter::new(&mut reader, None);
-            let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
-                let should_take = records_to_read > 0;
-                records_to_read -= 1;
-                should_take
-            }))?;
-            if records_to_read == 0 {
-                break;
+            let mut reader = std::io::BufReader::new(obj_reader?.sync_reader()?);
+            // FIXME: return number of records read from infer_json_schema so we can enforce
+            // records_to_read
+            let schema = ndjson::read::infer(&mut reader, records_to_read)?;
+            if let DataType::Struct(read_fields) = schema {
+                fields.extend(read_fields);
             }
-            schemas.push(schema);
         }
 
-        let schema = Schema::try_merge(schemas)?;
+        let schema = Schema::new(fields);
         Ok(Arc::new(schema))
     }
 
@@ -111,6 +107,7 @@ mod tests {
         },
         physical_plan::collect,
     };
+    use datafusion_common::field_util::FieldExt;
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {

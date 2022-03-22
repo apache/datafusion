@@ -25,7 +25,8 @@ use crate::physical_plan::metrics::{
 use std::sync::Arc;
 use std::task::Poll;
 
-use arrow::{error::ArrowError, record_batch::RecordBatch};
+use crate::record_batch::RecordBatch;
+use arrow::error::ArrowError;
 
 /// Simplified version of tracking memory consumer,
 /// see also: [`Tracking`](crate::execution::memory_manager::ConsumerType::Tracking)

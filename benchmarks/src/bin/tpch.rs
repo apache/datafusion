@@ -17,6 +17,8 @@
 
 //! Benchmark derived from TPC-H. This is not an official TPC-H benchmark.
 
+use arrow::array::ArrayRef;
+use arrow::chunk::Chunk;
 use futures::future::join_all;
 use rand::prelude::*;
 use std::ops::Div;
@@ -29,14 +31,15 @@ use std::{
     time::{Instant, SystemTime},
 };
 
-use ballista::context::BallistaContext;
-use ballista::prelude::{BallistaConfig, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS};
+use datafusion::arrow::io::print;
 
+use datafusion::datasource::{
+    listing::{ListingOptions, ListingTable},
+    object_store::local::LocalFileSystem,
+};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::LogicalPlan;
-use datafusion::parquet::basic::Compression;
-use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{collect, displayable};
 use datafusion::prelude::*;
@@ -46,26 +49,25 @@ use datafusion::{
     DATAFUSION_VERSION,
 };
 use datafusion::{
-    arrow::record_batch::RecordBatch, datasource::file_format::parquet::ParquetFormat,
-};
-use datafusion::{
-    arrow::util::pretty,
-    datasource::{
-        listing::{ListingOptions, ListingTable, ListingTableConfig},
-        object_store::local::LocalFileSystem,
-    },
+    datasource::file_format::parquet::ParquetFormat, record_batch::RecordBatch,
 };
 
+use arrow::io::parquet::write::{Compression, Version, WriteOptions};
+use ballista::prelude::{
+    BallistaConfig, BallistaContext, BALLISTA_DEFAULT_SHUFFLE_PARTITIONS,
+};
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;
 use datafusion::datasource::file_format::parquet::DEFAULT_PARQUET_EXTENSION;
+use datafusion::datasource::listing::ListingTableConfig;
+use datafusion::field_util::SchemaExt;
 use serde::Serialize;
 use structopt::StructOpt;
 
-#[cfg(feature = "snmalloc")]
+#[cfg(all(feature = "snmalloc", not(feature = "mimalloc")))]
 #[global_allocator]
 static ALLOC: snmalloc_rs::SnMalloc = snmalloc_rs::SnMalloc;
 
-#[cfg(feature = "mimalloc")]
+#[cfg(all(feature = "mimalloc", not(feature = "snmalloc")))]
 #[global_allocator]
 static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -379,7 +381,7 @@ async fn benchmark_ballista(opt: BallistaBenchmarkOpt) -> Result<()> {
         );
         benchmark_run.add_result(elapsed, row_count);
         if opt.debug {
-            pretty::print_batches(&batches)?;
+            println!("{}", datafusion::arrow_print::write(&batches));
         }
     }
 
@@ -493,7 +495,7 @@ async fn loadtest_ballista(opt: BallistaLoadtestOpt) -> Result<()> {
                     &client_id, &i, query_id, elapsed
                 );
                 if opt.debug {
-                    pretty::print_batches(&batches).unwrap();
+                    println!("{}", datafusion::arrow_print::write(&batches));
                 }
             }
         });
@@ -615,7 +617,12 @@ async fn execute_query(
             "=== Physical plan with metrics ===\n{}\n",
             DisplayableExecutionPlan::with_metrics(physical_plan.as_ref()).indent()
         );
-        pretty::print_batches(&result)?;
+        let fields = result
+            .first()
+            .map(|b| b.schema().field_names())
+            .unwrap_or(vec![]);
+        let chunks: Vec<Chunk<ArrayRef>> = result.iter().map(|rb| rb.into()).collect();
+        println!("{}", print::write(&chunks, &fields));
     }
     Ok(result)
 }
@@ -659,13 +666,13 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
             "csv" => ctx.write_csv(csv, output_path).await?,
             "parquet" => {
                 let compression = match opt.compression.as_str() {
-                    "none" => Compression::UNCOMPRESSED,
-                    "snappy" => Compression::SNAPPY,
-                    "brotli" => Compression::BROTLI,
-                    "gzip" => Compression::GZIP,
-                    "lz4" => Compression::LZ4,
-                    "lz0" => Compression::LZO,
-                    "zstd" => Compression::ZSTD,
+                    "none" => Compression::Uncompressed,
+                    "snappy" => Compression::Snappy,
+                    "brotli" => Compression::Brotli,
+                    "gzip" => Compression::Gzip,
+                    "lz4" => Compression::Lz4,
+                    "lz0" => Compression::Lzo,
+                    "zstd" => Compression::Zstd,
                     other => {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Invalid compression format: {}",
@@ -673,10 +680,13 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
                         )))
                     }
                 };
-                let props = WriterProperties::builder()
-                    .set_compression(compression)
-                    .build();
-                ctx.write_parquet(csv, output_path, Some(props)).await?
+
+                let options = WriteOptions {
+                    compression,
+                    write_statistics: false,
+                    version: Version::V1,
+                };
+                ctx.write_parquet(csv, output_path, options).await?
             }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
@@ -893,8 +903,9 @@ mod tests {
     use std::env;
     use std::sync::Arc;
 
+    use arrow::array::get_display;
     use datafusion::arrow::array::*;
-    use datafusion::arrow::util::display::array_value_to_string;
+    use datafusion::field_util::FieldExt;
     use datafusion::logical_plan::Expr;
     use datafusion::logical_plan::Expr::Cast;
 
@@ -1069,7 +1080,7 @@ mod tests {
     }
 
     /// Specialised String representation
-    fn col_str(column: &ArrayRef, row_index: usize) -> String {
+    fn col_str(column: &dyn Array, row_index: usize) -> String {
         if column.is_null(row_index) {
             return "NULL".to_string();
         }
@@ -1084,12 +1095,13 @@ mod tests {
 
             let mut r = Vec::with_capacity(*n as usize);
             for i in 0..*n {
-                r.push(col_str(&array, i as usize));
+                r.push(col_str(array.as_ref(), i as usize));
             }
             return format!("[{}]", r.join(","));
         }
-
-        array_value_to_string(column, row_index).unwrap()
+        let mut string = String::new();
+        get_display(column, "null")(&mut string, row_index).unwrap();
+        string
     }
 
     /// Converts the results into a 2d array of strings, `result[row][column]`
@@ -1101,7 +1113,7 @@ mod tests {
                 let row_vec = batch
                     .columns()
                     .iter()
-                    .map(|column| col_str(column, row_index))
+                    .map(|column| col_str(column.as_ref(), row_index))
                     .collect();
                 result.push(row_vec);
             }
@@ -1263,7 +1275,7 @@ mod tests {
 
     // convert the schema to the same but with all columns set to nullable=true.
     // this allows direct schema comparison ignoring nullable.
-    fn nullable_schema(schema: Arc<Schema>) -> Schema {
+    fn nullable_schema(schema: &Schema) -> Schema {
         Schema::new(
             schema
                 .fields()

@@ -31,10 +31,11 @@ use crate::serde::{
     PhysicalExtensionCodec,
 };
 use crate::{convert_box_required, convert_required, into_physical_plan, into_required};
-use datafusion::arrow::compute::SortOptions;
+use datafusion::arrow::compute::sort::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::PartitionedFile;
+use datafusion::field_util::FieldExt;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::physical_plan::aggregates::create_aggregate_expr;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -640,7 +641,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 .aggr_expr()
                 .iter()
                 .map(|expr| match expr.field() {
-                    Ok(field) => Ok(field.name().clone()),
+                    Ok(field) => Ok(field.name().to_string()),
                     Err(e) => Err(BallistaError::DataFusionError(e)),
                 })
                 .collect::<Result<_, BallistaError>>()?;
@@ -939,11 +940,12 @@ mod roundtrip_tests {
     use crate::serde::{AsExecutionPlan, BallistaCodec};
     use datafusion::datasource::object_store::local::LocalFileSystem;
     use datafusion::datasource::PartitionedFile;
+    use datafusion::field_util::SchemaExt;
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::prelude::ExecutionContext;
     use datafusion::{
         arrow::{
-            compute::kernels::sort::SortOptions,
+            compute::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
         logical_plan::{JoinType, Operator},

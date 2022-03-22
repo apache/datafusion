@@ -29,11 +29,11 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
+use crate::record_batch::RecordBatch;
 use arrow::array::ArrayRef;
 use arrow::compute::limit;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use super::expressions::PhysicalSortExpr;
 use super::{
@@ -340,10 +340,10 @@ impl ExecutionPlan for LocalLimitExec {
 /// Truncate a RecordBatch to maximum of n rows
 pub fn truncate_batch(batch: &RecordBatch, n: usize) -> RecordBatch {
     let limited_columns: Vec<ArrayRef> = (0..batch.num_columns())
-        .map(|i| limit(batch.column(i), n))
+        .map(|i| limit::limit(batch.column(i).as_ref(), n).into())
         .collect();
 
-    RecordBatch::try_new(batch.schema(), limited_columns).unwrap()
+    RecordBatch::try_new(batch.schema().clone(), limited_columns).unwrap()
 }
 
 /// A Limit stream limits the stream to up to `limit` rows.

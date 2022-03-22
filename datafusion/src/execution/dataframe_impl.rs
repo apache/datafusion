@@ -17,37 +17,36 @@
 
 //! Implementation of DataFrame API.
 
+use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use parking_lot::Mutex;
+use parquet::write::WriteOptions;
 use std::any::Any;
 use std::sync::Arc;
 
 use crate::arrow::datatypes::Schema;
 use crate::arrow::datatypes::SchemaRef;
-use crate::arrow::record_batch::RecordBatch;
+use crate::datasource::TableProvider;
+use crate::datasource::TableType;
 use crate::error::Result;
 use crate::execution::context::{ExecutionContext, ExecutionContextState};
 use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
     Partitioning,
 };
-use crate::scalar::ScalarValue;
-use crate::{
-    dataframe::*,
-    physical_plan::{collect, collect_partitioned},
-};
-use parquet::file::properties::WriterProperties;
-
-use crate::arrow::util::pretty;
-use crate::datasource::TableProvider;
-use crate::datasource::TableType;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
 use crate::physical_plan::{
     execute_stream, execute_stream_partitioned, ExecutionPlan, SendableRecordBatchStream,
 };
+use crate::record_batch::RecordBatch;
+use crate::scalar::ScalarValue;
 use crate::sql::utils::find_window_exprs;
-use async_trait::async_trait;
+use crate::{
+    dataframe::*,
+    physical_plan::{collect, collect_partitioned},
+};
 
-/// Implementation of DataFrame API
+/// The main implementation of `DataFrame`
 pub struct DataFrameImpl {
     ctx_state: Arc<Mutex<ExecutionContextState>>,
     plan: LogicalPlan,
@@ -102,7 +101,7 @@ impl TableProvider for DataFrameImpl {
                     let names = schema
                         .fields()
                         .iter()
-                        .map(|field| field.name().as_str())
+                        .map(|field| field.name())
                         .collect::<Vec<_>>();
                     self.select_columns(names.as_slice())
                 },
@@ -231,13 +230,15 @@ impl DataFrame for DataFrameImpl {
     /// Print results.
     async fn show(&self) -> Result<()> {
         let results = self.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        print!("{}", crate::arrow_print::write(&results));
+        Ok(())
     }
 
     /// Print results and limit rows.
     async fn show_limit(&self, num: usize) -> Result<()> {
         let results = self.limit(num)?.collect().await?;
-        Ok(pretty::print_batches(&results)?)
+        print!("{}", crate::arrow_print::write(&results));
+        Ok(())
     }
 
     /// Convert the logical plan represented by this DataFrame into a physical plan and
@@ -326,7 +327,7 @@ impl DataFrame for DataFrameImpl {
     async fn write_parquet(
         &self,
         path: &str,
-        writer_properties: Option<WriterProperties>,
+        writer_properties: Option<WriteOptions>,
     ) -> Result<()> {
         let plan = self.create_physical_plan().await?;
         let state = self.ctx_state.lock().clone();
@@ -428,9 +429,9 @@ mod tests {
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
                 "| a  | 0.02182578039211991         | 0.9800193410444061          | 0.48754517466109415         | 10.238448667882977          | 21                            | 21                                     |",
                 "| b  | 0.04893135681998029         | 0.9185813970744787          | 0.41040709263815384         | 7.797734760124923           | 19                            | 19                                     |",
-                "| c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439784          | 13.860958726523545          | 21                            | 21                                     |",
+                "| c  | 0.0494924465469434          | 0.991517828651004           | 0.6600456536439785          | 13.860958726523547          | 21                            | 21                                     |",
                 "| d  | 0.061029375346466685        | 0.9748360509016578          | 0.48855379387549824         | 8.793968289758968           | 18                            | 18                                     |",
-                "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341534         | 10.206140546981722          | 21                            | 21                                     |",
+                "| e  | 0.01479305307777301         | 0.9965400387585364          | 0.48600669271341557         | 10.206140546981727          | 21                            | 21                                     |",
                 "+----+-----------------------------+-----------------------------+-----------------------------+-----------------------------+-------------------------------+----------------------------------------+",
             ],
             &df

@@ -19,6 +19,7 @@ use ballista_core::error::Result;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::execution::context::{ExecutionConfig, ExecutionContext};
+use datafusion::field_util::SchemaExt;
 use datafusion::prelude::CsvReadOptions;
 
 pub const TPCH_TABLES: &[&str] = &[

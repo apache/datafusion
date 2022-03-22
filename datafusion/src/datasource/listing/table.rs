@@ -41,10 +41,11 @@ use crate::datasource::{
     datasource::TableProviderFilterPushDown, file_format::FileFormat,
     get_statistics_with_limit, object_store::ObjectStore, PartitionedFile, TableProvider,
 };
+use datafusion_common::field_util::SchemaExt;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
-/// Configuration for creating a 'ListingTable'  
+/// Configuration for creating a 'ListingTable'
 pub struct ListingTableConfig {
     /// `ObjectStore` that contains the files for the `ListingTable`.
     pub object_store: Arc<dyn ObjectStore>,
@@ -252,7 +253,7 @@ impl ListingTable {
         })?;
 
         // Add the partition columns to the file schema
-        let mut table_fields = file_schema.fields().clone();
+        let mut table_fields = file_schema.fields().to_vec();
         for part in &options.table_partition_cols {
             table_fields.push(Field::new(
                 part,
@@ -265,7 +266,7 @@ impl ListingTable {
             object_store: config.object_store.clone(),
             table_path: config.table_path.clone(),
             file_schema,
-            table_schema: Arc::new(Schema::new(table_fields)),
+            table_schema: Arc::new(Schema::new(table_fields.to_vec())),
             options,
         };
 
@@ -393,6 +394,8 @@ impl ListingTable {
 
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::DataType;
+
     use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
     use crate::{
         datasource::{
@@ -402,7 +405,6 @@ mod tests {
         logical_plan::{col, lit},
         test::{columns, object_store::TestObjectStore},
     };
-    use arrow::datatypes::DataType;
 
     use super::*;
 

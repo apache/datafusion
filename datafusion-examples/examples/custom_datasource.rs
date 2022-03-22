@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::array::{MutableArray, UInt64Vec, UInt8Vec};
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::dataframe_impl::DataFrameImpl;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::{Expr, LogicalPlanBuilder};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -30,6 +30,7 @@ use datafusion::physical_plan::{
     project_schema, ExecutionPlan, SendableRecordBatchStream, Statistics,
 };
 use datafusion::prelude::*;
+use datafusion::record_batch::RecordBatch;
 use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Debug, Formatter};
@@ -242,21 +243,18 @@ impl ExecutionPlan for CustomExec {
             db.data.values().cloned().collect()
         };
 
-        let mut id_array = UInt8Builder::new(users.len());
-        let mut account_array = UInt64Builder::new(users.len());
+        let mut id_array = UInt8Vec::with_capacity(users.len());
+        let mut account_array = UInt64Vec::with_capacity(users.len());
 
         for user in users {
-            id_array.append_value(user.id)?;
-            account_array.append_value(user.bank_account)?;
+            id_array.push(Some(user.id));
+            account_array.push(Some(user.bank_account));
         }
 
         return Ok(Box::pin(MemoryStream::try_new(
             vec![RecordBatch::try_new(
                 self.projected_schema.clone(),
-                vec![
-                    Arc::new(id_array.finish()),
-                    Arc::new(account_array.finish()),
-                ],
+                vec![id_array.as_arc(), account_array.as_arc()],
             )?],
             self.schema(),
             None,

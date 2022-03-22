@@ -24,7 +24,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::Float64Array;
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::Result;
 use std::any::Any;
 use std::iter;
@@ -89,18 +89,18 @@ impl PartitionEvaluator for CumeDistEvaluator {
         ranks_in_partition: &[Range<usize>],
     ) -> Result<ArrayRef> {
         let scaler = (partition.end - partition.start) as f64;
-        let result = Float64Array::from_iter_values(
-            ranks_in_partition
-                .iter()
-                .scan(0_u64, |acc, range| {
-                    let len = range.end - range.start;
-                    *acc += len as u64;
-                    let value: f64 = (*acc as f64) / scaler;
-                    let result = iter::repeat(value).take(len);
-                    Some(result)
-                })
-                .flatten(),
-        );
+        let result = ranks_in_partition
+            .iter()
+            .scan(0_u64, |acc, range| {
+                let len = range.end - range.start;
+                *acc += len as u64;
+                let value: f64 = (*acc as f64) / scaler;
+                let result = iter::repeat(value).take(len);
+                Some(result)
+            })
+            .flatten()
+            .collect::<Vec<_>>();
+        let result = Float64Array::from_values(result);
         Ok(Arc::new(result))
     }
 }
@@ -109,6 +109,7 @@ impl PartitionEvaluator for CumeDistEvaluator {
 mod tests {
     use super::*;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
 
     fn test_i32_result(
         expr: &CumeDist,
@@ -117,7 +118,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
+        let arr: ArrayRef = Arc::new(Int32Array::from_slice(data));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
@@ -127,7 +128,7 @@ mod tests {
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<Float64Array>().unwrap();
         let result = result.values();
-        assert_eq!(expected, result);
+        assert_eq!(expected, result.as_slice());
         Ok(())
     }
 

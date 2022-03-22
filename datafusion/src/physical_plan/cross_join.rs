@@ -23,7 +23,6 @@ use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use futures::{Stream, TryStreamExt};
 
@@ -32,6 +31,7 @@ use super::{
     coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
 };
+use crate::record_batch::RecordBatch;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
@@ -44,6 +44,7 @@ use super::{
     ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::execution::runtime_env::RuntimeEnv;
+use datafusion_common::field_util::SchemaExt;
 use log::debug;
 
 /// Data of the left side

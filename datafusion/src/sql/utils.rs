@@ -17,7 +17,7 @@
 
 //! SQL Utility Functions
 
-use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
+use arrow::datatypes::DataType;
 use sqlparser::ast::Ident;
 
 use crate::logical_plan::ExprVisitable;
@@ -27,6 +27,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
+use datafusion_common::DECIMAL_MAX_PRECISION;
 use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and

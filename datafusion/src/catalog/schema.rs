@@ -26,7 +26,7 @@ use std::sync::Arc;
 use crate::datasource::listing::{ListingTable, ListingTableConfig};
 use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
 use crate::datasource::TableProvider;
-use crate::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 
 /// Represents a schema, comprising a number of named tables.
 pub trait SchemaProvider: Sync + Send {
@@ -253,6 +253,7 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::execution::context::ExecutionContext;
 
+    use datafusion_common::field_util::SchemaExt;
     use futures::StreamExt;
 
     #[tokio::test]

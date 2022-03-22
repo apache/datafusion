@@ -87,7 +87,7 @@ async fn query_concat() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(StringArray::from_slice(&["", "a", "aa", "aaa"])),
-            Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(3)])),
+            Arc::new(Int32Array::from_iter(vec![Some(0), Some(1), None, Some(3)])),
         ],
     )?;
 
@@ -123,7 +123,7 @@ async fn query_array() -> Result<()> {
         schema.clone(),
         vec![
             Arc::new(StringArray::from_slice(&["", "a", "aa", "aaa"])),
-            Arc::new(Int32Array::from(vec![Some(0), Some(1), None, Some(3)])),
+            Arc::new(Int32Array::from_iter(vec![Some(0), Some(1), None, Some(3)])),
         ],
     )?;
 
@@ -149,7 +149,7 @@ async fn query_count_distinct() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![
+        vec![Arc::new(Int32Array::from_iter(vec![
             Some(0),
             Some(1),
             None,

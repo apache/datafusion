@@ -16,19 +16,18 @@
 // under the License.
 
 use arrow::array::{Int32Array, PrimitiveArray, UInt64Array};
-use arrow::compute::kernels::aggregate;
-use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
-use datafusion::from_slice::FromSlice;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
+use datafusion::record_batch::RecordBatch;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::DisplayFormatType,
 };
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 use datafusion::execution::context::ExecutionContext;
 use datafusion::logical_plan::{
@@ -45,6 +44,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use arrow::compute::aggregate;
 use async_trait::async_trait;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Projection;
@@ -165,18 +165,18 @@ impl ExecutionPlan for CustomExecutionPlan {
                     .iter()
                     .map(|i| ColumnStatistics {
                         null_count: Some(batch.column(*i).null_count()),
-                        min_value: Some(ScalarValue::Int32(aggregate::min(
+                        min_value: Some(ScalarValue::Int32(aggregate::min_primitive(
                             batch
                                 .column(*i)
                                 .as_any()
-                                .downcast_ref::<PrimitiveArray<Int32Type>>()
+                                .downcast_ref::<PrimitiveArray<i32>>()
                                 .unwrap(),
                         ))),
-                        max_value: Some(ScalarValue::Int32(aggregate::max(
+                        max_value: Some(ScalarValue::Int32(aggregate::max_primitive(
                             batch
                                 .column(*i)
                                 .as_any()
-                                .downcast_ref::<PrimitiveArray<Int32Type>>()
+                                .downcast_ref::<PrimitiveArray<i32>>()
                                 .unwrap(),
                         ))),
                         ..Default::default()
@@ -244,7 +244,7 @@ async fn custom_source_dataframe() -> Result<()> {
     let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
-    assert_eq!("c2", physical_plan.schema().field(0).name().as_str());
+    assert_eq!("c2", physical_plan.schema().field(0).name());
 
     let runtime = ctx.state.lock().runtime_env.clone();
     let batches = collect(physical_plan, runtime).await?;
@@ -286,9 +286,9 @@ async fn optimizers_catch_all_statistics() {
             Field::new("MAX(test.c1)", DataType::Int32, false),
         ])),
         vec![
-            Arc::new(UInt64Array::from_slice(&[4])),
-            Arc::new(Int32Array::from_slice(&[1])),
-            Arc::new(Int32Array::from_slice(&[100])),
+            Arc::new(UInt64Array::from_values(vec![4])),
+            Arc::new(Int32Array::from_values(vec![1])),
+            Arc::new(Int32Array::from_values(vec![100])),
         ],
     )
     .unwrap();

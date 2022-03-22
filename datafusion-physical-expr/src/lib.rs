@@ -17,6 +17,7 @@
 
 mod aggregate_expr;
 pub mod array_expressions;
+mod arrow_temporal_util;
 pub mod coercion_rule;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
@@ -32,6 +33,8 @@ pub mod regex_expressions;
 mod sort_expr;
 pub mod string_expressions;
 mod tdigest;
+#[cfg(test)]
+mod test_util;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod window;
@@ -39,4 +42,4 @@ pub mod window;
 pub use aggregate_expr::AggregateExpr;
 pub use functions::ScalarFunctionExpr;
 pub use physical_expr::PhysicalExpr;
-pub use sort_expr::PhysicalSortExpr;
+pub use sort_expr::{PhysicalSortExpr, SortColumn};

@@ -16,6 +16,9 @@
 // under the License.
 
 use crate::protobuf;
+use datafusion::arrow::datatypes::IntegerType;
+use datafusion::arrow::types::days_ms;
+use datafusion::field_util::SchemaExt;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
@@ -270,7 +273,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
             arrow_type::ArrowTypeEnum::LargeUtf8(_) => DataType::LargeUtf8,
             arrow_type::ArrowTypeEnum::Binary(_) => DataType::Binary,
             arrow_type::ArrowTypeEnum::FixedSizeBinary(size) => {
-                DataType::FixedSizeBinary(*size)
+                DataType::FixedSizeBinary((*size) as usize)
             }
             arrow_type::ArrowTypeEnum::LargeBinary(_) => DataType::LargeBinary,
             arrow_type::ArrowTypeEnum::Date32(_) => DataType::Date32,
@@ -315,7 +318,7 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
                 let list_size = list.list_size;
-                DataType::FixedSizeList(Box::new(list_type), list_size)
+                DataType::FixedSizeList(Box::new(list_type), list_size as usize)
             }
             arrow_type::ArrowTypeEnum::Struct(strct) => DataType::Struct(
                 strct
@@ -336,12 +339,13 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                     .iter()
                     .map(|field| field.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                DataType::Union(union_types, union_mode)
+                DataType::Union(union_types, None, union_mode)
             }
             arrow_type::ArrowTypeEnum::Dictionary(dict) => {
-                let key_datatype = dict.as_ref().key.as_deref().required("key")?;
+                //TODO: fix
+                //let key_datatype = dict.as_ref().key.as_deref().required("key")?;
                 let value_datatype = dict.as_ref().value.as_deref().required("value")?;
-                DataType::Dictionary(Box::new(key_datatype), Box::new(value_datatype))
+                DataType::Dictionary(IntegerType::UInt16, Box::new(value_datatype), false)
             }
         })
     }
@@ -551,7 +555,10 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
                 ScalarValue::TimestampMillisecond(Some(*v), None)
             }
             Value::IntervalYearmonthValue(v) => ScalarValue::IntervalYearMonth(Some(*v)),
-            Value::IntervalDaytimeValue(v) => ScalarValue::IntervalDayTime(Some(*v)),
+            // TODO: change the proto file to allow a tuple here
+            Value::IntervalDaytimeValue(v) => ScalarValue::IntervalDayTime(Some(
+                days_ms::new((*v / 86400000) as i32, ((*v) % 86400000) as i32),
+            )),
         };
         Ok(scalar)
     }
@@ -797,7 +804,10 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::TimeSecondValue(v) => Self::TimestampSecond(Some(*v), None),
             Value::TimeMillisecondValue(v) => Self::TimestampMillisecond(Some(*v), None),
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
-            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
+            Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(days_ms::new(
+                (*v / 86400000) as i32,
+                ((*v) % 86400000) as i32,
+            ))),
         })
     }
 }
@@ -1260,7 +1270,10 @@ fn typechecked_scalar_value_conversion(
             ScalarValue::IntervalYearMonth(Some(*v))
         }
         (Value::IntervalDaytimeValue(v), PrimitiveScalarType::IntervalDaytime) => {
-            ScalarValue::IntervalDayTime(Some(*v))
+            ScalarValue::IntervalDayTime(Some(days_ms::new(
+                (*v / 86400000) as i32,
+                ((*v) % 86400000) as i32,
+            )))
         }
         _ => return Err(proto_error("Could not convert to the proper type")),
     })

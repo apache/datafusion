@@ -30,11 +30,11 @@ use crate::physical_plan::{
     metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet},
     DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-use arrow::array::BooleanArray;
-use arrow::compute::filter_record_batch;
+use crate::record_batch::{filter_record_batch, RecordBatch};
+use arrow::array::{Array, BooleanArray};
+use arrow::compute::boolean::{and, is_not_null};
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 
@@ -202,7 +202,11 @@ fn batch_filter(
                     .into()
                 })
                 // apply filter array to record batch
-                .and_then(|filter_array| filter_record_batch(batch, filter_array))
+                .and_then(|filter_array| {
+                    let is_not_null = is_not_null(filter_array as &dyn Array);
+                    let and_filter = and(&is_not_null, filter_array)?;
+                    filter_record_batch(batch, &and_filter)
+                })
         })
 }
 
@@ -246,9 +250,10 @@ mod tests {
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
-    use crate::scalar::ScalarValue;
+
     use crate::test;
     use crate::test_util;
+    use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
     use std::iter::Iterator;
 

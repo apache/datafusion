@@ -22,12 +22,14 @@ use crate::error::{DataFusionError, Result};
 use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::metrics::MemTrackingMetrics;
 use crate::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
-use arrow::compute::concat;
+use crate::record_batch::RecordBatch;
+use arrow::compute::aggregate::estimated_bytes_size;
+use arrow::compute::concatenate::concatenate;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
-use arrow::ipc::writer::FileWriter;
-use arrow::record_batch::RecordBatch;
+use arrow::io::ipc::write::{FileWriter, WriteOptions};
+use datafusion_common::field_util::SchemaExt;
 use futures::channel::mpsc;
 use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
@@ -109,12 +111,13 @@ pub(crate) fn combine_batches(
             .iter()
             .enumerate()
             .map(|(i, _)| {
-                concat(
+                concatenate(
                     &batches
                         .iter()
                         .map(|batch| batch.column(i).as_ref())
                         .collect::<Vec<_>>(),
                 )
+                .map(|x| x.into())
             })
             .collect::<ArrowResult<Vec<_>>>()?;
         Ok(Some(RecordBatch::try_new(schema.clone(), columns)?))
@@ -183,7 +186,7 @@ pub(crate) fn spawn_execution(
             Err(e) => {
                 // If send fails, plan being torn
                 // down, no place to send the error
-                let arrow_error = ArrowError::ExternalError(Box::new(e));
+                let arrow_error = ArrowError::External("".to_string(), Box::new(e));
                 output.send(Err(arrow_error)).await.ok();
                 return;
             }
@@ -285,12 +288,11 @@ impl<T> Drop for AbortOnDropMany<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
     use arrow::{
         array::{Float32Array, Float64Array},
         datatypes::{DataType, Field, Schema},
-        record_batch::RecordBatch,
     };
+    use datafusion_common::field_util::SchemaExt;
 
     #[test]
     fn test_combine_batches_empty() -> Result<()> {
@@ -365,7 +367,8 @@ mod tests {
         let expected = Statistics {
             is_exact: true,
             num_rows: Some(3),
-            total_byte_size: Some(416), // this might change a bit if the way we compute the size changes
+            // TODO: fix this once we got https://github.com/jorgecarleitao/arrow2/issues/421
+            total_byte_size: Some(36),
             column_statistics: Some(vec![
                 ColumnStatistics {
                     distinct_count: None,
@@ -415,13 +418,13 @@ impl IPCWriter {
             num_rows: 0,
             num_bytes: 0,
             path: path.into(),
-            writer: FileWriter::try_new(file, schema)?,
+            writer: FileWriter::try_new(file, schema, None, WriteOptions::default())?,
         })
     }
 
     /// Write one single batch
     pub fn write(&mut self, batch: &RecordBatch) -> Result<()> {
-        self.writer.write(batch)?;
+        self.writer.write(&batch.into(), None)?;
         self.num_batches += 1;
         self.num_rows += batch.num_rows() as u64;
         let num_bytes: usize = batch_byte_size(batch);
@@ -445,6 +448,6 @@ pub fn batch_byte_size(batch: &RecordBatch) -> usize {
     batch
         .columns()
         .iter()
-        .map(|array| array.get_array_memory_size())
+        .map(|a| estimated_bytes_size(a.as_ref()))
         .sum()
 }

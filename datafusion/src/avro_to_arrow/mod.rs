@@ -21,8 +21,6 @@
 mod arrow_array_reader;
 #[cfg(feature = "avro")]
 mod reader;
-#[cfg(feature = "avro")]
-mod schema;
 
 use crate::arrow::datatypes::Schema;
 use crate::error::Result;
@@ -33,9 +31,8 @@ use std::io::Read;
 #[cfg(feature = "avro")]
 /// Read Avro schema given a reader
 pub fn read_avro_schema_from_reader<R: Read>(reader: &mut R) -> Result<Schema> {
-    let avro_reader = avro_rs::Reader::new(reader)?;
-    let schema = avro_reader.writer_schema();
-    schema::to_arrow_schema(schema)
+    let (_, schema, _, _) = arrow::io::avro::read::read_metadata(reader)?;
+    Ok(schema)
 }
 
 #[cfg(not(feature = "avro"))]

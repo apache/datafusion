@@ -18,16 +18,15 @@
 //! Execution plan for reading line-delimited Avro files
 #[cfg(feature = "avro")]
 use crate::avro_to_arrow;
+#[cfg(feature = "avro")]
+use crate::datasource::object_store::ReadSeek;
 use crate::error::{DataFusionError, Result};
+use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use arrow::datatypes::SchemaRef;
-#[cfg(feature = "avro")]
-use arrow::error::ArrowError;
-
-use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
@@ -124,19 +123,16 @@ impl ExecutionPlan for AvroExec {
         let file_schema = Arc::clone(&self.base_config.file_schema);
 
         // The avro reader cannot limit the number of records, so `remaining` is ignored.
-        let fun = move |file, _remaining: &Option<usize>| {
-            let reader_res = avro_to_arrow::Reader::try_new(
-                file,
-                Arc::clone(&file_schema),
-                batch_size,
-                proj.clone(),
-            );
-            match reader_res {
-                Ok(r) => Box::new(r) as BatchIter,
-                Err(e) => Box::new(
-                    vec![Err(ArrowError::ExternalError(Box::new(e)))].into_iter(),
-                ),
+        let fun = move |file: Box<dyn ReadSeek + Sync + Send>,
+                        _remaining: &Option<usize>| {
+            let mut builder = avro_to_arrow::ReaderBuilder::new()
+                .with_batch_size(batch_size)
+                .with_schema(file_schema.clone());
+            if let Some(proj) = proj.clone() {
+                builder = builder.with_projection(proj);
             }
+            let reader = builder.build(file).unwrap();
+            Box::new(reader) as BatchIter
         };
 
         Ok(Box::pin(FileStream::new(
@@ -178,15 +174,17 @@ mod tests {
     use crate::datasource::object_store::local::{
         local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
     };
-    use crate::scalar::ScalarValue;
+    use crate::physical_plan::Statistics;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::ScalarValue;
     use futures::StreamExt;
-    use sqlparser::ast::ObjectType::Schema;
 
     use super::*;
 
     #[tokio::test]
     async fn avro_exec_without_partition() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let avro_exec = AvroExec::new(FileScanConfig {
@@ -202,7 +200,10 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let mut results = avro_exec
+            .execute(0, runtime)
+            .await
+            .expect("plan execution failed");
         let batch = results
             .next()
             .await
@@ -240,21 +241,23 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_missing_column() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
+
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let actual_schema = AvroFormat {}
-            .infer_schema(local_object_reader_stream(vec![filename]))
+            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
             .await?;
 
-        let mut fields = actual_schema.fields().clone();
+        let mut fields = actual_schema.fields().to_vec();
         fields.push(Field::new("missing_col", DataType::Int32, true));
 
-        let file_schema = Arc::new(Schema::new(fields));
+        let file_schema = Arc::new(Schema::new(fields.to_vec()));
 
         let avro_exec = AvroExec::new(FileScanConfig {
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![local_unpartitioned_file(filename.clone())]],
-            file_schema,
+            file_schema: file_schema.clone(),
             statistics: Statistics::default(),
             // Include the missing column in the projection
             projection: Some(vec![0, 1, 2, file_schema.fields().len()]),
@@ -263,7 +266,10 @@ mod tests {
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let mut results = avro_exec
+            .execute(0, runtime)
+            .await
+            .expect("plan execution failed");
         let batch = results
             .next()
             .await
@@ -301,6 +307,7 @@ mod tests {
 
     #[tokio::test]
     async fn avro_exec_with_partition() -> Result<()> {
+        let runtime = Arc::new(RuntimeEnv::default());
         let testdata = crate::test_util::arrow_test_data();
         let filename = format!("{}/avro/alltypes_plain.avro", testdata);
         let mut partitioned_file = local_unpartitioned_file(filename.clone());
@@ -316,14 +323,17 @@ mod tests {
             projection: Some(vec![0, 1, file_schema.fields().len(), 2]),
             object_store: Arc::new(LocalFileSystem {}),
             file_groups: vec![vec![partitioned_file]],
-            file_schema: file_schema,
+            file_schema,
             statistics: Statistics::default(),
             limit: None,
             table_partition_cols: vec!["date".to_owned()],
         });
         assert_eq!(avro_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = avro_exec.execute(0).await.expect("plan execution failed");
+        let mut results = avro_exec
+            .execute(0, runtime)
+            .await
+            .expect("plan execution failed");
         let batch = results
             .next()
             .await

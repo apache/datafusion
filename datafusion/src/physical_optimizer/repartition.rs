@@ -234,7 +234,7 @@ impl PhysicalOptimizerRule for Repartition {
 }
 #[cfg(test)]
 mod tests {
-    use arrow::compute::SortOptions;
+    use arrow::compute::sort::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use super::*;
@@ -250,6 +250,7 @@ mod tests {
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, Statistics};
     use crate::test::object_store::TestObjectStore;
+    use datafusion_common::field_util::SchemaExt;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]))
@@ -275,7 +276,7 @@ mod tests {
     ) -> Arc<dyn ExecutionPlan> {
         let expr = vec![PhysicalSortExpr {
             expr: col("c1", &schema()).unwrap(),
-            options: arrow::compute::SortOptions::default(),
+            options: arrow::compute::sort::SortOptions::default(),
         }];
 
         Arc::new(SortPreservingMergeExec::new(expr, input))

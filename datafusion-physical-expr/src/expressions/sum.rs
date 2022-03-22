@@ -23,20 +23,15 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
 use arrow::{
-    array::{
-        ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-        Int8Array, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-    },
-    datatypes::Field,
+    array::*,
+    datatypes::{DataType, Field},
 };
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, DECIMAL_MAX_PRECISION};
 use datafusion_expr::Accumulator;
 
 use super::format_state_name;
 use arrow::array::Array;
-use arrow::array::DecimalArray;
 
 /// SUM aggregate expression
 #[derive(Debug)]
@@ -158,7 +153,7 @@ impl SumAccumulator {
 macro_rules! typed_sum_delta_batch {
     ($VALUES:expr, $ARRAYTYPE:ident, $SCALAR:ident) => {{
         let array = $VALUES.as_any().downcast_ref::<$ARRAYTYPE>().unwrap();
-        let delta = compute::sum(array);
+        let delta = compute::aggregate::sum_primitive(array);
         ScalarValue::$SCALAR(delta)
     }};
 }
@@ -170,7 +165,7 @@ fn sum_decimal_batch(
     precision: &usize,
     scale: &usize,
 ) -> Result<ScalarValue> {
-    let array = values.as_any().downcast_ref::<DecimalArray>().unwrap();
+    let array = values.as_any().downcast_ref::<Int128Array>().unwrap();
 
     if array.null_count() == array.len() {
         return Ok(ScalarValue::Decimal128(None, *precision, *scale));
@@ -374,11 +369,10 @@ impl Accumulator for SumAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::generic_test_op;
     use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
-    use datafusion_common::Result;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
 
     #[test]
     fn test_sum_return_data_type() -> Result<()> {
@@ -417,22 +411,22 @@ mod tests {
         );
 
         // test sum batch
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<DecimalArray>()
-                .with_precision_and_scale(10, 0)?,
-        );
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
+        for i in 1..6 {
+            decimal_builder.push(Some(i as i128));
+        }
+        let array: ArrayRef = decimal_builder.as_arc();
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
 
         // test agg
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(Some)
-                .collect::<DecimalArray>()
-                .with_precision_and_scale(10, 0)?,
-        );
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
+        for i in 1..6 {
+            decimal_builder.push(Some(i as i128));
+        }
+        let array: ArrayRef = decimal_builder.as_arc();
 
         generic_test_op!(
             array,
@@ -452,22 +446,30 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(Some(123), 10, 2), result);
 
         // test with batch
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
-                .with_precision_and_scale(10, 0)?,
-        );
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.push_null();
+            } else {
+                decimal_builder.push(Some(i));
+            }
+        }
+        let array: ArrayRef = decimal_builder.as_arc();
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
-        let array: ArrayRef = Arc::new(
-            (1..6)
-                .map(|i| if i == 2 { None } else { Some(i) })
-                .collect::<DecimalArray>()
-                .with_precision_and_scale(35, 0)?,
-        );
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(35, 0));
+        for i in 1..6 {
+            if i == 2 {
+                decimal_builder.push_null();
+            } else {
+                decimal_builder.push(Some(i));
+            }
+        }
+        let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
             DataType::Decimal(35, 0),
@@ -486,16 +488,22 @@ mod tests {
         assert_eq!(ScalarValue::Decimal128(None, 10, 2), result);
 
         // test with batch
-        let array: ArrayRef = Arc::new(
-            std::iter::repeat(None)
-                .take(6)
-                .collect::<DecimalArray>()
-                .with_precision_and_scale(10, 0)?,
-        );
+        let mut decimal_builder =
+            Int128Vec::with_capacity(6).to(DataType::Decimal(10, 0));
+        for _i in 1..7 {
+            decimal_builder.push_null();
+        }
+        let array: ArrayRef = decimal_builder.as_arc();
         let result = sum_batch(&array)?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg
+        let mut decimal_builder =
+            Int128Vec::with_capacity(5).to(DataType::Decimal(10, 0));
+        for _i in 1..6 {
+            decimal_builder.push_null();
+        }
+        let array: ArrayRef = decimal_builder.as_arc();
         generic_test_op!(
             array,
             DataType::Decimal(10, 0),
@@ -507,7 +515,7 @@ mod tests {
 
     #[test]
     fn sum_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -519,7 +527,7 @@ mod tests {
 
     #[test]
     fn sum_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(&[
             Some(1),
             None,
             Some(3),
@@ -537,7 +545,7 @@ mod tests {
 
     #[test]
     fn sum_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![None, None]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -549,8 +557,9 @@ mod tests {
 
     #[test]
     fn sum_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(vec![
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -562,8 +571,9 @@ mod tests {
 
     #[test]
     fn sum_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(vec![
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -575,8 +585,9 @@ mod tests {
 
     #[test]
     fn sum_f64() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,

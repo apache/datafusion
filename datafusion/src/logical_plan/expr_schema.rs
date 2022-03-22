@@ -19,8 +19,9 @@ use super::Expr;
 use crate::physical_plan::{
     aggregates, expressions::binary_operator_data_type, functions, window_functions,
 };
-use arrow::compute::can_cast_types;
+use arrow::compute::cast::can_cast_types;
 use arrow::datatypes::DataType;
+use datafusion_common::field_util::FieldExt;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
 use datafusion_physical_expr::field_util::get_indexed_field;
 

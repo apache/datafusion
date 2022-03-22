@@ -17,10 +17,12 @@
 
 //! Client API for sending requests to executors.
 
+use arrow::io::flight::deserialize_schemas;
+use arrow::io::ipc::IpcSchema;
+use std::collections::HashMap;
 use std::sync::Arc;
-
 use std::{
-    convert::{TryFrom, TryInto},
+    convert::TryInto,
     task::{Context, Poll},
 };
 
@@ -28,16 +30,16 @@ use crate::error::{ballista_error, BallistaError, Result};
 use crate::serde::protobuf::{self};
 use crate::serde::scheduler::Action;
 
-use arrow_flight::utils::flight_data_to_arrow_batch;
-use arrow_flight::Ticket;
-use arrow_flight::{flight_service_client::FlightServiceClient, FlightData};
+use arrow_format::flight::data::{FlightData, Ticket};
+use arrow_format::flight::service::flight_service_client::FlightServiceClient;
 use datafusion::arrow::{
-    datatypes::{Schema, SchemaRef},
+    datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
-
-use datafusion::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
+use datafusion::field_util::SchemaExt;
+use datafusion::physical_plan::RecordBatchStream;
+use datafusion::physical_plan::SendableRecordBatchStream;
+use datafusion::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
 use log::debug;
 use prost::Message;
@@ -116,10 +118,12 @@ impl BallistaClient {
         {
             Some(flight_data) => {
                 // convert FlightData to a stream
-                let schema = Arc::new(Schema::try_from(&flight_data)?);
+                let (schema, ipc_schema) =
+                    deserialize_schemas(flight_data.data_body.as_slice()).unwrap();
+                let schema = Arc::new(schema);
 
                 // all the remaining stream messages should be dictionary and record batches
-                Ok(Box::pin(FlightDataStream::new(stream, schema)))
+                Ok(Box::pin(FlightDataStream::new(stream, schema, ipc_schema)))
             }
             None => Err(ballista_error(
                 "Did not receive schema batch from flight server",
@@ -131,11 +135,20 @@ impl BallistaClient {
 struct FlightDataStream {
     stream: Streaming<FlightData>,
     schema: SchemaRef,
+    ipc_schema: IpcSchema,
 }
 
 impl FlightDataStream {
-    pub fn new(stream: Streaming<FlightData>, schema: SchemaRef) -> Self {
-        Self { stream, schema }
+    pub fn new(
+        stream: Streaming<FlightData>,
+        schema: SchemaRef,
+        ipc_schema: IpcSchema,
+    ) -> Self {
+        Self {
+            stream,
+            schema,
+            ipc_schema,
+        }
     }
 }
 
@@ -151,12 +164,16 @@ impl Stream for FlightDataStream {
                 let converted_chunk = flight_data_chunk_result
                     .map_err(|e| ArrowError::from_external_error(Box::new(e)))
                     .and_then(|flight_data_chunk| {
-                        flight_data_to_arrow_batch(
+                        let hm = HashMap::new();
+
+                        arrow::io::flight::deserialize_batch(
                             &flight_data_chunk,
-                            self.schema.clone(),
-                            &[],
+                            self.schema.fields(),
+                            &self.ipc_schema,
+                            &hm,
                         )
-                    });
+                    })
+                    .map(|c| RecordBatch::new_with_chunk(&self.schema, c));
                 Some(converted_chunk)
             }
             None => None,

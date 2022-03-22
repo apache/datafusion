@@ -17,17 +17,15 @@
 
 //! Fuzz Test for various corner cases sorting RecordBatches exceeds available memory and should spill
 
-use arrow::{
-    array::{ArrayRef, Int32Array},
-    compute::SortOptions,
-    record_batch::RecordBatch,
-};
+use arrow::array::{ArrayRef, Int32Array};
+use arrow::compute::sort::SortOptions;
 use datafusion::execution::memory_manager::MemoryManagerConfig;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion_common::record_batch::RecordBatch;
 use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
@@ -58,10 +56,11 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let input = vec![make_staggered_batches(size)];
         let first_batch = input
             .iter()
-            .flat_map(|p| p.iter())
+            .map(|p| p.iter())
+            .flatten()
             .next()
             .expect("at least one batch");
-        let schema = first_batch.schema();
+        let schema = first_batch.schema().clone();
 
         let sort = vec![PhysicalSortExpr {
             expr: col("x", &schema).unwrap(),
@@ -99,7 +98,7 @@ fn make_staggered_batches(len: usize) -> Vec<RecordBatch> {
     let mut rng = rand::thread_rng();
     let mut input: Vec<i32> = vec![0; len];
     rng.fill(&mut input[..]);
-    let input = Int32Array::from_iter_values(input.into_iter());
+    let input = Int32Array::from_values(input.into_iter());
 
     // split into several record batches
     let mut remainder =

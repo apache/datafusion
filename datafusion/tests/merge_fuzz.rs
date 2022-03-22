@@ -18,11 +18,9 @@
 //! Fuzz Test for various corner cases merging streams of RecordBatches
 use std::sync::Arc;
 
-use arrow::{
-    array::{ArrayRef, Int32Array},
-    compute::SortOptions,
-    record_batch::RecordBatch,
-};
+use arrow::array::{ArrayRef, Int32Array};
+use arrow::compute::sort::SortOptions;
+use datafusion::record_batch::RecordBatch;
 use datafusion::{
     execution::runtime_env::{RuntimeConfig, RuntimeEnv},
     physical_plan::{
@@ -117,7 +115,7 @@ async fn run_merge_test(input: Vec<Vec<RecordBatch>>) {
             },
         }];
 
-        let exec = MemoryExec::try_new(&input, schema, None).unwrap();
+        let exec = MemoryExec::try_new(&input, schema.clone(), None).unwrap();
         let merge = Arc::new(SortPreservingMergeExec::new(sort, Arc::new(exec)));
 
         let runtime_config = RuntimeConfig::new().with_batch_size(batch_size);

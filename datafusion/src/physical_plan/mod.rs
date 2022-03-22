@@ -24,10 +24,10 @@ use self::{
 };
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{error::Result, execution::runtime_env::RuntimeEnv, scalar::ScalarValue};
+use datafusion_common::record_batch::RecordBatch;
 
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
 pub use datafusion_expr::Accumulator;
@@ -37,6 +37,7 @@ use futures::stream::Stream;
 use std::fmt;
 use std::fmt::Debug;
 
+use datafusion_common::field_util::SchemaExt;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
@@ -478,6 +479,7 @@ pub use datafusion_physical_expr::{AggregateExpr, PhysicalExpr};
 /// Example:
 /// ```
 /// use arrow::datatypes::{SchemaRef, Schema, Field, DataType};
+/// use datafusion_common::field_util::SchemaExt;
 /// use datafusion::physical_plan::project_schema;
 ///
 /// // Schema with columns 'a', 'b', and 'c'
@@ -522,6 +524,7 @@ pub mod display;
 pub mod empty;
 pub mod explain;
 pub use datafusion_physical_expr::expressions;
+
 pub mod aggregate_rule;
 pub mod file_format;
 pub mod filter;

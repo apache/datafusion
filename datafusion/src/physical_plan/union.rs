@@ -23,7 +23,8 @@
 
 use std::{any::Any, sync::Arc};
 
-use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
+use arrow::datatypes::SchemaRef;
+use datafusion_common::record_batch::RecordBatch;
 use futures::StreamExt;
 
 use super::{
@@ -244,7 +245,7 @@ mod tests {
         },
         scalar::ScalarValue,
     };
-    use arrow::record_batch::RecordBatch;
+    use datafusion_common::record_batch::RecordBatch;
 
     #[tokio::test]
     async fn test_union_partitions() -> Result<()> {

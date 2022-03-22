@@ -28,13 +28,14 @@ use crate::physical_plan::{
     common, ColumnStatistics, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, RecordBatchStream, SendableRecordBatchStream, Statistics, WindowExpr,
 };
+use crate::record_batch::RecordBatch;
 use arrow::{
     array::ArrayRef,
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
-    record_batch::RecordBatch,
 };
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use futures::stream::Stream;
 use futures::FutureExt;
 use pin_project_lite::pin_project;
@@ -336,7 +337,9 @@ impl WindowAggStream {
                 self.finished = true;
                 // check for error in receiving channel and unwrap actual result
                 let result = match result {
-                    Err(e) => Some(Err(ArrowError::ExternalError(Box::new(e)))), // error receiving
+                    Err(e) => {
+                        Some(Err(ArrowError::External("".to_string(), Box::new(e))))
+                    } // error receiving
                     Ok(result) => Some(result),
                 };
                 Poll::Ready(result)

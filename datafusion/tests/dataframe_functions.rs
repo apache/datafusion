@@ -15,16 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::{
-    array::{Int32Array, StringArray},
-    record_batch::RecordBatch,
-};
-use datafusion::from_slice::FromSlice;
 use std::sync::Arc;
 
+use arrow::array::Int32Array;
+use arrow::array::Utf8Array;
+use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::MemTable;
+use datafusion::record_batch::RecordBatch;
 
 use datafusion::error::Result;
 
@@ -34,6 +32,7 @@ use datafusion::prelude::*;
 use datafusion::execution::context::ExecutionContext;
 
 use datafusion::assert_batches_eq;
+use datafusion_common::field_util::SchemaExt;
 
 fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
@@ -45,7 +44,7 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from_slice(&[
+            Arc::new(Utf8Array::<i32>::from_slice(&[
                 "abcDEF",
                 "abc123",
                 "CBAdef",

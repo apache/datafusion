@@ -16,7 +16,6 @@
 // under the License.
 
 use super::*;
-use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn equijoin() -> Result<()> {
@@ -658,11 +657,10 @@ async fn test_join_timestamp() -> Result<()> {
     )]));
     let timestamp_data = RecordBatch::try_new(
         timestamp_schema.clone(),
-        vec![Arc::new(TimestampNanosecondArray::from(vec![
-            131964190213133,
-            131964190213134,
-            131964190213135,
-        ]))],
+        vec![Arc::new(
+            Int64Array::from_slice(&[131964190213133, 131964190213134, 131964190213135])
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None)),
+        )],
     )?;
     let timestamp_table =
         MemTable::try_new(timestamp_schema, vec![vec![timestamp_data]])?;
@@ -701,7 +699,11 @@ async fn test_join_float32() -> Result<()> {
     let population_data = RecordBatch::try_new(
         population_schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            Arc::new(StringArray::from_slice(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+            ])),
             Arc::new(Float32Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
@@ -742,7 +744,11 @@ async fn test_join_float64() -> Result<()> {
     let population_data = RecordBatch::try_new(
         population_schema.clone(),
         vec![
-            Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")])),
+            Arc::new(StringArray::from_slice(vec![
+                Some("a"),
+                Some("b"),
+                Some("c"),
+            ])),
             Arc::new(Float64Array::from_slice(&[838.698, 1778.934, 626.443])),
         ],
     )?;
@@ -830,7 +836,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
     ])
     .unwrap();
-    let countries = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let countries = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
 
     let batch = RecordBatch::try_from_iter(vec![
         (
@@ -855,7 +861,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
         ),
     ])
     .unwrap();
-    let cities = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let cities = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
 
     let mut ctx = ExecutionContext::new();
     ctx.register_table("countries", Arc::new(countries))?;

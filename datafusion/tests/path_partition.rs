@@ -35,6 +35,7 @@ use datafusion::{
     prelude::ExecutionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
+use datafusion_common::field_util::SchemaExt;
 use futures::{stream, StreamExt};
 
 #[tokio::test]

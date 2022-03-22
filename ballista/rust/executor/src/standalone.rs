@@ -17,8 +17,7 @@
 
 use std::sync::Arc;
 
-use arrow_flight::flight_service_server::FlightServiceServer;
-
+use arrow_format::flight::service::flight_service_server::FlightServiceServer;
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use ballista_core::{

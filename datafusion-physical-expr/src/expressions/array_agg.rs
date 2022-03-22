@@ -158,18 +158,18 @@ impl Accumulator for ArrayAggAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
     use crate::expressions::tests::aggregate;
     use crate::generic_test_op;
     use arrow::array::ArrayRef;
     use arrow::array::Int32Array;
     use arrow::datatypes::*;
-    use arrow::record_batch::RecordBatch;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
 
     #[test]
     fn array_agg_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
 
         let list = ScalarValue::List(
             Some(Box::new(vec![
@@ -254,7 +254,7 @@ mod tests {
             )))),
         );
 
-        let array = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
+        let array: ArrayRef = ScalarValue::iter_to_array(vec![l1, l2, l3]).unwrap();
 
         generic_test_op!(
             array,

@@ -16,10 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion::{
-    datasource::empty::EmptyTable, from_slice::FromSlice,
-    physical_plan::collect_partitioned,
-};
+use datafusion::physical_plan::collect_partitioned;
 use tempfile::TempDir;
 
 #[tokio::test]
@@ -480,7 +477,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 
     let input = Int64Array::from_slice(&[1, 2, 3, 4]);
     let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(input) as _)]).unwrap();
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     ctx.register_table("test", Arc::new(table))?;
 
     let sql = "SELECT abs(c1) BETWEEN 0 AND LoG(c1 * 100 ) FROM test";
@@ -500,9 +497,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 
     let sql = "EXPLAIN SELECT c1 BETWEEN 2 AND 3 FROM test";
     let actual = execute_to_batches(&mut ctx, sql).await;
-    let formatted = arrow::util::pretty::pretty_format_batches(&actual)
-        .unwrap()
-        .to_string();
+    let formatted = print::write(&actual);
 
     // Only test that the projection exprs arecorrect, rather than entire output
     let needle = "ProjectionExec: expr=[c1@0 >= 2 AND c1@0 <= 3 as test.c1 BETWEEN Int64(2) AND Int64(3)]";
@@ -521,17 +516,19 @@ async fn query_get_indexed_field() -> Result<()> {
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
         false,
     )]));
-    let builder = PrimitiveBuilder::<Int64Type>::new(3);
-    let mut lb = ListBuilder::new(builder);
-    for int_vec in vec![vec![0, 1, 2], vec![4, 5, 6], vec![7, 8, 9]] {
-        let builder = lb.values();
-        for int in int_vec {
-            builder.append_value(int).unwrap();
-        }
-        lb.append(true).unwrap();
+
+    let rows = vec![
+        vec![Some(0), Some(1), Some(2)],
+        vec![Some(4), Some(5), Some(6)],
+        vec![Some(7), Some(8), Some(9)],
+    ];
+    let mut array =
+        MutableListArray::<i32, MutablePrimitiveArray<i64>>::with_capacity(rows.len());
+    for int_vec in rows {
+        array.try_push(Some(int_vec))?;
     }
 
-    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let data = RecordBatch::try_new(schema.clone(), vec![array.into_arc()])?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let table_a = Arc::new(table);
 
@@ -558,26 +555,24 @@ async fn query_nested_get_indexed_field() -> Result<()> {
         false,
     )]));
 
-    let builder = PrimitiveBuilder::<Int64Type>::new(3);
-    let nested_lb = ListBuilder::new(builder);
-    let mut lb = ListBuilder::new(nested_lb);
-    for int_vec_vec in vec![
+    let rows = vec![
         vec![vec![0, 1], vec![2, 3], vec![3, 4]],
         vec![vec![5, 6], vec![7, 8], vec![9, 10]],
         vec![vec![11, 12], vec![13, 14], vec![15, 16]],
-    ] {
-        let nested_builder = lb.values();
-        for int_vec in int_vec_vec {
-            let builder = nested_builder.values();
-            for int in int_vec {
-                builder.append_value(int).unwrap();
-            }
-            nested_builder.append(true).unwrap();
-        }
-        lb.append(true).unwrap();
+    ];
+    let mut array = MutableListArray::<
+        i32,
+        MutableListArray<i32, MutablePrimitiveArray<i64>>,
+    >::with_capacity(rows.len());
+    for int_vec_vec in rows.into_iter() {
+        array.try_push(Some(
+            int_vec_vec
+                .into_iter()
+                .map(|v| Some(v.into_iter().map(Some))),
+        ))?;
     }
 
-    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(lb.finish())])?;
+    let data = RecordBatch::try_new(schema.clone(), vec![array.into_arc()])?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let table_a = Arc::new(table);
 
@@ -611,23 +606,22 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_struct": { "bar": [i64] } }
     let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
+    let dt = DataType::Struct(struct_fields.clone());
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_struct",
         DataType::Struct(struct_fields.clone()),
         false,
     )]));
 
-    let builder = PrimitiveBuilder::<Int64Type>::new(3);
-    let nested_lb = ListBuilder::new(builder);
-    let mut sb = StructBuilder::new(struct_fields, vec![Box::new(nested_lb)]);
-    for int_vec in vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]] {
-        let lb = sb.field_builder::<ListBuilder<Int64Builder>>(0).unwrap();
-        for int in int_vec {
-            lb.values().append_value(int).unwrap();
-        }
-        lb.append(true).unwrap();
+    let rows = vec![vec![0, 1, 2, 3], vec![4, 5, 6, 7], vec![8, 9, 10, 11]];
+    let mut list_array =
+        MutableListArray::<i32, MutablePrimitiveArray<i64>>::with_capacity(rows.len());
+    for int_vec in rows.into_iter() {
+        list_array.try_push(Some(int_vec.into_iter().map(Some)))?;
     }
-    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(sb.finish())])?;
+    let array = StructArray::from_data(dt, vec![list_array.into_arc()], None);
+
+    let data = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)])?;
     let table = MemTable::try_new(schema, vec![vec![data]])?;
     let table_a = Arc::new(table);
 
@@ -675,7 +669,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     ])
     .unwrap();
 
-    let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+    let table = MemTable::try_new(batch.schema().clone(), vec![vec![batch]])?;
     let mut ctx = ExecutionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 

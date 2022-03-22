@@ -253,13 +253,14 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::generic_test_op;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
 
     #[test]
     fn stddev_f64_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -271,7 +272,7 @@ mod tests {
 
     #[test]
     fn stddev_f64_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -283,8 +284,9 @@ mod tests {
 
     #[test]
     fn stddev_f64_3() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -296,7 +298,7 @@ mod tests {
 
     #[test]
     fn stddev_f64_4() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
@@ -308,7 +310,7 @@ mod tests {
 
     #[test]
     fn stddev_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
@@ -320,8 +322,9 @@ mod tests {
 
     #[test]
     fn stddev_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(vec![
+            1_u32, 2_u32, 3_u32, 4_u32, 5_u32,
+        ]));
         generic_test_op!(
             a,
             DataType::UInt32,
@@ -333,8 +336,9 @@ mod tests {
 
     #[test]
     fn stddev_f32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(vec![
+            1_f32, 2_f32, 3_f32, 4_f32, 5_f32,
+        ]));
         generic_test_op!(
             a,
             DataType::Float32,
@@ -357,7 +361,7 @@ mod tests {
 
     #[test]
     fn test_stddev_1_input() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1_f64]));
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
@@ -374,7 +378,7 @@ mod tests {
 
     #[test]
     fn stddev_i32_with_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![
             Some(1),
             None,
             Some(3),
@@ -392,7 +396,7 @@ mod tests {
 
     #[test]
     fn stddev_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let a: ArrayRef = Int32Vec::from(vec![None, None]).as_arc();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
@@ -409,8 +413,8 @@ mod tests {
 
     #[test]
     fn stddev_f64_merge_1() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64]));
+        let a = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(vec![4_f64, 5_f64]));
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
 
@@ -437,8 +441,10 @@ mod tests {
 
     #[test]
     fn stddev_f64_merge_2() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
-        let b = Arc::new(Float64Array::from(vec![None]));
+        let a = Arc::new(Float64Array::from_slice(vec![
+            1_f64, 2_f64, 3_f64, 4_f64, 5_f64,
+        ]));
+        let b = Arc::new(Float64Array::from_iter(vec![None]));
 
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
 

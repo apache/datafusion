@@ -19,12 +19,10 @@
 
 use std::sync::Arc;
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
-
 use crate::PhysicalExpr;
+use arrow::datatypes::{DataType, Schema};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 

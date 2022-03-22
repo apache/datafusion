@@ -19,9 +19,9 @@
 
 use std::task::Poll;
 
-use arrow::{error::ArrowError, record_batch::RecordBatch};
-
 use super::{Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time, Timestamp};
+use arrow::error::ArrowError;
+use datafusion_common::record_batch::RecordBatch;
 
 /// Helper for creating and tracking common "baseline" metrics for
 /// each operator

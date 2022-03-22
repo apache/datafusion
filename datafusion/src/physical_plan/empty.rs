@@ -24,15 +24,16 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     memory::MemoryStream, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
 };
+use crate::record_batch::RecordBatch;
 use arrow::array::NullArray;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::record_batch::RecordBatch;
 
 use super::expressions::PhysicalSortExpr;
 use super::{common, SendableRecordBatchStream, Statistics};
 
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 
 /// Execution plan for empty relation (produces no rows)
 #[derive(Debug)]
@@ -65,7 +66,7 @@ impl EmptyExec {
                     DataType::Null,
                     true,
                 )])),
-                vec![Arc::new(NullArray::new(1))],
+                vec![Arc::new(NullArray::new_null(DataType::Null, 1))],
             )?]
         } else {
             vec![]

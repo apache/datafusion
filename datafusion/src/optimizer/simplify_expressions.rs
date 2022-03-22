@@ -26,16 +26,17 @@ use crate::logical_plan::{
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::create_physical_expr;
-use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::ScalarValue;
+use datafusion_expr::Volatility;
 
 /// Provides simplification information based on schema and properties
-pub(crate) struct SimplifyContext<'a, 'b> {
+struct SimplifyContext<'a, 'b> {
     schemas: Vec<&'a DFSchemaRef>,
     props: &'b ExecutionProps,
 }
@@ -338,7 +339,7 @@ impl<'a> ConstEvaluator<'a> {
         let schema = Schema::new(vec![Field::new(DUMMY_COL_NAME, DataType::Null, true)]);
 
         // Need a single "input" row to produce a single output row
-        let col = new_null_array(&DataType::Null, 1);
+        let col = new_null_array(DataType::Null, 1).into();
         let input_batch =
             RecordBatch::try_new(std::sync::Arc::new(schema), vec![col]).unwrap();
 
@@ -729,11 +730,11 @@ impl<'a, S: SimplifyInfo> ExprRewriter for Simplifier<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_common::DFMetadata;
 
     use super::*;
     use crate::assert_contains;
@@ -1215,7 +1216,7 @@ mod tests {
                     DFField::new(None, "c1_non_null", DataType::Utf8, false),
                     DFField::new(None, "c2_non_null", DataType::Boolean, false),
                 ],
-                HashMap::new(),
+                DFMetadata::new(),
             )
             .unwrap(),
         )
@@ -1824,8 +1825,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let expected =
-            "Cannot cast string '' to value of arrow::datatypes::types::Int32Type type";
+        let expected = "Could not cast Utf8[] to value of type Int32";
         let actual = get_optimized_plan_err(&plan, &Utc::now());
         assert_contains!(actual, expected);
     }

@@ -25,11 +25,12 @@ use crate::physical_plan::{
     memory::MemoryStream, ColumnarValue, DisplayFormatType, Distribution, ExecutionPlan,
     Partitioning, PhysicalExpr,
 };
+use crate::record_batch::RecordBatch;
 use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -59,7 +60,7 @@ impl ValuesExec {
             schema
                 .fields()
                 .iter()
-                .map(|field| new_null_array(field.data_type(), 1))
+                .map(|field| new_null_array(field.data_type().clone(), 1).into())
                 .collect::<Vec<_>>(),
         )?;
         let arr = (0..n_col)
@@ -83,6 +84,7 @@ impl ValuesExec {
                     })
                     .collect::<Result<Vec<_>>>()
                     .and_then(ScalarValue::iter_to_array)
+                    .map(Arc::from)
             })
             .collect::<Result<Vec<_>>>()?;
         let batch = RecordBatch::try_new(schema.clone(), arr)?;

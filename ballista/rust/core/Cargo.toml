@@ -46,7 +46,9 @@ chrono = { version = "0.4", default-features = false }
 clap = { version = "3", features = ["derive", "cargo"] }
 parse_arg = "0.1.3"
 
-arrow-flight = { version = "10.0"  }
+arrow-format = { version = "0.4", features = ["flight-data", "flight-service"] }
+arrow = { package = "arrow2", version="0.10", features = ["io_ipc", "io_flight"] }
+
 datafusion = { path = "../../../datafusion", version = "7.0.0" }
 datafusion-proto = { path = "../../../datafusion-proto", version = "7.0.0" }
 

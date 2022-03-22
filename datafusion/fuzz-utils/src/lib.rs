@@ -16,10 +16,11 @@
 // under the License.
 
 //! Common utils for fuzz tests
-use arrow::{array::Int32Array, record_batch::RecordBatch};
+use arrow::array::Int32Array;
 use rand::prelude::StdRng;
 use rand::Rng;
 
+use datafusion_common::record_batch::RecordBatch;
 pub use env_logger;
 
 /// Extracts the i32 values from the set of batches and returns them as a single Vec
@@ -34,6 +35,7 @@ pub fn batches_to_vec(batches: &[RecordBatch]) -> Vec<Option<i32>> {
                 .downcast_ref::<Int32Array>()
                 .unwrap()
                 .iter()
+                .map(|v| v.copied())
         })
         .collect()
 }
@@ -54,7 +56,7 @@ pub fn add_empty_batches(
     batches: Vec<RecordBatch>,
     rng: &mut StdRng,
 ) -> Vec<RecordBatch> {
-    let schema = batches[0].schema();
+    let schema = batches[0].schema().clone();
 
     batches
         .into_iter()

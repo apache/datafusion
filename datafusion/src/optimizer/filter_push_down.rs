@@ -602,6 +602,7 @@ mod tests {
     use crate::{logical_plan::col, prelude::JoinType};
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
+    use datafusion_common::field_util::SchemaExt;
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();

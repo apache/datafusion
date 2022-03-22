@@ -35,7 +35,6 @@ use crate::logical_plan::{
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
-use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident};
 use crate::{
     error::{DataFusionError, Result},
@@ -47,6 +46,10 @@ use crate::{
     sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use arrow::types::days_ms;
+use datafusion_common::ScalarValue;
+
+use datafusion_common::field_util::SchemaExt;
 use hashbrown::HashMap;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -1227,14 +1230,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         .iter()
                         .find(|field| match field.qualifier() {
                             Some(field_q) => {
-                                field.name() == &col.name
+                                field.name() == col.name
                                     && field_q.ends_with(&format!(".{}", q))
                             }
                             _ => false,
                         }) {
                         Some(df_field) => Expr::Column(Column {
                             relation: df_field.qualifier().cloned(),
-                            name: df_field.name().clone(),
+                            name: df_field.name().to_string(),
                         }),
                         None => Expr::Column(col),
                     }
@@ -1995,7 +1998,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ))));
         }
 
-        let result: i64 = (result_days << 32) | result_millis;
+        let result = days_ms::new(result_days as i32, result_millis as i32);
         Ok(Expr::Literal(ScalarValue::IntervalDayTime(Some(result))))
     }
 

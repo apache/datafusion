@@ -163,7 +163,8 @@ mod tests {
     use crate::test_util::{self, aggr_test_schema};
     use arrow::array::*;
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use arrow::record_batch::RecordBatch;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use futures::FutureExt;
 
     fn create_test_schema(partitions: usize) -> Result<(Arc<CsvExec>, SchemaRef)> {
@@ -234,15 +235,15 @@ mod tests {
 
         // c3 is small int
 
-        let count: &UInt64Array = as_primitive_array(&columns[0]);
+        let count = columns[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         assert_eq!(count.value(0), 100);
         assert_eq!(count.value(99), 100);
 
-        let max: &Int8Array = as_primitive_array(&columns[1]);
+        let max = columns[1].as_any().downcast_ref::<Int8Array>().unwrap();
         assert_eq!(max.value(0), 125);
         assert_eq!(max.value(99), 125);
 
-        let min: &Int8Array = as_primitive_array(&columns[2]);
+        let min = columns[2].as_any().downcast_ref::<Int8Array>().unwrap();
         assert_eq!(min.value(0), -117);
         assert_eq!(min.value(99), -117);
 

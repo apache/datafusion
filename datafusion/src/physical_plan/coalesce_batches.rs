@@ -18,6 +18,8 @@
 //! CoalesceBatchesExec combines small batches into larger batches for more efficient use of
 //! vectorized processing by upstream operators.
 
+use arrow::array::ArrayRef;
+use arrow::chunk::Chunk;
 use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -30,11 +32,12 @@ use crate::physical_plan::{
 };
 
 use crate::execution::runtime_env::RuntimeEnv;
-use arrow::compute::kernels::concat::concat;
+use crate::record_batch::RecordBatch;
+use arrow::compute::concatenate::concatenate;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
+use datafusion_common::field_util::SchemaExt;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
@@ -285,12 +288,13 @@ pub fn concat_batches(
     }
     let mut arrays = Vec::with_capacity(schema.fields().len());
     for i in 0..schema.fields().len() {
-        let array = concat(
+        let array = concatenate(
             &batches
                 .iter()
                 .map(|batch| batch.column(i).as_ref())
                 .collect::<Vec<_>>(),
-        )?;
+        )?
+        .into();
         arrays.push(array);
     }
     debug!(
@@ -299,6 +303,34 @@ pub fn concat_batches(
         row_count
     );
     RecordBatch::try_new(schema.clone(), arrays)
+}
+
+/// Concatenates an array of `arrow::chunk::Chunk` into one
+pub fn concat_chunks(
+    schema: &SchemaRef,
+    batches: &[Chunk<ArrayRef>],
+    row_count: usize,
+) -> ArrowResult<Chunk<ArrayRef>> {
+    if batches.is_empty() {
+        return Ok(Chunk::new(vec![]));
+    }
+    let mut arrays = Vec::with_capacity(schema.fields().len());
+    for i in 0..schema.fields().len() {
+        let array = concatenate(
+            &batches
+                .iter()
+                .map(|batch| batch.columns()[i].as_ref())
+                .collect::<Vec<_>>(),
+        )?
+        .into();
+        arrays.push(array);
+    }
+    debug!(
+        "Combined {} batches containing {} rows",
+        batches.len(),
+        row_count
+    );
+    Chunk::try_new(arrays)
 }
 
 #[cfg(test)]

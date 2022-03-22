@@ -20,10 +20,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::{
-    datatypes::{DataType, Schema},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Schema};
+use datafusion_common::record_batch::RecordBatch;
 
 use crate::PhysicalExpr;
 use datafusion_common::Result;
@@ -81,15 +79,17 @@ pub fn lit(value: ScalarValue) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int32Array;
+
+    use arrow::array::*;
     use arrow::datatypes::*;
+    use datafusion_common::field_util::SchemaExt;
     use datafusion_common::Result;
 
     #[test]
     fn literal_i32() -> Result<()> {
         // create an arbitrary record bacth
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let a = Int32Array::from(vec![Some(1), None, Some(3), Some(4), Some(5)]);
+        let a = Int32Array::from_iter(vec![Some(1), None, Some(3), Some(4), Some(5)]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
 
         // create and evaluate a literal expression

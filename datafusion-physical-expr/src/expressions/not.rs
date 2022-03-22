@@ -24,9 +24,10 @@ use std::sync::Arc;
 use crate::PhysicalExpr;
 use arrow::array::BooleanArray;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_expr::ColumnarValue;
 
 /// Not expression
@@ -82,7 +83,7 @@ impl PhysicalExpr for NotExpr {
                             )
                         })?;
                 Ok(ColumnarValue::Array(Arc::new(
-                    arrow::compute::kernels::boolean::not(array)?,
+                    arrow::compute::boolean::not(array),
                 )))
             }
             ColumnarValue::Scalar(scalar) => {
@@ -118,8 +119,10 @@ pub fn not(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use crate::expressions::col;
     use arrow::datatypes::*;
+    use datafusion_common::field_util::SchemaExt;
     use datafusion_common::Result;
 
     #[test]
@@ -130,8 +133,8 @@ mod tests {
         assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
         assert!(expr.nullable(&schema)?);
 
-        let input = BooleanArray::from(vec![Some(true), None, Some(false)]);
-        let expected = &BooleanArray::from(vec![Some(false), None, Some(true)]);
+        let input = BooleanArray::from_iter(vec![Some(true), None, Some(false)]);
+        let expected = &BooleanArray::from_iter(vec![Some(false), None, Some(true)]);
 
         let batch =
             RecordBatch::try_new(Arc::new(schema.clone()), vec![Arc::new(input)])?;

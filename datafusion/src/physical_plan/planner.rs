@@ -57,10 +57,11 @@ use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
 };
-use arrow::compute::SortOptions;
+use arrow::compute::sort::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::{compute::can_cast_types, datatypes::DataType};
+use arrow::{compute::cast::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -529,7 +530,7 @@ impl DefaultPhysicalPlanner {
                     let contains_dict = groups
                         .iter()
                         .flat_map(|x| x.0.data_type(physical_input_schema.as_ref()))
-                        .any(|x| matches!(x, DataType::Dictionary(_, _)));
+                        .any(|x| matches!(x, DataType::Dictionary(_, _, _)));
 
                     let can_repartition = !groups.is_empty()
                         && ctx_state.config.target_partitions > 1
@@ -1434,17 +1435,13 @@ mod tests {
     use crate::physical_plan::{
         expressions, DisplayFormatType, Partitioning, Statistics,
     };
-    use crate::scalar::ScalarValue;
     use crate::{
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
-    use arrow::datatypes::{DataType, Field, SchemaRef};
-    use async_trait::async_trait;
-    use datafusion_common::{DFField, DFSchema, DFSchemaRef};
-    use datafusion_expr::sum;
-    use datafusion_expr::{col, lit};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_common::{DFField, DFMetadata, DFSchemaRef, ScalarValue};
+    use datafusion_expr::{col, lit, sum};
     use fmt::Debug;
-    use std::collections::HashMap;
     use std::convert::TryFrom;
     use std::{any::Any, fmt};
 
@@ -1625,19 +1622,15 @@ mod tests {
             DFField { qualifier: None, field: Field { \
                 name: \"a\", \
                 data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: None } }\
-        ], metadata: {} }, \
+                is_nullable: false, \
+                metadata: {} } }\
+        ] }, \
         ExecutionPlan schema: Schema { fields: [\
             Field { \
                 name: \"b\", \
                 data_type: Int32, \
-                nullable: false, \
-                dict_id: 0, \
-                dict_is_ordered: false, \
-                metadata: None }\
+                is_nullable: false, \
+                metadata: {} }\
         ], metadata: {} }";
         match plan {
             Ok(_) => panic!("Expected planning failure"),
@@ -1675,7 +1668,7 @@ mod tests {
         .build()?;
         let execution_plan = plan(&logical_plan).await?;
         // verify that the plan correctly adds cast from Int64(1) to Utf8
-        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { safe: false } }], negated: false }";
+        let expected = "InListExpr { expr: Column { name: \"c1\", index: 0 }, list: [Literal { value: Utf8(\"a\") }, CastExpr { expr: Literal { value: Int64(1) }, cast_type: Utf8, cast_options: CastOptions { wrapped: false, partial: false } }], negated: false }";
         assert!(format!("{:?}", execution_plan).contains(expected));
 
         // expression: "a in (true, 'a')"
@@ -1819,7 +1812,7 @@ mod tests {
                 schema: DFSchemaRef::new(
                     DFSchema::new_with_metadata(
                         vec![DFField::new(None, "a", DataType::Int32, false)],
-                        HashMap::new(),
+                        DFMetadata::new(),
                     )
                     .unwrap(),
                 ),

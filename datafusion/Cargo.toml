@@ -43,11 +43,11 @@ simd = ["arrow/simd"]
 crypto_expressions = [ "datafusion-physical-expr/crypto_expressions" ]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
-pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
+pyarrow = ["pyo3", "datafusion-common/pyarrow"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
 # Used to enable the avro format
-avro = ["avro-rs", "num-traits", "datafusion-common/avro"]
+avro = ["arrow/io_avro", "arrow/io_avro_async", "arrow/io_avro_compression", "num-traits", "avro-schema"]
 # Used to enable row format experiment
 row = []
 # Used to enable JIT code generation
@@ -60,12 +60,11 @@ datafusion-jit = { path = "../datafusion-jit", version = "7.0.0", optional = tru
 datafusion-physical-expr = { path = "../datafusion-physical-expr", version = "7.0.0" }
 ahash = { version = "0.7", default-features = false }
 hashbrown = { version = "0.12", features = ["raw"] }
-arrow = { version = "10.0", features = ["prettyprint"] }
-parquet = { version = "10.0", features = ["arrow"] }
+parquet = { package = "parquet2", version = "0.10", default_features = false, features = ["stream"] }
 sqlparser = "0.15"
 paste = "^1.0"
 num_cpus = "1.13.0"
-chrono = { version = "0.4", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 async-trait = "0.1.41"
 futures = "0.3"
 pin-project-lite= "^0.2.7"
@@ -76,16 +75,25 @@ ordered-float = "2.10"
 lazy_static = { version = "^1.4.0" }
 smallvec = { version = "1.6", features = ["union"] }
 rand = "0.8"
-avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 num-traits = { version = "0.2", optional = true }
 pyo3 = { version = "0.16", optional = true }
 tempfile = "3"
 parking_lot = "0.12"
 
+avro-schema = { version = "0.2", optional = true }
+# used to print arrow arrays in a nice columnar format
+comfy-table = { version = "5.0", default-features = false }
+
+[dependencies.arrow]
+package = "arrow2"
+version="0.10"
+features = ["io_csv", "io_json", "io_parquet", "io_parquet_compression", "io_ipc", "ahash", "compute"]
+
 [dev-dependencies]
 criterion = "0.3"
 doc-comment = "0.3"
 fuzz-utils = { path = "fuzz-utils" }
+parquet-format-async-temp = "0.2"
 
 [[bench]]
 name = "aggregate_query_sql"

@@ -20,11 +20,11 @@
 use std::any::Any;
 use std::sync::Arc;
 
+use crate::expressions::cast::{cast_with_error, DEFAULT_DATAFUSION_CAST_OPTIONS};
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::Float64Array;
 use arrow::{
     array::{ArrayRef, UInt64Array},
-    compute::cast,
     datatypes::DataType,
     datatypes::Field,
 };
@@ -282,8 +282,16 @@ impl Accumulator for CovarianceAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values1 = &cast(&values[0], &DataType::Float64)?;
-        let values2 = &cast(&values[1], &DataType::Float64)?;
+        let values1 = &cast_with_error(
+            values[0].as_ref(),
+            &DataType::Float64,
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )?;
+        let values2 = &cast_with_error(
+            values[1].as_ref(),
+            &DataType::Float64,
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )?;
 
         let mut arr1 = values1
             .as_any()
@@ -389,14 +397,15 @@ mod tests {
     use super::*;
     use crate::expressions::col;
     use crate::generic_test_op2;
-    use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
 
     #[test]
     fn covariance_f64_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(vec![4_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -411,8 +420,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(vec![4_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -427,8 +436,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_4() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4.1_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1.1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(vec![4.1_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -443,8 +452,8 @@ mod tests {
 
     #[test]
     fn covariance_f64_5() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-        let b: ArrayRef = Arc::new(Float64Array::from(vec![4.1_f64, 5_f64, 6_f64]));
+        let a: ArrayRef = Arc::new(Float64Array::from_slice(vec![1.1_f64, 2_f64, 3_f64]));
+        let b: ArrayRef = Arc::new(Float64Array::from_slice(vec![4.1_f64, 5_f64, 6_f64]));
 
         generic_test_op2!(
             a,
@@ -459,10 +468,10 @@ mod tests {
 
     #[test]
     fn covariance_f64_6() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![
+        let a = Arc::new(Float64Array::from_slice(&[
             1_f64, 2_f64, 3_f64, 1.1_f64, 2.2_f64, 3.3_f64,
         ]));
-        let b = Arc::new(Float64Array::from(vec![
+        let b = Arc::new(Float64Array::from_slice(&[
             4_f64, 5_f64, 6_f64, 4.4_f64, 5.5_f64, 6.6_f64,
         ]));
 
@@ -479,8 +488,8 @@ mod tests {
 
     #[test]
     fn covariance_i32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![4, 5, 6]));
+        let a: ArrayRef = Arc::new(Int32Array::from_slice(vec![1, 2, 3]));
+        let b: ArrayRef = Arc::new(Int32Array::from_slice(vec![4, 5, 6]));
 
         generic_test_op2!(
             a,
@@ -495,8 +504,8 @@ mod tests {
 
     #[test]
     fn covariance_u32() -> Result<()> {
-        let a: ArrayRef = Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32]));
-        let b: ArrayRef = Arc::new(UInt32Array::from(vec![4_u32, 5_u32, 6_u32]));
+        let a: ArrayRef = Arc::new(UInt32Array::from_slice(vec![1_u32, 2_u32, 3_u32]));
+        let b: ArrayRef = Arc::new(UInt32Array::from_slice(vec![4_u32, 5_u32, 6_u32]));
         generic_test_op2!(
             a,
             b,
@@ -510,8 +519,8 @@ mod tests {
 
     #[test]
     fn covariance_f32() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32]));
-        let b: ArrayRef = Arc::new(Float32Array::from(vec![4_f32, 5_f32, 6_f32]));
+        let a: ArrayRef = Arc::new(Float32Array::from_slice(vec![1_f32, 2_f32, 3_f32]));
+        let b: ArrayRef = Arc::new(Float32Array::from_slice(vec![4_f32, 5_f32, 6_f32]));
         generic_test_op2!(
             a,
             b,
@@ -536,8 +545,8 @@ mod tests {
 
     #[test]
     fn covariance_i32_with_nulls_1() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), None, Some(6)]));
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![Some(1), None, Some(3)]));
+        let b: ArrayRef = Arc::new(Int32Array::from_iter(vec![Some(4), None, Some(6)]));
 
         generic_test_op2!(
             a,
@@ -552,8 +561,9 @@ mod tests {
 
     #[test]
     fn covariance_i32_with_nulls_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5), Some(6)]));
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![Some(1), None, Some(3)]));
+        let b: ArrayRef =
+            Arc::new(Int32Array::from_iter(vec![Some(4), Some(5), Some(6)]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -575,8 +585,8 @@ mod tests {
 
     #[test]
     fn covariance_i32_all_nulls() -> Result<()> {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
-        let b: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
+        let a: ArrayRef = Arc::new(Int32Array::from_iter(vec![None, None]));
+        let b: ArrayRef = Arc::new(Int32Array::from_iter(vec![None, None]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -598,10 +608,10 @@ mod tests {
 
     #[test]
     fn covariance_f64_merge_1() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
-        let c = Arc::new(Float64Array::from(vec![1.1_f64, 2.2_f64, 3.3_f64]));
-        let d = Arc::new(Float64Array::from(vec![4.4_f64, 5.5_f64, 6.6_f64]));
+        let a = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(vec![4_f64, 5_f64, 6_f64]));
+        let c = Arc::new(Float64Array::from_slice(vec![1.1_f64, 2.2_f64, 3.3_f64]));
+        let d = Arc::new(Float64Array::from_slice(vec![4.4_f64, 5.5_f64, 6.6_f64]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, false),
@@ -633,10 +643,10 @@ mod tests {
 
     #[test]
     fn covariance_f64_merge_2() -> Result<()> {
-        let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
-        let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64, 6_f64]));
-        let c = Arc::new(Float64Array::from(vec![None]));
-        let d = Arc::new(Float64Array::from(vec![None]));
+        let a = Arc::new(Float64Array::from_slice(vec![1_f64, 2_f64, 3_f64]));
+        let b = Arc::new(Float64Array::from_slice(vec![4_f64, 5_f64, 6_f64]));
+        let c = Arc::new(Float64Array::from_iter(vec![None]));
+        let d = Arc::new(Float64Array::from_iter(vec![None]));
 
         let schema = Schema::new(vec![
             Field::new("a", DataType::Float64, false),

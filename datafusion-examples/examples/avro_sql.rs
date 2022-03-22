@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use datafusion::arrow::util::pretty;
+use datafusion::arrow_print;
 
 use datafusion::error::Result;
 use datafusion::prelude::*;
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     // create local execution context
     let mut ctx = ExecutionContext::new();
 
-    let testdata = datafusion::arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::test_util::arrow_test_data();
 
     // register avro file with the execution context
     let avro_file = &format!("{}/avro/alltypes_plain.avro", testdata);
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
     let results = df.collect().await?;
 
     // print the results
-    pretty::print_batches(&results)?;
+    println!("{}", arrow_print::write(&results));
 
     Ok(())
 }

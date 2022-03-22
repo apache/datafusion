@@ -38,6 +38,7 @@ use datafusion::logical_plan::{
 };
 use datafusion::prelude::ExecutionContext;
 
+use datafusion::field_util::{FieldExt, SchemaExt};
 use prost::bytes::BufMut;
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
@@ -858,6 +859,7 @@ mod roundtrip_tests {
         FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
     };
     use datafusion::error::DataFusionError;
+    use datafusion::field_util::SchemaExt;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
         datasource::object_store::local::LocalFileSystem,

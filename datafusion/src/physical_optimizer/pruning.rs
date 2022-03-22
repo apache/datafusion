@@ -33,9 +33,12 @@ use std::{collections::HashSet, sync::Arc};
 
 use arrow::{
     array::{new_null_array, ArrayRef, BooleanArray},
+    compute::cast,
     datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
 };
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_physical_expr::expressions::DEFAULT_DATAFUSION_CAST_OPTIONS;
 
 use crate::execution::context::ExecutionProps;
 use crate::physical_plan::planner::create_physical_expr;
@@ -365,7 +368,8 @@ fn build_statistics_record_batch<S: PruningStatistics>(
             StatisticsType::Max => statistics.max_values(column),
             StatisticsType::NullCount => statistics.null_counts(column),
         };
-        let array = array.unwrap_or_else(|| new_null_array(data_type, num_containers));
+        let array = array
+            .unwrap_or_else(|| new_null_array(data_type.clone(), num_containers).into());
 
         if num_containers != array.len() {
             return Err(DataFusionError::Internal(format!(
@@ -377,7 +381,9 @@ fn build_statistics_record_batch<S: PruningStatistics>(
 
         // cast statistics array to required data type (e.g. parquet
         // provides timestamp statistics as "Int64")
-        let array = arrow::compute::cast(&array, data_type)?;
+        let array =
+            cast::cast(array.as_ref(), data_type, DEFAULT_DATAFUSION_CAST_OPTIONS)?
+                .into();
 
         fields.push(stat_field.clone());
         arrays.push(array);
@@ -774,11 +780,11 @@ enum StatisticsType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+
     use crate::logical_plan::{col, lit};
     use crate::{assert_batches_eq, physical_optimizer::pruning::StatisticsType};
     use arrow::{
-        array::{BinaryArray, Int32Array, Int64Array, StringArray},
+        array::*,
         datatypes::{DataType, TimeUnit},
     };
     use std::collections::HashMap;
@@ -806,8 +812,8 @@ mod tests {
             max: impl IntoIterator<Item = Option<&'a str>>,
         ) -> Self {
             Self {
-                min: Arc::new(min.into_iter().collect::<StringArray>()),
-                max: Arc::new(max.into_iter().collect::<StringArray>()),
+                min: Arc::new(min.into_iter().collect::<Utf8Array<i32>>()),
+                max: Arc::new(max.into_iter().collect::<Utf8Array<i32>>()),
             }
         }
 
@@ -997,8 +1003,8 @@ mod tests {
 
         // Note the statistics pass back i64 (not timestamp)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
-            max_values: Some(Arc::new(Int64Array::from(vec![Some(20)]))),
+            min_values: Some(Arc::new(Int64Array::from_iter(vec![Some(10)]))),
+            max_values: Some(Arc::new(Int64Array::from_iter(vec![Some(20)]))),
             num_containers: 1,
         };
 
@@ -1020,8 +1026,8 @@ mod tests {
         let required_columns = RequiredStatColumns::new();
 
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
-            max_values: Some(Arc::new(Int64Array::from(vec![Some(20)]))),
+            min_values: Some(Arc::new(Int64Array::from_iter(vec![Some(10)]))),
+            max_values: Some(Arc::new(Int64Array::from_iter(vec![Some(20)]))),
             num_containers: 1,
         };
 
@@ -1047,7 +1053,9 @@ mod tests {
 
         // Note the statistics return binary (which can't be cast to string)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(BinaryArray::from_slice(&[&[255u8] as &[u8]]))),
+            min_values: Some(Arc::new(BinaryArray::<i32>::from_slice(&[
+                &[255u8] as &[u8]
+            ]))),
             max_values: None,
             num_containers: 1,
         };
@@ -1076,8 +1084,8 @@ mod tests {
 
         // Note the statistics pass back i64 (not timestamp)
         let statistics = OneContainerStats {
-            min_values: Some(Arc::new(Int64Array::from(vec![Some(10)]))),
-            max_values: Some(Arc::new(Int64Array::from(vec![Some(20)]))),
+            min_values: Some(Arc::new(Int64Array::from_iter(vec![Some(10)]))),
+            max_values: Some(Arc::new(Int64Array::from_iter(vec![Some(20)]))),
             num_containers: 3,
         };
 

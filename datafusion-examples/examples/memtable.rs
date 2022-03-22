@@ -17,10 +17,11 @@
 
 use datafusion::arrow::array::{UInt64Array, UInt8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
+use datafusion::field_util::SchemaExt;
 use datafusion::prelude::ExecutionContext;
+use datafusion::record_batch::RecordBatch;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -56,8 +57,8 @@ fn create_memtable() -> Result<MemTable> {
 }
 
 fn create_record_batch() -> Result<RecordBatch> {
-    let id_array = UInt8Array::from(vec![1]);
-    let account_array = UInt64Array::from(vec![9000]);
+    let id_array = UInt8Array::from_slice(vec![1]);
+    let account_array = UInt64Array::from_slice(vec![9000]);
 
     Result::Ok(
         RecordBatch::try_new(

@@ -17,12 +17,14 @@
 
 //! Columnar value module contains a set of types that represent a columnar value.
 
+use std::sync::Arc;
+
 use arrow::array::ArrayRef;
 use arrow::array::NullArray;
 use arrow::datatypes::DataType;
-use arrow::record_batch::RecordBatch;
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
-use std::sync::Arc;
 
 /// Represents the result from an expression
 #[derive(Clone)]
@@ -57,6 +59,9 @@ pub type NullColumnarValue = ColumnarValue;
 impl From<&RecordBatch> for NullColumnarValue {
     fn from(batch: &RecordBatch) -> Self {
         let num_rows = batch.num_rows();
-        ColumnarValue::Array(Arc::new(NullArray::new(num_rows)))
+        ColumnarValue::Array(Arc::new(NullArray::new_null(
+            DataType::Struct(batch.schema().fields.to_vec()),
+            num_rows,
+        )))
     }
 }

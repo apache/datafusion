@@ -17,26 +17,29 @@
 
 //! Execution plan for reading CSV files
 
-use crate::error::{DataFusionError, Result};
-use crate::execution::context::ExecutionContext;
-use crate::physical_plan::expressions::PhysicalSortExpr;
-use crate::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-};
-
-use crate::execution::runtime_env::RuntimeEnv;
-use arrow::csv;
 use arrow::datatypes::SchemaRef;
+use arrow::error::Result as ArrowResult;
+use arrow::io::csv;
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+use datafusion_common::record_batch::RecordBatch;
 use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::fs;
+use std::io::{BufWriter, Read};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::task::{self, JoinHandle};
 
 use super::file_stream::{BatchIter, FileStream};
 use super::FileScanConfig;
+use crate::error::{DataFusionError, Result};
+use crate::execution::context::ExecutionContext;
+use crate::execution::runtime_env::RuntimeEnv;
+use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::{
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+};
 
 /// Execution plan for scanning a CSV file
 #[derive(Debug, Clone)]
@@ -73,6 +76,89 @@ impl CsvExec {
     /// A column delimiter
     pub fn delimiter(&self) -> u8 {
         self.delimiter
+    }
+}
+
+// CPU-intensive task
+fn deserialize(
+    rows: &[csv::read::ByteRecord],
+    projection: Option<&Vec<usize>>,
+    schema: &SchemaRef,
+) -> ArrowResult<RecordBatch> {
+    csv::read::deserialize_batch(
+        rows,
+        schema.fields(),
+        projection.map(|p| p.as_slice()),
+        0,
+        csv::read::deserialize_column,
+    )
+    .map(|chunk| RecordBatch::new_with_chunk(schema, chunk))
+}
+
+struct CsvBatchReader<R: Read> {
+    reader: csv::read::Reader<R>,
+    current_read: usize,
+    batch_size: usize,
+    rows: Vec<csv::read::ByteRecord>,
+    limit: Option<usize>,
+    projection: Option<Vec<usize>>,
+    schema: SchemaRef,
+}
+
+impl<R: Read> CsvBatchReader<R> {
+    fn new(
+        reader: csv::read::Reader<R>,
+        schema: SchemaRef,
+        batch_size: usize,
+        limit: Option<usize>,
+        projection: Option<Vec<usize>>,
+    ) -> Self {
+        let rows = vec![csv::read::ByteRecord::default(); batch_size];
+        Self {
+            reader,
+            schema,
+            current_read: 0,
+            rows,
+            batch_size,
+            limit,
+            projection,
+        }
+    }
+}
+
+impl<R: Read> Iterator for CsvBatchReader<R> {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let batch_size = match self.limit {
+            Some(limit) => {
+                if self.current_read >= limit {
+                    return None;
+                }
+                self.batch_size.min(limit - self.current_read)
+            }
+            None => self.batch_size,
+        };
+        let rows_read =
+            csv::read::read_rows(&mut self.reader, 0, &mut self.rows[..batch_size]);
+
+        match rows_read {
+            Ok(rows_read) => {
+                if rows_read > 0 {
+                    self.current_read += rows_read;
+
+                    let batch = deserialize(
+                        &self.rows[..rows_read],
+                        self.projection.as_ref(),
+                        &self.schema,
+                    );
+                    Some(batch)
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        }
     }
 }
 
@@ -133,17 +219,17 @@ impl ExecutionPlan for CsvExec {
         let start_line = if has_header { 1 } else { 0 };
 
         let fun = move |file, remaining: &Option<usize>| {
-            let bounds = remaining.map(|x| (0, x + start_line));
-            let datetime_format = None;
-            Box::new(csv::Reader::new(
-                file,
-                Arc::clone(&file_schema),
-                has_header,
-                Some(delimiter),
+            let bounds = remaining.map(|x| x + start_line);
+            let reader = csv::read::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .has_headers(has_header)
+                .from_reader(file);
+            Box::new(CsvBatchReader::new(
+                reader,
+                file_schema.clone(),
                 batch_size,
                 bounds,
                 file_projection.clone(),
-                datetime_format,
             )) as BatchIter
         };
 
@@ -196,12 +282,25 @@ pub async fn plan_to_csv(
                 let plan = plan.clone();
                 let filename = format!("part-{}.csv", i);
                 let path = fs_path.join(&filename);
-                let file = fs::File::create(path)?;
-                let mut writer = csv::Writer::new(file);
+
+                let writer = std::fs::File::create(path)?;
+                let mut writer = BufWriter::new(writer);
+                let mut field_names = vec![];
+                let schema = plan.schema();
+                for f in schema.fields() {
+                    field_names.push(f.name());
+                }
+
+                let options = csv::write::SerializeOptions::default();
+
+                csv::write::write_header(&mut writer, &field_names, &options)?;
+
                 let stream = plan.execute(i, runtime.clone()).await?;
                 let handle: JoinHandle<Result<()>> = task::spawn(async move {
                     stream
-                        .map(|batch| writer.write(&batch?))
+                        .map(|batch| {
+                            csv::write::write_chunk(&mut writer, &batch?.into(), &options)
+                        })
                         .try_collect()
                         .await
                         .map_err(DataFusionError::from)
@@ -224,11 +323,13 @@ mod tests {
     use crate::prelude::*;
     use crate::test_util::aggr_test_schema_with_missing_col;
     use crate::{
+        assert_batches_eq,
         datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},
         scalar::ScalarValue,
         test_util::aggr_test_schema,
     };
     use arrow::datatypes::*;
+    use datafusion_common::field_util::SchemaExt;
     use futures::StreamExt;
     use std::fs::File;
     use std::io::Write;
@@ -276,7 +377,7 @@ mod tests {
             "+----+-----+------------+",
         ];
 
-        crate::assert_batches_eq!(expected, &[batch.slice(0, 5)]);
+        assert_batches_eq!(expected, &[batch_slice(&batch, 0, 5)]);
         Ok(())
     }
 
@@ -505,5 +606,22 @@ mod tests {
         assert_eq!(allparts_count, 80);
 
         Ok(())
+    }
+
+    fn batch_slice(batch: &RecordBatch, offset: usize, length: usize) -> RecordBatch {
+        let schema = batch.schema().clone();
+        if schema.fields().is_empty() {
+            assert_eq!(offset + length, 0);
+            return RecordBatch::new_empty(schema);
+        }
+        assert!((offset + length) <= batch.num_rows());
+
+        let columns = batch
+            .columns()
+            .iter()
+            .map(|column| column.slice(offset, length).into())
+            .collect();
+
+        RecordBatch::try_new(schema, columns).unwrap()
     }
 }

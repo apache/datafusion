@@ -21,7 +21,6 @@
 //! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
 
 use std::any::Any;
-use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -30,15 +29,16 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use crate::record_batch::RecordBatch;
+use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
-use arrow::record_batch::RecordBatch;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream, Statistics};
 use crate::execution::runtime_env::RuntimeEnv;
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
@@ -71,16 +71,16 @@ impl ProjectionExec {
                     e.data_type(&input_schema)?,
                     e.nullable(&input_schema)?,
                 );
-                field.set_metadata(get_field_metadata(e, &input_schema));
+                if let Some(metadata) = get_field_metadata(e, &input_schema) {
+                    field.metadata = metadata;
+                }
 
                 Ok(field)
             })
             .collect();
 
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields?,
-            input_schema.metadata().clone(),
-        ));
+        let schema =
+            Arc::new(Schema::new(fields?).with_metadata(input_schema.metadata().clone()));
 
         Ok(Self {
             expr,
@@ -205,7 +205,7 @@ impl ExecutionPlan for ProjectionExec {
 fn get_field_metadata(
     e: &Arc<dyn PhysicalExpr>,
     input_schema: &Schema,
-) -> Option<BTreeMap<String, String>> {
+) -> Option<Metadata> {
     let name = if let Some(column) = e.as_any().downcast_ref::<Column>() {
         column.name()
     } else {
@@ -215,7 +215,7 @@ fn get_field_metadata(
     input_schema
         .field_with_name(name)
         .ok()
-        .and_then(|f| f.metadata().as_ref().cloned())
+        .map(|f| f.metadata().clone())
 }
 
 fn stats_projection(
@@ -303,9 +303,9 @@ mod tests {
     use crate::datasource::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
-    use crate::scalar::ScalarValue;
     use crate::test::{self};
     use crate::test_util;
+    use datafusion_common::ScalarValue;
     use futures::future;
 
     #[tokio::test]
@@ -338,7 +338,7 @@ mod tests {
         )?;
 
         let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let col_metadata = col_field.metadata().clone();
         let data: &str = &col_metadata["testing"];
         assert_eq!(data, "test");
 

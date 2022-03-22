@@ -448,7 +448,7 @@ mod test {
     use crate::logical_plan::DFField;
     use crate::prelude::{col, lit};
     use arrow::datatypes::DataType;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{DFMetadata, ScalarValue};
 
     #[derive(Default)]
     struct RecordingRewriter {
@@ -572,7 +572,7 @@ mod test {
     }
 
     fn make_schema_with_empty_metadata(fields: Vec<DFField>) -> DFSchema {
-        DFSchema::new_with_metadata(fields, HashMap::new()).unwrap()
+        DFSchema::new_with_metadata(fields, DFMetadata::new()).unwrap()
     }
 
     fn make_field(relation: &str, column: &str) -> DFField {

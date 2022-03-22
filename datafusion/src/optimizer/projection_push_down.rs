@@ -18,7 +18,6 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, Join, Projection, TableScan, Window,
@@ -31,7 +30,8 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::{Field, Schema};
-use arrow::error::Result as ArrowResult;
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::{DataFusionError, Result};
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -88,7 +88,7 @@ fn get_projected_schema(
         .iter()
         .filter(|c| c.relation.is_none() || c.relation.as_ref() == table_name)
         .map(|c| schema.index_of(&c.name))
-        .filter_map(ArrowResult::ok)
+        .filter_map(Result::ok)
         .collect();
 
     if projection.is_empty() {
@@ -471,15 +471,13 @@ fn optimize_plan(
 
 #[cfg(test)]
 mod tests {
-
-    use std::collections::HashMap;
-
     use super::*;
     use crate::logical_plan::{
         col, exprlist_to_fields, lit, max, min, Expr, JoinType, LogicalPlanBuilder,
     };
     use crate::test::*;
     use arrow::datatypes::DataType;
+    use datafusion_common::DFMetadata;
 
     #[test]
     fn aggregate_no_group_by() -> Result<()> {
@@ -618,7 +616,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                DFMetadata::new()
             )?,
         );
 
@@ -662,7 +660,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "c1", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                DFMetadata::new()
             )?,
         );
 
@@ -704,7 +702,7 @@ mod tests {
                     DFField::new(Some("test"), "b", DataType::UInt32, false),
                     DFField::new(Some("test2"), "a", DataType::UInt32, false),
                 ],
-                HashMap::new()
+                DFMetadata::new()
             )?,
         );
 

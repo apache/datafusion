@@ -18,7 +18,6 @@
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
 #[cfg(feature = "jit")]
-use crate::error::Result;
 #[cfg(feature = "jit")]
 use crate::reg_fn;
 #[cfg(feature = "jit")]
@@ -28,7 +27,7 @@ use crate::row::{
 };
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+
 use arrow::util::bit_util::{ceil, round_upto_power_of_2, set_bit_raw, unset_bit_raw};
 #[cfg(feature = "jit")]
 use datafusion_jit::api::CodeBlock;

@@ -17,14 +17,12 @@
 
 //! Physical exec for built-in window function expressions.
 
-use super::BuiltInWindowFunctionExpr;
-use super::WindowExpr;
-use crate::{expressions::PhysicalSortExpr, PhysicalExpr};
-use arrow::compute::concat;
-use arrow::record_batch::RecordBatch;
+use crate::window::{BuiltInWindowFunctionExpr, WindowExpr};
+use crate::{PhysicalExpr, PhysicalSortExpr};
+use arrow::compute::concatenate;
 use arrow::{array::ArrayRef, datatypes::Field};
-use datafusion_common::DataFusionError;
-use datafusion_common::Result;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -90,6 +88,8 @@ impl WindowExpr for BuiltInWindowExpr {
             evaluator.evaluate(partition_points)?
         };
         let results = results.iter().map(|i| i.as_ref()).collect::<Vec<_>>();
-        concat(&results).map_err(DataFusionError::ArrowError)
+        concatenate::concatenate(&results)
+            .map(ArrayRef::from)
+            .map_err(DataFusionError::ArrowError)
     }
 }

@@ -28,7 +28,7 @@ use avro_rs::Error as AvroError;
 #[cfg(feature = "jit")]
 use cranelift_module::ModuleError;
 #[cfg(feature = "parquet")]
-use parquet::errors::ParquetError;
+use parquet::error::ParquetError;
 use sqlparser::parser::ParserError;
 
 /// Result type for operations that could result in an [DataFusionError]
@@ -94,8 +94,8 @@ impl From<DataFusionError> for ArrowError {
     fn from(e: DataFusionError) -> Self {
         match e {
             DataFusionError::ArrowError(e) => e,
-            DataFusionError::External(e) => ArrowError::ExternalError(e),
-            other => ArrowError::ExternalError(Box::new(other)),
+            DataFusionError::External(e) => ArrowError::External(String::new(), e),
+            other => ArrowError::External(String::new(), Box::new(other)),
         }
     }
 }
@@ -212,7 +212,9 @@ mod test {
     #[allow(clippy::try_err)]
     fn return_datafusion_error() -> crate::error::Result<()> {
         // Expect the '?' to work
-        let _bar = Err(ArrowError::SchemaError("bar".to_string()))?;
+        let _bar = Err(ArrowError::InvalidArgumentError(
+            "bad schema bar".to_string(),
+        ))?;
         Ok(())
     }
 }

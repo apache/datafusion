@@ -108,44 +108,44 @@ async fn parquet_list_columns() {
     let batch = &results[0];
     assert_eq!(3, batch.num_rows());
     assert_eq!(2, batch.num_columns());
-    assert_eq!(schema, batch.schema());
+    assert_eq!(schema.as_ref(), batch.schema().as_ref());
 
     let int_list_array = batch
         .column(0)
         .as_any()
-        .downcast_ref::<ListArray>()
+        .downcast_ref::<ListArray<i32>>()
         .unwrap();
     let utf8_list_array = batch
         .column(1)
         .as_any()
-        .downcast_ref::<ListArray>()
+        .downcast_ref::<ListArray<i32>>()
         .unwrap();
 
     assert_eq!(
         int_list_array
             .value(0)
             .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .downcast_ref::<PrimitiveArray<i64>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![Some(1), Some(2), Some(3),])
+        &PrimitiveArray::<i64>::from(vec![Some(1), Some(2), Some(3)])
     );
 
     assert_eq!(
         utf8_list_array
             .value(0)
             .as_any()
-            .downcast_ref::<StringArray>()
+            .downcast_ref::<Utf8Array<i32>>()
             .unwrap(),
-        &StringArray::try_from(vec![Some("abc"), Some("efg"), Some("hij"),]).unwrap()
+        &Utf8Array::<i32>::from(vec![Some("abc"), Some("efg"), Some("hij")])
     );
 
     assert_eq!(
         int_list_array
             .value(1)
             .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .downcast_ref::<PrimitiveArray<i64>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![None, Some(1),])
+        &PrimitiveArray::<i64>::from(vec![None, Some(1),])
     );
 
     assert!(utf8_list_array.is_null(1));
@@ -154,13 +154,13 @@ async fn parquet_list_columns() {
         int_list_array
             .value(2)
             .as_any()
-            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .downcast_ref::<PrimitiveArray<i64>>()
             .unwrap(),
-        &PrimitiveArray::<Int64Type>::from(vec![Some(4),])
+        &PrimitiveArray::<i64>::from(vec![Some(4),])
     );
 
     let result = utf8_list_array.value(2);
-    let result = result.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = result.as_any().downcast_ref::<Utf8Array<i32>>().unwrap();
 
     assert_eq!(result.value(0), "efg");
     assert!(result.is_null(1));

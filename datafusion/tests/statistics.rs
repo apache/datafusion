@@ -35,6 +35,7 @@ use datafusion::{
 
 use async_trait::async_trait;
 use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion_common::field_util::SchemaExt;
 
 /// This is a testing structure for statistics
 /// It will act both as a table provider and execution plan

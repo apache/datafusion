@@ -23,9 +23,9 @@ use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
@@ -35,11 +35,29 @@ use crate::physical_plan::common;
 use crate::physical_plan::memory::MemoryExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{repartition::RepartitionExec, Partitioning};
+use crate::record_batch::RecordBatch;
 
 /// In-memory table
 pub struct MemTable {
     schema: SchemaRef,
     batches: Vec<Vec<RecordBatch>>,
+}
+
+fn field_is_consistent(lhs: &Field, rhs: &Field) -> bool {
+    lhs.name() == rhs.name()
+        && lhs.data_type() == rhs.data_type()
+        && (lhs.is_nullable() || lhs.is_nullable() == rhs.is_nullable())
+}
+
+fn schema_is_consistent(lhs: &Schema, rhs: &Schema) -> bool {
+    if lhs.fields().len() != rhs.fields().len() {
+        return false;
+    }
+
+    lhs.fields()
+        .iter()
+        .zip(rhs.fields().iter())
+        .all(|(lhs, rhs)| field_is_consistent(lhs, rhs))
 }
 
 impl MemTable {
@@ -48,7 +66,7 @@ impl MemTable {
         if partitions
             .iter()
             .flatten()
-            .all(|batches| schema.contains(&batches.schema()))
+            .all(|batch| schema_is_consistent(schema.as_ref(), batch.schema()))
         {
             Ok(Self {
                 schema,
@@ -144,12 +162,11 @@ impl TableProvider for MemTable {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::from_slice::FromSlice;
+
     use arrow::array::Int32Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::error::ArrowError;
-    use futures::StreamExt;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[tokio::test]
     async fn test_with_projection() -> Result<()> {
@@ -167,7 +184,7 @@ mod tests {
                 Arc::new(Int32Array::from_slice(&[1, 2, 3])),
                 Arc::new(Int32Array::from_slice(&[4, 5, 6])),
                 Arc::new(Int32Array::from_slice(&[7, 8, 9])),
-                Arc::new(Int32Array::from(vec![None, None, Some(9)])),
+                Arc::new(Int32Array::from(&[None, None, Some(9)])),
             ],
         )?;
 
@@ -236,7 +253,7 @@ mod tests {
         let projection: Vec<usize> = vec![0, 4];
 
         match provider.scan(&Some(projection), &[], None).await {
-            Err(DataFusionError::ArrowError(ArrowError::SchemaError(e))) => {
+            Err(DataFusionError::ArrowError(ArrowError::InvalidArgumentError(e))) => {
                 assert_eq!(
                     "\"project index 4 out of bounds, max field 3\"",
                     format!("{:?}", e)
@@ -317,18 +334,16 @@ mod tests {
     #[tokio::test]
     async fn test_merged_schema() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::default());
-        let mut metadata = HashMap::new();
+        let mut metadata = BTreeMap::new();
         metadata.insert("foo".to_string(), "bar".to_string());
 
-        let schema1 = Schema::new_with_metadata(
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Int32, false),
-                Field::new("c", DataType::Int32, false),
-            ],
-            // test for comparing metadata
-            metadata,
-        );
+        // test for comparing metadata
+        let schema1 = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ])
+        .with_metadata(metadata);
 
         let schema2 = Schema::new(vec![
             // test for comparing nullability

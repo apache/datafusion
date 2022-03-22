@@ -21,12 +21,12 @@ use crate::arrow::array::UInt32Array;
 use crate::datasource::object_store::local::local_unpartitioned_file;
 use crate::datasource::{MemTable, PartitionedFile, TableProvider};
 use crate::error::Result;
-use crate::from_slice::FromSlice;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
-use array::{Array, ArrayRef};
-use arrow::array::{self, DecimalBuilder, Int32Array};
+use arrow::array::*;
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use datafusion_common::field_util::{FieldExt, SchemaExt};
+
+use datafusion_common::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
 use std::io::prelude::*;
@@ -43,8 +43,8 @@ pub fn create_table_dual() -> Arc<dyn TableProvider> {
     let batch = RecordBatch::try_new(
         dual_schema.clone(),
         vec![
-            Arc::new(array::Int32Array::from_slice(&[1])),
-            Arc::new(array::StringArray::from_slice(&["a"])),
+            Arc::new(Int32Array::from_slice(&[1])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a"])),
         ],
     )
     .unwrap();
@@ -123,7 +123,7 @@ pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {
         .schema()
         .fields()
         .iter()
-        .map(|f| f.name().clone())
+        .map(|f| f.name().to_string())
         .collect();
     assert_eq!(actual, expected);
 }
@@ -143,9 +143,9 @@ pub fn build_table_i32(
     RecordBatch::try_new(
         Arc::new(schema),
         vec![
-            Arc::new(Int32Array::from(a.1.clone())),
-            Arc::new(Int32Array::from(b.1.clone())),
-            Arc::new(Int32Array::from(c.1.clone())),
+            Arc::new(Int32Array::from_slice(a.1)),
+            Arc::new(Int32Array::from_slice(b.1)),
+            Arc::new(Int32Array::from_slice(c.1)),
         ],
     )
     .unwrap()
@@ -153,7 +153,11 @@ pub fn build_table_i32(
 
 /// Returns the column names on the schema
 pub fn columns(schema: &Schema) -> Vec<String> {
-    schema.fields().iter().map(|f| f.name().clone()).collect()
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.name().to_string())
+        .collect()
 }
 
 /// Return a new table provider that has a single Int32 column with
@@ -163,11 +167,10 @@ pub fn table_with_sequence(
     seq_end: i32,
 ) -> Result<Arc<dyn TableProvider>> {
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from((seq_start..=seq_end).collect::<Vec<_>>()));
-    let partitions = vec![vec![RecordBatch::try_new(
-        schema.clone(),
-        vec![arr as ArrayRef],
-    )?]];
+    let arr = Arc::new(Int32Array::from_slice(
+        &(seq_start..=seq_end).collect::<Vec<_>>(),
+    ));
+    let partitions = vec![vec![RecordBatch::try_new(schema.clone(), vec![arr])?]];
     Ok(Arc::new(MemTable::try_new(schema, partitions)?))
 }
 
@@ -177,8 +180,7 @@ pub fn make_partition(sz: i32) -> RecordBatch {
     let seq_end = sz;
     let values = (seq_start..seq_end).collect::<Vec<_>>();
     let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
-    let arr = Arc::new(Int32Array::from(values));
-    let arr = arr as ArrayRef;
+    let arr = Arc::new(Int32Array::from_slice(&values));
 
     RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
@@ -186,20 +188,20 @@ pub fn make_partition(sz: i32) -> RecordBatch {
 /// Return a new table which provide this decimal column
 pub fn table_with_decimal() -> Arc<dyn TableProvider> {
     let batch_decimal = make_decimal();
-    let schema = batch_decimal.schema();
+    let schema = batch_decimal.schema().clone();
     let partitions = vec![vec![batch_decimal]];
     Arc::new(MemTable::try_new(schema, partitions).unwrap())
 }
 
 fn make_decimal() -> RecordBatch {
-    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    let mut data = Vec::new();
     for i in 110000..110010 {
-        decimal_builder.append_value(i as i128).unwrap();
+        data.push(Some(i as i128));
     }
     for i in 100000..100010 {
-        decimal_builder.append_value(-i as i128).unwrap();
+        data.push(Some(-i as i128));
     }
-    let array = decimal_builder.finish();
+    let array = PrimitiveArray::<i128>::from(data).to(DataType::Decimal(10, 3));
     let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
     RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
 }

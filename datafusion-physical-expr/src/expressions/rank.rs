@@ -24,7 +24,7 @@ use crate::PhysicalExpr;
 use arrow::array::ArrayRef;
 use arrow::array::{Float64Array, UInt64Array};
 use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::Result;
 use std::any::Any;
 use std::iter;
@@ -39,6 +39,7 @@ pub struct Rank {
 }
 
 #[derive(Debug, Copy, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum RankType {
     Basic,
     Dense,
@@ -122,7 +123,7 @@ impl PartitionEvaluator for RankEvaluator {
     ) -> Result<ArrayRef> {
         // see https://www.postgresql.org/docs/current/functions-window.html
         let result: ArrayRef = match self.rank_type {
-            RankType::Dense => Arc::new(UInt64Array::from_iter_values(
+            RankType::Dense => Arc::new(UInt64Array::from_values(
                 ranks_in_partition
                     .iter()
                     .zip(1u64..)
@@ -134,7 +135,7 @@ impl PartitionEvaluator for RankEvaluator {
             RankType::Percent => {
                 // Returns the relative rank of the current row, that is (rank - 1) / (total partition rows - 1). The value thus ranges from 0 to 1 inclusive.
                 let denominator = (partition.end - partition.start) as f64;
-                Arc::new(Float64Array::from_iter_values(
+                Arc::new(Float64Array::from_values(
                     ranks_in_partition
                         .iter()
                         .scan(0_u64, |acc, range| {
@@ -147,7 +148,7 @@ impl PartitionEvaluator for RankEvaluator {
                         .flatten(),
                 ))
             }
-            RankType::Basic => Arc::new(UInt64Array::from_iter_values(
+            RankType::Basic => Arc::new(UInt64Array::from_values(
                 ranks_in_partition
                     .iter()
                     .scan(1_u64, |acc, range| {
@@ -167,6 +168,7 @@ impl PartitionEvaluator for RankEvaluator {
 mod tests {
     use super::*;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::field_util::SchemaExt;
 
     fn test_with_rank(expr: &Rank, expected: Vec<u64>) -> Result<()> {
         test_i32_result(
@@ -188,7 +190,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<f64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
+        let arr: ArrayRef = Arc::new(Int32Array::from_slice(data.as_slice()));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
@@ -197,7 +199,7 @@ mod tests {
             .evaluate_with_rank(vec![range], ranks)?;
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<Float64Array>().unwrap();
-        let result = result.values();
+        let result = result.values().as_slice();
         assert_eq!(expected, result);
         Ok(())
     }
@@ -208,7 +210,7 @@ mod tests {
         ranks: Vec<Range<usize>>,
         expected: Vec<u64>,
     ) -> Result<()> {
-        let arr: ArrayRef = Arc::new(Int32Array::from(data));
+        let arr: ArrayRef = Arc::new(Int32Array::from_values(data));
         let values = vec![arr];
         let schema = Schema::new(vec![Field::new("arr", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema), values.clone())?;
@@ -217,8 +219,8 @@ mod tests {
             .evaluate_with_rank(vec![0..8], ranks)?;
         assert_eq!(1, result.len());
         let result = result[0].as_any().downcast_ref::<UInt64Array>().unwrap();
-        let result = result.values();
-        assert_eq!(expected, result);
+        let expected = UInt64Array::from_values(expected);
+        assert_eq!(expected, *result);
         Ok(())
     }
 

@@ -24,7 +24,7 @@ mod average;
 #[macro_use]
 mod binary;
 mod case;
-mod cast;
+pub(crate) mod cast;
 mod column;
 mod count;
 mod cume_dist;
@@ -113,7 +113,7 @@ pub use crate::PhysicalSortExpr;
 #[cfg(test)]
 mod tests {
     use crate::AggregateExpr;
-    use arrow::record_batch::RecordBatch;
+    use datafusion_common::record_batch::RecordBatch;
     use datafusion_common::Result;
     use datafusion_common::ScalarValue;
     use std::sync::Arc;
@@ -127,7 +127,7 @@ mod tests {
             let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![$ARRAY])?;
 
             let agg = Arc::new(<$OP>::new(
-                col("a", &schema)?,
+                $crate::expressions::col("a", &schema)?,
                 "bla".to_string(),
                 $EXPECTED_DATATYPE,
             ));

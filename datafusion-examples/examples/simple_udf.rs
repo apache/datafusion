@@ -15,17 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::field_util::SchemaExt;
+use datafusion::prelude::*;
+use datafusion::record_batch::RecordBatch;
 use datafusion::{
     arrow::{
         array::{ArrayRef, Float32Array, Float64Array},
         datatypes::DataType,
-        record_batch::RecordBatch,
     },
     physical_plan::functions::Volatility,
 };
-
-use datafusion::from_slice::FromSlice;
-use datafusion::prelude::*;
 use datafusion::{error::Result, physical_plan::functions::make_scalar_function};
 use std::sync::Arc;
 
@@ -43,8 +42,8 @@ fn create_context() -> Result<ExecutionContext> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Float32Array::from_slice(&[2.1, 3.1, 4.1, 5.1])),
-            Arc::new(Float64Array::from_slice(&[1.0, 2.0, 3.0, 4.0])),
+            Arc::new(Float32Array::from_values(vec![2.1, 3.1, 4.1, 5.1])),
+            Arc::new(Float64Array::from_values(vec![1.0, 2.0, 3.0, 4.0])),
         ],
     )?;
 
@@ -92,7 +91,7 @@ async fn main() -> Result<()> {
                 match (base, exponent) {
                     // in arrow, any value can be null.
                     // Here we decide to make our UDF to return null when either base or exponent is null.
-                    (Some(base), Some(exponent)) => Some(base.powf(exponent)),
+                    (Some(base), Some(exponent)) => Some(base.powf(*exponent)),
                     _ => None,
                 }
             })

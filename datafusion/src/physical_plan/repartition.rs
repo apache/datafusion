@@ -26,7 +26,8 @@ use std::{any::Any, vec};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Statistics};
-use arrow::record_batch::RecordBatch;
+use crate::record_batch::RecordBatch;
+use arrow::array::UInt64Array;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -368,19 +369,21 @@ impl RepartitionExec {
                             continue;
                         }
                         let timer = r_metrics.repart_time.timer();
-                        let indices = partition_indices.into();
+                        let indices = UInt64Array::from_slice(&partition_indices);
                         // Produce batches based on indices
                         let columns = input_batch
                             .columns()
                             .iter()
                             .map(|c| {
-                                take(c.as_ref(), &indices, None).map_err(|e| {
-                                    DataFusionError::Execution(e.to_string())
-                                })
+                                take::take(c.as_ref(), &indices)
+                                    .map(|x| x.into())
+                                    .map_err(|e| {
+                                        DataFusionError::Execution(e.to_string())
+                                    })
                             })
                             .collect::<Result<Vec<Arc<dyn Array>>>>()?;
                         let output_batch =
-                            RecordBatch::try_new(input_batch.schema(), columns);
+                            RecordBatch::try_new(input_batch.schema().clone(), columns);
                         timer.done();
 
                         let timer = r_metrics.send_time.timer();
@@ -501,8 +504,10 @@ impl RecordBatchStream for RepartitionStream {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    type StringArray = Utf8Array<i32>;
+
     use super::*;
-    use crate::from_slice::FromSlice;
     use crate::test::create_vec_batches;
     use crate::{
         assert_batches_sorted_eq,
@@ -515,14 +520,12 @@ mod tests {
             },
         },
     };
+    use arrow::array::{ArrayRef, Utf8Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use arrow::record_batch::RecordBatch;
-    use arrow::{
-        array::{ArrayRef, StringArray},
-        error::ArrowError,
-    };
+    use arrow::error::ArrowError;
+    use datafusion_common::field_util::SchemaExt;
+    use datafusion_common::record_batch::RecordBatch;
     use futures::FutureExt;
-    use std::collections::HashSet;
 
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
@@ -669,11 +672,11 @@ mod tests {
         // have to send at least one batch through to provoke error
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         let input = MockExec::new(vec![Ok(batch)], schema);
         // This generates an error (partitioning type not supported)
         // but only after the plan is executed. The error should be
@@ -726,15 +729,17 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::default());
         let batch = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         // input stream returns one good batch and then one error. The
         // error should be returned.
-        let err = Err(ArrowError::ComputeError("bad data error".to_string()));
+        let err = Err(ArrowError::InvalidArgumentError(
+            "bad data error".to_string(),
+        ));
 
-        let schema = batch.schema();
+        let schema = batch.schema().clone();
         let input = MockExec::new(vec![Ok(batch), err], schema);
         let partitioning = Partitioning::RoundRobinBatch(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
@@ -760,19 +765,19 @@ mod tests {
         let runtime = Arc::new(RuntimeEnv::default());
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch2 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["frob", "baz"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["frob", "baz"])) as ArrayRef,
         )])
         .unwrap();
 
         // The mock exec doesn't return immediately (instead it
         // requires the input to wait at least once)
-        let schema = batch1.schema();
+        let schema = batch1.schema().clone();
         let expected_batches = vec![batch1.clone(), batch2.clone()];
         let input = MockExec::new(vec![Ok(batch1), Ok(batch2)], schema);
         let partitioning = Partitioning::RoundRobinBatch(1);
@@ -913,31 +918,31 @@ mod tests {
     fn make_barrier_exec() -> BarrierExec {
         let batch1 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["foo", "bar"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["foo", "bar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch2 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["frob", "baz"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["frob", "baz"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch3 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["goo", "gar"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["goo", "gar"])) as ArrayRef,
         )])
         .unwrap();
 
         let batch4 = RecordBatch::try_from_iter(vec![(
             "my_awesome_field",
-            Arc::new(StringArray::from_slice(&["grob", "gaz"])) as ArrayRef,
+            Arc::new(Utf8Array::<i32>::from_slice(&["grob", "gaz"])) as ArrayRef,
         )])
         .unwrap();
 
         // The barrier exec waits to be pinged
         // requires the input to wait at least once)
-        let schema = batch1.schema();
+        let schema = batch1.schema().clone();
         BarrierExec::new(vec![vec![batch1, batch2], vec![batch3, batch4]], schema)
     }
 
@@ -978,8 +983,8 @@ mod tests {
             ))],
             2,
         );
-        let schema = batch.schema();
-        let input = MockExec::new(vec![Ok(batch)], schema);
+        let schema = batch.schema().clone();
+        let input = MockExec::new(vec![Ok(batch)], schema.clone());
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
         let output_stream0 = exec.execute(0, runtime.clone()).await.unwrap();
         let batch0 = crate::physical_plan::common::collect(output_stream0)

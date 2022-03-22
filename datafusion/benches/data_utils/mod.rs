@@ -17,17 +17,11 @@
 
 //! This module provides the in-memory table for more realistic benchmarking.
 
-use arrow::{
-    array::Float32Array,
-    array::Float64Array,
-    array::StringArray,
-    array::UInt64Array,
-    datatypes::{DataType, Field, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::{array::*, datatypes::*};
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::from_slice::FromSlice;
+use datafusion::record_batch::RecordBatch;
+use datafusion_common::field_util::SchemaExt;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
@@ -130,11 +124,11 @@ fn create_record_batch(
     RecordBatch::try_new(
         schema,
         vec![
-            Arc::new(StringArray::from(keys)),
-            Arc::new(Float32Array::from_slice(&vec![i as f32; batch_size])),
+            Arc::new(Utf8Array::<i32>::from_slice(keys)),
+            Arc::new(Float32Array::from_slice(vec![i as f32; batch_size])),
             Arc::new(Float64Array::from(values)),
             Arc::new(UInt64Array::from(integer_values_wide)),
-            Arc::new(UInt64Array::from(integer_values_narrow)),
+            Arc::new(UInt64Array::from_slice(integer_values_narrow)),
         ],
     )
     .unwrap()

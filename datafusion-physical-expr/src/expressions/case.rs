@@ -17,14 +17,16 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::expressions::try_cast;
-use crate::PhysicalExpr;
-use arrow::array::{self, *};
-use arrow::compute::{eq, eq_utf8};
+use arrow::array::*;
+use arrow::compute::{comparison, if_then_else};
 use arrow::datatypes::{DataType, Schema};
-use arrow::record_batch::RecordBatch;
+
+use datafusion_common::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+
+use crate::expressions::try_cast;
+use crate::PhysicalExpr;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
 
@@ -107,208 +109,6 @@ impl CaseExpr {
     }
 }
 
-macro_rules! if_then_else {
-    ($BUILDER_TYPE:ty, $ARRAY_TYPE:ty, $BOOLS:expr, $TRUE:expr, $FALSE:expr) => {{
-        let true_values = $TRUE
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$ARRAY_TYPE>()
-            .expect("true_values downcast failed");
-
-        let false_values = $FALSE
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$ARRAY_TYPE>()
-            .expect("false_values downcast failed");
-
-        let mut builder = <$BUILDER_TYPE>::new($BOOLS.len());
-        for i in 0..$BOOLS.len() {
-            if $BOOLS.is_null(i) {
-                if false_values.is_null(i) {
-                    builder.append_null()?;
-                } else {
-                    builder.append_value(false_values.value(i))?;
-                }
-            } else if $BOOLS.value(i) {
-                if true_values.is_null(i) {
-                    builder.append_null()?;
-                } else {
-                    builder.append_value(true_values.value(i))?;
-                }
-            } else {
-                if false_values.is_null(i) {
-                    builder.append_null()?;
-                } else {
-                    builder.append_value(false_values.value(i))?;
-                }
-            }
-        }
-        Ok(Arc::new(builder.finish()))
-    }};
-}
-
-fn if_then_else(
-    bools: &BooleanArray,
-    true_values: ArrayRef,
-    false_values: ArrayRef,
-    data_type: &DataType,
-) -> Result<ArrayRef> {
-    match data_type {
-        DataType::UInt8 => if_then_else!(
-            array::UInt8Builder,
-            array::UInt8Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::UInt16 => if_then_else!(
-            array::UInt16Builder,
-            array::UInt16Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::UInt32 => if_then_else!(
-            array::UInt32Builder,
-            array::UInt32Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::UInt64 => if_then_else!(
-            array::UInt64Builder,
-            array::UInt64Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int8 => if_then_else!(
-            array::Int8Builder,
-            array::Int8Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int16 => if_then_else!(
-            array::Int16Builder,
-            array::Int16Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int32 => if_then_else!(
-            array::Int32Builder,
-            array::Int32Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int64 => if_then_else!(
-            array::Int64Builder,
-            array::Int64Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Float32 => if_then_else!(
-            array::Float32Builder,
-            array::Float32Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Float64 => if_then_else!(
-            array::Float64Builder,
-            array::Float64Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Utf8 => if_then_else!(
-            array::StringBuilder,
-            array::StringArray,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Boolean => if_then_else!(
-            array::BooleanBuilder,
-            array::BooleanArray,
-            bools,
-            true_values,
-            false_values
-        ),
-        other => Err(DataFusionError::Execution(format!(
-            "CASE does not support '{:?}'",
-            other
-        ))),
-    }
-}
-
-macro_rules! array_equals {
-    ($TY:ty, $L:expr, $R:expr, $eq_fn:expr) => {{
-        let when_value = $L
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$TY>()
-            .expect("array_equals downcast failed");
-
-        let base_value = $R
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$TY>()
-            .expect("array_equals downcast failed");
-
-        $eq_fn(when_value, base_value).map_err(DataFusionError::from)
-    }};
-}
-
-fn array_equals(
-    data_type: &DataType,
-    when_value: ArrayRef,
-    base_value: ArrayRef,
-) -> Result<BooleanArray> {
-    match data_type {
-        DataType::UInt8 => {
-            array_equals!(array::UInt8Array, when_value, base_value, eq)
-        }
-        DataType::UInt16 => {
-            array_equals!(array::UInt16Array, when_value, base_value, eq)
-        }
-        DataType::UInt32 => {
-            array_equals!(array::UInt32Array, when_value, base_value, eq)
-        }
-        DataType::UInt64 => {
-            array_equals!(array::UInt64Array, when_value, base_value, eq)
-        }
-        DataType::Int8 => {
-            array_equals!(array::Int8Array, when_value, base_value, eq)
-        }
-        DataType::Int16 => {
-            array_equals!(array::Int16Array, when_value, base_value, eq)
-        }
-        DataType::Int32 => {
-            array_equals!(array::Int32Array, when_value, base_value, eq)
-        }
-        DataType::Int64 => {
-            array_equals!(array::Int64Array, when_value, base_value, eq)
-        }
-        DataType::Float32 => {
-            array_equals!(array::Float32Array, when_value, base_value, eq)
-        }
-        DataType::Float64 => {
-            array_equals!(array::Float64Array, when_value, base_value, eq)
-        }
-        DataType::Utf8 => {
-            array_equals!(array::StringArray, when_value, base_value, eq_utf8)
-        }
-        other => Err(DataFusionError::Execution(format!(
-            "CASE does not support '{:?}'",
-            other
-        ))),
-    }
-}
-
 impl CaseExpr {
     /// This function evaluates the form of CASE that matches an expression to fixed values.
     ///
@@ -318,20 +118,19 @@ impl CaseExpr {
     ///     [ELSE result]
     /// END
     fn case_when_with_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
+        let return_type = self.when_then_expr[0].1.data_type(batch.schema())?;
         let expr = self.expr.as_ref().unwrap();
         let base_value = expr.evaluate(batch)?;
-        let base_type = expr.data_type(&batch.schema())?;
         let base_value = base_value.into_array(batch.num_rows());
 
         // start with the else condition, or nulls
-        let mut current_value: Option<ArrayRef> = if let Some(e) = &self.else_expr {
+        let mut current_value = if let Some(e) = &self.else_expr {
             // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type)
                 .unwrap_or_else(|_| e.clone());
-            Some(expr.evaluate(batch)?.into_array(batch.num_rows()))
+            expr.evaluate(batch)?.into_array(batch.num_rows())
         } else {
-            Some(new_null_array(&return_type, batch.num_rows()))
+            new_null_array(return_type, batch.num_rows()).into()
         };
 
         // walk backwards through the when/then expressions
@@ -345,17 +144,27 @@ impl CaseExpr {
             let then_value = then_value.into_array(batch.num_rows());
 
             // build boolean array representing which rows match the "when" value
-            let when_match = array_equals(&base_type, when_value, base_value.clone())?;
+            let when_match = comparison::eq(when_value.as_ref(), base_value.as_ref());
+            let when_match = if let Some(validity) = when_match.validity() {
+                // null values are never matched and should thus be "else".
+                BooleanArray::from_data(
+                    DataType::Boolean,
+                    when_match.values() & validity,
+                    None,
+                )
+            } else {
+                when_match
+            };
 
-            current_value = Some(if_then_else(
+            current_value = if_then_else::if_then_else(
                 &when_match,
-                then_value,
-                current_value.unwrap(),
-                &return_type,
-            )?);
+                then_value.as_ref(),
+                current_value.as_ref(),
+            )?
+            .into();
         }
 
-        Ok(ColumnarValue::Array(current_value.unwrap()))
+        Ok(ColumnarValue::Array(current_value))
     }
 
     /// This function evaluates the form of CASE where each WHEN expression is a boolean
@@ -366,15 +175,15 @@ impl CaseExpr {
     ///      [ELSE result]
     /// END
     fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
+        let return_type = self.when_then_expr[0].1.data_type(batch.schema())?;
 
         // start with the else condition, or nulls
-        let mut current_value: Option<ArrayRef> = if let Some(e) = &self.else_expr {
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+        let mut current_value = if let Some(e) = &self.else_expr {
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type)
                 .unwrap_or_else(|_| e.clone());
-            Some(expr.evaluate(batch)?.into_array(batch.num_rows()))
+            expr.evaluate(batch)?.into_array(batch.num_rows())
         } else {
-            Some(new_null_array(&return_type, batch.num_rows()))
+            new_null_array(return_type, batch.num_rows()).into()
         };
 
         // walk backwards through the when/then expressions
@@ -387,20 +196,31 @@ impl CaseExpr {
                 .as_ref()
                 .as_any()
                 .downcast_ref::<BooleanArray>()
-                .expect("WHEN expression did not return a BooleanArray");
+                .expect("WHEN expression did not return a BooleanArray")
+                .clone();
+            let when_value = if let Some(validity) = when_value.validity() {
+                // null values are never matched and should thus be "else".
+                BooleanArray::from_data(
+                    DataType::Boolean,
+                    when_value.values() & validity,
+                    None,
+                )
+            } else {
+                when_value
+            };
 
             let then_value = self.when_then_expr[i].1.evaluate(batch)?;
             let then_value = then_value.into_array(batch.num_rows());
 
-            current_value = Some(if_then_else(
-                when_value,
-                then_value,
-                current_value.unwrap(),
-                &return_type,
-            )?);
+            current_value = if_then_else::if_then_else(
+                &when_value,
+                then_value.as_ref(),
+                current_value.as_ref(),
+            )?
+            .into();
         }
 
-        Ok(ColumnarValue::Array(current_value.unwrap()))
+        Ok(ColumnarValue::Array(current_value))
     }
 }
 
@@ -455,11 +275,10 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::binary;
-    use crate::expressions::col;
-    use crate::expressions::lit;
-    use arrow::array::StringArray;
+    use crate::expressions::{binary, col, lit};
+    use arrow::array::Utf8Array;
     use arrow::datatypes::*;
+    use datafusion_common::field_util::SchemaExt;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
 
@@ -475,7 +294,7 @@ mod tests {
         let then2 = lit(ScalarValue::Int32(Some(456)));
 
         let expr = case(
-            Some(col("a", &schema)?),
+            Some(col("a", schema)?),
             &[(when1, then1), (when2, then2)],
             None,
         )?;
@@ -485,7 +304,7 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("failed to downcast to Int32Array");
 
-        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+        let expected = &Int32Array::from_iter(vec![Some(123), None, None, Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -505,7 +324,7 @@ mod tests {
         let else_value = lit(ScalarValue::Int32(Some(999)));
 
         let expr = case(
-            Some(col("a", &schema)?),
+            Some(col("a", schema)?),
             &[(when1, then1), (when2, then2)],
             Some(else_value),
         )?;
@@ -516,7 +335,7 @@ mod tests {
             .expect("failed to downcast to Int32Array");
 
         let expected =
-            &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(456)]);
+            &Int32Array::from_iter(vec![Some(123), Some(999), Some(999), Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -530,17 +349,17 @@ mod tests {
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 END
         let when1 = binary(
-            col("a", &schema)?,
+            col("a", schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("foo".to_string()))),
-            &batch.schema(),
+            batch.schema(),
         )?;
         let then1 = lit(ScalarValue::Int32(Some(123)));
         let when2 = binary(
-            col("a", &schema)?,
+            col("a", schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("bar".to_string()))),
-            &batch.schema(),
+            batch.schema(),
         )?;
         let then2 = lit(ScalarValue::Int32(Some(456)));
 
@@ -551,7 +370,7 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("failed to downcast to Int32Array");
 
-        let expected = &Int32Array::from(vec![Some(123), None, None, Some(456)]);
+        let expected = &Int32Array::from_iter(vec![Some(123), None, None, Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -565,17 +384,17 @@ mod tests {
 
         // CASE WHEN a = 'foo' THEN 123 WHEN a = 'bar' THEN 456 ELSE 999 END
         let when1 = binary(
-            col("a", &schema)?,
+            col("a", schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("foo".to_string()))),
-            &batch.schema(),
+            batch.schema(),
         )?;
         let then1 = lit(ScalarValue::Int32(Some(123)));
         let when2 = binary(
-            col("a", &schema)?,
+            col("a", schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("bar".to_string()))),
-            &batch.schema(),
+            batch.schema(),
         )?;
         let then2 = lit(ScalarValue::Int32(Some(456)));
         let else_value = lit(ScalarValue::Int32(Some(999)));
@@ -588,7 +407,7 @@ mod tests {
             .expect("failed to downcast to Int32Array");
 
         let expected =
-            &Int32Array::from(vec![Some(123), Some(999), Some(999), Some(456)]);
+            &Int32Array::from_iter(vec![Some(123), Some(999), Some(999), Some(456)]);
 
         assert_eq!(expected, result);
 
@@ -602,10 +421,10 @@ mod tests {
 
         // CASE WHEN a = 'foo' THEN 123.3 ELSE 999 END
         let when = binary(
-            col("a", &schema)?,
+            col("a", schema)?,
             Operator::Eq,
             lit(ScalarValue::Utf8(Some("foo".to_string()))),
-            &batch.schema(),
+            batch.schema(),
         )?;
         let then = lit(ScalarValue::Float64(Some(123.3)));
         let else_value = lit(ScalarValue::Int32(Some(999)));
@@ -617,8 +436,12 @@ mod tests {
             .downcast_ref::<Float64Array>()
             .expect("failed to downcast to Float64Array");
 
-        let expected =
-            &Float64Array::from(vec![Some(123.3), Some(999.0), Some(999.0), Some(999.0)]);
+        let expected = &Float64Array::from_iter(vec![
+            Some(123.3),
+            Some(999.0),
+            Some(999.0),
+            Some(999.0),
+        ]);
 
         assert_eq!(expected, result);
 
@@ -626,7 +449,7 @@ mod tests {
     }
     fn case_test_batch() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-        let a = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
+        let a = Utf8Array::<i32>::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
         Ok(batch)
     }

@@ -30,7 +30,7 @@
 //! ```rust
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -48,8 +48,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!    .to_string();
+//! let pretty_results = datafusion::arrow_print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+--------------------------+",
@@ -69,7 +68,7 @@
 //! ```
 //! # use datafusion::prelude::*;
 //! # use datafusion::error::Result;
-//! # use datafusion::arrow::record_batch::RecordBatch;
+//! # use datafusion::record_batch::RecordBatch;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
@@ -84,8 +83,7 @@
 //! let results: Vec<RecordBatch> = df.collect().await?;
 //!
 //! // format the results
-//! let pretty_results = arrow::util::pretty::pretty_format_batches(&results)?
-//!   .to_string();
+//! let pretty_results = datafusion::arrow_print::write(&results);
 //!
 //! let expected = vec![
 //!     "+---+----------------+",
@@ -225,11 +223,15 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
+pub mod arrow_print;
+pub mod record_batch;
+pub use datafusion_common::field_util;
+
 #[cfg(feature = "row")]
 pub mod row;
 
-pub mod from_slice;
-
+#[cfg(test)]
+mod cast;
 #[cfg(test)]
 pub mod test;
 pub mod test_util;

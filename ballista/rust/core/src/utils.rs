@@ -30,18 +30,19 @@ use crate::serde::scheduler::PartitionStats;
 
 use crate::config::BallistaConfig;
 use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
+use arrow::chunk::Chunk;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::error::Result as ArrowResult;
-use datafusion::arrow::{
-    datatypes::SchemaRef, ipc::writer::FileWriter, record_batch::RecordBatch,
-};
+use datafusion::arrow::io::ipc::write::FileWriter;
+use datafusion::arrow::io::ipc::write::WriteOptions;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
     ExecutionConfig, ExecutionContext, ExecutionContextState, QueryPlanner,
 };
+use datafusion::field_util::SchemaExt;
 use datafusion::logical_plan::LogicalPlan;
-
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::common::batch_byte_size;
@@ -54,6 +55,7 @@ use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{metrics, ExecutionPlan, RecordBatchStream};
+use datafusion::record_batch::RecordBatch;
 use futures::{Stream, StreamExt};
 
 /// Stream data to disk in Arrow IPC format
@@ -63,7 +65,7 @@ pub async fn write_stream_to_disk(
     path: &str,
     disk_write_metric: &metrics::Time,
 ) -> Result<PartitionStats> {
-    let file = File::create(&path).map_err(|e| {
+    let mut file = File::create(&path).map_err(|e| {
         BallistaError::General(format!(
             "Failed to create partition file at {}: {:?}",
             path, e
@@ -73,7 +75,12 @@ pub async fn write_stream_to_disk(
     let mut num_rows = 0;
     let mut num_batches = 0;
     let mut num_bytes = 0;
-    let mut writer = FileWriter::try_new(file, stream.schema().as_ref())?;
+    let mut writer = FileWriter::try_new(
+        &mut file,
+        stream.schema().as_ref(),
+        None,
+        WriteOptions::default(),
+    )?;
 
     while let Some(result) = stream.next().await {
         let batch = result?;
@@ -84,7 +91,8 @@ pub async fn write_stream_to_disk(
         num_bytes += batch_size_bytes;
 
         let timer = disk_write_metric.timer();
-        writer.write(&batch)?;
+        let chunk = Chunk::new(batch.columns().to_vec());
+        writer.write(&chunk, None)?;
         timer.done();
     }
     let timer = disk_write_metric.timer();

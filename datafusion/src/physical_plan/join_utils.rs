@@ -21,6 +21,7 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_plan::JoinType;
 use crate::physical_plan::expressions::Column;
 use arrow::datatypes::{Field, Schema};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 use std::collections::HashSet;
 
 /// The on clause of the join, as vector of (left, right) columns.

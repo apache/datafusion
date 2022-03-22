@@ -17,27 +17,21 @@
 
 //! DateTime expressions
 
+use crate::arrow_temporal_util::string_to_timestamp_nanos;
+use arrow::compute::temporal;
+use arrow::scalar::PrimitiveScalar;
+use arrow::temporal_conversions::timestamp_ns_to_datetime;
+use arrow::types::NativeType;
 use arrow::{
-    array::{Array, ArrayRef, GenericStringArray, PrimitiveArray, StringOffsetSizeTrait},
-    compute::kernels::cast_utils::string_to_timestamp_nanos,
-    datatypes::{
-        ArrowPrimitiveType, DataType, TimestampMicrosecondType, TimestampMillisecondType,
-        TimestampNanosecondType, TimestampSecondType,
-    },
+    array::*,
+    compute::cast,
+    datatypes::{DataType, TimeUnit},
 };
-use arrow::{
-    array::{
-        Date32Array, Date64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray,
-    },
-    compute::kernels::temporal,
-    datatypes::TimeUnit,
-    temporal_conversions::timestamp_ns_to_datetime,
-};
-use chrono::prelude::*;
+use chrono::prelude::{DateTime, Utc};
 use chrono::Duration;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarType, ScalarValue};
+use chrono::Timelike;
+use chrono::{Datelike, NaiveDateTime};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 use std::borrow::Borrow;
 use std::sync::Arc;
@@ -48,7 +42,7 @@ use std::sync::Arc;
 /// # Errors
 /// This function errors iff:
 /// * the number of arguments is not 1 or
-/// * the first argument is not castable to a `GenericStringArray` or
+/// * the first argument is not castable to a `Utf8Array` or
 /// * the function `op` errors
 pub(crate) fn unary_string_to_primitive_function<'a, T, O, F>(
     args: &[&'a dyn Array],
@@ -56,9 +50,9 @@ pub(crate) fn unary_string_to_primitive_function<'a, T, O, F>(
     name: &str,
 ) -> Result<PrimitiveArray<O>>
 where
-    O: ArrowPrimitiveType,
-    T: StringOffsetSizeTrait,
-    F: Fn(&'a str) -> Result<O::Native>,
+    O: NativeType,
+    T: Offset,
+    F: Fn(&'a str) -> Result<O>,
 {
     if args.len() != 1 {
         return Err(DataFusionError::Internal(format!(
@@ -70,7 +64,7 @@ where
 
     let array = args[0]
         .as_any()
-        .downcast_ref::<GenericStringArray<T>>()
+        .downcast_ref::<Utf8Array<T>>()
         .ok_or_else(|| {
             DataFusionError::Internal("failed to downcast to string".to_string())
         })?;
@@ -85,23 +79,26 @@ where
 // given an function that maps a `&str` to a arrow native type,
 // returns a `ColumnarValue` where the function is applied to either a `ArrayRef` or `ScalarValue`
 // depending on the `args`'s variant.
-fn handle<'a, O, F, S>(
+fn handle<'a, O, F>(
     args: &'a [ColumnarValue],
     op: F,
     name: &str,
+    data_type: DataType,
 ) -> Result<ColumnarValue>
 where
-    O: ArrowPrimitiveType,
-    S: ScalarType<O::Native>,
-    F: Fn(&'a str) -> Result<O::Native>,
+    O: NativeType,
+    ScalarValue: From<Option<O>>,
+    F: Fn(&'a str) -> Result<O>,
 {
     match &args[0] {
         ColumnarValue::Array(a) => match a.data_type() {
             DataType::Utf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?,
+                unary_string_to_primitive_function::<i32, O, _>(&[a.as_ref()], op, name)?
+                    .to(data_type),
             ))),
             DataType::LargeUtf8 => Ok(ColumnarValue::Array(Arc::new(
-                unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?,
+                unary_string_to_primitive_function::<i64, O, _>(&[a.as_ref()], op, name)?
+                    .to(data_type),
             ))),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
@@ -109,14 +106,15 @@ where
             ))),
         },
         ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Utf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
-            }
-            ScalarValue::LargeUtf8(a) => {
-                let result = a.as_ref().map(|x| (op)(x)).transpose()?;
-                Ok(ColumnarValue::Scalar(S::scalar(result)))
-            }
+            ScalarValue::Utf8(a) | ScalarValue::LargeUtf8(a) => Ok(match a {
+                Some(s) => {
+                    let s = PrimitiveScalar::<O>::new(data_type, Some((op)(s)?));
+                    ColumnarValue::Scalar(s.try_into()?)
+                }
+                None => ColumnarValue::Scalar(
+                    PrimitiveScalar::<O>::new(data_type, None).try_into()?,
+                ),
+            }),
             other => Err(DataFusionError::Internal(format!(
                 "Unsupported data type {:?} for function {}",
                 other, name
@@ -125,44 +123,48 @@ where
     }
 }
 
-/// Calls string_to_timestamp_nanos and converts the error type
+/// Calls cast::string_to_timestamp_nanos and converts the error type
 fn string_to_timestamp_nanos_shim(s: &str) -> Result<i64> {
     string_to_timestamp_nanos(s).map_err(|e| e.into())
 }
 
 /// to_timestamp SQL function
 pub fn to_timestamp(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<TimestampNanosecondType, _, TimestampNanosecondType>(
+    handle::<i64, _>(
         args,
         string_to_timestamp_nanos_shim,
         "to_timestamp",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
     )
 }
 
 /// to_timestamp_millis SQL function
 pub fn to_timestamp_millis(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<TimestampMillisecondType, _, TimestampMillisecondType>(
+    handle::<i64, _>(
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000_000),
         "to_timestamp_millis",
+        DataType::Timestamp(TimeUnit::Millisecond, None),
     )
 }
 
 /// to_timestamp_micros SQL function
 pub fn to_timestamp_micros(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<TimestampMicrosecondType, _, TimestampMicrosecondType>(
+    handle::<i64, _>(
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000),
         "to_timestamp_micros",
+        DataType::Timestamp(TimeUnit::Microsecond, None),
     )
 }
 
 /// to_timestamp_seconds SQL function
 pub fn to_timestamp_seconds(args: &[ColumnarValue]) -> Result<ColumnarValue> {
-    handle::<TimestampSecondType, _, TimestampSecondType>(
+    handle::<i64, _>(
         args,
         |s| string_to_timestamp_nanos_shim(s).map(|n| n / 1_000_000_000),
         "to_timestamp_seconds",
+        DataType::Timestamp(TimeUnit::Second, None),
     )
 }
 
@@ -246,24 +248,22 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
             ));
         };
 
-    let f = |x: Option<i64>| x.map(|x| date_trunc_single(granularity, x)).transpose();
+    let f = |x: Option<&i64>| x.map(|x| date_trunc_single(granularity, *x)).transpose();
 
     Ok(match array {
         ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(v, tz_opt)) => {
             ColumnarValue::Scalar(ScalarValue::TimestampNanosecond(
-                (f)(*v)?,
+                (f)(v.as_ref())?,
                 tz_opt.clone(),
             ))
         }
         ColumnarValue::Array(array) => {
-            let array = array
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
+            let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
             let array = array
                 .iter()
                 .map(f)
-                .collect::<Result<TimestampNanosecondArray>>()?;
+                .collect::<Result<PrimitiveArray<i64>>>()?
+                .to(DataType::Timestamp(TimeUnit::Nanosecond, None));
 
             ColumnarValue::Array(Arc::new(array))
         }
@@ -275,52 +275,11 @@ pub fn date_trunc(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     })
 }
 
-macro_rules! extract_date_part {
+macro_rules! cast_array_u32_i32 {
     ($ARRAY: expr, $FN:expr) => {
-        match $ARRAY.data_type() {
-            DataType::Date32 => {
-                let array = $ARRAY.as_any().downcast_ref::<Date32Array>().unwrap();
-                Ok($FN(array)?)
-            }
-            DataType::Date64 => {
-                let array = $ARRAY.as_any().downcast_ref::<Date64Array>().unwrap();
-                Ok($FN(array)?)
-            }
-            DataType::Timestamp(time_unit, None) => match time_unit {
-                TimeUnit::Second => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampSecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
-                }
-                TimeUnit::Millisecond => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampMillisecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
-                }
-                TimeUnit::Microsecond => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampMicrosecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
-                }
-                TimeUnit::Nanosecond => {
-                    let array = $ARRAY
-                        .as_any()
-                        .downcast_ref::<TimestampNanosecondArray>()
-                        .unwrap();
-                    Ok($FN(array)?)
-                }
-            },
-            datatype => Err(DataFusionError::Internal(format!(
-                "Extract does not support datatype {:?}",
-                datatype
-            ))),
-        }
+        $FN($ARRAY.as_ref())
+            .map(|x| cast::primitive_to_primitive::<u32, i32>(&x, &DataType::Int32))
+            .map_err(|e| e.into())
     };
 }
 
@@ -349,13 +308,13 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     };
 
     let arr = match date_part.to_lowercase().as_str() {
-        "year" => extract_date_part!(array, temporal::year),
-        "month" => extract_date_part!(array, temporal::month),
-        "week" => extract_date_part!(array, temporal::week),
-        "day" => extract_date_part!(array, temporal::day),
-        "hour" => extract_date_part!(array, temporal::hour),
-        "minute" => extract_date_part!(array, temporal::minute),
-        "second" => extract_date_part!(array, temporal::second),
+        "year" => temporal::year(array.as_ref()).map_err(|e| e.into()),
+        "month" => cast_array_u32_i32!(array, temporal::month),
+        "week" => cast_array_u32_i32!(array, temporal::iso_week),
+        "day" => cast_array_u32_i32!(array, temporal::day),
+        "hour" => cast_array_u32_i32!(array, temporal::hour),
+        "minute" => cast_array_u32_i32!(array, temporal::minute),
+        "second" => cast_array_u32_i32!(array, temporal::second),
         _ => Err(DataFusionError::Execution(format!(
             "Date part '{}' not supported",
             date_part
@@ -376,7 +335,8 @@ pub fn date_part(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{ArrayRef, Int64Array, StringBuilder};
+    use arrow::array::*;
+    use arrow::datatypes::*;
 
     use super::*;
 
@@ -384,18 +344,15 @@ mod tests {
     fn to_timestamp_arrays_and_nulls() -> Result<()> {
         // ensure that arrow array implementation is wired up and handles nulls correctly
 
-        let mut string_builder = StringBuilder::new(2);
-        let mut ts_builder = TimestampNanosecondArray::builder(2);
-
-        string_builder.append_value("2020-09-08T13:42:29.190855Z")?;
-        ts_builder.append_value(1599572549190855000)?;
-
-        string_builder.append_null()?;
-        ts_builder.append_null()?;
-        let expected_timestamps = &ts_builder.finish() as &dyn Array;
-
         let string_array =
-            ColumnarValue::Array(Arc::new(string_builder.finish()) as ArrayRef);
+            Utf8Array::<i32>::from(&[Some("2020-09-08T13:42:29.190855Z"), None]);
+
+        let ts_array = Int64Array::from(&[Some(1599572549190855000), None])
+            .to(DataType::Timestamp(TimeUnit::Nanosecond, None));
+
+        let expected_timestamps = &ts_array as &dyn Array;
+
+        let string_array = ColumnarValue::Array(Arc::new(string_array) as ArrayRef);
         let parsed_timestamps = to_timestamp(&[string_array])
             .expect("that to_timestamp parsed values without error");
         if let ColumnarValue::Array(parsed_array) = parsed_timestamps {
@@ -507,9 +464,8 @@ mod tests {
         // pass the wrong type of input array to to_timestamp and test
         // that we get an error.
 
-        let mut builder = Int64Array::builder(1);
-        builder.append_value(1)?;
-        let int64array = ColumnarValue::Array(Arc::new(builder.finish()));
+        let array = Int64Array::from_slice(&[1]);
+        let int64array = ColumnarValue::Array(Arc::new(array));
 
         let expected_err =
             "Internal error: Unsupported data type Int64 for function to_timestamp";

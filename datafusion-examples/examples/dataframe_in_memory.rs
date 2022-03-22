@@ -17,12 +17,13 @@
 
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Int32Array, StringArray};
+use datafusion::arrow::array::{Int32Array, Utf8Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::record_batch::RecordBatch;
+
 use datafusion::datasource::MemTable;
 use datafusion::error::Result;
-use datafusion::from_slice::FromSlice;
+use datafusion::field_util::SchemaExt;
 use datafusion::prelude::*;
 
 /// This example demonstrates how to use the DataFrame API against in-memory data.
@@ -38,8 +39,8 @@ async fn main() -> Result<()> {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(StringArray::from_slice(&["a", "b", "c", "d"])),
-            Arc::new(Int32Array::from_slice(&[1, 10, 10, 100])),
+            Arc::new(Utf8Array::<i32>::from_slice(&["a", "b", "c", "d"])),
+            Arc::new(Int32Array::from_values(vec![1, 10, 10, 100])),
         ],
     )?;
 

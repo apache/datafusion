@@ -301,7 +301,7 @@ async fn query_group_on_null() -> Result<()> {
 
     let data = RecordBatch::try_new(
         schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![
+        vec![Arc::new(Int32Array::from_iter(vec![
             Some(0),
             Some(3),
             None,
@@ -344,7 +344,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![
+            Arc::new(Int32Array::from_iter(vec![
                 Some(0),
                 Some(0),
                 Some(3),
@@ -355,7 +355,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
                 None,
                 Some(3),
             ])),
-            Arc::new(StringArray::from(vec![
+            Arc::new(StringArray::from_slice(vec![
                 None,
                 None,
                 Some("foo"),
@@ -408,15 +408,18 @@ async fn csv_group_by_date() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Date32Array::from(vec![
-                Some(100),
-                Some(100),
-                Some(100),
-                Some(101),
-                Some(101),
-                Some(101),
-            ])),
-            Arc::new(Int32Array::from(vec![
+            Arc::new(
+                Int32Array::from([
+                    Some(100),
+                    Some(100),
+                    Some(100),
+                    Some(101),
+                    Some(101),
+                    Some(101),
+                ])
+                .to(DataType::Date32),
+            ),
+            Arc::new(Int32Array::from([
                 Some(1),
                 Some(2),
                 Some(3),

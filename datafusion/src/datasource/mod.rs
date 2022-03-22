@@ -32,9 +32,11 @@ pub use self::memory::MemTable;
 use self::object_store::{FileMeta, SizedFile};
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
-use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
-use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
-use crate::scalar::ScalarValue;
+use crate::physical_plan::{ColumnStatistics, Statistics};
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::ScalarValue;
+use datafusion_expr::Accumulator;
+use datafusion_physical_expr::expressions::{MaxAccumulator, MinAccumulator};
 use futures::StreamExt;
 use std::pin::Pin;
 

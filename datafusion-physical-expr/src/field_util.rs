@@ -18,6 +18,7 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
+use datafusion_common::field_util::FieldExt;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 

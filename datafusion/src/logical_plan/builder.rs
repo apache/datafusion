@@ -24,7 +24,6 @@ use crate::datasource::{
     object_store::ObjectStore,
     MemTable, TableProvider,
 };
-use crate::error::{DataFusionError, Result};
 use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
@@ -32,11 +31,11 @@ use crate::logical_plan::plan::{
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
-use crate::scalar::ScalarValue;
-use arrow::{
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion_common::field_util::SchemaExt;
+use datafusion_common::record_batch::RecordBatch;
+use datafusion_common::{convert_metadata, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -399,7 +398,7 @@ impl LogicalPlanBuilder {
                             DFField::from_qualified(&table_name, schema.field(*i).clone())
                         })
                         .collect(),
-                    schema.metadata().clone(),
+                    convert_metadata(schema.metadata()),
                 )
             })
             .unwrap_or_else(|| {

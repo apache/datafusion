@@ -21,6 +21,7 @@ use std::collections::BTreeMap;
 use std::{env, error::Error, path::PathBuf, sync::Arc};
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_common::field_util::{FieldExt, SchemaExt};
 
 /// Compares formatted output of a record batch with an expected
 /// vector of strings, with the result of pretty formatting record
@@ -38,9 +39,7 @@ macro_rules! assert_batches_eq {
         let expected_lines: Vec<String> =
             $EXPECTED_LINES.iter().map(|&s| s.into()).collect();
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS)
-            .unwrap()
-            .to_string();
+        let formatted = $crate::arrow_print::write($CHUNKS);
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
 
@@ -74,9 +73,7 @@ macro_rules! assert_batches_sorted_eq {
             expected_lines.as_mut_slice()[2..num_lines - 1].sort_unstable()
         }
 
-        let formatted = arrow::util::pretty::pretty_format_batches($CHUNKS)
-            .unwrap()
-            .to_string();
+        let formatted = $crate::arrow_print::write($CHUNKS);
         // fix for windows: \r\n -->
 
         let mut actual_lines: Vec<&str> = formatted.trim().lines().collect();
@@ -233,11 +230,11 @@ fn get_data_dir(udf_env: &str, submodule_data: &str) -> Result<PathBuf, Box<dyn 
 }
 
 /// Get the schema for the aggregate_test_* csv files
-pub fn aggr_test_schema() -> SchemaRef {
+pub fn aggr_test_schema() -> Arc<Schema> {
     let mut f1 = Field::new("c1", DataType::Utf8, false);
-    f1.set_metadata(Some(BTreeMap::from_iter(
+    f1 = f1.with_metadata(BTreeMap::from_iter(
         vec![("testing".into(), "test".into())].into_iter(),
-    )));
+    ));
     let schema = Schema::new(vec![
         f1,
         Field::new("c2", DataType::UInt32, false),
@@ -336,4 +333,41 @@ mod tests {
         let res = parquet_test_data();
         assert!(PathBuf::from(res).is_dir());
     }
+}
+
+#[cfg(test)]
+pub fn create_decimal_array(
+    array: &[Option<i128>],
+    precision: usize,
+    scale: usize,
+) -> crate::error::Result<arrow::array::Int128Array> {
+    use arrow::array::{Int128Vec, TryPush};
+    let mut decimal_builder = Int128Vec::from_data(
+        DataType::Decimal(precision, scale),
+        Vec::<i128>::with_capacity(array.len()),
+        None,
+    );
+
+    for value in array {
+        match value {
+            None => {
+                decimal_builder.push(None);
+            }
+            Some(v) => {
+                decimal_builder.try_push(Some(*v))?;
+            }
+        }
+    }
+    Ok(decimal_builder.into())
+}
+
+#[cfg(test)]
+pub fn create_decimal_array_from_slice(
+    array: &[i128],
+    precision: usize,
+    scale: usize,
+) -> crate::error::Result<arrow::array::Int128Array> {
+    let decimal_array_values: Vec<Option<i128>> =
+        array.into_iter().map(|v| Some(*v)).collect();
+    create_decimal_array(&decimal_array_values, precision, scale)
 }
