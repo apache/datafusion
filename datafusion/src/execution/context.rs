@@ -92,9 +92,7 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::{
-    options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions},
-};
+use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";

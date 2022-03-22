@@ -83,20 +83,20 @@ async fn json_explain() {
     let actual = normalize_vec_for_explain(actual);
     let expected = vec![
         vec![
-            "logical_plan", 
+            "logical_plan",
             "Projection: #COUNT(UInt8(1))\
             \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-            \n    TableScan: t1 projection=Some([0])"
-            ],
+            \n    TableScan: t1 projection=Some([0])",
+        ],
         vec![
-            "physical_plan", 
+            "physical_plan",
             "ProjectionExec: expr=[COUNT(UInt8(1))@0 as COUNT(UInt8(1))]\
             \n  HashAggregateExec: mode=Final, gby=[], aggr=[COUNT(UInt8(1))]\
             \n    CoalescePartitionsExec\
             \n      HashAggregateExec: mode=Partial, gby=[], aggr=[COUNT(UInt8(1))]\
             \n        RepartitionExec: partitioning=RoundRobinBatch(NUM_CORES)\
-            \n          JsonExec: limit=None, files=[tests/jsons/2.json]\n"
-            ],
+            \n          JsonExec: limit=None, files=[tests/jsons/2.json]\n",
+        ],
     ];
     assert_eq!(expected, actual);
 }
