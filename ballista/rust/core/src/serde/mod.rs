@@ -350,6 +350,7 @@ mod tests {
     use datafusion::datasource::object_store::local::LocalFileSystem;
     use datafusion::error::DataFusionError;
     use datafusion::execution::context::{QueryPlanner, SessionState, TaskContext};
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::logical_plan::plan::Extension;
     use datafusion::logical_plan::{
         col, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
@@ -699,10 +700,11 @@ mod tests {
     #[tokio::test]
     async fn test_extension_plan() -> crate::error::Result<()> {
         let store = Arc::new(LocalFileSystem {});
-        let config =
-            SessionConfig::new().with_query_planner(Arc::new(TopKQueryPlanner {}));
+        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+        let session_state = SessionState::with_config(SessionConfig::new(), runtime)
+            .with_query_planner(Arc::new(TopKQueryPlanner {}));
 
-        let ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::with_state(session_state);
 
         let scan = LogicalPlanBuilder::scan_csv(
             store,

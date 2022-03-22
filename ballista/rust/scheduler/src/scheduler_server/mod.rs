@@ -179,11 +179,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
     }
 }
 
-/// Create a DataFusion context that is compatible with Ballista
+/// Create a DataFusion session context that is compatible with Ballista Configuration
 pub fn create_datafusion_context(config: &BallistaConfig) -> SessionContext {
     let config =
         SessionConfig::new().with_target_partitions(config.default_shuffle_partitions());
     SessionContext::with_config(config)
+}
+
+/// Update the existing DataFusion session context with Ballista Configuration
+pub fn update_datafusion_context(
+    session_ctx: Arc<SessionContext>,
+    config: &BallistaConfig,
+) -> Arc<SessionContext> {
+    session_ctx.state.write().config.target_partitions =
+        config.default_shuffle_partitions();
+    session_ctx
 }
 
 #[cfg(all(test, feature = "sled"))]

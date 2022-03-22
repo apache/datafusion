@@ -18,7 +18,7 @@
 //! Execution plan for reading CSV files
 
 use crate::error::{DataFusionError, Result};
-use crate::execution::context::{SessionContext, TaskContext};
+use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -124,7 +124,7 @@ impl ExecutionPlan for CsvExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let batch_size = context.runtime.batch_size();
+        let batch_size = context.session_config().batch_size;
         let file_schema = Arc::clone(&self.base_config.file_schema);
         let file_projection = self.base_config.file_column_projection_indices();
         let has_header = self.has_header;
@@ -180,7 +180,7 @@ impl ExecutionPlan for CsvExec {
 }
 
 pub async fn plan_to_csv(
-    context: &SessionContext,
+    state: &SessionState,
     plan: Arc<dyn ExecutionPlan>,
     path: impl AsRef<str>,
 ) -> Result<()> {
@@ -196,7 +196,7 @@ pub async fn plan_to_csv(
                 let path = fs_path.join(&filename);
                 let file = fs::File::create(path)?;
                 let mut writer = csv::Writer::new(file);
-                let task_ctx = context.task_ctx();
+                let task_ctx = Arc::new(TaskContext::from(state));
                 let stream = plan.execute(i, task_ctx).await?;
                 let handle: JoinHandle<Result<()>> = task::spawn(async move {
                     stream

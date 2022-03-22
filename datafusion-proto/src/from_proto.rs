@@ -515,13 +515,13 @@ impl TryFrom<&protobuf::scalar_type::Datatype> for DataType {
                 }
                 let field_type =
                     protobuf::PrimitiveScalarType::try_from(deepest_type)?.into();
-                //Because length is checked above it is safe to unwrap .last()
+                // Because length is checked above it is safe to unwrap .last()
                 let mut scalar_type = DataType::List(Box::new(Field::new(
                     field_names.last().unwrap().as_str(),
                     field_type,
                     true,
                 )));
-                //Iterate over field names in reverse order except for the last item in the vector
+                // Iterate over field names in reverse order except for the last item in the vector
                 for name in field_names.iter().rev().skip(1) {
                     let new_datatype = DataType::List(Box::new(Field::new(
                         name.as_str(),
@@ -751,12 +751,12 @@ impl TryFrom<&protobuf::ScalarListType> for DataType {
         }
 
         let mut curr_type = Self::List(Box::new(Field::new(
-            //Since checked vector is not empty above this is safe to unwrap
+            // Since checked vector is not empty above this is safe to unwrap
             field_names.last().unwrap(),
             PrimitiveScalarType::try_from(deepest_type)?.into(),
             true,
         )));
-        //Iterates over field names in reverse order except for the last item in the vector
+        // Iterates over field names in reverse order except for the last item in the vector
         for name in field_names.iter().rev().skip(1) {
             let temp_curr_type = Self::List(Box::new(Field::new(name, curr_type, true)));
             curr_type = temp_curr_type;
@@ -930,7 +930,7 @@ pub fn parse_expr(
                     .iter()
                     .map(|e| parse_expr(e, ctx))
                     .collect::<Result<Vec<_>, _>>()?,
-                distinct: false, //TODO
+                distinct: false, // TODO
             })
         }
         ExprType::Alias(alias) => Ok(Expr::Alias(
@@ -1168,7 +1168,7 @@ pub fn parse_expr(
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode { fun_name, args }) => {
             let scalar_fn = ctx
                 .state
-                .lock()
+                .read()
                 .get_function_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
 
             Ok(Expr::ScalarUDF {
@@ -1182,7 +1182,7 @@ pub fn parse_expr(
         ExprType::AggregateUdfExpr(protobuf::AggregateUdfExprNode { fun_name, args }) => {
             let agg_fn = ctx
                 .state
-                .lock()
+                .read()
                 .get_aggregate_meta(fun_name.as_str()).ok_or_else(|| Error::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", fun_name)))?;
 
             Ok(Expr::AggregateUDF {
