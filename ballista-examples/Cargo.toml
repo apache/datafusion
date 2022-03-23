@@ -28,6 +28,12 @@ edition = "2021"
 publish = false
 rust-version = "1.59"
 
+
+[[example]]
+name = "test_sql"
+path = "examples/test_sql.rs"
+required-features = ["ballista/standalone"]
+
 [dependencies]
 ballista = { path = "../ballista/rust/client", version = "0.6.0" }
 datafusion = { path = "../datafusion" }
