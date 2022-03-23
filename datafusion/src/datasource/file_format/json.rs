@@ -68,13 +68,15 @@ impl FileFormat for JsonFormat {
             let iter = ValueIter::new(&mut reader, None);
             let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
                 let should_take = records_to_read > 0;
-                records_to_read -= 1;
+                if should_take {
+                    records_to_read -= 1;
+                }
                 should_take
             }))?;
+            schemas.push(schema);
             if records_to_read == 0 {
                 break;
             }
-            schemas.push(schema);
         }
 
         let schema = Schema::try_merge(schemas)?;
