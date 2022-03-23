@@ -40,7 +40,6 @@ use crate::arrow::array::{
     BooleanArray, Float32Array, Float64Array, Int32Array, Int64Array,
 };
 use crate::arrow::datatypes::{DataType, Field};
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::datasource::{create_max_min_accs, get_col_stats};
 use crate::error::DataFusionError;
 use crate::error::Result;
@@ -50,6 +49,7 @@ use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::ParquetExec;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::{Accumulator, Statistics};
+use datafusion_storage::object_store::{ObjectReader, ObjectReaderStream};
 
 /// The default file exetension of parquet files
 pub const DEFAULT_PARQUET_EXTENSION: &str = ".parquet";
@@ -357,12 +357,10 @@ impl ChunkReader for ChunkObjectReader {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        datasource::object_store::local::{
-            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
-            LocalFileSystem,
-        },
-        physical_plan::collect,
+    use crate::physical_plan::collect;
+    use datafusion_storage::object_store::local::{
+        local_object_reader, local_object_reader_stream, local_unpartitioned_file,
+        LocalFileSystem,
     };
 
     use super::*;

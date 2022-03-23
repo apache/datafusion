@@ -33,8 +33,8 @@ use crate::serde::{
 use crate::{convert_box_required, convert_required, into_physical_plan, into_required};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::datasource::PartitionedFile;
+use datafusion::datafusion_storage::object_store::local::LocalFileSystem;
+use datafusion::datafusion_storage::PartitionedFile;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::physical_plan::aggregates::create_aggregate_expr;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -941,8 +941,9 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
-    use datafusion::datasource::object_store::local::LocalFileSystem;
-    use datafusion::datasource::PartitionedFile;
+    use datafusion::datafusion_storage::{
+        object_store::local::LocalFileSystem, PartitionedFile,
+    };
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::prelude::SessionContext;
     use datafusion::{

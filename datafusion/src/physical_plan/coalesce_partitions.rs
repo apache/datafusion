@@ -221,7 +221,7 @@ mod tests {
     use futures::FutureExt;
 
     use super::*;
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::{collect, common};
     use crate::prelude::SessionContext;

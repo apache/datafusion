@@ -241,7 +241,7 @@ impl RecordBatchStream for FilterExecStream {
 mod tests {
 
     use super::*;
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::physical_plan::collect;
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};

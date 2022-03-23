@@ -23,20 +23,18 @@ pub mod empty;
 pub mod file_format;
 pub mod listing;
 pub mod memory;
-pub mod object_store;
+pub mod object_store_registry;
 
 use futures::Stream;
 
 pub use self::datasource::{TableProvider, TableType};
 pub use self::memory::MemTable;
-use self::object_store::{FileMeta, SizedFile};
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
-use crate::scalar::ScalarValue;
+use datafusion_storage::PartitionedFile;
 use futures::StreamExt;
-use std::pin::Pin;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).
 /// If the optional `limit` is provided, includes only sufficient files.
@@ -122,40 +120,6 @@ pub async fn get_statistics_with_limit(
     };
 
     Ok((result_files, statistics))
-}
-
-#[derive(Debug, Clone)]
-/// A single file that should be read, along with its schema, statistics
-/// and partition column values that need to be appended to each row.
-pub struct PartitionedFile {
-    /// Path for the file (e.g. URL, filesystem path, etc)
-    pub file_meta: FileMeta,
-    /// Values of partition columns to be appended to each row
-    pub partition_values: Vec<ScalarValue>,
-    // We may include row group range here for a more fine-grained parallel execution
-}
-
-impl PartitionedFile {
-    /// Create a simple file without metadata or partition
-    pub fn new(path: String, size: u64) -> Self {
-        Self {
-            file_meta: FileMeta {
-                sized_file: SizedFile { path, size },
-                last_modified: None,
-            },
-            partition_values: vec![],
-        }
-    }
-}
-
-/// Stream of files get listed from object store
-pub type PartitionedFileStream =
-    Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
-
-impl std::fmt::Display for PartitionedFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.file_meta)
-    }
 }
 
 fn create_max_min_accs(

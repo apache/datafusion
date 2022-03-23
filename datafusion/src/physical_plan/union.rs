@@ -234,7 +234,7 @@ fn stats_union(mut left: Statistics, right: Statistics) -> Statistics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::object_store::{local::LocalFileSystem, ObjectStore};
+    use crate::datafusion_storage::object_store::{local::LocalFileSystem, ObjectStore};
     use crate::{test, test_util};
 
     use crate::prelude::SessionContext;

@@ -605,7 +605,7 @@ impl RecordBatchStream for SortPreservingMergeStream {
 
 #[cfg(test)]
 mod tests {
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::from_slice::FromSlice;
     use crate::physical_plan::metrics::MetricValue;
     use crate::test::exec::{assert_strong_count_converges_to_zero, BlockingExec};

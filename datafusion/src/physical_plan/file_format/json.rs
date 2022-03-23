@@ -193,12 +193,10 @@ mod tests {
     use arrow::datatypes::{Field, Schema};
     use futures::StreamExt;
 
-    use crate::datasource::{
-        file_format::{json::JsonFormat, FileFormat},
-        object_store::local::{
-            local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
-        },
+    use crate::datafusion_storage::object_store::local::{
+        local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
     };
+    use crate::datasource::file_format::{json::JsonFormat, FileFormat};
     use crate::prelude::NdJsonReadOptions;
     use crate::prelude::*;
     use tempfile::TempDir;

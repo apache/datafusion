@@ -22,13 +22,16 @@ use std::{fs, io, sync::Arc};
 use async_trait::async_trait;
 use datafusion::{
     assert_batches_sorted_eq,
+    datafusion_storage::{
+        object_store::{
+            local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+            ObjectStore,
+        },
+        FileMeta, SizedFile,
+    },
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
-        object_store::{
-            local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
-            ObjectReader, ObjectStore, SizedFile,
-        },
     },
     error::{DataFusionError, Result},
     physical_plan::ColumnStatistics,

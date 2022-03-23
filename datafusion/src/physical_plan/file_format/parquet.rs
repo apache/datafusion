@@ -25,8 +25,6 @@ use std::sync::Arc;
 use std::{any::Any, convert::TryInto};
 
 use crate::datasource::file_format::parquet::ChunkObjectReader;
-use crate::datasource::object_store::ObjectStore;
-use crate::datasource::PartitionedFile;
 use crate::execution::context::{SessionState, TaskContext};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::{
@@ -43,6 +41,7 @@ use crate::{
 };
 use datafusion_common::Column;
 use datafusion_expr::Expr;
+use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
 
 use arrow::{
     array::ArrayRef,
@@ -568,15 +567,13 @@ pub async fn plan_to_parquet(
 mod tests {
     use crate::{
         assert_batches_sorted_eq, assert_contains,
-        datasource::{
-            file_format::{parquet::ParquetFormat, FileFormat},
-            object_store::{
-                local::{
-                    local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
-                },
-                FileMeta, SizedFile,
+        datafusion_storage::{
+            object_store::local::{
+                local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
             },
+            FileMeta, SizedFile,
         },
+        datasource::file_format::{parquet::ParquetFormat, FileFormat},
         physical_plan::collect,
     };
 
