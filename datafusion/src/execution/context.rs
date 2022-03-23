@@ -1340,7 +1340,7 @@ impl TaskContext {
         match task_props {
             TaskProperties::KVPairs(props) => {
                 let session_config = SessionConfig::new();
-                if props.len() == 0 {
+                if props.is_empty() {
                     session_config
                 } else {
                     session_config
