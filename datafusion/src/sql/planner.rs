@@ -28,10 +28,11 @@ use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
-    and, builder::expand_wildcard, col, lit, normalize_col, union_with_alias, Column,
-    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
-    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, LogicalPlan,
-    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
+    and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
+    normalize_col, union_with_alias, Column, CreateCatalogSchema,
+    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
+    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
+    ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -1010,6 +1011,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         expand_wildcard(input_schema, plan)?
                     }
+                    Expr::QualifiedWildcard { ref qualifier } => {
+                        expand_qualified_wildcard(qualifier, input_schema, plan)?
+                    }
                     _ => vec![normalize_col(expr, plan)?],
                 })
             })
@@ -1210,9 +1214,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 normalize_ident(alias),
             )),
             SelectItem::Wildcard => Ok(Expr::Wildcard),
-            SelectItem::QualifiedWildcard(_) => Err(DataFusionError::NotImplemented(
-                "Qualified wildcards are not supported".to_string(),
-            )),
+            SelectItem::QualifiedWildcard(ref object_name) => {
+                let qualifier = format!("{}", object_name);
+                Ok(Expr::QualifiedWildcard { qualifier })
+            }
         }
     }
 
