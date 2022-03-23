@@ -305,7 +305,7 @@ impl BallistaContext {
         // the show tables、 show columns sql can not run at scheduler because the tables is store at client
         if is_show {
             let state = self.state.lock();
-            ctx = create_datafusion_context(&state.config());
+            ctx = create_datafusion_context(state.config());
         }
 
         // register tables with DataFusion context
