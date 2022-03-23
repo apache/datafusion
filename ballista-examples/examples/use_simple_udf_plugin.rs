@@ -20,14 +20,16 @@ use ballista::prelude::{BallistaConfig, BallistaContext, Result};
 use datafusion::prelude::CsvReadOptions;
 
 /// This example show the udf plugin is work
+///
 #[tokio::main]
 async fn main() -> Result<()> {
     let dylib = test_cdylib::build_example("simple_udf_plugin");
     global_plugin_manager(dylib.display().to_string().as_str());
     let config = BallistaConfig::builder()
-        .set("ballista.shuffle.partitions", "2")
+        .set("ballista.shuffle.partitions", "1")
         .build()?;
-    let ctx = BallistaContext::standalone(&config, 1).await.unwrap();
+
+    let ctx = BallistaContext::standalone(&config, 10).await.unwrap();
 
     let testdata = datafusion::test_util::arrow_test_data();
 
@@ -40,9 +42,14 @@ async fn main() -> Result<()> {
     .await?;
 
     // execute the query
-    let df = ctx.sql("show functions").await?;
+    // let df = ctx
+    //     .sql("select array_4(1, c2, 0, 0, 2) from aggregate_test_100 limit 3")
+    //     .await?;
+    //
+    // df.show().await?;
 
-    // print the results
+    let df = ctx.sql("select geo_mean(2)").await?;
+
     df.show().await?;
 
     Ok(())

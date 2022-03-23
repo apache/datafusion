@@ -40,6 +40,7 @@ message DfField{
 
 message DfSchema {
   repeated DfField columns = 1;
+  map<string, string> metadata = 2;
 }
 
 // logical expressions
@@ -76,6 +77,12 @@ message LogicalExprNode {
 
     // window expressions
     WindowExprNode window_expr = 18;
+
+    // AggregateUDF expressions
+    AggregateUDFExprNode aggregate_udf_expr = 19;
+
+    // Scalar UDF expressions
+    ScalarUDFExprNode scalar_udf_expr = 20;
   }
 }
 
@@ -207,6 +214,16 @@ message AggregateExprNode {
   repeated LogicalExprNode expr = 2;
 }
 
+message AggregateUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
+}
+
+message ScalarUDFExprNode {
+  string fun_name = 1;
+  repeated LogicalExprNode args = 2;
+}
+
 enum BuiltInWindowFunction {
   ROW_NUMBER = 0;
   RANK = 1;
@@ -319,53 +336,53 @@ message Field {
 }
 
 message FixedSizeBinary{
-    int32 length = 1;
+  int32 length = 1;
 }
 
 message Timestamp{
-    TimeUnit time_unit = 1;
-    string timezone = 2;
+  TimeUnit time_unit = 1;
+  string timezone = 2;
 }
 
 enum DateUnit{
-    Day = 0;
-    DateMillisecond = 1;
+  Day = 0;
+  DateMillisecond = 1;
 }
 
 enum TimeUnit{
-    Second = 0;
-    TimeMillisecond = 1;
-    Microsecond = 2;
-    Nanosecond = 3;
+  Second = 0;
+  TimeMillisecond = 1;
+  Microsecond = 2;
+  Nanosecond = 3;
 }
 
 enum IntervalUnit{
-    YearMonth = 0;
-    DayTime = 1;
-    MonthDayNano = 2;
+  YearMonth = 0;
+  DayTime = 1;
+  MonthDayNano = 2;
 }
 
 message Decimal{
-    uint64 whole = 1;
-    uint64 fractional = 2;
+  uint64 whole = 1;
+  uint64 fractional = 2;
 }
 
 message List{
-    Field field_type = 1;
+  Field field_type = 1;
 }
 
 message FixedSizeList{
-    Field field_type = 1;
-    int32 list_size = 2;
+  Field field_type = 1;
+  int32 list_size = 2;
 }
 
 message Dictionary{
-    ArrowType key = 1;
-    ArrowType value = 2;
+  ArrowType key = 1;
+  ArrowType value = 2;
 }
 
 message Struct{
-    repeated Field sub_field_types = 1;
+  repeated Field sub_field_types = 1;
 }
 
 enum UnionMode{
@@ -374,45 +391,45 @@ enum UnionMode{
 }
 
 message Union{
-    repeated Field union_types = 1;
-    UnionMode union_mode = 2;
+  repeated Field union_types = 1;
+  UnionMode union_mode = 2;
 }
 
 message ScalarListValue{
-    ScalarType datatype = 1;
-    repeated ScalarValue values = 2;
+  ScalarType datatype = 1;
+  repeated ScalarValue values = 2;
 }
 
 message ScalarValue{
-    oneof value {
-        bool   bool_value = 1;
-        string utf8_value = 2;
-        string large_utf8_value = 3;
-        int32  int8_value = 4;
-        int32  int16_value = 5;
-        int32  int32_value = 6;
-        int64  int64_value = 7;
-        uint32 uint8_value = 8;
-        uint32 uint16_value = 9;
-        uint32 uint32_value = 10;
-        uint64 uint64_value = 11;
-        float  float32_value = 12;
-        double float64_value = 13;
-        //Literal Date32 value always has a unit of day
-        int32  date_32_value = 14;
-        int64  time_microsecond_value = 15;
-        int64  time_nanosecond_value = 16;
-        ScalarListValue list_value = 17;
-        ScalarType null_list_value = 18;
+  oneof value {
+    bool   bool_value = 1;
+    string utf8_value = 2;
+    string large_utf8_value = 3;
+    int32  int8_value = 4;
+    int32  int16_value = 5;
+    int32  int32_value = 6;
+    int64  int64_value = 7;
+    uint32 uint8_value = 8;
+    uint32 uint16_value = 9;
+    uint32 uint32_value = 10;
+    uint64 uint64_value = 11;
+    float  float32_value = 12;
+    double float64_value = 13;
+    //Literal Date32 value always has a unit of day
+    int32  date_32_value = 14;
+    int64  time_microsecond_value = 15;
+    int64  time_nanosecond_value = 16;
+    ScalarListValue list_value = 17;
+    ScalarType null_list_value = 18;
 
-        PrimitiveScalarType null_value = 19;
-        Decimal128 decimal128_value = 20;
-        int64 date_64_value = 21;
-        int64 time_second_value = 22;
-        int64 time_millisecond_value = 23;
-        int32 interval_yearmonth_value = 24;
-        int64 interval_daytime_value = 25;
-    }
+    PrimitiveScalarType null_value = 19;
+    Decimal128 decimal128_value = 20;
+    int64 date_64_value = 21;
+    int64 time_second_value = 22;
+    int64 time_millisecond_value = 23;
+    int32 interval_yearmonth_value = 24;
+    int64 interval_daytime_value = 25;
+  }
 }
 
 message Decimal128{
@@ -425,42 +442,42 @@ message Decimal128{
 // List
 enum PrimitiveScalarType{
 
-    BOOL = 0;     // arrow::Type::BOOL
-    UINT8 = 1;    // arrow::Type::UINT8
-    INT8 = 2;     // arrow::Type::INT8
-    UINT16 = 3;   // represents arrow::Type fields in src/arrow/type.h
-    INT16 = 4;
-    UINT32 = 5;
-    INT32 = 6;
-    UINT64 = 7;
-    INT64 = 8;
-    FLOAT32 = 9;
-    FLOAT64 = 10;
-    UTF8 = 11;
-    LARGE_UTF8 = 12;
-    DATE32 = 13;
-    TIME_MICROSECOND = 14;
-    TIME_NANOSECOND = 15;
-    NULL = 16;
+  BOOL = 0;     // arrow::Type::BOOL
+  UINT8 = 1;    // arrow::Type::UINT8
+  INT8 = 2;     // arrow::Type::INT8
+  UINT16 = 3;   // represents arrow::Type fields in src/arrow/type.h
+  INT16 = 4;
+  UINT32 = 5;
+  INT32 = 6;
+  UINT64 = 7;
+  INT64 = 8;
+  FLOAT32 = 9;
+  FLOAT64 = 10;
+  UTF8 = 11;
+  LARGE_UTF8 = 12;
+  DATE32 = 13;
+  TIME_MICROSECOND = 14;
+  TIME_NANOSECOND = 15;
+  NULL = 16;
 
-    DECIMAL128 = 17;
-    DATE64 = 20;
-    TIME_SECOND = 21;
-    TIME_MILLISECOND = 22;
-    INTERVAL_YEARMONTH = 23;
-    INTERVAL_DAYTIME = 24;
+  DECIMAL128 = 17;
+  DATE64 = 20;
+  TIME_SECOND = 21;
+  TIME_MILLISECOND = 22;
+  INTERVAL_YEARMONTH = 23;
+  INTERVAL_DAYTIME = 24;
 }
 
 message ScalarType{
-    oneof datatype{
-        PrimitiveScalarType scalar = 1;
-        ScalarListType list = 2;
-    }
+  oneof datatype{
+    PrimitiveScalarType scalar = 1;
+    ScalarListType list = 2;
+  }
 }
 
 message ScalarListType{
-    repeated string field_names = 3;
-    PrimitiveScalarType deepest_type = 2;
+  repeated string field_names = 3;
+  PrimitiveScalarType deepest_type = 2;
 }
 
 // Broke out into multiple message types so that type
@@ -468,40 +485,40 @@ message ScalarListType{
 //All types that are of the empty message types contain no additional metadata
 // about the type
 message ArrowType{
-    oneof arrow_type_enum{
-        EmptyMessage NONE = 1;     // arrow::Type::NA
-        EmptyMessage BOOL =  2;     // arrow::Type::BOOL
-        EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
-        EmptyMessage INT8 =  4;     // arrow::Type::INT8
-        EmptyMessage UINT16 =5;   // represents arrow::Type fields in src/arrow/type.h
-        EmptyMessage INT16 = 6;
-        EmptyMessage UINT32 =7;
-        EmptyMessage INT32 = 8;
-        EmptyMessage UINT64 =9;
-        EmptyMessage INT64 =10 ;
-        EmptyMessage FLOAT16 =11 ;
-        EmptyMessage FLOAT32 =12 ;
-        EmptyMessage FLOAT64 =13 ;
-        EmptyMessage UTF8 =14 ;
-        EmptyMessage LARGE_UTF8 = 32;
-        EmptyMessage BINARY =15 ;
-        int32 FIXED_SIZE_BINARY =16 ;
-        EmptyMessage LARGE_BINARY = 31;
-        EmptyMessage DATE32 =17 ;
-        EmptyMessage DATE64 =18 ;
-        TimeUnit DURATION = 19;
-        Timestamp TIMESTAMP =20 ;
-        TimeUnit TIME32 =21 ;
-        TimeUnit TIME64 =22 ;
-        IntervalUnit INTERVAL =23 ;
-        Decimal DECIMAL =24 ;
-        List LIST =25;
-        List LARGE_LIST = 26;
-        FixedSizeList FIXED_SIZE_LIST = 27;
-        Struct STRUCT =28;
-        Union UNION =29;
-        Dictionary DICTIONARY =30;
-    }
+  oneof arrow_type_enum{
+    EmptyMessage NONE = 1;     // arrow::Type::NA
+    EmptyMessage BOOL =  2;     // arrow::Type::BOOL
+    EmptyMessage UINT8 = 3;    // arrow::Type::UINT8
+    EmptyMessage INT8 =  4;     // arrow::Type::INT8
+    EmptyMessage UINT16 =5;   // represents arrow::Type fields in src/arrow/type.h
+    EmptyMessage INT16 = 6;
+    EmptyMessage UINT32 =7;
+    EmptyMessage INT32 = 8;
+    EmptyMessage UINT64 =9;
+    EmptyMessage INT64 =10 ;
+    EmptyMessage FLOAT16 =11 ;
+    EmptyMessage FLOAT32 =12 ;
+    EmptyMessage FLOAT64 =13 ;
+    EmptyMessage UTF8 =14 ;
+    EmptyMessage LARGE_UTF8 = 32;
+    EmptyMessage BINARY =15 ;
+    int32 FIXED_SIZE_BINARY =16 ;
+    EmptyMessage LARGE_BINARY = 31;
+    EmptyMessage DATE32 =17 ;
+    EmptyMessage DATE64 =18 ;
+    TimeUnit DURATION = 19;
+    Timestamp TIMESTAMP =20 ;
+    TimeUnit TIME32 =21 ;
+    TimeUnit TIME64 =22 ;
+    IntervalUnit INTERVAL =23 ;
+    Decimal DECIMAL =24 ;
+    List LIST =25;
+    List LARGE_LIST = 26;
+    FixedSizeList FIXED_SIZE_LIST = 27;
+    Struct STRUCT =28;
+    Union UNION =29;
+    Dictionary DICTIONARY =30;
+  }
 }
 
 //Useful for representing an empty enum variant in rust

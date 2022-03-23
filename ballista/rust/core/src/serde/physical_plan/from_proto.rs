@@ -35,6 +35,7 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::window_functions::WindowFunction;
 
+use datafusion::physical_plan::udf::ScalarUDFExpr;
 use datafusion::physical_plan::{
     expressions::{
         BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
@@ -45,6 +46,7 @@ use datafusion::physical_plan::{
 };
 use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
 
+use crate::plugin::udf::get_udf_plugin_manager;
 use protobuf::physical_expr_node::ExprType;
 
 impl From<&protobuf::PhysicalColumn> for Column {
@@ -78,6 +80,41 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
             ExprType::AggregateExpr(_) => {
                 return Err(BallistaError::General(
                     "Cannot convert aggregate expr node to physical expression"
+                        .to_owned(),
+                ));
+            }
+            ExprType::ScalarUdfProtoExpr(e) => {
+                if let Some(udf_plugin_manager) = get_udf_plugin_manager("") {
+                    let fun = udf_plugin_manager
+                        .scalar_udfs
+                        .get(&e.fun_name)
+                        .ok_or_else(|| {
+                            proto_error(format!(
+                                "can not get udf:{} from UDFPluginMananger.scalar_udfs!",
+                                &e.fun_name.to_owned()
+                            ))
+                        })?;
+                    let args = e
+                        .expr
+                        .iter()
+                        .map(|x| x.try_into())
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    Arc::new(ScalarUDFExpr::new(
+                        e.fun_name.as_str(),
+                        (**fun).clone(),
+                        args,
+                        &convert_required!(e.return_type)?,
+                    ))
+                } else {
+                    return Err(BallistaError::General(
+                        "Cannot found udf plugin".to_owned(),
+                    ));
+                }
+            }
+            ExprType::AggregateUdfExpr(_) => {
+                return Err(BallistaError::General(
+                    "Cannot convert aggregate udf expr node to physical expression"
                         .to_owned(),
                 ));
             }

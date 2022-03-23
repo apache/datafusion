@@ -36,6 +36,7 @@ crate-type = ["cdylib"]
 [[example]]
 name = "use_simple_udf_plugin"
 path = "examples/use_simple_udf_plugin.rs"
+required-features = ["ballista/standalone"]
 
 [dependencies]
 datafusion = { path = "../datafusion" }
@@ -48,3 +49,5 @@ futures = "0.3"
 num_cpus = "1.13.0"
 test-cdylib = "1.1.0"
 lazy_static = { version = "^1.4.0" }
+
+
