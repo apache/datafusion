@@ -289,7 +289,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
 
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::Parquet => Ok(Arc::new(ParquetFormat::default())),
-            //TODO implement for CSV
+            // TODO implement for CSV
             _ => Err(tonic::Status::unimplemented(
                 "get_file_metadata unsupported file type",
             )),

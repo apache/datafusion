@@ -182,7 +182,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskScheduler
         }
 
         let total_task_num = tasks_status.len();
-        info!("{} tasks to be scheduled", total_task_num);
+        debug!("{} tasks to be scheduled", total_task_num);
 
         // No need to deal with the stage event, since the task status is changing from pending to running
         self.stage_manager.update_tasks_status(tasks_status);

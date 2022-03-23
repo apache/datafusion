@@ -228,6 +228,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let object_store = ctx
+                    .runtime_env()
                     .object_store(scan.path.as_str())
                     .map_err(|e| {
                         BallistaError::NotImplemented(format!(
@@ -704,8 +705,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         extension_codec,
                     )?;
 
-                //Assumed common usize field was batch size
-                //Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Assumed common usize field was batch size
+                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
                 let pb_partition_method =
@@ -935,7 +936,7 @@ mod roundtrip_tests {
         }
     }
 
-    //Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
+    // Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
     macro_rules! roundtrip_test {
         ($initial_struct:ident, $proto_type:ty, $struct_type:ty) => {
             let proto: $proto_type = (&$initial_struct).try_into()?;
@@ -1287,9 +1288,10 @@ mod roundtrip_tests {
         let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
             BallistaCodec::default();
         let custom_object_store = Arc::new(TestObjectStore {});
-        ctx.register_object_store("test", custom_object_store.clone());
+        ctx.runtime_env()
+            .register_object_store("test", custom_object_store.clone());
 
-        let (os, _) = ctx.object_store("test://foo.csv")?;
+        let (os, _) = ctx.runtime_env().object_store("test://foo.csv")?;
 
         println!("Object Store {:?}", os);
 

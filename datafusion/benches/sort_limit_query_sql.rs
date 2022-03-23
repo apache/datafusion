@@ -84,7 +84,7 @@ fn create_context() -> Arc<Mutex<SessionContext>> {
     rt.block_on(async {
         // create local session context
         let mut ctx = SessionContext::new();
-        ctx.state.lock().config.target_partitions = 1;
+        ctx.state.write().config.target_partitions = 1;
 
         let task_ctx = ctx.task_ctx();
         let mem_table = MemTable::load(Arc::new(csv.await), Some(partitions), task_ctx)

@@ -41,16 +41,18 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // execute the query
-    // let df = ctx
-    //     .sql("select array_4(1, c2, 0, 0, 2) from aggregate_test_100 limit 3")
-    //     .await?;
-    //
-    // df.show().await?;
-
-    let df = ctx.sql("select geo_mean(2)").await?;
+    // test udf
+    let df = ctx
+        .sql("select array_4(1, c2, 0, 0, 2) from aggregate_test_100 limit 3")
+        .await?;
 
     df.show().await?;
+
+    // TODO The test will get stuck here
+    // test udaf
+    // let df = ctx.sql("select geo_mean(2)").await?;
+    //
+    // df.show().await?;
 
     Ok(())
 }

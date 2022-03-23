@@ -179,7 +179,7 @@ impl BallistaConfig {
     }
 
     pub fn default_plugin_dir(&self) -> String {
-        self.get_string_setting(BALLISTA_WITH_INFORMATION_SCHEMA)
+        self.get_string_setting(BALLISTA_PLUGIN_DIR)
     }
 
     fn get_usize_setting(&self, key: &str) -> usize {

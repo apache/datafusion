@@ -63,7 +63,7 @@ mod roundtrip_tests {
     #[test]
     fn scalar_values_error_serialization() {
         let should_fail_on_seralize: Vec<ScalarValue> = vec![
-            //Should fail due to inconsistent types
+            // Should fail due to inconsistent types
             ScalarValue::List(
                 Some(Box::new(vec![
                     ScalarValue::Int16(None),
@@ -267,7 +267,7 @@ mod roundtrip_tests {
             DataType::Time64(TimeUnit::Nanosecond),
             DataType::Utf8,
             DataType::LargeUtf8,
-            //Recursive list tests
+            // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Boolean, true)),
             DataType::List(new_box_field(
                 "Level1",
@@ -279,7 +279,7 @@ mod roundtrip_tests {
         let should_fail: Vec<DataType> = vec![
             DataType::Null,
             DataType::Float16,
-            //Add more timestamp tests
+            // Add more timestamp tests
             DataType::Timestamp(TimeUnit::Millisecond, None),
             DataType::Date64,
             DataType::Time32(TimeUnit::Second),
@@ -300,7 +300,7 @@ mod roundtrip_tests {
             DataType::FixedSizeBinary(-432),
             DataType::LargeBinary,
             DataType::Decimal(1345, 5431),
-            //Recursive list tests
+            // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
                 "Level1",
@@ -311,7 +311,7 @@ mod roundtrip_tests {
                 )),
                 true,
             )),
-            //Fixed size lists
+            // Fixed size lists
             DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
             DataType::FixedSizeList(
                 new_box_field(
@@ -325,7 +325,7 @@ mod roundtrip_tests {
                 ),
                 41,
             ),
-            //Struct Testing
+            // Struct Testing
             DataType::Struct(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
@@ -426,7 +426,7 @@ mod roundtrip_tests {
             DataType::Float16,
             DataType::Float32,
             DataType::Float64,
-            //Add more timestamp tests
+            // Add more timestamp tests
             DataType::Timestamp(TimeUnit::Millisecond, None),
             DataType::Date32,
             DataType::Date64,
@@ -452,7 +452,7 @@ mod roundtrip_tests {
             DataType::Utf8,
             DataType::LargeUtf8,
             DataType::Decimal(1345, 5431),
-            //Recursive list tests
+            // Recursive list tests
             DataType::List(new_box_field("Level1", DataType::Binary, true)),
             DataType::List(new_box_field(
                 "Level1",
@@ -463,7 +463,7 @@ mod roundtrip_tests {
                 )),
                 true,
             )),
-            //Fixed size lists
+            // Fixed size lists
             DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
             DataType::FixedSizeList(
                 new_box_field(
@@ -477,7 +477,7 @@ mod roundtrip_tests {
                 ),
                 41,
             ),
-            //Struct Testing
+            // Struct Testing
             DataType::Struct(vec![
                 Field::new("nullable", DataType::Boolean, false),
                 Field::new("name", DataType::Utf8, false),
@@ -565,7 +565,7 @@ mod roundtrip_tests {
             ScalarValue::Date32(None),
             ScalarValue::TimestampMicrosecond(None, None),
             ScalarValue::TimestampNanosecond(None, None),
-            //ScalarValue::List(None, DataType::Boolean)
+            // ScalarValue::List(None, DataType::Boolean)
         ];
 
         for test_case in test_types.into_iter() {

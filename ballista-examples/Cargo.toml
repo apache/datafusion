@@ -39,15 +39,14 @@ path = "examples/use_simple_udf_plugin.rs"
 required-features = ["ballista/standalone"]
 
 [dependencies]
-datafusion = { path = "../datafusion" }
+ballista = { path = "../ballista/rust/client", version = "0.6.0" }
 datafusion-expr = { path = "../datafusion-expr" }
-ballista = { path = "../ballista/rust/client", version = "0.6.0"}
-prost = "0.9"
-tonic = "0.6"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-futures = "0.3"
-num_cpus = "1.13.0"
+datafusion = { path = "../datafusion" }
 test-cdylib = "1.1.0"
 lazy_static = { version = "^1.4.0" }
 
-
+futures = "0.3"
+num_cpus = "1.13.0"
+prost = "0.9"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
+tonic = "0.6"

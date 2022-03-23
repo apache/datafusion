@@ -96,7 +96,8 @@ impl FlightService for BallistaFlightService {
                         ))
                     })
                     .map_err(|e| from_ballista_err(&e))?;
-                let reader = FileReader::try_new(file).map_err(|e| from_arrow_err(&e))?;
+                let reader =
+                    FileReader::try_new(file, None).map_err(|e| from_arrow_err(&e))?;
 
                 let (tx, rx): (FlightDataSender, FlightDataReceiver) = channel(2);
 

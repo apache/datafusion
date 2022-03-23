@@ -23,7 +23,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::execution::memory_manager::MemoryManagerConfig;
-use datafusion::execution::runtime_env::RuntimeConfig;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -78,8 +78,8 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let runtime_config = RuntimeConfig::new().with_memory_manager(
             MemoryManagerConfig::try_new_limit(pool_size, 1.0).unwrap(),
         );
-        let session_config = SessionConfig::new().with_runtime_config(runtime_config);
-        let session_ctx = SessionContext::with_config(session_config);
+        let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
+        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
 
         let task_ctx = session_ctx.task_ctx();
         let collected = collect(sort.clone(), task_ctx).await.unwrap();
