@@ -222,6 +222,14 @@ impl DFSchema {
         }
     }
 
+    /// Find all fields having the given qualifier
+    pub fn fields_with_qualified(&self, qualifier: &str) -> Vec<&DFField> {
+        self.fields
+            .iter()
+            .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
+            .collect()
+    }
+
     /// Find all fields match the given name
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields
