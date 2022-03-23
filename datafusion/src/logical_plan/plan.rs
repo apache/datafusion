@@ -31,6 +31,7 @@ use std::{
     fmt::{self, Display},
     sync::Arc,
 };
+use crate::datasource::datasource::TableProviderFilterPushDown;
 
 /// Join type
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,6 +311,7 @@ pub struct Join {
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
 }
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -382,8 +384,8 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(EmptyRelation { schema, .. }) => schema,
             LogicalPlan::Values(Values { schema, .. }) => schema,
             LogicalPlan::TableScan(TableScan {
-                projected_schema, ..
-            }) => projected_schema,
+                                       projected_schema, ..
+                                   }) => projected_schema,
             LogicalPlan::Projection(Projection { schema, .. }) => schema,
             LogicalPlan::Filter(Filter { input, .. }) => input.schema(),
             LogicalPlan::Window(Window { schema, .. }) => schema,
@@ -414,8 +416,8 @@ impl LogicalPlan {
     pub fn all_schemas(&self) -> Vec<&DFSchemaRef> {
         match self {
             LogicalPlan::TableScan(TableScan {
-                projected_schema, ..
-            }) => vec![projected_schema],
+                                       projected_schema, ..
+                                   }) => vec![projected_schema],
             LogicalPlan::Values(Values { schema, .. }) => vec![schema],
             LogicalPlan::Window(Window { input, schema, .. })
             | LogicalPlan::Projection(Projection { input, schema, .. })
@@ -425,16 +427,16 @@ impl LogicalPlan {
                 schemas
             }
             LogicalPlan::Join(Join {
-                left,
-                right,
-                schema,
-                ..
-            })
+                                  left,
+                                  right,
+                                  schema,
+                                  ..
+                              })
             | LogicalPlan::CrossJoin(CrossJoin {
-                left,
-                right,
-                schema,
-            }) => {
+                                         left,
+                                         right,
+                                         schema,
+                                     }) => {
                 let mut schemas = left.all_schemas();
                 schemas.extend(right.all_schemas());
                 schemas.insert(0, schema);
@@ -479,18 +481,18 @@ impl LogicalPlan {
             }
             LogicalPlan::Filter(Filter { predicate, .. }) => vec![predicate.clone()],
             LogicalPlan::Repartition(Repartition {
-                partitioning_scheme,
-                ..
-            }) => match partitioning_scheme {
+                                         partitioning_scheme,
+                                         ..
+                                     }) => match partitioning_scheme {
                 Partitioning::Hash(expr, _) => expr.clone(),
                 _ => vec![],
             },
             LogicalPlan::Window(Window { window_expr, .. }) => window_expr.clone(),
             LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
+                                       group_expr,
+                                       aggr_expr,
+                                       ..
+                                   }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
             LogicalPlan::Join(Join { on, .. }) => on
                 .iter()
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
@@ -555,10 +557,10 @@ impl LogicalPlan {
 
             fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
                 if let LogicalPlan::Join(Join {
-                    join_constraint: JoinConstraint::Using,
-                    on,
-                    ..
-                }) = plan
+                                             join_constraint: JoinConstraint::Using,
+                                             on,
+                                             ..
+                                         }) = plan
                 {
                     self.using_columns.push(
                         on.iter()
@@ -625,7 +627,7 @@ pub trait PlanVisitor {
     /// Err(..) or Ok(false) are returned, the recursion stops
     /// immediately and the error, if any, is returned to `accept`
     fn pre_visit(&mut self, plan: &LogicalPlan)
-        -> std::result::Result<bool, Self::Error>;
+                 -> std::result::Result<bool, Self::Error>;
 
     /// Invoked on a logical plan after all of its child inputs have
     /// been visited. The return value is handled the same as the
@@ -645,8 +647,8 @@ impl LogicalPlan {
     /// `pre_visit` or `post_visit` returned Ok(false) and may have
     /// cut short the recursion
     pub fn accept<V>(&self, visitor: &mut V) -> std::result::Result<bool, V::Error>
-    where
-        V: PlanVisitor,
+        where
+            V: PlanVisitor,
     {
         if !visitor.pre_visit(self)? {
             return Ok(false);
@@ -900,12 +902,13 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::TableScan(TableScan {
-                        ref table_name,
-                        ref projection,
-                        ref filters,
-                        ref limit,
-                        ..
-                    }) => {
+                                               ref source,
+                                               ref table_name,
+                                               ref projection,
+                                               ref filters,
+                                               ref limit,
+                                               ..
+                                           }) => {
                         write!(
                             f,
                             "TableScan: {} projection={:?}",
@@ -913,7 +916,27 @@ impl LogicalPlan {
                         )?;
 
                         if !filters.is_empty() {
-                            write!(f, ", filters={:?}", filters)?;
+                            let mut full_filter = vec![];
+                            let mut partial_filter = vec![];
+                            let mut unsupported_filters = vec![];
+
+                            filters.iter().for_each(|x| if let Ok(t) = source.supports_filter_pushdown(x) {
+                                match t {
+                                    TableProviderFilterPushDown::Exact => full_filter.push(x),
+                                    TableProviderFilterPushDown::Inexact => partial_filter.push(x),
+                                    TableProviderFilterPushDown::Unsupported => unsupported_filters.push(x),
+                                }
+                            });
+
+                            if !full_filter.is_empty() {
+                                write!(f, ", full_filters={:?}", full_filter)?;
+                            };
+                            if !partial_filter.is_empty() {
+                                write!(f, ", partial_filters={:?}", partial_filter)?;
+                            }
+                            if !unsupported_filters.is_empty() {
+                                write!(f, ", unsupported_filters={:?}", unsupported_filters)?;
+                            }
                         }
 
                         if let Some(n) = limit {
@@ -923,8 +946,8 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Projection(Projection {
-                        ref expr, alias, ..
-                    }) => {
+                                                ref expr, alias, ..
+                                            }) => {
                         write!(f, "Projection: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
                             if i > 0 {
@@ -938,19 +961,19 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Filter(Filter {
-                        predicate: ref expr,
-                        ..
-                    }) => write!(f, "Filter: {:?}", expr),
+                                            predicate: ref expr,
+                                            ..
+                                        }) => write!(f, "Filter: {:?}", expr),
                     LogicalPlan::Window(Window {
-                        ref window_expr, ..
-                    }) => {
+                                            ref window_expr, ..
+                                        }) => {
                         write!(f, "WindowAggr: windowExpr=[{:?}]", window_expr)
                     }
                     LogicalPlan::Aggregate(Aggregate {
-                        ref group_expr,
-                        ref aggr_expr,
-                        ..
-                    }) => write!(
+                                               ref group_expr,
+                                               ref aggr_expr,
+                                               ..
+                                           }) => write!(
                         f,
                         "Aggregate: groupBy=[{:?}], aggr=[{:?}]",
                         group_expr, aggr_expr
@@ -966,11 +989,11 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Join(Join {
-                        on: ref keys,
-                        join_constraint,
-                        join_type,
-                        ..
-                    }) => {
+                                          on: ref keys,
+                                          join_constraint,
+                                          join_type,
+                                          ..
+                                      }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
                         match join_constraint {
@@ -991,9 +1014,9 @@ impl LogicalPlan {
                         write!(f, "CrossJoin:")
                     }
                     LogicalPlan::Repartition(Repartition {
-                        partitioning_scheme,
-                        ..
-                    }) => match partitioning_scheme {
+                                                 partitioning_scheme,
+                                                 ..
+                                             }) => match partitioning_scheme {
                         Partitioning::RoundRobinBatch(n) => write!(
                             f,
                             "Repartition: RoundRobinBatch partition_count={}",
@@ -1012,25 +1035,25 @@ impl LogicalPlan {
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
-                        ref name,
-                        ..
-                    }) => {
+                                                         ref name,
+                                                         ..
+                                                     }) => {
                         write!(f, "CreateExternalTable: {:?}", name)
                     }
                     LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                        name, ..
-                    }) => {
+                                                       name, ..
+                                                   }) => {
                         write!(f, "CreateMemoryTable: {:?}", name)
                     }
                     LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
-                        schema_name,
-                        ..
-                    }) => {
+                                                         schema_name,
+                                                         ..
+                                                     }) => {
                         write!(f, "CreateCatalogSchema: {:?}", schema_name)
                     }
                     LogicalPlan::DropTable(DropTable {
-                        name, if_exists, ..
-                    }) => {
+                                               name, if_exists, ..
+                                           }) => {
                         write!(f, "DropTable: {:?} if not exist:={}", name, if_exists)
                     }
                     LogicalPlan::Explain { .. } => write!(f, "Explain"),
@@ -1154,13 +1177,13 @@ mod tests {
             &employee_schema(),
             Some(vec![0, 3]),
         )
-        .unwrap()
-        .filter(col("state").eq(lit("CO")))
-        .unwrap()
-        .project(vec![col("id")])
-        .unwrap()
-        .build()
-        .unwrap()
+            .unwrap()
+            .filter(col("state").eq(lit("CO")))
+            .unwrap()
+            .project(vec![col("id")])
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -1217,11 +1240,11 @@ mod tests {
     }
 
     /// Tests for the Visitor trait and walking logical plan nodes
-
     #[derive(Debug, Default)]
     struct OkVisitor {
         strings: Vec<String>,
     }
+
     impl PlanVisitor for OkVisitor {
         type Error = String;
 
@@ -1271,7 +1294,7 @@ mod tests {
                 "pre_visit TableScan",
                 "post_visit TableScan",
                 "post_visit Filter",
-                "post_visit Projection"
+                "post_visit Projection",
             ]
         );
     }
@@ -1281,6 +1304,7 @@ mod tests {
     struct OptionalCounter {
         val: Option<usize>,
     }
+
     impl OptionalCounter {
         fn new(val: usize) -> Self {
             Self { val: Some(val) }
@@ -1344,7 +1368,7 @@ mod tests {
 
         assert_eq!(
             visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter",]
+            vec!["pre_visit Projection", "pre_visit Filter"]
         );
     }
 
@@ -1422,7 +1446,7 @@ mod tests {
 
         assert_eq!(
             visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter",]
+            vec!["pre_visit Projection", "pre_visit Filter"]
         );
     }
 

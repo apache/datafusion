@@ -1431,7 +1431,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
 
         let expected = "\
-        TableScan: test projection=None, filters=[#a = Int64(1)]";
+        TableScan: test projection=None, full_filters=[#a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1443,7 +1443,7 @@ mod tests {
 
         let expected = "\
         Filter: #a = Int64(1)\
-        \n  TableScan: test projection=None, filters=[#a = Int64(1)]";
+        \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1457,7 +1457,7 @@ mod tests {
 
         let expected = "\
         Filter: #a = Int64(1)\
-        \n  TableScan: test projection=None, filters=[#a = Int64(1)]";
+        \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
 
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
@@ -1501,7 +1501,7 @@ mod tests {
 
         let expected ="Projection: #a, #b\
             \n  Filter: #a = Int64(10) AND #b > Int64(11)\
-            \n    TableScan: test projection=Some([0]), filters=[#a = Int64(10), #b > Int64(11)]";
+            \n    TableScan: test projection=Some([0]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
 
         assert_optimized_plan_eq(&plan, expected);
 
