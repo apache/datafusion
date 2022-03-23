@@ -34,10 +34,5 @@ members = [
 ]
 
 [profile.release]
-lto = true
 codegen-units = 1
-
-[patch.crates-io]
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev = "2bca71e322fcab6c6d93a47ef71638a617e29f6c"}
-arrow-flight = { git = "https://github.com/apache/arrow-rs.git", rev = "2bca71e322fcab6c6d93a47ef71638a617e29f6c"}
-parquet = { git = "https://github.com/apache/arrow-rs.git", rev = "2bca71e322fcab6c6d93a47ef71638a617e29f6c"}
+lto = true

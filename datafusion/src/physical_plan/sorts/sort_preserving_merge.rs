@@ -43,7 +43,6 @@ use futures::{Stream, StreamExt};
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
-use crate::execution::runtime_env::RuntimeEnv;
 use crate::physical_plan::sorts::{RowIndex, SortKeyCursor, SortedStream, StreamWrapper};
 use crate::physical_plan::{
     common::spawn_execution, expressions::PhysicalSortExpr, DisplayFormatType,
@@ -201,7 +200,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
                     self.schema(),
                     &self.expr,
                     tracking_metrics,
-                    context.runtime.clone(),
+                    context.session_config().batch_size,
                 )))
             }
         }
@@ -303,7 +302,7 @@ impl SortPreservingMergeStream {
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         tracking_metrics: MemTrackingMetrics,
-        runtime: Arc<RuntimeEnv>,
+        batch_size: usize,
     ) -> Self {
         let stream_count = receivers.len();
         let batches = (0..stream_count)
@@ -325,7 +324,7 @@ impl SortPreservingMergeStream {
             in_progress: vec![],
             next_batch_id: 0,
             min_heap: BinaryHeap::with_capacity(stream_count),
-            batch_size: runtime.batch_size(),
+            batch_size,
         }
     }
 
@@ -334,7 +333,7 @@ impl SortPreservingMergeStream {
         schema: SchemaRef,
         expressions: &[PhysicalSortExpr],
         tracking_metrics: MemTrackingMetrics,
-        runtime: Arc<RuntimeEnv>,
+        batch_size: usize,
     ) -> Self {
         let stream_count = streams.len();
         let batches = (0..stream_count)
@@ -360,7 +359,7 @@ impl SortPreservingMergeStream {
             in_progress: vec![],
             next_batch_id: 0,
             min_heap: BinaryHeap::with_capacity(stream_count),
-            batch_size: runtime.batch_size(),
+            batch_size,
         }
     }
 
@@ -1228,7 +1227,7 @@ mod tests {
             batches.schema(),
             sort.as_slice(),
             tracking_metrics,
-            task_ctx.runtime.clone(),
+            task_ctx.session_config().batch_size,
         );
 
         let mut merged = common::collect(Box::pin(merge_stream)).await.unwrap();

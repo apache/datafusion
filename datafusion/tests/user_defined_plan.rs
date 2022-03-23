@@ -87,6 +87,7 @@ use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
 use datafusion::execution::context::{ExecutionProps, TaskContext};
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::logical_plan::plan::{Extension, Sort};
 use datafusion::logical_plan::{DFSchemaRef, Limit};
 
@@ -242,12 +243,12 @@ async fn topk_plan() -> Result<()> {
 }
 
 fn make_topk_context() -> SessionContext {
-    let config = SessionConfig::new()
+    let config = SessionConfig::new().with_target_partitions(48);
+    let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
+    let state = SessionState::with_config(config, runtime)
         .with_query_planner(Arc::new(TopKQueryPlanner {}))
-        .with_target_partitions(48)
         .add_optimizer_rule(Arc::new(TopKOptimizerRule {}));
-
-    SessionContext::with_config(config)
+    SessionContext::with_state(state)
 }
 
 // ------ The implementation of the TopK code follows -----

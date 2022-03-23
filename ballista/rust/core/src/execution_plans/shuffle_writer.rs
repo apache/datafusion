@@ -248,8 +248,8 @@ impl ShuffleWriterExec {
 
                         // write non-empty batch out
 
-                        //TODO optimize so we don't write or fetch empty partitions
-                        //if output_batch.num_rows() > 0 {
+                        // TODO optimize so we don't write or fetch empty partitions
+                        // if output_batch.num_rows() > 0 {
                         let timer = write_metrics.write_time.timer();
                         match &mut writers[output_partition] {
                             Some(w) => {

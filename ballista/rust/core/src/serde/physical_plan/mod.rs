@@ -57,6 +57,7 @@ use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion::prelude::SessionContext;
+use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
 use std::convert::TryInto;
@@ -133,7 +134,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let predicate = scan
                     .pruning_predicate
                     .as_ref()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
                     decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
@@ -483,8 +484,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .map(|i| i.try_into_physical_plan(ctx, extension_codec))
                     .collect::<Result<_, BallistaError>>()?;
 
-                let extension_node =
-                    extension_codec.try_decode(extension.node.as_slice(), &inputs)?;
+                let extension_node = extension_codec.try_decode(
+                    extension.node.as_slice(),
+                    &inputs,
+                    ctx,
+                )?;
 
                 Ok(extension_node)
             }
@@ -905,7 +909,7 @@ fn decode_scan_config(
         .collect::<Result<Vec<_>, _>>()?;
 
     let object_store = if let Some(file) = file_groups.get(0).and_then(|h| h.get(0)) {
-        ctx.object_store(file.file_meta.path())?.0
+        ctx.runtime_env().object_store(file.file_meta.path())?.0
     } else {
         Arc::new(LocalFileSystem {})
     };

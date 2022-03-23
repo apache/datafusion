@@ -25,6 +25,9 @@ repository = "https://github.com/apache/arrow-datafusion"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2018"
 
+[package.metadata.configure_me.bin]
+scheduler = "scheduler_config_spec.toml"
+
 [features]
 default = ["etcd", "sled"]
 etcd = ["etcd-client"]
@@ -32,6 +35,8 @@ sled = ["sled_package", "tokio-stream"]
 
 [dependencies]
 anyhow = "1"
+async-recursion = "1.0.0"
+async-trait = "0.1.41"
 ballista-core = { path = "../core", version = "0.6.0" }
 clap = { version = "3", features = ["derive", "cargo"] }
 configure_me = "0.4.0"
@@ -43,19 +48,17 @@ http = "0.2"
 http-body = "0.4"
 hyper = "0.14.4"
 log = "0.4"
+parking_lot = "0.12"
 parse_arg = "0.1.3"
 prost = "0.9"
 rand = "0.8"
-serde = {version = "1", features = ["derive"]}
+serde = { version = "1", features = ["derive"] }
 sled_package = { package = "sled", version = "0.34", optional = true }
 tokio = { version = "1.0", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["net"], optional = true }
 tonic = "0.6"
 tower = { version = "0.4" }
 warp = "0.3"
-parking_lot = "0.12"
-async-trait = "0.1.41"
-async-recursion = "1.0.0"
 
 [dev-dependencies]
 ballista-core = { path = "../core", version = "0.6.0" }
@@ -64,6 +67,3 @@ uuid = { version = "0.8", features = ["v4"] }
 [build-dependencies]
 configure_me_codegen = "0.4.1"
 tonic-build = { version = "0.6" }
-
-[package.metadata.configure_me.bin]
-scheduler = "scheduler_config_spec.toml"

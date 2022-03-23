@@ -297,7 +297,7 @@ mod tests {
     ) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
-        let conf = session_ctx.state.lock().clone().config;
+        let conf = session_ctx.copied_config();
         let optimized = AggregateStatistics::new().optimize(Arc::new(plan), &conf)?;
 
         let (col, count) = match nulls {
