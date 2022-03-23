@@ -352,10 +352,7 @@ macro_rules! get_min_max_values {
         let data_type = field.data_type();
         // The result may be None, because DataFusion doesn't have support for ScalarValues of the column type
         let null_scalar: ScalarValue = data_type.try_into().ok()?;
-<<<<<<< HEAD
-=======
 
->>>>>>> apache/master
         $self.row_group_metadata
             .column(column_index)
             .statistics()

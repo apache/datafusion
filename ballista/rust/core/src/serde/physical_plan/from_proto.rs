@@ -29,7 +29,7 @@ use chrono::{TimeZone, Utc};
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::object_store::{FileMeta, SizedFile};
 use datafusion::datasource::{FileRange, PartitionedFile};
-use datafusion::execution::context::{ExecutionProps, SessionState};
+use datafusion::execution::context::ExecutionProps;
 
 use datafusion::physical_plan::file_format::FileScanConfig;
 
