@@ -29,6 +29,7 @@ use arrow::{
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
 };
+use datafusion_common::Result;
 
 use crate::datasource::{MemTable, TableProvider, TableType};
 
@@ -89,7 +90,7 @@ impl CatalogProvider for CatalogWithInformationSchema {
         &self,
         name: &str,
         schema: Arc<dyn SchemaProvider>,
-    ) -> Option<Arc<dyn SchemaProvider>> {
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
         let catalog = &self.inner;
         catalog.register_schema(name, schema)
     }
