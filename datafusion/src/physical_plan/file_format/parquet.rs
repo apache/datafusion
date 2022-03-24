@@ -238,6 +238,7 @@ impl ExecutionPlan for ParquetExec {
         let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
 
         let join_handle = if projection.is_empty() {
+            println!("Empty projection. using read_partition_no_file_columns");
             task::spawn_blocking(move || {
                 if let Err(e) = read_partition_no_file_columns(
                     object_store.as_ref(),
@@ -260,6 +261,7 @@ impl ExecutionPlan for ParquetExec {
                 }
             })
         } else {
+            println!("Non-empty projection. using read_partition");
             task::spawn_blocking(move || {
                 if let Err(e) = read_partition(
                     object_store.as_ref(),
@@ -480,39 +482,27 @@ fn read_partition_no_file_columns(
     mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
     for partitioned_file in partition {
-        let mut file_row_count = 0;
-        let object_reader =
-            object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
+        let object_reader = object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
         let file_reader = SerializedFileReader::new(ChunkObjectReader(object_reader))?;
-        for i in 0..file_reader.num_row_groups() {
-            let row_group = file_reader.get_row_group(i)?;
-            let num_rows = row_group.metadata().num_rows();
-            let num_rows = usize::try_from(num_rows).map_err(|e| {
-                DataFusionError::Execution(format!(
-                    "Could not convert number of rows from i64 to usize: {}",
-                    e
-                ))
-            })?;
-            file_row_count += num_rows;
-            let remaining_rows = limit.unwrap_or(usize::MAX);
-            if file_row_count >= remaining_rows {
-                file_row_count = remaining_rows;
-                limit = Some(0);
-                break;
-            } else if let Some(remaining_limt) = &mut limit {
-                *remaining_limt -= file_row_count;
-            }
+        let mut file_rows: usize = file_reader.metadata().file_metadata().num_rows().try_into().expect("Row count should always be greater than or equal to 0");
+        let remaining_rows = limit.unwrap_or(usize::MAX);
+        if file_rows >= remaining_rows{
+            file_rows = remaining_rows;
+            limit = Some(0);
+        }else if let Some(remaining_limit) = &mut limit{
+            *remaining_limit -= file_rows;
         }
-
-        while file_row_count > batch_size {
+        
+        while file_rows > batch_size {
             send_result(
                 &response_tx,
                 partition_column_projector
                     .project_empty(batch_size, &partitioned_file.partition_values),
             )?;
-            file_row_count -= batch_size;
+            file_rows -= batch_size;
         }
-        if file_row_count != 0 {
+
+        if file_rows != 0 {
             send_result(
                 &response_tx,
                 partition_column_projector
