@@ -152,6 +152,27 @@ pub fn coerce_types(
             }
             Ok(input_types.to_vec())
         }
+        AggregateFunction::ApproxPercentileContWithWeight => {
+            if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The function {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[0]
+                )));
+            }
+            if !is_approx_percentile_cont_supported_arg_type(&input_types[1]) {
+                return Err(DataFusionError::Plan(format!(
+                    "The weight argument for {:?} does not support inputs of type {:?}.",
+                    agg_fun, input_types[1]
+                )));
+            }
+            if !matches!(input_types[2], DataType::Float64) {
+                return Err(DataFusionError::Plan(format!(
+                    "The percentile argument for {:?} must be Float64, not {:?}.",
+                    agg_fun, input_types[2]
+                )));
+            }
+            Ok(input_types.to_vec())
+        }
         AggregateFunction::ApproxMedian => {
             if !is_approx_percentile_cont_supported_arg_type(&input_types[0]) {
                 return Err(DataFusionError::Plan(format!(

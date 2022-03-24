@@ -16,7 +16,11 @@
 // under the License.
 
 use super::{format_state_name, Literal};
-use crate::{tdigest::TDigest, AggregateExpr, PhysicalExpr};
+use crate::tdigest::TryIntoOrderedF64;
+use crate::{
+    tdigest::{TDigest, DEFAULT_MAX_SIZE},
+    AggregateExpr, PhysicalExpr,
+};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -28,6 +32,7 @@ use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
+use ordered_float::OrderedFloat;
 use std::{any::Any, iter, sync::Arc};
 
 /// Return `true` if `arg_type` is of a [`DataType`] that the
@@ -102,6 +107,30 @@ impl ApproxPercentileCont {
             percentile,
         })
     }
+
+    pub(crate) fn create_plain_accumulator(&self) -> Result<ApproxPercentileAccumulator> {
+        let accumulator: ApproxPercentileAccumulator = match &self.input_data_type {
+            t @ (DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::Float32
+            | DataType::Float64) => {
+                ApproxPercentileAccumulator::new(self.percentile, t.clone())
+            }
+            other => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
+                    other
+                )))
+            }
+        };
+        Ok(accumulator)
+    }
 }
 
 impl AggregateExpr for ApproxPercentileCont {
@@ -156,27 +185,8 @@ impl AggregateExpr for ApproxPercentileCont {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        let accumulator: Box<dyn Accumulator> = match &self.input_data_type {
-            t @ (DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64) => {
-                Box::new(ApproxPercentileAccumulator::new(self.percentile, t.clone()))
-            }
-            other => {
-                return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
-                    other
-                )))
-            }
-        };
-        Ok(accumulator)
+        let accumulator = self.create_plain_accumulator()?;
+        Ok(Box::new(accumulator))
     }
 
     fn name(&self) -> &str {
@@ -194,9 +204,106 @@ pub struct ApproxPercentileAccumulator {
 impl ApproxPercentileAccumulator {
     pub fn new(percentile: f64, return_type: DataType) -> Self {
         Self {
-            digest: TDigest::new(100),
+            digest: TDigest::new(DEFAULT_MAX_SIZE),
             percentile,
             return_type,
+        }
+    }
+
+    pub(crate) fn merge_digests(&mut self, digests: &[TDigest]) {
+        self.digest = TDigest::merge_digests(digests);
+    }
+
+    pub(crate) fn convert_to_ordered_float(
+        values: &ArrayRef,
+    ) -> Result<Vec<OrderedFloat<f64>>> {
+        match values.data_type() {
+            DataType::Float64 => {
+                let array = values.as_any().downcast_ref::<Float64Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::Float32 => {
+                let array = values.as_any().downcast_ref::<Float32Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::Int64 => {
+                let array = values.as_any().downcast_ref::<Int64Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::Int32 => {
+                let array = values.as_any().downcast_ref::<Int32Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::Int16 => {
+                let array = values.as_any().downcast_ref::<Int16Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::Int8 => {
+                let array = values.as_any().downcast_ref::<Int8Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::UInt64 => {
+                let array = values.as_any().downcast_ref::<UInt64Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::UInt32 => {
+                let array = values.as_any().downcast_ref::<UInt32Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::UInt16 => {
+                let array = values.as_any().downcast_ref::<UInt16Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            DataType::UInt8 => {
+                let array = values.as_any().downcast_ref::<UInt8Array>().unwrap();
+                Ok(array
+                    .values()
+                    .iter()
+                    .filter_map(|v| v.try_as_f64().transpose())
+                    .collect::<Result<Vec<_>>>()?)
+            }
+            e => {
+                return Err(DataFusionError::Internal(format!(
+                    "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
+                    e
+                )));
+            }
         }
     }
 }
@@ -213,56 +320,9 @@ impl Accumulator for ApproxPercentileAccumulator {
             "invalid number of values in batch percentile update"
         );
         let values = &values[0];
-
-        self.digest = match values.data_type() {
-            DataType::Float64 => {
-                let array = values.as_any().downcast_ref::<Float64Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::Float32 => {
-                let array = values.as_any().downcast_ref::<Float32Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::Int64 => {
-                let array = values.as_any().downcast_ref::<Int64Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::Int32 => {
-                let array = values.as_any().downcast_ref::<Int32Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::Int16 => {
-                let array = values.as_any().downcast_ref::<Int16Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::Int8 => {
-                let array = values.as_any().downcast_ref::<Int8Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::UInt64 => {
-                let array = values.as_any().downcast_ref::<UInt64Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::UInt32 => {
-                let array = values.as_any().downcast_ref::<UInt32Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::UInt16 => {
-                let array = values.as_any().downcast_ref::<UInt16Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            DataType::UInt8 => {
-                let array = values.as_any().downcast_ref::<UInt8Array>().unwrap();
-                self.digest.merge_unsorted(array.values().iter().cloned())?
-            }
-            e => {
-                return Err(DataFusionError::Internal(format!(
-                    "APPROX_PERCENTILE_CONT is not expected to receive the type {:?}",
-                    e
-                )));
-            }
-        };
-
+        let unsorted_values =
+            ApproxPercentileAccumulator::convert_to_ordered_float(values)?;
+        self.digest = self.digest.merge_unsorted_f64(unsorted_values);
         Ok(())
     }
 
@@ -302,7 +362,7 @@ impl Accumulator for ApproxPercentileAccumulator {
             .chain(iter::once(Ok(self.digest.clone())))
             .collect::<Result<Vec<_>>>()?;
 
-        self.digest = TDigest::merge_digests(&states);
+        self.merge_digests(&states);
 
         Ok(())
     }
