@@ -94,7 +94,7 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
   The `extract` function returns values of type u32.
   - `year` :`EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 2020`
   - `month`:`EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 9`
-  - `week` :`EXTRACT(week FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 23`
+  - `week` :`EXTRACT(week FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 37`
   - `day`: `EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 8`
   - `hour`: `EXTRACT(hour FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 12`
   - `minute`: `EXTRACT(minute FROM to_timestamp('2020-09-08T12:01:00+00:00')) -> 1`
