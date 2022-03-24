@@ -17,8 +17,8 @@
   under the License.
 -->
 
-# DataFusion Common
+# DataFusion Storage
 
-This is an internal module for the most fundamental datasource storage of [DataFusion][df].
+This module contains an `async` API for the [DataFusion][df] to access data, either remotely or locally.
 
 [df]: https://crates.io/crates/datafusion
