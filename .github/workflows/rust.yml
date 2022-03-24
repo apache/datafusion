@@ -131,6 +131,8 @@ jobs:
           cargo run --example csv_sql
           cargo run --example parquet_sql
           cargo run --example avro_sql --features=datafusion/avro
+          cd ../ballista-examples
+          cargo run --example test_sql --features=ballista/standalone
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
