@@ -162,7 +162,7 @@ pub fn coerce_types(
             if !is_approx_percentile_cont_supported_arg_type(&input_types[1]) {
                 return Err(DataFusionError::Plan(format!(
                     "The weight argument for {:?} does not support inputs of type {:?}.",
-                    agg_fun, input_types[0]
+                    agg_fun, input_types[1]
                 )));
             }
             if !matches!(input_types[2], DataType::Float64) {
