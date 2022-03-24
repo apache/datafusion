@@ -20,6 +20,7 @@
 use super::display::{GraphvizVisitor, IndentVisitor};
 use super::expr::{Column, Expr};
 use super::extension::UserDefinedLogicalNode;
+use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::datasource::TableProvider;
 use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
@@ -310,6 +311,7 @@ pub struct Join {
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
 }
+
 /// A LogicalPlan represents the different types of relational
 /// operators (such as Projection, Filter, etc) and can be created by
 /// the SQL query planner and the DataFrame API.
@@ -900,6 +902,7 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::TableScan(TableScan {
+                        ref source,
                         ref table_name,
                         ref projection,
                         ref filters,
@@ -913,7 +916,39 @@ impl LogicalPlan {
                         )?;
 
                         if !filters.is_empty() {
-                            write!(f, ", filters={:?}", filters)?;
+                            let mut full_filter = vec![];
+                            let mut partial_filter = vec![];
+                            let mut unsupported_filters = vec![];
+
+                            filters.iter().for_each(|x| {
+                                if let Ok(t) = source.supports_filter_pushdown(x) {
+                                    match t {
+                                        TableProviderFilterPushDown::Exact => {
+                                            full_filter.push(x)
+                                        }
+                                        TableProviderFilterPushDown::Inexact => {
+                                            partial_filter.push(x)
+                                        }
+                                        TableProviderFilterPushDown::Unsupported => {
+                                            unsupported_filters.push(x)
+                                        }
+                                    }
+                                }
+                            });
+
+                            if !full_filter.is_empty() {
+                                write!(f, ", full_filters={:?}", full_filter)?;
+                            };
+                            if !partial_filter.is_empty() {
+                                write!(f, ", partial_filters={:?}", partial_filter)?;
+                            }
+                            if !unsupported_filters.is_empty() {
+                                write!(
+                                    f,
+                                    ", unsupported_filters={:?}",
+                                    unsupported_filters
+                                )?;
+                            }
                         }
 
                         if let Some(n) = limit {
@@ -1217,11 +1252,11 @@ mod tests {
     }
 
     /// Tests for the Visitor trait and walking logical plan nodes
-
     #[derive(Debug, Default)]
     struct OkVisitor {
         strings: Vec<String>,
     }
+
     impl PlanVisitor for OkVisitor {
         type Error = String;
 
@@ -1271,7 +1306,7 @@ mod tests {
                 "pre_visit TableScan",
                 "post_visit TableScan",
                 "post_visit Filter",
-                "post_visit Projection"
+                "post_visit Projection",
             ]
         );
     }
@@ -1281,6 +1316,7 @@ mod tests {
     struct OptionalCounter {
         val: Option<usize>,
     }
+
     impl OptionalCounter {
         fn new(val: usize) -> Self {
             Self { val: Some(val) }
@@ -1344,7 +1380,7 @@ mod tests {
 
         assert_eq!(
             visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter",]
+            vec!["pre_visit Projection", "pre_visit Filter"]
         );
     }
 
@@ -1422,7 +1458,7 @@ mod tests {
 
         assert_eq!(
             visitor.inner.strings,
-            vec!["pre_visit Projection", "pre_visit Filter",]
+            vec!["pre_visit Projection", "pre_visit Filter"]
         );
     }
 
