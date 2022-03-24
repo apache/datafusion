@@ -21,16 +21,13 @@
 //! Note: Most traits here need to be marked `Sync + Send` to be
 //! compliant with the `SendableRecordBatchStream` trait.
 
-use crate::{
-    datasource::{object_store::ObjectStore, PartitionedFile},
-    physical_plan::RecordBatchStream,
-    scalar::ScalarValue,
-};
+use crate::{physical_plan::RecordBatchStream, scalar::ScalarValue};
 use arrow::{
     datatypes::SchemaRef,
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
+use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
 use futures::Stream;
 use std::{
     io::Read,

@@ -18,9 +18,9 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
+use datafusion::datafusion_storage::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-use datafusion::datasource::object_store::local::LocalFileSystem;
 
 use parking_lot::Mutex;
 use std::sync::Arc;

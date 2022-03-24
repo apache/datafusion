@@ -300,7 +300,7 @@ impl RecordBatchStream for ProjectionStream {
 mod tests {
 
     use super::*;
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::physical_plan::expressions::{self, col};
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::prelude::SessionContext;

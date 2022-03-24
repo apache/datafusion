@@ -21,7 +21,6 @@ use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
     listing::{ListingOptions, ListingTable, ListingTableConfig},
-    object_store::ObjectStore,
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
@@ -37,6 +36,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_storage::object_store::ObjectStore;
 use std::convert::TryFrom;
 use std::iter;
 use std::{

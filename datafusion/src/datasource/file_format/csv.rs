@@ -26,12 +26,12 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use super::FileFormat;
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+use datafusion_storage::object_store::{ObjectReader, ObjectReaderStream};
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -140,13 +140,11 @@ mod tests {
     use super::*;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::{
-        datasource::{
-            file_format::FileScanConfig,
-            object_store::local::{
-                local_object_reader, local_object_reader_stream,
-                local_unpartitioned_file, LocalFileSystem,
-            },
+        datafusion_storage::object_store::local::{
+            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
+            LocalFileSystem,
         },
+        datasource::file_format::FileScanConfig,
         physical_plan::collect,
     };
 
