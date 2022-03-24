@@ -33,6 +33,8 @@ use arrow::{
 };
 use futures::Stream;
 
+use crate::execution::context::TaskContext;
+use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::{
     common, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
@@ -40,9 +42,6 @@ use crate::physical_plan::{
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::stream::RecordBatchReceiverStream,
-};
-use crate::{
-    execution::runtime_env::RuntimeEnv, physical_plan::expressions::PhysicalSortExpr,
 };
 
 /// Index into the data that has been returned so far
@@ -172,7 +171,7 @@ impl ExecutionPlan for MockExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(partition, 0);
 
@@ -311,7 +310,7 @@ impl ExecutionPlan for BarrierExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert!(partition < self.data.len());
 
@@ -412,7 +411,7 @@ impl ExecutionPlan for ErrorExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Internal(format!(
             "ErrorExec, unsurprisingly, errored in partition {}",
@@ -497,7 +496,7 @@ impl ExecutionPlan for StatisticsExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         unimplemented!("This plan only serves for testing statistics")
     }
@@ -595,7 +594,7 @@ impl ExecutionPlan for BlockingExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(BlockingStream {
             schema: Arc::clone(&self.schema),

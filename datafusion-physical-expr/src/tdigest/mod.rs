@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn test_centroid_addition_regression() {
-        //https://github.com/MnO2/t-digest/pull/1
+        // https://github.com/MnO2/t-digest/pull/1
 
         let vals = vec![1.0, 1.0, 1.0, 2.0, 1.0, 1.0];
         let mut t = TDigest::new(10);

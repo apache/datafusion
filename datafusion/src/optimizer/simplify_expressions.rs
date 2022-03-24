@@ -373,11 +373,12 @@ impl<'a> ConstEvaluator<'a> {
             Expr::Alias(..)
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. }
-            | Expr::ScalarVariable(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
-            | Expr::Wildcard => false,
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. } => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),
             Expr::ScalarUDF { fun, .. } => Self::volatility_ok(fun.signature.volatility),
             Expr::Literal(_)

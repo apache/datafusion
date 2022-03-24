@@ -62,7 +62,7 @@ mod config {
 }
 
 use config::prelude::*;
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
 async fn start_server(
     config_backend: Arc<dyn StateBackendClient>,
@@ -74,7 +74,7 @@ async fn start_server(
         "Ballista v{} Scheduler listening on {:?}",
         BALLISTA_VERSION, addr
     );
-    //should only call SchedulerServer::new() once in the process
+    // Should only call SchedulerServer::new() once in the process
     info!(
         "Starting Scheduler grpc server with task scheduling policy of {:?}",
         policy
@@ -85,13 +85,13 @@ async fn start_server(
                 config_backend.clone(),
                 namespace.clone(),
                 policy,
-                Arc::new(RwLock::new(ExecutionContext::new())),
+                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             ),
             _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
-                Arc::new(RwLock::new(ExecutionContext::new())),
+                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             ),
         };

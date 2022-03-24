@@ -16,13 +16,13 @@
 // under the License.
 
 use async_trait::async_trait;
-use datafusion::arrow::array::{Array, UInt64Builder, UInt8Builder};
+use datafusion::arrow::array::{UInt64Builder, UInt8Builder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::dataframe_impl::DataFrameImpl;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::TaskContext;
 use datafusion::logical_plan::{Expr, LogicalPlanBuilder};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::memory::MemoryStream;
@@ -57,7 +57,7 @@ async fn search_accounts(
     expected_result_length: usize,
 ) -> Result<()> {
     // create local execution context
-    let ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
     // create logical plan composed of a single TableScan
     let logical_plan =
@@ -66,7 +66,7 @@ async fn search_accounts(
             .build()
             .unwrap();
 
-    let mut dataframe = DataFrameImpl::new(ctx.state, &logical_plan)
+    let mut dataframe = DataFrame::new(ctx.state, &logical_plan)
         .select_columns(&["id", "bank_account"])?;
 
     if let Some(f) = filter {
@@ -235,7 +235,7 @@ impl ExecutionPlan for CustomExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         let users: Vec<User> = {
             let db = self.db.inner.lock().unwrap();

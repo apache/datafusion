@@ -21,8 +21,8 @@ use super::*;
 async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     // and then validate the presence of baseline metrics for supported operators
-    let config = ExecutionConfig::new().with_target_partitions(3);
-    let mut ctx = ExecutionContext::with_config(config);
+    let config = SessionConfig::new().with_target_partitions(3);
+    let mut ctx = SessionContext::with_config(config);
     register_aggregate_csv_by_sql(&mut ctx).await;
     // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE \
@@ -41,8 +41,8 @@ async fn explain_analyze_baseline_metrics() {
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(physical_plan.clone(), runtime).await.unwrap();
+    let task_ctx = ctx.task_ctx();
+    let results = collect(physical_plan.clone(), task_ctx).await.unwrap();
     let formatted = arrow::util::pretty::pretty_format_batches(&results)
         .unwrap()
         .to_string();
@@ -168,7 +168,7 @@ async fn explain_analyze_baseline_metrics() {
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
 
@@ -260,7 +260,7 @@ async fn csv_explain_plans() {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
         "    Filter: #aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int32]",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)] [c1:Utf8, c2:Int32]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)] [c1:Utf8, c2:Int32]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -275,7 +275,7 @@ async fn csv_explain_plans() {
         "Explain",
         "  Projection: #aggregate_test_100.c1",
         "    Filter: #aggregate_test_100.c2 > Int64(10)",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]",
     ];
     let formatted = plan.display_indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -297,7 +297,7 @@ async fn csv_explain_plans() {
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
         "    4[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\"]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "  subgraph cluster_6",
@@ -308,7 +308,7 @@ async fn csv_explain_plans() {
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
         "    9[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -329,8 +329,8 @@ async fn csv_explain_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.expect(&msg);
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -342,7 +342,7 @@ async fn csv_explain_plans() {
 
 #[tokio::test]
 async fn csv_explain_verbose() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
@@ -365,7 +365,7 @@ async fn csv_explain_verbose() {
 async fn csv_explain_verbose_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
 
@@ -458,7 +458,7 @@ async fn csv_explain_verbose_plans() {
         "Explain [plan_type:Utf8, plan:Utf8]",
         "  Projection: #aggregate_test_100.c1 [c1:Utf8]",
         "    Filter: #aggregate_test_100.c2 > Int64(10) [c1:Utf8, c2:Int32]",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)] [c1:Utf8, c2:Int32]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)] [c1:Utf8, c2:Int32]",
     ];
     let formatted = plan.display_indent_schema().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -473,7 +473,7 @@ async fn csv_explain_verbose_plans() {
         "Explain",
         "  Projection: #aggregate_test_100.c1",
         "    Filter: #aggregate_test_100.c2 > Int64(10)",
-        "      TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]",
+        "      TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]",
     ];
     let formatted = plan.display_indent().to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
@@ -495,7 +495,7 @@ async fn csv_explain_verbose_plans() {
         "    2 -> 3 [arrowhead=none, arrowtail=normal, dir=back]",
         "    4[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\"]",
         "    3 -> 4 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\"]",
+        "    5[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]\"]",
         "    4 -> 5 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "  subgraph cluster_6",
@@ -506,7 +506,7 @@ async fn csv_explain_verbose_plans() {
         "    7 -> 8 [arrowhead=none, arrowtail=normal, dir=back]",
         "    9[shape=box label=\"Filter: #aggregate_test_100.c2 > Int64(10)\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    8 -> 9 [arrowhead=none, arrowtail=normal, dir=back]",
-        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]\\nSchema: [c1:Utf8, c2:Int32]\"]",
+        "    10[shape=box label=\"TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]\\nSchema: [c1:Utf8, c2:Int32]\"]",
         "    9 -> 10 [arrowhead=none, arrowtail=normal, dir=back]",
         "  }",
         "}",
@@ -527,8 +527,8 @@ async fn csv_explain_verbose_plans() {
     //
     // Execute plan
     let msg = format!("Executing physical plan for '{}': {:?}", sql, plan);
-    let runtime = ctx.state.lock().runtime_env.clone();
-    let results = collect(plan, runtime).await.expect(&msg);
+    let task_ctx = ctx.task_ctx();
+    let results = collect(plan, task_ctx).await.expect(&msg);
     let actual = result_vec(&results);
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -545,7 +545,7 @@ async fn csv_explain_verbose_plans() {
 async fn explain_analyze_runs_optimizers() {
     // repro for https://github.com/apache/arrow-datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_alltypes_parquet(&mut ctx).await;
 
     // This happens as an optimization pass where count(*) can be
@@ -553,7 +553,7 @@ async fn explain_analyze_runs_optimizers() {
     let expected = "EmptyExec: produce_one_row=true";
 
     let sql = "EXPLAIN SELECT count(*) from alltypes_plain";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let actual = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
@@ -561,7 +561,7 @@ async fn explain_analyze_runs_optimizers() {
 
     // EXPLAIN ANALYZE should work the same
     let sql = "EXPLAIN  ANALYZE SELECT count(*) from alltypes_plain";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let actual = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
@@ -570,7 +570,7 @@ async fn explain_analyze_runs_optimizers() {
 
 #[tokio::test]
 async fn tpch_explain_q10() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_tpch_csv(&mut ctx, "customer").await?;
     register_tpch_csv(&mut ctx, "orders").await?;
@@ -621,9 +621,9 @@ order by
     \n          Inner Join: #customer.c_custkey = #orders.o_custkey\
     \n            TableScan: customer projection=Some([0, 1, 2, 3, 4, 5, 7])\
     \n            Filter: #orders.o_orderdate >= Date32(\"8674\") AND #orders.o_orderdate < Date32(\"8766\")\
-    \n              TableScan: orders projection=Some([0, 1, 4]), filters=[#orders.o_orderdate >= Date32(\"8674\"), #orders.o_orderdate < Date32(\"8766\")]\
+    \n              TableScan: orders projection=Some([0, 1, 4]), partial_filters=[#orders.o_orderdate >= Date32(\"8674\"), #orders.o_orderdate < Date32(\"8766\")]\
     \n          Filter: #lineitem.l_returnflag = Utf8(\"R\")\
-    \n            TableScan: lineitem projection=Some([0, 5, 6, 8]), filters=[#lineitem.l_returnflag = Utf8(\"R\")]\
+    \n            TableScan: lineitem projection=Some([0, 5, 6, 8]), partial_filters=[#lineitem.l_returnflag = Utf8(\"R\")]\
     \n        TableScan: nation projection=Some([0, 1])";
     assert_eq!(format!("{:?}", plan.unwrap()), expected);
 
@@ -633,8 +633,8 @@ order by
 #[tokio::test]
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = ExecutionConfig::new().with_target_partitions(3);
-    let mut ctx = ExecutionContext::with_config(config);
+    let config = SessionConfig::new().with_target_partitions(3);
+    let mut ctx = SessionContext::with_config(config);
     register_aggregate_csv(&mut ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
                FROM aggregate_test_100 \
@@ -679,8 +679,8 @@ async fn test_physical_plan_display_indent() {
 #[tokio::test]
 async fn test_physical_plan_display_indent_multi_children() {
     // Hard code target_partitions as it appears in the RepartitionExec output
-    let config = ExecutionConfig::new().with_target_partitions(3);
-    let mut ctx = ExecutionContext::with_config(config);
+    let config = SessionConfig::new().with_target_partitions(3);
+    let mut ctx = SessionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
     register_aggregate_csv(&mut ctx).await.unwrap();
     let sql = "SELECT c1 \
@@ -731,7 +731,7 @@ async fn test_physical_plan_display_indent_multi_children() {
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
     let actual = execute(&mut ctx, sql).await;
@@ -744,7 +744,7 @@ async fn csv_explain() {
             "logical_plan",
             "Projection: #aggregate_test_100.c1\
              \n  Filter: #aggregate_test_100.c2 > Int64(10)\
-             \n    TableScan: aggregate_test_100 projection=Some([0, 1]), filters=[#aggregate_test_100.c2 > Int64(10)]"
+             \n    TableScan: aggregate_test_100 projection=Some([0, 1]), partial_filters=[#aggregate_test_100.c2 > Int64(10)]"
         ],
         vec!["physical_plan",
              "ProjectionExec: expr=[c1@0 as c1]\
@@ -766,10 +766,10 @@ async fn csv_explain() {
 #[tokio::test]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();
@@ -787,11 +787,11 @@ async fn csv_explain_analyze() {
 #[tokio::test]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
     register_aggregate_csv_by_sql(&mut ctx).await;
     let sql =
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)
         .unwrap()
         .to_string();

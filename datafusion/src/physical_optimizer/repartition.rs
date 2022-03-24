@@ -21,7 +21,7 @@ use std::sync::Arc;
 use super::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::Partitioning::*;
 use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
-use crate::{error::Result, execution::context::ExecutionConfig};
+use crate::{error::Result, execution::context::SessionConfig};
 
 /// Optimizer that introduces repartition to introduce more
 /// parallelism in the plan
@@ -218,7 +218,7 @@ impl PhysicalOptimizerRule for Repartition {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
-        config: &ExecutionConfig,
+        config: &SessionConfig,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Don't run optimizer if target_partitions == 1
         if config.target_partitions == 1 {
@@ -238,7 +238,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
     use super::*;
-    use crate::datasource::PartitionedFile;
+    use crate::datafusion_storage::PartitionedFile;
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
@@ -343,7 +343,7 @@ mod tests {
             // run optimizer
             let optimizer = Repartition {};
             let optimized = optimizer
-                .optimize($PLAN, &ExecutionConfig::new().with_target_partitions(10))?;
+                .optimize($PLAN, &SessionConfig::new().with_target_partitions(10))?;
 
             // Now format correctly
             let plan = displayable(optimized.as_ref()).indent().to_string();

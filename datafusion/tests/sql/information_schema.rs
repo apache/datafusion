@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use datafusion::{
     catalog::{
-        catalog::MemoryCatalogProvider,
+        catalog::{CatalogProvider, MemoryCatalogProvider},
         schema::{MemorySchemaProvider, SchemaProvider},
     },
     datasource::{TableProvider, TableType},
@@ -29,7 +29,7 @@ use super::*;
 
 #[tokio::test]
 async fn information_schema_tables_not_exist_by_default() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     let err = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
@@ -42,9 +42,8 @@ async fn information_schema_tables_not_exist_by_default() {
 
 #[tokio::test]
 async fn information_schema_tables_no_tables() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
         .await
@@ -63,9 +62,8 @@ async fn information_schema_tables_no_tables() {
 
 #[tokio::test]
 async fn information_schema_tables_tables_default_catalog() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     // Now, register an empty table
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
@@ -109,9 +107,8 @@ async fn information_schema_tables_tables_default_catalog() {
 
 #[tokio::test]
 async fn information_schema_tables_tables_with_multiple_catalogs() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
     schema
@@ -120,7 +117,9 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     schema
         .register_table("t2".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
-    catalog.register_schema("my_schema", Arc::new(schema));
+    catalog
+        .register_schema("my_schema", Arc::new(schema))
+        .unwrap();
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
     let catalog = MemoryCatalogProvider::new();
@@ -128,7 +127,9 @@ async fn information_schema_tables_tables_with_multiple_catalogs() {
     schema
         .register_table("t3".to_owned(), table_with_sequence(1, 1).unwrap())
         .unwrap();
-    catalog.register_schema("my_other_schema", Arc::new(schema));
+    catalog
+        .register_schema("my_other_schema", Arc::new(schema))
+        .unwrap();
     ctx.register_catalog("my_other_catalog", Arc::new(catalog));
 
     let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.tables")
@@ -181,9 +182,8 @@ async fn information_schema_tables_table_types() {
         }
     }
 
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("physical", Arc::new(TestTable(TableType::Base)))
         .unwrap();
@@ -212,7 +212,7 @@ async fn information_schema_tables_table_types() {
 
 #[tokio::test]
 async fn information_schema_show_tables_no_information_schema() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let mut ctx = SessionContext::with_config(SessionConfig::new());
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -225,9 +225,8 @@ async fn information_schema_show_tables_no_information_schema() {
 
 #[tokio::test]
 async fn information_schema_show_tables() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -253,7 +252,7 @@ async fn information_schema_show_tables() {
 
 #[tokio::test]
 async fn information_schema_show_columns_no_information_schema() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let mut ctx = SessionContext::with_config(SessionConfig::new());
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -267,7 +266,7 @@ async fn information_schema_show_columns_no_information_schema() {
 
 #[tokio::test]
 async fn information_schema_show_columns_like_where() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let mut ctx = SessionContext::with_config(SessionConfig::new());
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -288,9 +287,8 @@ async fn information_schema_show_columns_like_where() {
 
 #[tokio::test]
 async fn information_schema_show_columns() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -326,9 +324,8 @@ async fn information_schema_show_columns() {
 // test errors with WHERE and LIKE
 #[tokio::test]
 async fn information_schema_show_columns_full_extended() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -353,9 +350,8 @@ async fn information_schema_show_columns_full_extended() {
 
 #[tokio::test]
 async fn information_schema_show_table_table_names() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
 
     ctx.register_table("t", table_with_sequence(1, 1).unwrap())
         .unwrap();
@@ -397,7 +393,7 @@ async fn information_schema_show_table_table_names() {
 
 #[tokio::test]
 async fn show_unsupported() {
-    let mut ctx = ExecutionContext::with_config(ExecutionConfig::new());
+    let mut ctx = SessionContext::with_config(SessionConfig::new());
 
     let err = plan_and_collect(&mut ctx, "SHOW SOMETHING_UNKNOWN")
         .await
@@ -408,7 +404,7 @@ async fn show_unsupported() {
 
 #[tokio::test]
 async fn information_schema_columns_not_exist_by_default() {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     let err = plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
         .await
@@ -456,9 +452,8 @@ fn table_with_many_types() -> Arc<dyn TableProvider> {
 
 #[tokio::test]
 async fn information_schema_columns() {
-    let mut ctx = ExecutionContext::with_config(
-        ExecutionConfig::new().with_information_schema(true),
-    );
+    let mut ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
     let catalog = MemoryCatalogProvider::new();
     let schema = MemorySchemaProvider::new();
 
@@ -469,7 +464,9 @@ async fn information_schema_columns() {
     schema
         .register_table("t2".to_owned(), table_with_many_types())
         .unwrap();
-    catalog.register_schema("my_schema", Arc::new(schema));
+    catalog
+        .register_schema("my_schema", Arc::new(schema))
+        .unwrap();
     ctx.register_catalog("my_catalog", Arc::new(catalog));
 
     let result = plan_and_collect(&mut ctx, "SELECT * from information_schema.columns")
@@ -495,7 +492,7 @@ async fn information_schema_columns() {
 
 /// Execute SQL and return results
 async fn plan_and_collect(
-    ctx: &mut ExecutionContext,
+    ctx: &mut SessionContext,
     sql: &str,
 ) -> Result<Vec<RecordBatch>> {
     ctx.sql(sql).await?.collect().await

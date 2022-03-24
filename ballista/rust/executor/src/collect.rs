@@ -27,7 +27,7 @@ use datafusion::arrow::{
     datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
 use datafusion::error::DataFusionError;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -81,12 +81,12 @@ impl ExecutionPlan for CollectExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(0, partition);
         let num_partitions = self.plan.output_partitioning().partition_count();
 
-        let futures = (0..num_partitions).map(|i| self.plan.execute(i, runtime.clone()));
+        let futures = (0..num_partitions).map(|i| self.plan.execute(i, context.clone()));
         let streams = futures::future::join_all(futures)
             .await
             .into_iter()

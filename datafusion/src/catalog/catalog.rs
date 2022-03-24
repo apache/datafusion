@@ -19,6 +19,7 @@
 //! representing collections of named schemas.
 
 use crate::catalog::schema::SchemaProvider;
+use datafusion_common::{DataFusionError, Result};
 use parking_lot::RwLock;
 use std::any::Any;
 use std::collections::HashMap;
@@ -108,6 +109,25 @@ pub trait CatalogProvider: Sync + Send {
 
     /// Retrieves a specific schema from the catalog by name, provided it exists.
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>>;
+
+    /// Adds a new schema to this catalog.
+    ///
+    /// If a schema of the same name existed before, it is replaced in
+    /// the catalog and returned.
+    ///
+    /// By default returns a "Not Implemented" error
+    fn register_schema(
+        &self,
+        name: &str,
+        schema: Arc<dyn SchemaProvider>,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        // use variables to avoid unused variable warnings
+        let _ = name;
+        let _ = schema;
+        Err(DataFusionError::NotImplemented(
+            "Registering new schemas is not supported".to_string(),
+        ))
+    }
 }
 
 /// Simple in-memory implementation of a catalog.
@@ -121,17 +141,6 @@ impl MemoryCatalogProvider {
         Self {
             schemas: RwLock::new(HashMap::new()),
         }
-    }
-
-    /// Adds a new schema to this catalog.
-    /// If a schema of the same name existed before, it is replaced in the catalog and returned.
-    pub fn register_schema(
-        &self,
-        name: impl Into<String>,
-        schema: Arc<dyn SchemaProvider>,
-    ) -> Option<Arc<dyn SchemaProvider>> {
-        let mut schemas = self.schemas.write();
-        schemas.insert(name.into(), schema)
     }
 }
 
@@ -148,5 +157,48 @@ impl CatalogProvider for MemoryCatalogProvider {
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
         let schemas = self.schemas.read();
         schemas.get(name).cloned()
+    }
+
+    fn register_schema(
+        &self,
+        name: &str,
+        schema: Arc<dyn SchemaProvider>,
+    ) -> Result<Option<Arc<dyn SchemaProvider>>> {
+        let mut schemas = self.schemas.write();
+        Ok(schemas.insert(name.into(), schema))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::catalog::schema::MemorySchemaProvider;
+
+    use super::*;
+
+    #[test]
+    fn default_register_schema_not_supported() {
+        // mimic a new CatalogProvider and ensure it does not support registering schemas
+        struct TestProvider {}
+        impl CatalogProvider for TestProvider {
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+
+            fn schema_names(&self) -> Vec<String> {
+                unimplemented!()
+            }
+
+            fn schema(&self, _name: &str) -> Option<Arc<dyn SchemaProvider>> {
+                unimplemented!()
+            }
+        }
+
+        let schema = Arc::new(MemorySchemaProvider::new()) as _;
+        let catalog = Arc::new(TestProvider {});
+
+        match catalog.register_schema("foo", schema) {
+            Ok(_) => panic!("unexpected OK"),
+            Err(e) => assert_eq!(e.to_string(), "This feature is not implemented: Registering new schemas is not supported"),
+        };
     }
 }

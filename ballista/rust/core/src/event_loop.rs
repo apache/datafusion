@@ -37,9 +37,9 @@ pub trait EventAction<E>: Send + Sync {
 
 #[derive(Clone)]
 pub struct EventLoop<E> {
-    name: String,
+    pub name: String,
+    pub buffer_size: usize,
     stopped: Arc<AtomicBool>,
-    buffer_size: usize,
     action: Arc<dyn EventAction<E>>,
     tx_event: Option<mpsc::Sender<E>>,
 }
@@ -52,8 +52,8 @@ impl<E: Send + 'static> EventLoop<E> {
     ) -> Self {
         Self {
             name,
-            stopped: Arc::new(AtomicBool::new(false)),
             buffer_size,
+            stopped: Arc::new(AtomicBool::new(false)),
             action,
             tx_event: None,
         }
@@ -134,8 +134,8 @@ pub struct EventSender<E> {
 
 impl<E> EventSender<E> {
     pub async fn post_event(&self, event: E) -> Result<()> {
-        Ok(self.tx_event.send(event).await.map_err(|e| {
+        self.tx_event.send(event).await.map_err(|e| {
             BallistaError::General(format!("Fail to send event due to {}", e))
-        })?)
+        })
     }
 }

@@ -523,7 +523,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     // Don't add expression again if it's already present in
                     // pushed down filters.
                     if new_filters.contains(filter_expr) {
-                        break;
+                        continue;
                     }
                     new_filters.push(filter_expr.clone());
                 }
@@ -1376,6 +1376,11 @@ mod tests {
                     arrow::datatypes::DataType::Int32,
                     true,
                 ),
+                arrow::datatypes::Field::new(
+                    "b",
+                    arrow::datatypes::DataType::Int32,
+                    true,
+                ),
             ]))
         }
 
@@ -1426,7 +1431,7 @@ mod tests {
         let plan = table_scan_with_pushdown_provider(TableProviderFilterPushDown::Exact)?;
 
         let expected = "\
-        TableScan: test projection=None, filters=[#a = Int64(1)]";
+        TableScan: test projection=None, full_filters=[#a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1438,7 +1443,7 @@ mod tests {
 
         let expected = "\
         Filter: #a = Int64(1)\
-        \n  TableScan: test projection=None, filters=[#a = Int64(1)]";
+        \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
@@ -1452,7 +1457,7 @@ mod tests {
 
         let expected = "\
         Filter: #a = Int64(1)\
-        \n  TableScan: test projection=None, filters=[#a = Int64(1)]";
+        \n  TableScan: test projection=None, partial_filters=[#a = Int64(1)]";
 
         // Optimizing the same plan multiple times should produce the same plan
         // each time.
@@ -1469,6 +1474,37 @@ mod tests {
         Filter: #a = Int64(1)\
         \n  TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn multi_combined_filter() -> Result<()> {
+        let test_provider = PushDownProvider {
+            filter_support: TableProviderFilterPushDown::Inexact,
+        };
+
+        let table_scan = LogicalPlan::TableScan(TableScan {
+            table_name: "test".to_string(),
+            filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            projected_schema: Arc::new(DFSchema::try_from(
+                (*test_provider.schema()).clone(),
+            )?),
+            projection: Some(vec![0]),
+            source: Arc::new(test_provider),
+            limit: None,
+        });
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+
+        let expected ="Projection: #a, #b\
+            \n  Filter: #a = Int64(10) AND #b > Int64(11)\
+            \n    TableScan: test projection=Some([0]), partial_filters=[#a = Int64(10), #b > Int64(11)]";
+
+        assert_optimized_plan_eq(&plan, expected);
+
         Ok(())
     }
 }

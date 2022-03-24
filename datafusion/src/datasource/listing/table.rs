@@ -24,10 +24,6 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use crate::{
-    datasource::file_format::avro::AvroFormat,
-    datasource::file_format::csv::CsvFormat,
-    datasource::file_format::json::JsonFormat,
-    datasource::file_format::parquet::ParquetFormat,
     error::{DataFusionError, Result},
     logical_plan::Expr,
     physical_plan::{
@@ -38,9 +34,15 @@ use crate::{
 };
 
 use crate::datasource::{
-    datasource::TableProviderFilterPushDown, file_format::FileFormat,
-    get_statistics_with_limit, object_store::ObjectStore, PartitionedFile, TableProvider,
+    datasource::TableProviderFilterPushDown,
+    file_format::{
+        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
+        FileFormat,
+    },
+    get_statistics_with_limit, TableProvider,
 };
+
+use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 
@@ -395,10 +397,8 @@ impl ListingTable {
 mod tests {
     use crate::datasource::file_format::avro::DEFAULT_AVRO_EXTENSION;
     use crate::{
-        datasource::{
-            file_format::{avro::AvroFormat, parquet::ParquetFormat},
-            object_store::local::LocalFileSystem,
-        },
+        datafusion_storage::object_store::local::LocalFileSystem,
+        datasource::file_format::{avro::AvroFormat, parquet::ParquetFormat},
         logical_plan::{col, lit},
         test::{columns, object_store::TestObjectStore},
     };

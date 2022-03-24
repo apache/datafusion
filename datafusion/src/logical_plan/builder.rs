@@ -21,7 +21,6 @@ use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
     listing::{ListingOptions, ListingTable, ListingTableConfig},
-    object_store::ObjectStore,
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
@@ -37,6 +36,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_storage::object_store::ObjectStore;
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -329,6 +329,55 @@ impl LogicalPlanBuilder {
         object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
         options: AvroReadOptions<'_>,
+        projection: Option<Vec<usize>>,
+        table_name: impl Into<String>,
+        target_partitions: usize,
+    ) -> Result<Self> {
+        let listing_options = options.to_listing_options(target_partitions);
+
+        let path: String = path.into();
+
+        let resolved_schema = match options.schema {
+            Some(s) => s,
+            None => {
+                listing_options
+                    .infer_schema(Arc::clone(&object_store), &path)
+                    .await?
+            }
+        };
+        let config = ListingTableConfig::new(object_store, path)
+            .with_listing_options(listing_options)
+            .with_schema(resolved_schema);
+        let provider = ListingTable::try_new(config)?;
+
+        Self::scan(table_name, Arc::new(provider), projection)
+    }
+
+    /// Scan an Json data source
+    pub async fn scan_json(
+        object_store: Arc<dyn ObjectStore>,
+        path: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
+        projection: Option<Vec<usize>>,
+        target_partitions: usize,
+    ) -> Result<Self> {
+        let path = path.into();
+        Self::scan_json_with_name(
+            object_store,
+            path.clone(),
+            options,
+            projection,
+            path,
+            target_partitions,
+        )
+        .await
+    }
+
+    /// Scan an Json data source and register it with a given table name
+    pub async fn scan_json_with_name(
+        object_store: Arc<dyn ObjectStore>,
+        path: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
         projection: Option<Vec<usize>>,
         table_name: impl Into<String>,
         target_partitions: usize,
@@ -1029,6 +1078,8 @@ pub fn project_with_alias(
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)
             }
+            Expr::QualifiedWildcard { ref qualifier } => projected_expr
+                .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1088,6 +1139,27 @@ pub(crate) fn expand_wildcard(
             })
             .collect::<Vec<Expr>>())
     }
+}
+
+pub(crate) fn expand_qualified_wildcard(
+    qualifier: &str,
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let qualified_fields: Vec<DFField> = schema
+        .fields_with_qualified(qualifier)
+        .into_iter()
+        .cloned()
+        .collect();
+    if qualified_fields.is_empty() {
+        return Err(DataFusionError::Plan(format!(
+            "Invalid qualifier {}",
+            qualifier
+        )));
+    }
+    let qualifier_schema =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+    expand_wildcard(&qualifier_schema, plan)
 }
 
 #[cfg(test)]

@@ -22,24 +22,27 @@ use std::{fs, io, sync::Arc};
 use async_trait::async_trait;
 use datafusion::{
     assert_batches_sorted_eq,
+    datafusion_storage::{
+        object_store::{
+            local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+            ObjectStore,
+        },
+        FileMeta, SizedFile,
+    },
     datasource::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
-        object_store::{
-            local::LocalFileSystem, FileMeta, FileMetaStream, ListEntryStream,
-            ObjectReader, ObjectStore, SizedFile,
-        },
     },
     error::{DataFusionError, Result},
     physical_plan::ColumnStatistics,
-    prelude::ExecutionContext,
+    prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
 use futures::{stream, StreamExt};
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
         &mut ctx,
@@ -76,7 +79,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_partitioned_aggregate_csv(
         &mut ctx,
@@ -112,7 +115,7 @@ async fn csv_filter_with_file_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_projection_on_partition() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_partitioned_aggregate_csv(
         &mut ctx,
@@ -148,7 +151,7 @@ async fn csv_projection_on_partition() -> Result<()> {
 
 #[tokio::test]
 async fn csv_grouping_by_partition() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_partitioned_aggregate_csv(
         &mut ctx,
@@ -182,7 +185,7 @@ async fn csv_grouping_by_partition() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_multiple_partitions() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
         &mut ctx,
@@ -224,7 +227,7 @@ async fn parquet_multiple_partitions() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_statistics() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
         &mut ctx,
@@ -283,7 +286,7 @@ async fn parquet_statistics() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_overlapping_columns() -> Result<()> {
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     // `id` is both a column of the file and a partitioning col
     register_partitioned_alltypes_parquet(
@@ -309,7 +312,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
 }
 
 fn register_partitioned_aggregate_csv(
-    ctx: &mut ExecutionContext,
+    ctx: &mut SessionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
     table_path: &str,
@@ -332,7 +335,7 @@ fn register_partitioned_aggregate_csv(
 }
 
 async fn register_partitioned_alltypes_parquet(
-    ctx: &mut ExecutionContext,
+    ctx: &mut SessionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
     table_path: &str,

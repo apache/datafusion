@@ -111,7 +111,7 @@ impl ExprRewritable for Expr {
         let expr = match self {
             Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
             Expr::Column(_) => self.clone(),
-            Expr::ScalarVariable(names) => Expr::ScalarVariable(names),
+            Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
             Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
                 left: rewrite_boxed(left, rewriter)?,
@@ -218,6 +218,9 @@ impl ExprRewritable for Expr {
                 negated,
             },
             Expr::Wildcard => Expr::Wildcard,
+            Expr::QualifiedWildcard { qualifier } => {
+                Expr::QualifiedWildcard { qualifier }
+            }
             Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
                 expr: rewrite_boxed(expr, rewriter)?,
                 key,
@@ -421,7 +424,7 @@ pub fn unnormalize_col(expr: Expr) -> Expr {
     impl ExprRewriter for RemoveQualifier {
         fn mutate(&mut self, expr: Expr) -> Result<Expr> {
             if let Expr::Column(col) = expr {
-                //let Column { relation: _, name } = col;
+                // let Column { relation: _, name } = col;
                 Ok(Expr::Column(Column {
                     relation: None,
                     name: col.name,

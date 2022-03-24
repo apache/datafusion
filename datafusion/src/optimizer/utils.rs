@@ -62,7 +62,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::Column(qc) => {
                 self.accum.insert(qc.clone());
             }
-            Expr::ScalarVariable(var_names) => {
+            Expr::ScalarVariable(_, var_names) => {
                 self.accum.insert(Column::from_name(var_names.join(".")));
             }
             Expr::Alias(_, _)
@@ -84,6 +84,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. } => {}
         }
         Ok(Recursion::Continue(self))
@@ -267,7 +268,8 @@ pub fn from_plan(
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::CreateExternalTable(_)
-        | LogicalPlan::DropTable(_) => {
+        | LogicalPlan::DropTable(_)
+        | LogicalPlan::CreateCatalogSchema(_) => {
             // All of these plan types have no inputs / exprs so should not be called
             assert!(expr.is_empty(), "{:?} should have no exprs", plan);
             assert!(inputs.is_empty(), "{:?}  should have no inputs", plan);
@@ -331,7 +333,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
             }
             Ok(expr_list)
         }
-        Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_) => Ok(vec![]),
+        Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_, _) => Ok(vec![]),
         Expr::Between {
             expr, low, high, ..
         } => Ok(vec![
@@ -348,6 +350,10 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         }
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
+        )),
+        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            "QualifiedWildcard expressions are not valid in a logical query plan"
+                .to_owned(),
         )),
     }
 }
@@ -476,7 +482,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::InList { .. }
-        | Expr::ScalarVariable(_) => Ok(expr.clone()),
+        | Expr::ScalarVariable(_, _) => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..
         } => Ok(Expr::Sort {
@@ -505,8 +511,12 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 Ok(expr)
             }
         }
-        Expr::Wildcard { .. } => Err(DataFusionError::Internal(
+        Expr::Wildcard => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
+        )),
+        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            "QualifiedWildcard expressions are not valid in a logical query plan"
+                .to_owned(),
         )),
         Expr::GetIndexedField { expr: _, key } => Ok(Expr::GetIndexedField {
             expr: Box::new(expressions[0].clone()),

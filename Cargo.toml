@@ -25,6 +25,7 @@ members = [
     "datafusion-cli",
     "datafusion-examples",
     "datafusion-proto",
+    "datafusion-storage",
     "benchmarks",
     "ballista/rust/client",
     "ballista/rust/core",
@@ -34,5 +35,5 @@ members = [
 ]
 
 [profile.release]
-lto = true
 codegen-units = 1
+lto = true

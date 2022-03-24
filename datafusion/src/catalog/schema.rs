@@ -24,9 +24,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::datasource::listing::{ListingTable, ListingTableConfig};
-use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
+use crate::datasource::object_store_registry::ObjectStoreRegistry;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
+use datafusion_storage::object_store::ObjectStore;
 
 /// Represents a schema, comprising a number of named tables.
 pub trait SchemaProvider: Sync + Send {
@@ -245,13 +246,14 @@ mod tests {
     use arrow::datatypes::Schema;
 
     use crate::assert_batches_eq;
+    use crate::catalog::catalog::CatalogProvider;
     use crate::catalog::catalog::MemoryCatalogProvider;
     use crate::catalog::schema::{
         MemorySchemaProvider, ObjectStoreSchemaProvider, SchemaProvider,
     };
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::datasource::empty::EmptyTable;
-    use crate::datasource::object_store::local::LocalFileSystem;
-    use crate::execution::context::ExecutionContext;
+    use crate::execution::context::SessionContext;
 
     use futures::StreamExt;
 
@@ -288,9 +290,9 @@ mod tests {
             .unwrap();
 
         let catalog = MemoryCatalogProvider::new();
-        catalog.register_schema("active", Arc::new(schema));
+        catalog.register_schema("active", Arc::new(schema)).unwrap();
 
-        let mut ctx = ExecutionContext::new();
+        let mut ctx = SessionContext::new();
 
         ctx.register_catalog("cat", Arc::new(catalog));
 

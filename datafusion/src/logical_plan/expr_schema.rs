@@ -58,7 +58,7 @@ impl ExprSchemable for Expr {
                 expr.get_type(schema)
             }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
-            Expr::ScalarVariable(_) => Ok(DataType::Utf8),
+            Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
             Expr::Cast { data_type, .. } | Expr::TryCast { data_type, .. } => {
@@ -116,6 +116,10 @@ impl ExprSchemable for Expr {
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
             )),
+            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+                "QualifiedWildcard expressions are not valid in a logical query plan"
+                    .to_owned(),
+            )),
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(schema)?;
 
@@ -162,7 +166,7 @@ impl ExprSchemable for Expr {
                 }
             }
             Expr::Cast { expr, .. } => expr.nullable(input_schema),
-            Expr::ScalarVariable(_)
+            Expr::ScalarVariable(_, _)
             | Expr::TryCast { .. }
             | Expr::ScalarFunction { .. }
             | Expr::ScalarUDF { .. }
@@ -177,6 +181,10 @@ impl ExprSchemable for Expr {
             } => Ok(left.nullable(input_schema)? || right.nullable(input_schema)?),
             Expr::Wildcard => Err(DataFusionError::Internal(
                 "Wildcard expressions are not valid in a logical query plan".to_owned(),
+            )),
+            Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+                "QualifiedWildcard expressions are not valid in a logical query plan"
+                    .to_owned(),
             )),
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(input_schema)?;

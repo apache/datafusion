@@ -26,12 +26,12 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use super::FileFormat;
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+use datafusion_storage::object_store::{ObjectReader, ObjectReaderStream};
 
 /// The default file extension of csv files
 pub const DEFAULT_CSV_EXTENSION: &str = ".csv";
@@ -138,25 +138,25 @@ mod tests {
     use arrow::array::StringArray;
 
     use super::*;
-    use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use crate::prelude::{SessionConfig, SessionContext};
     use crate::{
-        datasource::{
-            file_format::FileScanConfig,
-            object_store::local::{
-                local_object_reader, local_object_reader_stream,
-                local_unpartitioned_file, LocalFileSystem,
-            },
+        datafusion_storage::object_store::local::{
+            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
+            LocalFileSystem,
         },
+        datasource::file_format::FileScanConfig,
         physical_plan::collect,
     };
 
     #[tokio::test]
     async fn read_small_batches() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::new().with_batch_size(2))?);
+        let config = SessionConfig::new().with_batch_size(2);
+        let ctx = SessionContext::with_config(config);
         // skip column 9 that overflows the automaticly discovered column type of i64 (u64 would work)
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12]);
         let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
-        let stream = exec.execute(0, runtime).await?;
+        let task_ctx = ctx.task_ctx();
+        let stream = exec.execute(0, task_ctx).await?;
 
         let tt_batches: i32 = stream
             .map(|batch| {
@@ -178,10 +178,11 @@ mod tests {
 
     #[tokio::test]
     async fn read_limit() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0, 1, 2, 3]);
         let exec = get_exec("aggregate_test_100.csv", &projection, Some(1)).await?;
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         assert_eq!(4, batches[0].num_columns());
         assert_eq!(1, batches[0].num_rows());
@@ -224,11 +225,12 @@ mod tests {
 
     #[tokio::test]
     async fn read_char_column() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0]);
         let exec = get_exec("aggregate_test_100.csv", &projection, None).await?;
 
-        let batches = collect(exec, runtime).await.expect("Collect batches");
+        let batches = collect(exec, task_ctx).await.expect("Collect batches");
 
         assert_eq!(1, batches.len());
         assert_eq!(1, batches[0].num_columns());

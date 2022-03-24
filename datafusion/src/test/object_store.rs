@@ -23,8 +23,9 @@ use std::{
 };
 
 use crate::{
-    datasource::object_store::{
-        FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
+    datafusion_storage::{
+        object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
+        FileMeta, SizedFile,
     },
     error::{DataFusionError, Result},
 };

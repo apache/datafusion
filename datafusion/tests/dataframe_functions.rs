@@ -31,11 +31,11 @@ use datafusion::error::Result;
 // use datafusion::logical_plan::Expr;
 use datafusion::prelude::*;
 
-use datafusion::execution::context::ExecutionContext;
+use datafusion::execution::context::SessionContext;
 
 use datafusion::assert_batches_eq;
 
-fn create_test_table() -> Result<Arc<dyn DataFrame>> {
+fn create_test_table() -> Result<Arc<DataFrame>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Utf8, false),
         Field::new("b", DataType::Int32, false),
@@ -55,7 +55,7 @@ fn create_test_table() -> Result<Arc<dyn DataFrame>> {
         ],
     )?;
 
-    let mut ctx = ExecutionContext::new();
+    let mut ctx = SessionContext::new();
 
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
 

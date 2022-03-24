@@ -18,7 +18,6 @@
 //! DataFusion query execution
 
 pub mod context;
-pub mod dataframe_impl;
 pub(crate) mod disk_manager;
 pub mod memory_manager;
 pub mod options;

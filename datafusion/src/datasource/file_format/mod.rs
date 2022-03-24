@@ -34,10 +34,10 @@ use crate::physical_plan::{ExecutionPlan, Statistics};
 
 use async_trait::async_trait;
 
-use super::object_store::{ObjectReader, ObjectReaderStream};
+use datafusion_storage::object_store::{ObjectReader, ObjectReaderStream};
 
 /// This trait abstracts all the file format specific implementations
-/// from the `TableProvider`. This helps code re-utilization accross
+/// from the `TableProvider`. This helps code re-utilization across
 /// providers that support the the same file formats.
 #[async_trait]
 pub trait FileFormat: Send + Sync + fmt::Debug {

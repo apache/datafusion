@@ -28,6 +28,7 @@ use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{collect, ExecutionPlan};
+use datafusion::prelude::{SessionConfig, SessionContext};
 use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
@@ -78,7 +79,10 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
             MemoryManagerConfig::try_new_limit(pool_size, 1.0).unwrap(),
         );
         let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
-        let collected = collect(sort.clone(), runtime).await.unwrap();
+        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
+
+        let task_ctx = session_ctx.task_ctx();
+        let collected = collect(sort.clone(), task_ctx).await.unwrap();
 
         let expected = partitions_to_sorted_vec(&input);
         let actual = batches_to_vec(&collected);

@@ -221,6 +221,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
         | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::Extension { .. } => {
             // apply the optimization to all inputs of the plan
@@ -379,7 +380,7 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("Column-");
                 desc.push_str(&column.flat_name());
             }
-            Expr::ScalarVariable(var_names) => {
+            Expr::ScalarVariable(_, var_names) => {
                 desc.push_str("ScalarVariable-");
                 desc.push_str(&var_names.join("."));
             }
@@ -458,6 +459,10 @@ impl ExprIdentifierVisitor<'_> {
             }
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");
+            }
+            Expr::QualifiedWildcard { qualifier } => {
+                desc.push_str("QualifiedWildcard-");
+                desc.push_str(qualifier);
             }
             Expr::GetIndexedField { key, .. } => {
                 desc.push_str("GetIndexedField-");

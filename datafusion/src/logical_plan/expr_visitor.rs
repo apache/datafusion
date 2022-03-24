@@ -73,9 +73,9 @@ impl ExprVisitable for Expr {
     /// ```text
     /// pre_visit(BinaryExpr(GT))
     /// pre_visit(Column("foo"))
+    /// post_visit(Column("foo"))
     /// pre_visit(Column("bar"))
     /// post_visit(Column("bar"))
-    /// post_visit(Column("foo"))
     /// post_visit(BinaryExpr(GT))
     /// ```
     ///
@@ -104,9 +104,10 @@ impl ExprVisitable for Expr {
             | Expr::Sort { expr, .. }
             | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
             Expr::Column(_)
-            | Expr::ScalarVariable(_)
+            | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Wildcard => Ok(visitor),
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. } => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
