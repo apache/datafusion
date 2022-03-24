@@ -54,7 +54,6 @@ pub fn create_physical_expr(
 }
 
 /// Physical expression of a UDF.
-/// argo engine add
 #[derive(Debug)]
 pub struct ScalarUDFExpr {
     fun: ScalarUDF,
