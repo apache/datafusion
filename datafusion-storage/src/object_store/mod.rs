@@ -27,16 +27,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::{AsyncRead, Stream, StreamExt};
 
-use crate::{FileMeta, ListEntry, PartitionedFile, SizedFile};
-use datafusion_common::Result;
+use crate::{FileMeta, ListEntry, Result, SizedFile};
 
 /// Stream of files listed from object store
 pub type FileMetaStream =
     Pin<Box<dyn Stream<Item = Result<FileMeta>> + Send + Sync + 'static>>;
-
-/// Stream of files get listed from object store
-pub type PartitionedFileStream =
-    Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
 /// Stream of list entries obtained from object store
 pub type ListEntryStream =

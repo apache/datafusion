@@ -33,7 +33,7 @@ use datafusion::{
         file_format::{csv::CsvFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig},
     },
-    error::{DataFusionError, Result},
+    error::Result,
     physical_plan::ColumnStatistics,
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
@@ -352,7 +352,10 @@ impl MirroringObjectStore {
 
 #[async_trait]
 impl ObjectStore for MirroringObjectStore {
-    async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
+    async fn list_file(
+        &self,
+        prefix: &str,
+    ) -> datafusion_storage::Result<FileMetaStream> {
         let prefix = prefix.to_owned();
         let size = self.file_size;
         Ok(Box::pin(
@@ -375,11 +378,14 @@ impl ObjectStore for MirroringObjectStore {
         &self,
         _prefix: &str,
         _delimiter: Option<String>,
-    ) -> Result<ListEntryStream> {
+    ) -> datafusion_storage::Result<ListEntryStream> {
         unimplemented!()
     }
 
-    fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
+    fn file_reader(
+        &self,
+        file: SizedFile,
+    ) -> datafusion_storage::Result<Arc<dyn ObjectReader>> {
         assert_eq!(
             self.file_size, file.size,
             "Requested files should have the same size as the mirrored file"
@@ -389,10 +395,10 @@ impl ObjectStore for MirroringObjectStore {
                 path: self.mirrored_file.clone(),
                 size: self.file_size,
             })?),
-            None => Err(DataFusionError::IoError(io::Error::new(
+            None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "not in provided test list",
-            ))),
+            )),
         }
     }
 }
