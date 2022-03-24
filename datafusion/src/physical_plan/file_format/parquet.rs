@@ -237,33 +237,18 @@ impl ExecutionPlan for ParquetExec {
 
         let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
 
-        let join_handle = if projection.is_empty() {
-            println!("Empty projection. using read_partition_no_file_columns");
-            task::spawn_blocking(move || {
-                if let Err(e) = read_partition_no_file_columns(
+        let join_handle = task::spawn_blocking(move || {
+            let res = if projection.is_empty() {
+                read_partition_no_file_columns(
                     object_store.as_ref(),
                     &partition,
                     batch_size,
                     response_tx.clone(),
                     limit,
                     partition_col_proj,
-                ) {
-                    error!(
-                        "Parquet reader thread terminated due to error: {:?} for files: {:?}",
-                        e, partition
-                    );
-                    // Send the error back to the main thread.
-                    //
-                    // Ignore error sending (via `.ok()`) because that
-                    // means the receiver has been torn down (and nothing
-                    // cares about the errors anymore)
-                    send_result(&response_tx, Err(e.into())).ok();
-                }
-            })
-        } else {
-            println!("Non-empty projection. using read_partition");
-            task::spawn_blocking(move || {
-                if let Err(e) = read_partition(
+                )
+            } else {
+                read_partition(
                     object_store.as_ref(),
                     adapter,
                     partition_index,
@@ -275,20 +260,22 @@ impl ExecutionPlan for ParquetExec {
                     response_tx.clone(),
                     limit,
                     partition_col_proj,
-                ) {
-                    error!(
+                )
+            };
+
+            if let Err(e) = res {
+                error!(
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
                 );
-                    // Send the error back to the main thread.
-                    //
-                    // Ignore error sending (via `.ok()`) because that
-                    // means the receiver has been torn down (and nothing
-                    // cares about the errors anymore)
-                    send_result(&response_tx, Err(e.into())).ok();
-                }
-            })
-        };
+                // Send the error back to the main thread.
+                //
+                // Ignore error sending (via `.ok()`) because that
+                // means the receiver has been torn down (and nothing
+                // cares about the errors anymore)
+                send_result(&response_tx, Err(e.into())).ok();
+            }
+        });
 
         Ok(RecordBatchReceiverStream::create(
             &self.projected_schema,
@@ -482,17 +469,23 @@ fn read_partition_no_file_columns(
     mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
     for partitioned_file in partition {
-        let object_reader = object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
+        let object_reader =
+            object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
         let file_reader = SerializedFileReader::new(ChunkObjectReader(object_reader))?;
-        let mut file_rows: usize = file_reader.metadata().file_metadata().num_rows().try_into().expect("Row count should always be greater than or equal to 0");
+        let mut file_rows: usize = file_reader
+            .metadata()
+            .file_metadata()
+            .num_rows()
+            .try_into()
+            .expect("Row count should always be greater than or equal to 0");
         let remaining_rows = limit.unwrap_or(usize::MAX);
-        if file_rows >= remaining_rows{
+        if file_rows >= remaining_rows {
             file_rows = remaining_rows;
             limit = Some(0);
-        }else if let Some(remaining_limit) = &mut limit{
+        } else if let Some(remaining_limit) = &mut limit {
             *remaining_limit -= file_rows;
         }
-        
+
         while file_rows > batch_size {
             send_result(
                 &response_tx,
@@ -501,7 +494,6 @@ fn read_partition_no_file_columns(
             )?;
             file_rows -= batch_size;
         }
-
         if file_rows != 0 {
             send_result(
                 &response_tx,
