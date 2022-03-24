@@ -15,25 +15,28 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion",
-    "datafusion-common",
-    "datafusion-expr",
-    "datafusion-jit",
-    "datafusion-physical-expr",
-    "datafusion-cli",
-    "datafusion-examples",
-    "datafusion-proto",
-    "datafusion-storage",
-    "benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-    "ballista-examples",
-]
+[package]
+name = "datafusion-storage"
+description = "Storage for DataFusion query engine"
+version = "7.0.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+readme = "README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = [ "arrow", "query", "sql" ]
+edition = "2021"
+rust-version = "1.59"
 
-[profile.release]
-codegen-units = 1
-lto = true
+[lib]
+name = "datafusion_storage"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1.41"
+chrono = { version = "0.4", default-features = false }
+datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
+futures = "0.3"
+parking_lot = "0.12"
+tempfile = "3"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }

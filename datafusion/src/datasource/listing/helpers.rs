@@ -36,6 +36,7 @@ use futures::{
 use log::debug;
 
 use crate::{
+    datasource::MemTable,
     error::Result,
     execution::context::SessionContext,
     logical_plan::{self, Expr, ExprVisitable, ExpressionVisitor, Recursion},
@@ -43,9 +44,9 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use crate::datasource::{
-    object_store::{FileMeta, ObjectStore, SizedFile},
-    MemTable, PartitionedFile, PartitionedFileStream,
+use datafusion_storage::{
+    object_store::{ObjectStore, PartitionedFileStream},
+    FileMeta, PartitionedFile, SizedFile,
 };
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";

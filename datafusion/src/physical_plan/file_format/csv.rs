@@ -220,13 +220,12 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datafusion_storage::object_store::local::{
+        local_unpartitioned_file, LocalFileSystem,
+    };
     use crate::prelude::*;
     use crate::test_util::aggr_test_schema_with_missing_col;
-    use crate::{
-        datasource::object_store::local::{local_unpartitioned_file, LocalFileSystem},
-        scalar::ScalarValue,
-        test_util::aggr_test_schema,
-    };
+    use crate::{scalar::ScalarValue, test_util::aggr_test_schema};
     use arrow::datatypes::*;
     use futures::StreamExt;
     use std::fs::File;

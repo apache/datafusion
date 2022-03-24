@@ -38,13 +38,12 @@ pub use csv::CsvExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
-use crate::error::DataFusionError;
 use crate::{
-    datasource::{object_store::ObjectStore, PartitionedFile},
-    error::Result,
+    error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
+use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
 use lazy_static::lazy_static;
 use log::info;
 use std::{

@@ -33,9 +33,9 @@ use ballista_core::serde::scheduler::{
     ExecutorData, ExecutorDataChange, ExecutorMetadata,
 };
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
+use datafusion::datafusion_storage::object_store::{local::LocalFileSystem, ObjectStore};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::object_store::{local::LocalFileSystem, ObjectStore};
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
