@@ -274,12 +274,24 @@ impl ExecutionPlan for ParquetExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(
-                    f,
-                    "ParquetExec: limit={:?}, partitions={}",
-                    self.base_config.limit,
-                    super::FileGroupsDisplay(&self.base_config.file_groups)
-                )
+                if let Some(pre) = &self.pruning_predicate {
+                    write!(
+                        f,
+                        "ParquetExec: limit={:?}, partitions={}, pruning_predicate={}, projected_col={}",
+                        self.base_config.limit,
+                        super::FileGroupsDisplay(&self.base_config.file_groups),
+                        pre.predicate_expr(),
+                        super::ProjectSchemaDisplay(&self.projected_schema),
+                    )
+                } else {
+                    write!(
+                        f,
+                        "ParquetExec: limit={:?}, partitions={}, projected_col={}",
+                        self.base_config.limit,
+                        super::FileGroupsDisplay(&self.base_config.file_groups),
+                        super::ProjectSchemaDisplay(&self.projected_schema),
+                    )
+                }
             }
         }
     }

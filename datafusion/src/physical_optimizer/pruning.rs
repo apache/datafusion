@@ -210,6 +210,11 @@ impl PruningPredicate {
     pub fn logical_expr(&self) -> &Expr {
         &self.logical_expr
     }
+
+    /// Returns a reference to the predicate expr
+    pub fn predicate_expr(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.predicate_expr
+    }
 }
 
 /// Handles creating references to the min/max statistics
