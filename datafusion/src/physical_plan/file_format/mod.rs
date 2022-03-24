@@ -307,17 +307,19 @@ impl PartitionColumnProjector {
                 partition_values.len()
             )));
         }
-        let mut cols = Vec::with_capacity(partition_values.len());
-        for &(pidx, sidx) in &self.projected_partition_indexes {
-            cols.insert(
-                sidx,
+        //The destination index is not needed. Since there are no non-partition columns it will simply be equivalent to
+        //the index that would be provided by .enumerate()
+        let cols = self
+            .projected_partition_indexes
+            .iter()
+            .map(|(pidx, _)| {
                 create_dict_array(
                     &mut self.key_buffer_cache,
-                    &partition_values[pidx],
+                    &partition_values[*pidx],
                     batch_size,
-                ),
-            )
-        }
+                )
+            })
+            .collect();
         RecordBatch::try_new(Arc::clone(&self.projected_schema), cols)
     }
 
@@ -340,7 +342,6 @@ impl PartitionColumnProjector {
                 file_batch.columns().len()
             )));
         }
-
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
             cols.insert(
