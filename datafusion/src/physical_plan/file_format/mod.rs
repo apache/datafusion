@@ -35,6 +35,7 @@ use arrow::{
 pub use avro::AvroExec;
 pub(crate) use csv::plan_to_csv;
 pub use csv::CsvExec;
+pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
 use crate::error::DataFusionError;

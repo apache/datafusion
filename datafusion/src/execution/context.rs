@@ -26,6 +26,7 @@ use crate::{
         file_format::{
             avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
             csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
+            json::{JsonFormat, DEFAULT_JSON_EXTENSION},
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
@@ -75,7 +76,7 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
-use crate::physical_plan::file_format::{plan_to_csv, plan_to_parquet};
+use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
@@ -91,7 +92,7 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::options::{AvroReadOptions, CsvReadOptions};
+use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
@@ -211,24 +212,24 @@ impl SessionContext {
                 ref has_header,
             }) => {
                 let (file_format, file_extension) = match file_type {
-                    FileType::CSV => Ok((
+                    FileType::CSV => (
                         Arc::new(CsvFormat::default().with_has_header(*has_header))
                             as Arc<dyn FileFormat>,
                         DEFAULT_CSV_EXTENSION,
-                    )),
-                    FileType::Parquet => Ok((
+                    ),
+                    FileType::Parquet => (
                         Arc::new(ParquetFormat::default()) as Arc<dyn FileFormat>,
                         DEFAULT_PARQUET_EXTENSION,
-                    )),
-                    FileType::Avro => Ok((
+                    ),
+                    FileType::Avro => (
                         Arc::new(AvroFormat::default()) as Arc<dyn FileFormat>,
                         DEFAULT_AVRO_EXTENSION,
-                    )),
-                    _ => Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported file type {:?}.",
-                        file_type
-                    ))),
-                }?;
+                    ),
+                    FileType::NdJson => (
+                        Arc::new(JsonFormat::default()) as Arc<dyn FileFormat>,
+                        DEFAULT_JSON_EXTENSION,
+                    ),
+                };
 
                 let options = ListingOptions {
                     format: file_format,
@@ -379,7 +380,6 @@ impl SessionContext {
     }
 
     /// Creates a DataFrame for reading an Avro data source.
-
     pub async fn read_avro(
         &mut self,
         uri: impl Into<String>,
@@ -391,6 +391,29 @@ impl SessionContext {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan_avro(
+                object_store,
+                path,
+                options,
+                None,
+                target_partitions,
+            )
+            .await?
+            .build()?,
+        )))
+    }
+
+    /// Creates a DataFrame for reading an Json data source.
+    pub async fn read_json(
+        &mut self,
+        uri: impl Into<String>,
+        options: NdJsonReadOptions<'_>,
+    ) -> Result<Arc<DataFrame>> {
+        let uri: String = uri.into();
+        let (object_store, path) = self.runtime_env().object_store(&uri)?;
+        let target_partitions = self.copied_config().target_partitions;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &LogicalPlanBuilder::scan_json(
                 object_store,
                 path,
                 options,
@@ -505,6 +528,22 @@ impl SessionContext {
         )
         .await?;
 
+        Ok(())
+    }
+
+    // Registers a Json data source so that it can be referenced from SQL statements
+    /// executed against this context.
+    pub async fn register_json(
+        &mut self,
+        name: &str,
+        uri: &str,
+        options: NdJsonReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options =
+            options.to_listing_options(self.copied_config().target_partitions);
+
+        self.register_listing_table(name, uri, listing_options, options.schema)
+            .await?;
         Ok(())
     }
 
@@ -707,6 +746,16 @@ impl SessionContext {
     ) -> Result<()> {
         let state = self.state.read().clone();
         plan_to_csv(&state, plan, path).await
+    }
+
+    /// Executes a query and writes the results to a partitioned JSON file.
+    pub async fn write_json(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        path: impl AsRef<str>,
+    ) -> Result<()> {
+        let state = self.state.read().clone();
+        plan_to_json(&state, plan, path).await
     }
 
     /// Executes a query and writes the results to a partitioned Parquet file.
