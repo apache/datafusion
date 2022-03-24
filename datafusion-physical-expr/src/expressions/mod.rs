@@ -19,6 +19,7 @@
 
 mod approx_distinct;
 mod approx_percentile_cont;
+mod approx_percentile_cont_with_weight;
 mod array_agg;
 mod average;
 #[macro_use]
@@ -62,6 +63,7 @@ pub use approx_median::ApproxMedian;
 pub use approx_percentile_cont::{
     is_approx_percentile_cont_supported_arg_type, ApproxPercentileCont,
 };
+pub use approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use array_agg::ArrayAgg;
 pub use average::is_avg_support_arg_type;
 pub use average::{avg_return_type, Avg, AvgAccumulator};
