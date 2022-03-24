@@ -354,10 +354,11 @@ impl CaseExpr {
             // keep `else_expr`'s data type and return type consistent
             let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
                 .unwrap_or_else(|_| e.clone());
+            // null and unmatched tuples should be assigned else value
+            remainder = or(&base_nulls, &remainder)?;
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows());
-            remainder = or(&base_nulls, &remainder)?;
             current_value = if_then_else(&remainder, else_, current_value, &return_type)?;
         }
 
@@ -413,7 +414,6 @@ impl CaseExpr {
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows());
-            remainder = or(&is_null(&remainder)?, &remainder)?;
             current_value = if_then_else(&remainder, else_, current_value, &return_type)?;
         }
 
