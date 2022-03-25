@@ -20,6 +20,7 @@ on: [push, pull_request]
 
 jobs:
   lint:
+    if: github.event.pull_request.draft == false
     name: Lint C++, Python, R, Rust, Docker
     runs-on: ubuntu-latest
     steps:
@@ -39,6 +40,7 @@ jobs:
         run: archery lint --rat
 
   rat:
+    if: github.event.pull_request.draft == false
     name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
     steps:
@@ -52,6 +54,7 @@ jobs:
         run: ./dev/release/run-rat.sh .
 
   prettier:
+    if: github.event.pull_request.draft == false
     name: Use prettier to check formatting of documents
     runs-on: ubuntu-latest
     steps:

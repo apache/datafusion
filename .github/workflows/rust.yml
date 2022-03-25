@@ -25,6 +25,7 @@ on:
 jobs:
   # build the library, a compilation step used by multiple steps below
   linux-build-lib:
+    if: github.event.pull_request.draft == false
     name: Build Libraries on AMD64 Rust ${{ matrix.rust }}
     runs-on: ubuntu-latest
     strategy:
@@ -87,6 +88,7 @@ jobs:
 
   # test the crate
   linux-test:
+    if: github.event.pull_request.draft == false
     name: Test Workspace on AMD64 Rust ${{ matrix.rust }}
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
@@ -151,6 +153,7 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target"
 
   integration-test:
+    if: github.event.pull_request.draft == false
     name: "Integration Test"
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
@@ -221,6 +224,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
 
   windows-and-macos:
+    if: github.event.pull_request.draft == false
     name: Test on ${{ matrix.os }} Rust ${{ matrix.rust }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -249,6 +253,7 @@ jobs:
           RUSTFLAGS: "-C debuginfo=0"
 
   test-datafusion-pyarrow:
+    if: github.event.pull_request.draft == false
     needs: [linux-build-lib]
     runs-on: ubuntu-latest
     strategy:
@@ -298,6 +303,7 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target"
 
   lint:
+    if: github.event.pull_request.draft == false
     name: Lint
     runs-on: ubuntu-latest
     container:
@@ -355,6 +361,7 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target"
 
   miri-checks:
+    if: github.event.pull_request.draft == false
     name: MIRI
     runs-on: ubuntu-latest
     strategy:
