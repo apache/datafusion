@@ -18,8 +18,10 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
-use crate::datasource::object_store::local::local_unpartitioned_file;
-use crate::datasource::{MemTable, PartitionedFile, TableProvider};
+use crate::datafusion_storage::{
+    object_store::local::local_unpartitioned_file, PartitionedFile,
+};
+use crate::datasource::{MemTable, TableProvider};
 use crate::error::Result;
 use crate::from_slice::FromSlice;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};

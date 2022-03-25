@@ -16,44 +16,27 @@
 # under the License.
 
 [package]
-name = "ballista-examples"
-description = "Ballista usage examples"
-version = "0.6.0"
+name = "datafusion-storage"
+description = "Storage for DataFusion query engine"
+version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
+readme = "README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow", "distributed", "query", "sql" ]
+keywords = [ "arrow", "query", "sql" ]
 edition = "2021"
-publish = false
 rust-version = "1.59"
 
-<<<<<<< HEAD
-[[example]]
-name = "simple_udf_plugin"
-path = "examples/simple_udf_plugin.rs"
-crate-type = ["cdylib"]
-
-[[example]]
-name = "use_simple_udf_plugin"
-path = "examples/use_simple_udf_plugin.rs"
-=======
-
-[[example]]
-name = "test_sql"
-path = "examples/test_sql.rs"
->>>>>>> apache/master
-required-features = ["ballista/standalone"]
+[lib]
+name = "datafusion_storage"
+path = "src/lib.rs"
 
 [dependencies]
-ballista = { path = "../ballista/rust/client", version = "0.6.0" }
-datafusion-expr = { path = "../datafusion-expr" }
-datafusion = { path = "../datafusion" }
-test-cdylib = "1.1.0"
-lazy_static = { version = "^1.4.0" }
-
+async-trait = "0.1.41"
+chrono = { version = "0.4", default-features = false }
+datafusion-common = { path = "../datafusion-common", version = "7.0.0" }
 futures = "0.3"
-num_cpus = "1.13.0"
-prost = "0.9"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-tonic = "0.6"
+parking_lot = "0.12"
+tempfile = "3"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }

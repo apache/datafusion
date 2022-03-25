@@ -84,6 +84,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
             | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. } => {}
         }
         Ok(Recursion::Continue(self))
@@ -350,6 +351,10 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
+        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            "QualifiedWildcard expressions are not valid in a logical query plan"
+                .to_owned(),
+        )),
     }
 }
 
@@ -506,8 +511,12 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
                 Ok(expr)
             }
         }
-        Expr::Wildcard { .. } => Err(DataFusionError::Internal(
+        Expr::Wildcard => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
+        )),
+        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            "QualifiedWildcard expressions are not valid in a logical query plan"
+                .to_owned(),
         )),
         Expr::GetIndexedField { expr: _, key } => Ok(Expr::GetIndexedField {
             expr: Box::new(expressions[0].clone()),

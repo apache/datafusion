@@ -228,6 +228,8 @@ pub enum Expr {
     },
     /// Represents a reference to all fields in a schema.
     Wildcard,
+    /// Represents a reference to all fields in a specific schema.
+    QualifiedWildcard { qualifier: String },
 }
 
 /// Fixed seed for the hashing so that Ords are consistent across runs
@@ -512,6 +514,7 @@ impl fmt::Debug for Expr {
                 }
             }
             Expr::Wildcard => write!(f, "*"),
+            Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }
@@ -695,6 +698,9 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         )),
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create name does not support wildcard".to_string(),
+        )),
+        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            "Create name does not support qualified wildcard".to_string(),
         )),
     }
 }

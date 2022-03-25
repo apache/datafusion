@@ -152,7 +152,7 @@ fn create_built_in_window_expr(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::physical_plan::aggregates::AggregateFunction;
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};

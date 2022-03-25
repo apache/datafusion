@@ -347,7 +347,7 @@ fn str_to_byte(s: &str) -> Result<u8, BallistaError> {
 mod tests {
     use async_trait::async_trait;
     use datafusion::arrow::datatypes::SchemaRef;
-    use datafusion::datasource::object_store::local::LocalFileSystem;
+    use datafusion::datafusion_storage::object_store::local::LocalFileSystem;
     use datafusion::error::DataFusionError;
     use datafusion::execution::context::{QueryPlanner, SessionState, TaskContext};
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};

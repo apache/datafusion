@@ -24,13 +24,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
 
-use crate::datasource::object_store::{
-    FileMeta, FileMetaStream, ListEntryStream, ObjectReader, ObjectStore,
-};
-use crate::datasource::PartitionedFile;
-use crate::error::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 
-use super::{ObjectReaderStream, SizedFile};
+use crate::{FileMeta, PartitionedFile, SizedFile};
+
+use super::{
+    FileMetaStream, ListEntryStream, ObjectReader, ObjectReaderStream, ObjectStore,
+};
+
+pub static LOCAL_SCHEME: &str = "file";
 
 #[derive(Debug)]
 /// Local File System as Object Store.

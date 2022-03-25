@@ -27,12 +27,12 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use crate::avro_to_arrow::read_avro_schema_from_reader;
-use crate::datasource::object_store::{ObjectReader, ObjectReaderStream};
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{AvroExec, FileScanConfig};
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::Statistics;
+use datafusion_storage::object_store::{ObjectReader, ObjectReaderStream};
 
 /// The default file extension of avro files
 pub const DEFAULT_AVRO_EXTENSION: &str = ".avro";
@@ -75,7 +75,7 @@ impl FileFormat for AvroFormat {
 #[cfg(feature = "avro")]
 mod tests {
     use crate::{
-        datasource::object_store::local::{
+        datafusion_storage::object_store::local::{
             local_object_reader, local_object_reader_stream, local_unpartitioned_file,
             LocalFileSystem,
         },
@@ -394,7 +394,7 @@ mod tests {
 mod tests {
     use super::*;
 
-    use crate::datasource::object_store::local::local_object_reader_stream;
+    use crate::datafusion_storage::object_store::local::local_object_reader_stream;
     use crate::error::DataFusionError;
 
     #[tokio::test]

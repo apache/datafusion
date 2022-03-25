@@ -21,7 +21,6 @@ use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
     listing::{ListingOptions, ListingTable, ListingTableConfig},
-    object_store::ObjectStore,
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
@@ -37,6 +36,7 @@ use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
 };
+use datafusion_storage::object_store::ObjectStore;
 use std::convert::TryFrom;
 use std::iter;
 use std::{
@@ -1078,6 +1078,8 @@ pub fn project_with_alias(
             Expr::Wildcard => {
                 projected_expr.extend(expand_wildcard(input_schema, &plan)?)
             }
+            Expr::QualifiedWildcard { ref qualifier } => projected_expr
+                .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
             _ => projected_expr
                 .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
@@ -1137,6 +1139,27 @@ pub(crate) fn expand_wildcard(
             })
             .collect::<Vec<Expr>>())
     }
+}
+
+pub(crate) fn expand_qualified_wildcard(
+    qualifier: &str,
+    schema: &DFSchema,
+    plan: &LogicalPlan,
+) -> Result<Vec<Expr>> {
+    let qualified_fields: Vec<DFField> = schema
+        .fields_with_qualified(qualifier)
+        .into_iter()
+        .cloned()
+        .collect();
+    if qualified_fields.is_empty() {
+        return Err(DataFusionError::Plan(format!(
+            "Invalid qualifier {}",
+            qualifier
+        )));
+    }
+    let qualifier_schema =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?;
+    expand_wildcard(&qualifier_schema, plan)
 }
 
 #[cfg(test)]

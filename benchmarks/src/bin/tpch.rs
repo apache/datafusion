@@ -50,10 +50,8 @@ use datafusion::{
 };
 use datafusion::{
     arrow::util::pretty,
-    datasource::{
-        listing::{ListingOptions, ListingTable, ListingTableConfig},
-        object_store::local::LocalFileSystem,
-    },
+    datafusion_storage::object_store::local::LocalFileSystem,
+    datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
 
 use datafusion::datasource::file_format::csv::DEFAULT_CSV_EXTENSION;

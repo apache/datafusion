@@ -225,6 +225,9 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
+// re-export object store dependencies
+pub use datafusion_storage;
+
 #[cfg(feature = "row")]
 pub mod row;
 

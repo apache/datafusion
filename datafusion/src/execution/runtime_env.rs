@@ -26,8 +26,9 @@ use crate::{
     },
 };
 
-use crate::datasource::object_store::{ObjectStore, ObjectStoreRegistry};
+use crate::datasource::object_store_registry::ObjectStoreRegistry;
 use datafusion_common::DataFusionError;
+use datafusion_storage::object_store::ObjectStore;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
 use std::sync::Arc;

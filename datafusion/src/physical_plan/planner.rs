@@ -206,6 +206,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
         Expr::Wildcard => Err(DataFusionError::Internal(
             "Create physical name does not support wildcard".to_string(),
         )),
+        Expr::QualifiedWildcard { .. } => Err(DataFusionError::Internal(
+            "Create physical name does not support qualified wildcard".to_string(),
+        )),
     }
 }
 
@@ -1441,7 +1444,7 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::object_store::local::LocalFileSystem;
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
     use crate::execution::context::TaskContext;
     use crate::execution::options::CsvReadOptions;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};

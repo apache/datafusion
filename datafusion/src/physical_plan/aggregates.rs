@@ -79,6 +79,9 @@ pub fn return_type(
             true,
         )))),
         AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
+        AggregateFunction::ApproxPercentileContWithWeight => {
+            Ok(coerced_data_types[0].clone())
+        }
         AggregateFunction::ApproxMedian => Ok(coerced_data_types[0].clone()),
     }
 }
@@ -268,6 +271,20 @@ pub fn create_aggregate_expr(
                     .to_string(),
             ));
         }
+        (AggregateFunction::ApproxPercentileContWithWeight, false) => {
+            Arc::new(expressions::ApproxPercentileContWithWeight::new(
+                // Pass in the desired percentile expr
+                coerced_phy_exprs,
+                name,
+                return_type,
+            )?)
+        }
+        (AggregateFunction::ApproxPercentileContWithWeight, true) => {
+            return Err(DataFusionError::NotImplemented(
+                "approx_percentile_cont_with_weight(DISTINCT) aggregations are not available"
+                    .to_string(),
+            ));
+        }
         (AggregateFunction::ApproxMedian, false) => {
             Arc::new(expressions::ApproxMedian::new(
                 coerced_phy_exprs[0].clone(),
@@ -344,6 +361,16 @@ pub(super) fn signature(fun: &AggregateFunction) -> Signature {
             NUMERICS
                 .iter()
                 .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
+                .collect(),
+            Volatility::Immutable,
+        ),
+        AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
+            // Accept any numeric value paired with a float64 percentile
+            NUMERICS
+                .iter()
+                .map(|t| {
+                    TypeSignature::Exact(vec![t.clone(), t.clone(), DataType::Float64])
+                })
                 .collect(),
             Volatility::Immutable,
         ),

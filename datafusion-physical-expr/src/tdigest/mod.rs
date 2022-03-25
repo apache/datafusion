@@ -34,6 +34,8 @@ use datafusion_common::ScalarValue;
 use ordered_float::OrderedFloat;
 use std::cmp::Ordering;
 
+pub const DEFAULT_MAX_SIZE: usize = 100;
+
 // Cast a non-null [`ScalarValue::Float64`] to an [`OrderedFloat<f64>`], or
 // panic.
 macro_rules! cast_scalar_f64 {
@@ -96,7 +98,7 @@ impl TryIntoOrderedF64 for ScalarValue {
 
             got => {
                 return Err(DataFusionError::NotImplemented(format!(
-                    "Support for 'APPROX_PERCENTILE_CONT' for data type {} is not implemented",
+                    "Support for 'TryIntoOrderedF64' for data type {} is not implemented",
                     got
                 )))
             }
@@ -189,6 +191,17 @@ impl TDigest {
         }
     }
 
+    pub(crate) fn new_with_centroid(max_size: usize, centroid: Centroid) -> Self {
+        TDigest {
+            centroids: vec![centroid.clone()],
+            max_size,
+            sum: centroid.mean * centroid.weight,
+            count: OrderedFloat::from(1.0),
+            max: centroid.mean,
+            min: centroid.mean,
+        }
+    }
+
     #[inline]
     pub(crate) fn count(&self) -> f64 {
         self.count.into_inner()
@@ -249,18 +262,13 @@ impl TDigest {
         }
     }
 
-    pub(crate) fn merge_unsorted<T: TryIntoOrderedF64>(
+    pub(crate) fn merge_unsorted_f64(
         &self,
-        unsorted_values: impl IntoIterator<Item = T>,
-    ) -> Result<TDigest> {
-        let mut values = unsorted_values
-            .into_iter()
-            .filter_map(|v| v.try_as_f64().transpose())
-            .collect::<Result<Vec<_>>>()?;
-
+        unsorted_values: Vec<OrderedFloat<f64>>,
+    ) -> TDigest {
+        let mut values = unsorted_values;
         values.sort();
-
-        Ok(self.merge_sorted_f64(&values))
+        self.merge_sorted_f64(&values)
     }
 
     fn merge_sorted_f64(&self, sorted_values: &[OrderedFloat<f64>]) -> TDigest {
@@ -668,8 +676,6 @@ fn is_sorted(values: &[OrderedFloat<f64>]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::iter;
-
     use super::*;
 
     // A macro to assert the specified `quantile` estimated by `t` is within the
@@ -708,29 +714,12 @@ mod tests {
 
     #[test]
     fn test_int64_uniform() {
-        let values = (1i64..=1000).map(|v| ScalarValue::Int64(Some(v)));
+        let values = (1i64..=1000)
+            .map(|v| OrderedFloat::from(v as f64))
+            .collect();
 
         let t = TDigest::new(100);
-        let t = t.merge_unsorted(values).unwrap();
-
-        assert_error_bounds!(t, quantile = 0.1, want = 100.0);
-        assert_error_bounds!(t, quantile = 0.5, want = 500.0);
-        assert_error_bounds!(t, quantile = 0.9, want = 900.0);
-        assert_state_roundtrip!(t);
-    }
-
-    #[test]
-    fn test_int64_uniform_with_nulls() {
-        let values = (1i64..=1000).map(|v| ScalarValue::Int64(Some(v)));
-        // Prepend some NULLs
-        let values = iter::repeat(ScalarValue::Int64(None))
-            .take(10)
-            .chain(values);
-        // Append some more NULLs
-        let values = values.chain(iter::repeat(ScalarValue::Int64(None)).take(10));
-
-        let t = TDigest::new(100);
-        let t = t.merge_unsorted(values).unwrap();
+        let t = t.merge_unsorted_f64(values);
 
         assert_error_bounds!(t, quantile = 0.1, want = 100.0);
         assert_error_bounds!(t, quantile = 0.5, want = 500.0);
@@ -746,7 +735,7 @@ mod tests {
         let mut t = TDigest::new(10);
 
         for v in vals {
-            t = t.merge_unsorted([ScalarValue::Float64(Some(v))]).unwrap();
+            t = t.merge_unsorted_f64(vec![OrderedFloat::from(v as f64)]);
         }
 
         assert_error_bounds!(t, quantile = 0.5, want = 1.0);
@@ -759,10 +748,10 @@ mod tests {
         let t = TDigest::new(100);
         let values: Vec<_> = (1..=1_000_000)
             .map(f64::from)
-            .map(|v| ScalarValue::Float64(Some(v)))
+            .map(|v| OrderedFloat::from(v as f64))
             .collect();
 
-        let t = t.merge_unsorted(values).unwrap();
+        let t = t.merge_unsorted_f64(values);
 
         assert_error_bounds!(t, quantile = 1.0, want = 1_000_000.0);
         assert_error_bounds!(t, quantile = 0.99, want = 990_000.0);
@@ -777,13 +766,13 @@ mod tests {
         let t = TDigest::new(100);
         let mut values: Vec<_> = (1..=600_000)
             .map(f64::from)
-            .map(|v| ScalarValue::Float64(Some(v)))
+            .map(|v| OrderedFloat::from(v as f64))
             .collect();
         for _ in 0..400_000 {
-            values.push(ScalarValue::Float64(Some(1_000_000.0)));
+            values.push(OrderedFloat::from(1_000_000_f64));
         }
 
-        let t = t.merge_unsorted(values).unwrap();
+        let t = t.merge_unsorted_f64(values);
 
         assert_error_bounds!(t, quantile = 0.99, want = 1_000_000.0);
         assert_error_bounds!(t, quantile = 0.01, want = 10_000.0);
@@ -799,9 +788,9 @@ mod tests {
             let t = TDigest::new(100);
             let values: Vec<_> = (1..=1_000)
                 .map(f64::from)
-                .map(|v| ScalarValue::Float64(Some(v)))
+                .map(|v| OrderedFloat::from(v as f64))
                 .collect();
-            let t = t.merge_unsorted(values).unwrap();
+            let t = t.merge_unsorted_f64(values);
             digests.push(t)
         }
 

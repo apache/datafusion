@@ -1340,27 +1340,31 @@ impl TaskContext {
         match task_props {
             TaskProperties::KVPairs(props) => {
                 let session_config = SessionConfig::new();
-                session_config
-                    .with_batch_size(props.get(BATCH_SIZE).unwrap().parse().unwrap())
-                    .with_target_partitions(
-                        props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
-                    )
-                    .with_repartition_joins(
-                        props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
-                    )
-                    .with_repartition_aggregations(
-                        props
-                            .get(REPARTITION_AGGREGATIONS)
-                            .unwrap()
-                            .parse()
-                            .unwrap(),
-                    )
-                    .with_repartition_windows(
-                        props.get(REPARTITION_WINDOWS).unwrap().parse().unwrap(),
-                    )
-                    .with_parquet_pruning(
-                        props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
-                    )
+                if props.is_empty() {
+                    session_config
+                } else {
+                    session_config
+                        .with_batch_size(props.get(BATCH_SIZE).unwrap().parse().unwrap())
+                        .with_target_partitions(
+                            props.get(TARGET_PARTITIONS).unwrap().parse().unwrap(),
+                        )
+                        .with_repartition_joins(
+                            props.get(REPARTITION_JOINS).unwrap().parse().unwrap(),
+                        )
+                        .with_repartition_aggregations(
+                            props
+                                .get(REPARTITION_AGGREGATIONS)
+                                .unwrap()
+                                .parse()
+                                .unwrap(),
+                        )
+                        .with_repartition_windows(
+                            props.get(REPARTITION_WINDOWS).unwrap().parse().unwrap(),
+                        )
+                        .with_parquet_pruning(
+                            props.get(PARQUET_PRUNING).unwrap().parse().unwrap(),
+                        )
+                }
             }
             TaskProperties::SessionConfig(session_config) => session_config.clone(),
         }

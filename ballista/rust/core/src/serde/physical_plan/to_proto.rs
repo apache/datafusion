@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     Statistics,
 };
 
-use datafusion::datasource::PartitionedFile;
+use datafusion::datafusion_storage::PartitionedFile;
 use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, Literal};

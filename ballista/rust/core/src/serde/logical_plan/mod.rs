@@ -885,14 +885,17 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
-    use datafusion::datasource::listing::ListingTable;
-    use datafusion::datasource::object_store::{
-        FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
+    use datafusion::datafusion_storage::{
+        object_store::{
+            local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+            ObjectStore,
+        },
+        SizedFile,
     };
+    use datafusion::datasource::listing::ListingTable;
     use datafusion::error::DataFusionError;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
-        datasource::object_store::local::LocalFileSystem,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
             ToDFSchema,

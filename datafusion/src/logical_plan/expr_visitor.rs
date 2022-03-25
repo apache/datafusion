@@ -106,7 +106,8 @@ impl ExprVisitable for Expr {
             Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Wildcard => Ok(visitor),
+            | Expr::Wildcard
+            | Expr::QualifiedWildcard { .. } => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {
                 let visitor = left.accept(visitor)?;
                 right.accept(visitor)
