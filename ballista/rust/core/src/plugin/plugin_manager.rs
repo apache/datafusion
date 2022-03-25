@@ -136,10 +136,6 @@ impl GlobalPluginManager {
                             "load plugin from library file:{}",
                             item.path().to_str().unwrap()
                         );
-                        println!(
-                            "load plugin from library file:{}",
-                            item.path().to_str().unwrap()
-                        );
                         return Some(item);
                     }
                 }

@@ -55,6 +55,7 @@ impl From<&protobuf::PhysicalColumn> for Column {
     }
 }
 
+// TODO resolved from the SessionContext
 impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
     type Error = BallistaError;
 
