@@ -277,7 +277,7 @@ impl ExecutionPlan for ParquetExec {
                 if let Some(pre) = &self.pruning_predicate {
                     write!(
                         f,
-                        "ParquetExec: limit={:?}, partitions={}, pruning_predicate={}, projected_col={}",
+                        "ParquetExec: limit={:?}, partitions={}, predicate={}, projection={}",
                         self.base_config.limit,
                         super::FileGroupsDisplay(&self.base_config.file_groups),
                         pre.predicate_expr(),
@@ -286,7 +286,7 @@ impl ExecutionPlan for ParquetExec {
                 } else {
                     write!(
                         f,
-                        "ParquetExec: limit={:?}, partitions={}, projected_col={}",
+                        "ParquetExec: limit={:?}, partitions={}, projection={}",
                         self.base_config.limit,
                         super::FileGroupsDisplay(&self.base_config.file_groups),
                         super::ProjectSchemaDisplay(&self.projected_schema),

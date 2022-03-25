@@ -165,7 +165,7 @@ impl ExecutionPlan for CsvExec {
             DisplayFormatType::Default => {
                 write!(
                     f,
-                    "CsvExec: files={}, has_header={}, limit={:?}, projected_col={}",
+                    "CsvExec: files={}, has_header={}, limit={:?}, projection={}",
                     super::FileGroupsDisplay(&self.base_config.file_groups),
                     self.has_header,
                     self.base_config.limit,
