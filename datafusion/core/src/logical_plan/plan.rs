@@ -199,6 +199,17 @@ pub struct CreateCatalogSchema {
     pub schema: DFSchemaRef,
 }
 
+/// Creates a catalog.
+#[derive(Clone)]
+pub struct CreateCatalog {
+    /// The table schema
+    pub catalog_name: String,
+    /// The table name
+    pub if_not_exists: bool,
+    /// Empty schema
+    pub schema: DFSchemaRef,
+}
+
 /// Drops a table.
 #[derive(Clone)]
 pub struct DropTable {
@@ -363,6 +374,8 @@ pub enum LogicalPlan {
     CreateMemoryTable(CreateMemoryTable),
     /// Creates a new catalog schema.
     CreateCatalogSchema(CreateCatalogSchema),
+    /// Creates a new catalog schema.
+    CreateCatalog(CreateCatalog),
     /// Drops a table.
     DropTable(DropTable),
     /// Values expression. See
@@ -410,6 +423,7 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
                 schema
             }
+            LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
         }
     }
@@ -452,7 +466,8 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
-            | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
+            | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
+            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Limit(Limit { input, .. })
@@ -508,6 +523,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
@@ -544,6 +560,7 @@ impl LogicalPlan {
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -697,6 +714,7 @@ impl LogicalPlan {
             | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_) => true,
         };
         if !recurse {
@@ -1064,6 +1082,11 @@ impl LogicalPlan {
                         ..
                     }) => {
                         write!(f, "CreateCatalogSchema: {:?}", schema_name)
+                    }
+                    LogicalPlan::CreateCatalog(CreateCatalog {
+                        catalog_name, ..
+                    }) => {
+                        write!(f, "CreateCatalog: {:?}", catalog_name)
                     }
                     LogicalPlan::DropTable(DropTable {
                         name, if_exists, ..

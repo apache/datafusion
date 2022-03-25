@@ -58,8 +58,8 @@ use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateCatalogSchema, CreateExternalTable, CreateMemoryTable, DropTable,
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    DropTable, FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -318,6 +318,33 @@ impl SessionContext {
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
                         "Schema '{:?}' already exists",
                         schema_name
+                    ))),
+                }
+            }
+            LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name,
+                if_not_exists,
+                ..
+            }) => {
+                let catalog = self.catalog(catalog_name.as_str());
+
+                match (if_not_exists, catalog) {
+                    (true, Some(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (true, None) | (false, None) => {
+                        let new_catalog = Arc::new(MemoryCatalogProvider::new());
+                        self.state
+                            .write()
+                            .catalog_list
+                            .register_catalog(catalog_name, new_catalog);
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                        "Catalog '{:?}' already exists",
+                        catalog_name
                     ))),
                 }
             }
