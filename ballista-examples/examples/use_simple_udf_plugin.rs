@@ -18,7 +18,6 @@
 use ballista::prelude::plugin_manager::global_plugin_manager;
 use ballista::prelude::{BallistaConfig, BallistaContext, Result};
 use datafusion::prelude::CsvReadOptions;
-
 /// This example show the udf plugin is work
 ///
 #[tokio::main]
