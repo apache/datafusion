@@ -103,10 +103,9 @@ mod tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::{
         datafusion_storage::object_store::local::{
-            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
-            LocalFileSystem,
+            local_object_reader, local_object_reader_stream, LocalFileSystem,
         },
-        datasource::file_format::FileScanConfig,
+        datasource::{file_format::FileScanConfig, listing::local_unpartitioned_file},
         physical_plan::collect,
     };
 

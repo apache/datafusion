@@ -138,11 +138,11 @@ mod tests {
     use arrow::array::StringArray;
 
     use super::*;
+    use crate::datasource::listing::local_unpartitioned_file;
     use crate::prelude::{SessionConfig, SessionContext};
     use crate::{
         datafusion_storage::object_store::local::{
-            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
-            LocalFileSystem,
+            local_object_reader, local_object_reader_stream, LocalFileSystem,
         },
         datasource::file_format::FileScanConfig,
         physical_plan::collect,
@@ -271,7 +271,7 @@ mod tests {
         let exec = format
             .create_physical_plan(
                 FileScanConfig {
-                    object_store: Arc::new(LocalFileSystem {}),
+                    object_store: Arc::new(LocalFileSystem),
                     file_schema,
                     file_groups,
                     statistics,

@@ -42,7 +42,8 @@ use crate::datasource::{
     get_statistics_with_limit, TableProvider,
 };
 
-use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
+use super::PartitionedFile;
+use datafusion_storage::object_store::ObjectStore;
 
 use super::helpers::{expr_applicable_for_cols, pruned_partition_list, split_files};
 

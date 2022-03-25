@@ -28,12 +28,12 @@ pub mod object_store_registry;
 use futures::Stream;
 
 pub use self::datasource::{TableProvider, TableType};
+use self::listing::PartitionedFile;
 pub use self::memory::MemTable;
 use crate::arrow::datatypes::{Schema, SchemaRef};
 use crate::error::Result;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::{Accumulator, ColumnStatistics, Statistics};
-use datafusion_storage::PartitionedFile;
 use futures::StreamExt;
 
 /// Get all files as well as the file level summary statistics (no statistic for partition columns).

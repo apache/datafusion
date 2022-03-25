@@ -29,6 +29,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use chrono::{TimeZone, Utc};
+use datafusion_common::DataFusionError;
 use futures::{
     stream::{self},
     StreamExt, TryStreamExt,
@@ -44,10 +45,8 @@ use crate::{
     scalar::ScalarValue,
 };
 
-use datafusion_storage::{
-    object_store::{ObjectStore, PartitionedFileStream},
-    FileMeta, PartitionedFile, SizedFile,
-};
+use super::{PartitionedFile, PartitionedFileStream};
+use datafusion_storage::{object_store::ObjectStore, FileMeta, SizedFile};
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";
@@ -234,7 +233,11 @@ pub async fn pruned_partition_list(
             // store if we switch to a streaming-stlye pruning of the files. For instance S3 lists
             // 1000 items at a time so batches of 1000 would be ideal with S3 as store.
             .chunks(1024)
-            .map(|v| v.into_iter().collect::<Result<Vec<_>>>())
+            .map(|v| {
+                v.into_iter()
+                    .collect::<datafusion_storage::Result<Vec<_>>>()
+            })
+            .map_err(DataFusionError::IoError)
             .map(move |metas| paths_to_batch(table_partition_cols, &stream_path, &metas?))
             .try_collect()
             .await?;

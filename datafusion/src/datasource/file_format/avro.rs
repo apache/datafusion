@@ -76,13 +76,13 @@ impl FileFormat for AvroFormat {
 mod tests {
     use crate::{
         datafusion_storage::object_store::local::{
-            local_object_reader, local_object_reader_stream, local_unpartitioned_file,
-            LocalFileSystem,
+            local_object_reader, local_object_reader_stream, LocalFileSystem,
         },
         physical_plan::collect,
     };
 
     use super::*;
+    use crate::datasource::listing::local_unpartitioned_file;
     use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
