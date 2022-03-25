@@ -52,7 +52,7 @@ use datafusion::{
 };
 use datafusion::{
     arrow::util::pretty,
-    datafusion_storage::object_store::local::LocalFileSystem,
+    datafusion_data_access::object_store::local::LocalFileSystem,
     datasource::listing::{ListingOptions, ListingTable, ListingTableConfig},
 };
 

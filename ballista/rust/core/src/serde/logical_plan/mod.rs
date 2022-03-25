@@ -922,7 +922,7 @@ mod roundtrip_tests {
     use core::panic;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
-        datafusion_storage::{
+        datafusion_data_access::{
             self,
             object_store::{
                 local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
@@ -949,7 +949,7 @@ mod roundtrip_tests {
         async fn list_file(
             &self,
             _prefix: &str,
-        ) -> datafusion_storage::Result<FileMetaStream> {
+        ) -> datafusion_data_access::Result<FileMetaStream> {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
@@ -960,7 +960,7 @@ mod roundtrip_tests {
             &self,
             _prefix: &str,
             _delimiter: Option<String>,
-        ) -> datafusion_storage::Result<ListEntryStream> {
+        ) -> datafusion_data_access::Result<ListEntryStream> {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
@@ -970,7 +970,7 @@ mod roundtrip_tests {
         fn file_reader(
             &self,
             _file: SizedFile,
-        ) -> datafusion_storage::Result<Arc<dyn ObjectReader>> {
+        ) -> datafusion_data_access::Result<Arc<dyn ObjectReader>> {
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),

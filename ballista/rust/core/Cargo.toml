@@ -36,8 +36,8 @@ arrow-flight = { version = "11" }
 async-trait = "0.1.41"
 chrono = { version = "0.4", default-features = false }
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../../../datafusion", version = "7.0.0" }
-datafusion-proto = { path = "../../../datafusion-proto", version = "7.0.0" }
+datafusion = { path = "../../../datafusion/core", version = "7.0.0" }
+datafusion-proto = { path = "../../../datafusion/proto", version = "7.0.0" }
 futures = "0.3"
 hashbrown = "0.12"
 log = "0.4"
