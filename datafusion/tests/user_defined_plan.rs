@@ -215,7 +215,7 @@ async fn topk_query() -> Result<()> {
 async fn topk_plan() -> Result<()> {
     let mut ctx = setup_table(make_topk_context()).await?;
 
-    let expected = vec![
+    let mut expected = vec![
         "| logical_plan after topk                               | TopK: k=3                                                                     |",
         "|                                                       |   Projection: #sales.customer_id, #sales.revenue                              |",
         "|                                                       |     TableScan: sales projection=Some([0, 1])                                  |",
@@ -225,7 +225,9 @@ async fn topk_plan() -> Result<()> {
     let actual_output = exec_sql(&mut ctx, &explain_query).await?;
 
     // normalize newlines (output on windows uses \r\n)
-    let actual_output = actual_output.replace("\r\n", "\n");
+    let mut actual_output = actual_output.replace("\r\n", "\n");
+    actual_output.retain(|x| !x.is_ascii_whitespace());
+    expected.retain(|x| !x.is_ascii_whitespace());
 
     assert!(
         actual_output.contains(&expected),
