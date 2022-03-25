@@ -28,7 +28,6 @@ edition = "2021"
 publish = false
 rust-version = "1.59"
 
-<<<<<<< HEAD
 [[example]]
 name = "simple_udf_plugin"
 path = "examples/simple_udf_plugin.rs"
@@ -37,12 +36,11 @@ crate-type = ["cdylib"]
 [[example]]
 name = "use_simple_udf_plugin"
 path = "examples/use_simple_udf_plugin.rs"
-=======
+required-features = ["ballista/standalone"]
 
 [[example]]
 name = "test_sql"
 path = "examples/test_sql.rs"
->>>>>>> apache/master
 required-features = ["ballista/standalone"]
 
 [dependencies]
