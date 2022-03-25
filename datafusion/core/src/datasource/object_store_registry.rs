@@ -22,6 +22,8 @@
 use datafusion_common::{DataFusionError, Result};
 use datafusion_data_access::object_store::local::{LocalFileSystem, LOCAL_SCHEME};
 use datafusion_data_access::object_store::ObjectStore;
+#[cfg(feature = "hdfs")]
+use datafusion_objectstore_hdfs::object_store::hdfs::get_hadoop_object_stores;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt;
@@ -56,6 +58,9 @@ impl ObjectStoreRegistry {
     pub fn new() -> Self {
         let mut map: HashMap<String, Arc<dyn ObjectStore>> = HashMap::new();
         map.insert(LOCAL_SCHEME.to_string(), Arc::new(LocalFileSystem));
+
+        #[cfg(feature = "hdfs")]
+        map.extend(get_hadoop_object_stores());
 
         Self {
             object_stores: RwLock::new(map),
