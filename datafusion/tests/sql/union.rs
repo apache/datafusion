@@ -29,11 +29,11 @@ async fn union_all() -> Result<()> {
 
 #[tokio::test]
 async fn csv_union_all() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT c1 FROM aggregate_test_100 UNION ALL SELECT c1 FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     assert_eq!(actual.len(), 200);
     Ok(())
 }

@@ -582,9 +582,9 @@ async fn do_sort(
         expr,
         metrics_set,
         Arc::new(context.session_config()),
-        context.runtime.clone(),
+        context.runtime_env(),
     );
-    context.runtime.register_requester(sorter.id());
+    context.runtime_env().register_requester(sorter.id());
     while let Some(batch) = input.next().await {
         let batch = batch?;
         sorter.insert_batch(batch).await?;

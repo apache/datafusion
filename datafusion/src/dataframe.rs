@@ -59,7 +59,7 @@ use std::any::Any;
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// let mut ctx = SessionContext::new();
+/// let ctx = SessionContext::new();
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
@@ -97,7 +97,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select_columns(&["a", "b"])?;
     /// # Ok(())
@@ -119,7 +119,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.select(vec![col("a") * col("b"), col("c")])?;
     /// # Ok(())
@@ -147,7 +147,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.filter(col("a").lt_eq(col("b")))?;
     /// # Ok(())
@@ -167,7 +167,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     ///
     /// // The following use is the equivalent of "SELECT MIN(b) GROUP BY a"
@@ -196,7 +196,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.limit(100)?;
     /// # Ok(())
@@ -216,7 +216,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.union(df.clone())?;
     /// # Ok(())
@@ -236,7 +236,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.union(df.clone())?;
     /// let df = df.distinct()?;
@@ -260,7 +260,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.sort(vec![col("a").sort(true, true), col("b").sort(false, false)])?;
     /// # Ok(())
@@ -280,7 +280,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let left = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let right = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?
     ///   .select(vec![
@@ -318,7 +318,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df1 = df.repartition(Partitioning::RoundRobinBatch(4))?;
     /// # Ok(())
@@ -342,7 +342,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.collect().await?;
     /// # Ok(())
@@ -361,7 +361,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// df.show().await?;
     /// # Ok(())
@@ -379,7 +379,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// df.show_limit(10).await?;
     /// # Ok(())
@@ -397,7 +397,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let stream = df.execute_stream().await?;
     /// # Ok(())
@@ -417,7 +417,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.collect_partitioned().await?;
     /// # Ok(())
@@ -436,7 +436,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.execute_stream_partitioned().await?;
     /// # Ok(())
@@ -458,7 +458,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let schema = df.schema();
     /// # Ok(())
@@ -482,7 +482,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let batches = df.limit(100)?.explain(false, false)?.collect().await?;
     /// # Ok(())
@@ -502,7 +502,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let f = df.registry();
     /// // use f.udf("name", vec![...]) to use the udf
@@ -521,7 +521,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.intersect(df.clone())?;
     /// # Ok(())
@@ -543,7 +543,7 @@ impl DataFrame {
     /// # use datafusion::error::Result;
     /// # #[tokio::main]
     /// # async fn main() -> Result<()> {
-    /// let mut ctx = SessionContext::new();
+    /// let ctx = SessionContext::new();
     /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
     /// let df = df.except(df.clone())?;
     /// # Ok(())
@@ -878,7 +878,7 @@ mod tests {
     #[tokio::test]
     async fn register_table() -> Result<()> {
         let df = test_table().await?.select_columns(&["c1", "c12"])?;
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.to_logical_plan()));
 
         // register a dataframe as a table

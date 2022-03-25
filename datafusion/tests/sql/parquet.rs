@@ -24,8 +24,8 @@ use super::*;
 
 #[tokio::test]
 async fn parquet_query() {
-    let mut ctx = SessionContext::new();
-    register_alltypes_parquet(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
     // NOTE that string_col is actually a binary column and does not have the UTF8 logical type
     // so we need an explicit cast
     let sql = "SELECT id, CAST(string_col AS varchar) FROM alltypes_plain";
@@ -50,7 +50,7 @@ async fn parquet_query() {
 
 #[tokio::test]
 async fn parquet_single_nan_schema() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
         .await
@@ -70,7 +70,7 @@ async fn parquet_single_nan_schema() {
 #[tokio::test]
 #[ignore = "Test ignored, will be enabled as part of the nested Parquet reader"]
 async fn parquet_list_columns() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
     ctx.register_parquet(
         "list_columns",
@@ -212,7 +212,7 @@ async fn schema_merge_ignores_metadata() {
 
     // Read the parquet files into a dataframe to confirm results
     // (no errors)
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let df = ctx
         .read_parquet(table_dir.to_str().unwrap().to_string())
         .await

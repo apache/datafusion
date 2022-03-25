@@ -24,8 +24,8 @@ use tempfile::TempDir;
 
 #[tokio::test]
 async fn all_where_empty() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT *
                FROM aggregate_test_100
                WHERE 1=2";
@@ -249,8 +249,8 @@ async fn select_values_list() -> Result<()> {
 
 #[tokio::test]
 async fn select_all() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT c1 FROM aggregate_simple order by c1";
     let results = execute_to_batches(&ctx, sql).await;
@@ -288,11 +288,11 @@ async fn select_all() -> Result<()> {
 
 #[tokio::test]
 async fn select_distinct() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT DISTINCT * FROM aggregate_simple";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
 
     let mut dedup = actual.clone();
@@ -305,8 +305,8 @@ async fn select_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn select_distinct_simple_1() {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT DISTINCT c1 FROM aggregate_simple order by c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -327,8 +327,8 @@ async fn select_distinct_simple_1() {
 
 #[tokio::test]
 async fn select_distinct_simple_2() {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT DISTINCT c1, c2 FROM aggregate_simple order by c1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -349,8 +349,8 @@ async fn select_distinct_simple_2() {
 
 #[tokio::test]
 async fn select_distinct_simple_3() {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT distinct c3 FROM aggregate_simple order by c3";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -368,8 +368,8 @@ async fn select_distinct_simple_3() {
 
 #[tokio::test]
 async fn select_distinct_simple_4() {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await.unwrap();
 
     let sql = "SELECT distinct c1+c2 as a FROM aggregate_simple";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -434,8 +434,8 @@ async fn select_distinct_from_utf8() {
 
 #[tokio::test]
 async fn csv_query_with_decimal_by_sql() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_simple_aggregate_csv_with_decimal_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_simple_aggregate_csv_with_decimal_by_sql(&ctx).await;
     let sql = "SELECT c1 from aggregate_simple";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -465,7 +465,7 @@ async fn csv_query_with_decimal_by_sql() -> Result<()> {
 
 #[tokio::test]
 async fn use_between_expression_in_select_query() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let sql = "SELECT 1 NOT BETWEEN 3 AND 5";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -515,7 +515,7 @@ async fn use_between_expression_in_select_query() -> Result<()> {
 
 #[tokio::test]
 async fn query_get_indexed_field() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![Field::new(
         "some_list",
         DataType::List(Box::new(Field::new("item", DataType::Int64, true))),
@@ -549,7 +549,7 @@ async fn query_get_indexed_field() -> Result<()> {
 
 #[tokio::test]
 async fn query_nested_get_indexed_field() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_list": [[i64]] }
     let schema = Arc::new(Schema::new(vec![Field::new(
@@ -607,7 +607,7 @@ async fn query_nested_get_indexed_field() -> Result<()> {
 
 #[tokio::test]
 async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let nested_dt = DataType::List(Box::new(Field::new("item", DataType::Int64, true)));
     // Nested schema of { "some_struct": { "bar": [i64] } }
     let struct_fields = vec![Field::new("bar", nested_dt.clone(), true)];
@@ -676,7 +676,7 @@ async fn query_on_string_dictionary() -> Result<()> {
     .unwrap();
 
     let table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
 
     // Basic SELECT
@@ -903,8 +903,8 @@ async fn query_cte() -> Result<()> {
 
 #[tokio::test]
 async fn csv_select_nested() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT o1, o2, c3
                FROM (
                  SELECT c1 AS o1, c2 + 1 AS o2, c3
@@ -991,11 +991,11 @@ async fn parallel_query_with_filter() -> Result<()> {
 
 #[tokio::test]
 async fn query_empty_table() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
     ctx.register_table("test_tbl", empty_table).unwrap();
     let sql = "SELECT * FROM test_tbl";
-    let result = plan_and_collect(&mut ctx, sql)
+    let result = plan_and_collect(&ctx, sql)
         .await
         .expect("Query empty table");
     let expected = vec!["++", "++"];

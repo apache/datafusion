@@ -22,8 +22,8 @@ async fn explain_analyze_baseline_metrics() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
     // and then validate the presence of baseline metrics for supported operators
     let config = SessionConfig::new().with_target_partitions(3);
-    let mut ctx = SessionContext::with_config(config);
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv_by_sql(&ctx).await;
     // a query with as many operators as we have metrics for
     let sql = "EXPLAIN ANALYZE \
                SELECT count(*) as cnt FROM \
@@ -168,8 +168,8 @@ async fn explain_analyze_baseline_metrics() {
 async fn csv_explain_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
 
     // Logical plan
@@ -342,10 +342,10 @@ async fn csv_explain_plans() {
 
 #[tokio::test]
 async fn csv_explain_verbose() {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
 
     // flatten to a single string
     let actual = actual.into_iter().map(|r| r.join("\t")).collect::<String>();
@@ -365,8 +365,8 @@ async fn csv_explain_verbose() {
 async fn csv_explain_verbose_plans() {
     // This test verify the look of each plan in its full cycle plan creation
 
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN VERBOSE SELECT c1 FROM aggregate_test_100 where c2 > 10";
 
     // Logical plan
@@ -545,8 +545,8 @@ async fn csv_explain_verbose_plans() {
 async fn explain_analyze_runs_optimizers() {
     // repro for https://github.com/apache/arrow-datafusion/issues/917
     // where EXPLAIN ANALYZE was not correctly running optiimizer
-    let mut ctx = SessionContext::new();
-    register_alltypes_parquet(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
 
     // This happens as an optimization pass where count(*) can be
     // answered using statistics only.
@@ -570,12 +570,12 @@ async fn explain_analyze_runs_optimizers() {
 
 #[tokio::test]
 async fn tpch_explain_q10() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
-    register_tpch_csv(&mut ctx, "customer").await?;
-    register_tpch_csv(&mut ctx, "orders").await?;
-    register_tpch_csv(&mut ctx, "lineitem").await?;
-    register_tpch_csv(&mut ctx, "nation").await?;
+    register_tpch_csv(&ctx, "customer").await?;
+    register_tpch_csv(&ctx, "orders").await?;
+    register_tpch_csv(&ctx, "lineitem").await?;
+    register_tpch_csv(&ctx, "nation").await?;
 
     let sql = "select
     c_custkey,
@@ -634,8 +634,8 @@ order by
 async fn test_physical_plan_display_indent() {
     // Hard code target_partitions as it appears in the RepartitionExec output
     let config = SessionConfig::new().with_target_partitions(3);
-    let mut ctx = SessionContext::with_config(config);
-    register_aggregate_csv(&mut ctx).await.unwrap();
+    let ctx = SessionContext::with_config(config);
+    register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1, MAX(c12), MIN(c12) as the_min \
                FROM aggregate_test_100 \
                WHERE c12 < 10 \
@@ -680,9 +680,9 @@ async fn test_physical_plan_display_indent() {
 async fn test_physical_plan_display_indent_multi_children() {
     // Hard code target_partitions as it appears in the RepartitionExec output
     let config = SessionConfig::new().with_target_partitions(3);
-    let mut ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::with_config(config);
     // ensure indenting works for nodes with multiple children
-    register_aggregate_csv(&mut ctx).await.unwrap();
+    register_aggregate_csv(&ctx).await.unwrap();
     let sql = "SELECT c1 \
                FROM (select c1 from aggregate_test_100) AS a \
                JOIN\
@@ -731,10 +731,10 @@ async fn test_physical_plan_display_indent_multi_children() {
 async fn csv_explain() {
     // This test uses the execute function that create full plan cycle: logical, optimized logical, and physical,
     // then execute the physical plan and return the final explain results
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
 
     // Note can't use `assert_batches_eq` as the plan needs to be
@@ -758,7 +758,7 @@ async fn csv_explain() {
 
     // Also, expect same result with lowercase explain
     let sql = "explain SELECT c1 FROM aggregate_test_100 where c2 > 10";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
     assert_eq!(expected, actual);
 }
@@ -766,8 +766,8 @@ async fn csv_explain() {
 #[tokio::test]
 async fn csv_explain_analyze() {
     // This test uses the execute function to run an actual plan under EXPLAIN ANALYZE
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "EXPLAIN ANALYZE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&ctx, sql).await;
     let formatted = arrow::util::pretty::pretty_format_batches(&actual)
@@ -787,8 +787,8 @@ async fn csv_explain_analyze() {
 #[tokio::test]
 async fn csv_explain_analyze_verbose() {
     // This test uses the execute function to run an actual plan under EXPLAIN VERBOSE ANALYZE
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql =
         "EXPLAIN ANALYZE VERBOSE SELECT count(*), c1 FROM aggregate_test_100 group by c1";
     let actual = execute_to_batches(&ctx, sql).await;

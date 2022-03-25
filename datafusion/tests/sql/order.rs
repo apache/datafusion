@@ -19,8 +19,8 @@ use super::*;
 
 #[tokio::test]
 async fn test_sort_unprojected_col() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_alltypes_parquet(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT id FROM alltypes_plain ORDER BY int_col, double_col";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -34,8 +34,8 @@ async fn test_sort_unprojected_col() -> Result<()> {
 
 #[tokio::test]
 async fn test_order_by_agg_expr() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT MIN(c12) FROM aggregate_test_100 ORDER BY MIN(c12)";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![

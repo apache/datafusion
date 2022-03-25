@@ -16,9 +16,9 @@
 // under the License.
 
 use anyhow::Context;
-use ballista_core::config::TaskSchedulingPolicy;
+use ballista_core::config::{BallistaConfig, TaskSchedulingPolicy};
 use ballista_core::error::BallistaError;
-use ballista_core::serde::protobuf::execute_query_params::Query;
+use ballista_core::serde::protobuf::execute_query_params::{OptionalSessionId, Query};
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::protobuf::executor_registration::OptionalHost;
 use ballista_core::serde::protobuf::scheduler_grpc_server::SchedulerGrpc;
@@ -40,13 +40,16 @@ use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use std::convert::TryInto;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 
 use crate::scheduler_server::event::QueryStageSchedulerEvent;
-use crate::scheduler_server::SchedulerServer;
+use crate::scheduler_server::{
+    create_datafusion_context, update_datafusion_context, SchedulerServer,
+};
 use crate::state::task_scheduler::TaskScheduler;
 
 #[tonic::async_trait]
@@ -321,31 +324,62 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<ExecuteQueryParams>,
     ) -> std::result::Result<Response<ExecuteQueryResult>, tonic::Status> {
+        let query_params = request.into_inner();
         if let ExecuteQueryParams {
             query: Some(query),
-            settings: _,
-        } = request.into_inner()
+            settings,
+            optional_session_id,
+        } = query_params
         {
-            let plan = match query {
-                Query::LogicalPlan(message) => {
-                    let ctx = self.ctx.read().await;
-                    T::try_decode(message.as_slice())
-                        .and_then(|m| {
-                            m.try_into_logical_plan(
-                                &ctx,
-                                self.codec.logical_extension_codec(),
-                            )
-                        })
-                        .map_err(|e| {
-                            let msg =
-                                format!("Could not parse logical plan protobuf: {}", e);
-                            error!("{}", msg);
-                            tonic::Status::internal(msg)
-                        })?
+            // parse config
+            let mut config_builder = BallistaConfig::builder();
+            for kv_pair in &settings {
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            }
+            let config = config_builder.build().map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+
+            let df_session = match optional_session_id {
+                Some(OptionalSessionId::SessionId(session_id)) => {
+                    let session_ctx = self
+                        .state
+                        .session_registry()
+                        .lookup_session(session_id.as_str())
+                        .await
+                        .expect(
+                            "SessionContext does not exist in SessionContextRegistry.",
+                        );
+                    update_datafusion_context(session_ctx, &config)
                 }
+                _ => {
+                    let df_session =
+                        create_datafusion_context(&config, self.session_builder);
+                    self.state
+                        .session_registry()
+                        .register_session(df_session.clone())
+                        .await;
+                    df_session
+                }
+            };
+
+            let plan = match query {
+                Query::LogicalPlan(message) => T::try_decode(message.as_slice())
+                    .and_then(|m| {
+                        m.try_into_logical_plan(
+                            df_session.deref(),
+                            self.codec.logical_extension_codec(),
+                        )
+                    })
+                    .map_err(|e| {
+                        let msg = format!("Could not parse logical plan protobuf: {}", e);
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?,
                 Query::Sql(sql) => {
-                    let mut ctx = self.ctx.write().await;
-                    let df = ctx.sql(&sql).await.map_err(|e| {
+                    let df = df_session.sql(&sql).await.map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
                         tonic::Status::internal(msg)
@@ -358,6 +392,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             // Generate job id.
             // TODO Maybe the format will be changed in the future
             let job_id = generate_job_id();
+            let session_id = df_session.session_id();
             let state = self.state.clone();
             let query_stage_event_sender =
                 self.query_stage_event_loop.get_sender().map_err(|e| {
@@ -380,8 +415,18 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     tonic::Status::internal(format!("Could not save job metadata: {}", e))
                 })?;
 
+            state
+                .save_job_session(&job_id, &session_id)
+                .await
+                .map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Could not save job session mapping: {}",
+                        e
+                    ))
+                })?;
+
             let job_id_spawn = job_id.clone();
-            let ctx = self.ctx.read().await.clone();
+            let ctx = df_session.clone();
             tokio::spawn(async move {
                 if let Err(e) = async {
                     // create physical plan
@@ -445,7 +490,32 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 }
             });
 
-            Ok(Response::new(ExecuteQueryResult { job_id }))
+            Ok(Response::new(ExecuteQueryResult { job_id, session_id }))
+        } else if let ExecuteQueryParams {
+            query: None,
+            settings,
+            optional_session_id: None,
+        } = query_params
+        {
+            // parse config for new session
+            let mut config_builder = BallistaConfig::builder();
+            for kv_pair in &settings {
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            }
+            let config = config_builder.build().map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+            let df_session = create_datafusion_context(&config, self.session_builder);
+            self.state
+                .session_registry()
+                .register_session(df_session.clone())
+                .await;
+            Ok(Response::new(ExecuteQueryResult {
+                job_id: "NA".to_owned(),
+                session_id: df_session.session_id(),
+            }))
         } else {
             Err(tonic::Status::internal("Error parsing request"))
         }
@@ -476,7 +546,6 @@ fn generate_job_id() -> String {
 #[cfg(all(test, feature = "sled"))]
 mod test {
     use std::sync::Arc;
-    use tokio::sync::RwLock;
 
     use tonic::Request;
 
@@ -488,7 +557,6 @@ mod test {
     };
     use ballista_core::serde::scheduler::ExecutorSpecification;
     use ballista_core::serde::BallistaCodec;
-    use datafusion::prelude::SessionContext;
 
     use super::{SchedulerGrpc, SchedulerServer};
 
@@ -500,7 +568,6 @@ mod test {
             SchedulerServer::new(
                 state_storage.clone(),
                 namespace.to_owned(),
-                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             );
         let exec_meta = ExecutorRegistration {
@@ -528,8 +595,7 @@ mod test {
                 namespace.to_string(),
                 BallistaCodec::default(),
             );
-        let ctx = scheduler.ctx.read().await;
-        state.init(&ctx).await?;
+        state.init().await?;
         // executor should be registered
         assert_eq!(state.get_executors_metadata().await.unwrap().len(), 1);
 
@@ -551,8 +617,7 @@ mod test {
                 namespace.to_string(),
                 BallistaCodec::default(),
             );
-        let ctx = scheduler.ctx.read().await;
-        state.init(&ctx).await?;
+        state.init().await?;
         // executor should be registered
         assert_eq!(state.get_executors_metadata().await.unwrap().len(), 1);
         Ok(())

@@ -480,7 +480,7 @@ impl ContextWithParquet {
         let parquet_path = file.path().to_string_lossy();
 
         // now, setup a the file as a data source and run a query against it
-        let mut ctx = SessionContext::with_config(config);
+        let ctx = SessionContext::with_config(config);
 
         ctx.register_parquet("t", &parquet_path).await.unwrap();
         let provider = ctx.deregister_table("t").unwrap().unwrap();

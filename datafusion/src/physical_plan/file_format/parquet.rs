@@ -1308,7 +1308,7 @@ mod tests {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
         // let mut ctx = create_ctx(&tmp_dir, 4).await?;
-        let mut ctx =
+        let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
         let schema = populate_csv_partitions(&tmp_dir, 4, ".csv")?;
         // register csv file with the execution context
@@ -1326,7 +1326,7 @@ mod tests {
         // write_parquet(&mut ctx, "SELECT c1, c2 FROM test", &out_dir, None).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         // register each partition as well as the top level dir
         ctx.register_parquet("part0", &format!("{}/part-0.parquet", out_dir))

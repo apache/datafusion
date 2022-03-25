@@ -20,16 +20,16 @@ use super::*;
 /// sqrt(f32) is slightly different than sqrt(CAST(f32 AS double)))
 #[tokio::test]
 async fn sqrt_f32_vs_f64() -> Result<()> {
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = create_ctx()?;
+    register_aggregate_csv(&ctx).await?;
     // sqrt(f32)'s plan passes
     let sql = "SELECT avg(sqrt(c11)) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0.6584407806396484"]];
 
     assert_eq!(actual, expected);
     let sql = "SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0.6584408483418833"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -37,8 +37,8 @@ async fn sqrt_f32_vs_f64() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_cast() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT CAST(c12 AS float) FROM aggregate_test_100 WHERE c12 > 0.376 AND c12 < 0.4";
     let actual = execute_to_batches(&ctx, sql).await;
 
@@ -57,8 +57,8 @@ async fn csv_query_cast() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_cast_literal() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql =
         "SELECT c12, CAST(1 AS float) FROM aggregate_test_100 WHERE c12 > CAST(0 AS float) LIMIT 2";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -93,7 +93,7 @@ async fn query_concat() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT concat(c1, '-hi-', cast(c2 as varchar)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -129,10 +129,10 @@ async fn query_array() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT array(c1, cast(c2 as varchar)) FROM test";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![
         vec!["[,0]"],
         vec!["[a,1]"],
@@ -160,7 +160,7 @@ async fn query_count_distinct() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COUNT(DISTINCT c1) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;

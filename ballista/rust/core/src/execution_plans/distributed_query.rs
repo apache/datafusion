@@ -40,6 +40,7 @@ use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 
+use crate::serde::protobuf::execute_query_params::OptionalSessionId;
 use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
 use datafusion::execution::context::TaskContext;
@@ -63,16 +64,24 @@ pub struct DistributedQueryExec<T: 'static + AsLogicalPlan> {
     extension_codec: Arc<dyn LogicalExtensionCodec>,
     /// Phantom data for serializable plan message
     plan_repr: PhantomData<T>,
+    /// Session id
+    session_id: String,
 }
 
 impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
-    pub fn new(scheduler_url: String, config: BallistaConfig, plan: LogicalPlan) -> Self {
+    pub fn new(
+        scheduler_url: String,
+        config: BallistaConfig,
+        plan: LogicalPlan,
+        session_id: String,
+    ) -> Self {
         Self {
             scheduler_url,
             config,
             plan,
             extension_codec: Arc::new(DefaultLogicalExtensionCodec {}),
             plan_repr: PhantomData,
+            session_id,
         }
     }
 
@@ -81,6 +90,7 @@ impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
         config: BallistaConfig,
         plan: LogicalPlan,
         extension_codec: Arc<dyn LogicalExtensionCodec>,
+        session_id: String,
     ) -> Self {
         Self {
             scheduler_url,
@@ -88,6 +98,7 @@ impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
             plan,
             extension_codec,
             plan_repr: PhantomData,
+            session_id,
         }
     }
 
@@ -97,6 +108,7 @@ impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
         plan: LogicalPlan,
         extension_codec: Arc<dyn LogicalExtensionCodec>,
         plan_repr: PhantomData<T>,
+        session_id: String,
     ) -> Self {
         Self {
             scheduler_url,
@@ -104,6 +116,7 @@ impl<T: 'static + AsLogicalPlan> DistributedQueryExec<T> {
             plan,
             extension_codec,
             plan_repr,
+            session_id,
         }
     }
 }
@@ -144,6 +157,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             plan: self.plan.clone(),
             extension_codec: self.extension_codec.clone(),
             plan_repr: self.plan_repr,
+            session_id: self.session_id.clone(),
         }))
     }
 
@@ -155,6 +169,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
         assert_eq!(0, partition);
 
         info!("Connecting to Ballista scheduler at {}", self.scheduler_url);
+        // TODO reuse the scheduler to avoid connecting to the Ballista scheduler again and again
 
         let mut scheduler = SchedulerGrpcClient::connect(self.scheduler_url.clone())
             .await
@@ -176,7 +191,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             DataFusionError::Execution(format!("failed to encode logical plan: {:?}", e))
         })?;
 
-        let job_id = scheduler
+        let query_result = scheduler
             .execute_query(ExecuteQueryParams {
                 query: Some(Query::LogicalPlan(buf)),
                 settings: self
@@ -188,12 +203,22 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                         value: v.to_owned(),
                     })
                     .collect::<Vec<_>>(),
+                optional_session_id: Some(OptionalSessionId::SessionId(
+                    self.session_id.clone(),
+                )),
             })
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?
-            .into_inner()
-            .job_id;
+            .into_inner();
 
+        let response_session_id = query_result.session_id;
+        assert_eq!(
+            self.session_id.clone(),
+            response_session_id,
+            "Session id inconsistent between Client and Server side in DistributedQueryExec."
+        );
+
+        let job_id = query_result.job_id;
         let mut prev_status: Option<job_status::Status> = None;
 
         loop {

@@ -722,6 +722,8 @@ message TaskDefinition {
   bytes plan = 2;
   // Output partition for shuffle writer
   PhysicalHashRepartition output_partitioning = 3;
+  string session_id = 4;
+  repeated KeyValuePair props = 5;
 }
 
 message PollWorkResult {
@@ -767,7 +769,10 @@ message ExecuteQueryParams {
     bytes logical_plan = 1;
     string sql = 2;
   }
-  repeated KeyValuePair settings = 3;
+  oneof optional_session_id {
+    string session_id = 3;
+  }
+  repeated KeyValuePair settings = 4;
 }
 
 message ExecuteSqlParams {
@@ -776,6 +781,7 @@ message ExecuteSqlParams {
 
 message ExecuteQueryResult {
   string job_id = 1;
+  string session_id = 2;
 }
 
 message GetJobStatusParams {

@@ -111,7 +111,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(projection.input, &ctx, extension_codec)?;
+                    into_logical_plan!(projection.input, ctx, extension_codec)?;
                 let x: Vec<Expr> = projection
                     .expr
                     .iter()
@@ -131,7 +131,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(selection.input, &ctx, extension_codec)?;
+                    into_logical_plan!(selection.input, ctx, extension_codec)?;
                 let expr: Expr = selection
                     .expr
                     .as_ref()
@@ -148,7 +148,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(window.input, &ctx, extension_codec)?;
+                    into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr = window
                     .window_expr
                     .iter()
@@ -161,7 +161,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(aggregate.input, &ctx, extension_codec)?;
+                    into_logical_plan!(aggregate.input, ctx, extension_codec)?;
                 let group_expr = aggregate
                     .group_expr
                     .iter()
@@ -261,7 +261,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(sort.input, &ctx, extension_codec)?;
+                    into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<Expr> = sort
                     .expr
                     .iter()
@@ -275,7 +275,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_plan::Partitioning;
                 let input: LogicalPlan =
-                    into_logical_plan!(repartition.input, &ctx, extension_codec)?;
+                    into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
                     BallistaError::General(String::from(
@@ -342,7 +342,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(analyze.input, &ctx, extension_codec)?;
+                    into_logical_plan!(analyze.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(analyze.verbose, true)?
                     .build()
@@ -350,7 +350,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(explain.input, &ctx, extension_codec)?;
+                    into_logical_plan!(explain.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(explain.verbose, false)?
                     .build()
@@ -358,7 +358,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(limit.input, &ctx, extension_codec)?;
+                    into_logical_plan!(limit.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .limit(limit.limit as usize)?
                     .build()
@@ -388,17 +388,17 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let builder = LogicalPlanBuilder::from(into_logical_plan!(
                     join.left,
-                    &ctx,
+                    ctx,
                     extension_codec
                 )?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join(
-                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
+                        &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                     )?,
                     JoinConstraint::Using => builder.join_using(
-                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
+                        &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         left_keys,
                     )?,
@@ -426,8 +426,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 builder.build().map_err(|e| e.into())
             }
             LogicalPlanType::CrossJoin(crossjoin) => {
-                let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
-                let right = into_logical_plan!(crossjoin.right, &ctx, extension_codec)?;
+                let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
+                let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
                 LogicalPlanBuilder::from(left)
                     .cross_join(&right)?
@@ -905,7 +905,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 macro_rules! into_logical_plan {
     ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_logical_plan(&$CTX, $CODEC)
+            field.as_ref().try_into_logical_plan($CTX, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }

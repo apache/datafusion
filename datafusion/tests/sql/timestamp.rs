@@ -20,7 +20,7 @@ use datafusion::from_slice::FromSlice;
 
 #[tokio::test]
 async fn query_cast_timestamp_millis() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -52,7 +52,7 @@ async fn query_cast_timestamp_millis() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_micros() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -85,7 +85,7 @@ async fn query_cast_timestamp_micros() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_seconds() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let t1_schema = Arc::new(Schema::new(vec![Field::new("ts", DataType::Int64, true)]));
     let t1_data = RecordBatch::try_new(
@@ -116,7 +116,7 @@ async fn query_cast_timestamp_seconds() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     // Original column is nanos, convert to millis and check timestamp
@@ -166,7 +166,7 @@ async fn query_cast_timestamp_nanos_to_others() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("ts_secs", make_timestamp_table::<TimestampSecondType>()?)?;
 
     // Original column is seconds, convert to millis and check timestamp
@@ -216,7 +216,7 @@ async fn query_cast_timestamp_seconds_to_others() -> Result<()> {
 
 #[tokio::test]
 async fn query_cast_timestamp_micros_to_others() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table(
         "ts_micros",
         make_timestamp_table::<TimestampMicrosecondType>()?,
@@ -268,7 +268,7 @@ async fn query_cast_timestamp_micros_to_others() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp('2020-09-08T12:00:00+00:00')";
@@ -287,7 +287,7 @@ async fn to_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_millis() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table(
         "ts_data",
         make_timestamp_table::<TimestampMillisecondType>()?,
@@ -308,7 +308,7 @@ async fn to_timestamp_millis() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_micros() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table(
         "ts_data",
         make_timestamp_table::<TimestampMicrosecondType>()?,
@@ -330,7 +330,7 @@ async fn to_timestamp_micros() -> Result<()> {
 
 #[tokio::test]
 async fn to_timestamp_seconds() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("ts_data", make_timestamp_table::<TimestampSecondType>()?)?;
 
     let sql = "SELECT COUNT(*) FROM ts_data where ts > to_timestamp_seconds('2020-09-08T12:00:00+00:00')";
@@ -349,7 +349,7 @@ async fn to_timestamp_seconds() -> Result<()> {
 
 #[tokio::test]
 async fn count_distinct_timestamps() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("ts_data", make_timestamp_nano_table()?)?;
 
     let sql = "SELECT COUNT(DISTINCT(ts)) FROM ts_data";
@@ -369,8 +369,8 @@ async fn count_distinct_timestamps() -> Result<()> {
 #[tokio::test]
 async fn test_current_timestamp_expressions() -> Result<()> {
     let t1 = chrono::Utc::now().timestamp();
-    let mut ctx = SessionContext::new();
-    let actual = execute(&mut ctx, "SELECT NOW(), NOW() as t2").await;
+    let ctx = SessionContext::new();
+    let actual = execute(&ctx, "SELECT NOW(), NOW() as t2").await;
     let res1 = actual[0][0].as_str();
     let res2 = actual[0][1].as_str();
     let t3 = chrono::Utc::now().timestamp();
@@ -416,7 +416,7 @@ async fn test_current_timestamp_expressions_non_optimized() -> Result<()> {
 
 #[tokio::test]
 async fn timestamp_minmax() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
     let table_b =
         make_timestamp_tz_table::<TimestampNanosecondType>(Some("UTC".to_owned()))?;
@@ -440,7 +440,7 @@ async fn timestamp_minmax() -> Result<()> {
 #[tokio::test]
 async fn timestamp_coercion() -> Result<()> {
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a =
             make_timestamp_tz_table::<TimestampSecondType>(Some("UTC".to_owned()))?;
         let table_b =
@@ -469,7 +469,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampSecondType>()?;
         let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -496,7 +496,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampSecondType>()?;
         let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -523,7 +523,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
         let table_b = make_timestamp_table::<TimestampSecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -550,7 +550,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
         let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -577,7 +577,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampMillisecondType>()?;
         let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -604,7 +604,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
         let table_b = make_timestamp_table::<TimestampSecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -631,7 +631,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
         let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -658,7 +658,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampMicrosecondType>()?;
         let table_b = make_timestamp_table::<TimestampNanosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -685,7 +685,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
         let table_b = make_timestamp_table::<TimestampSecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -712,7 +712,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
         let table_b = make_timestamp_table::<TimestampMillisecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -739,7 +739,7 @@ async fn timestamp_coercion() -> Result<()> {
     }
 
     {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let table_a = make_timestamp_table::<TimestampNanosecondType>()?;
         let table_b = make_timestamp_table::<TimestampMicrosecondType>()?;
         ctx.register_table("table_a", table_a)?;
@@ -770,7 +770,7 @@ async fn timestamp_coercion() -> Result<()> {
 
 #[tokio::test]
 async fn group_by_timestamp_millis() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new(
