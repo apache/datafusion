@@ -22,12 +22,9 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    datafusion_storage::{
-        object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
-        FileMeta, SizedFile,
-    },
-    error::{DataFusionError, Result},
+use crate::datafusion_storage::{
+    object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
+    FileMeta, Result, SizedFile,
 };
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
@@ -84,14 +81,14 @@ impl ObjectStore for TestObjectStore {
             Some((_, size)) if *size == file.size => {
                 Ok(Arc::new(EmptyObjectReader(*size)))
             }
-            Some(_) => Err(DataFusionError::IoError(io::Error::new(
+            Some(_) => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "found in test list but wrong size",
-            ))),
-            None => Err(DataFusionError::IoError(io::Error::new(
+            )),
+            None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "not in provided test list",
-            ))),
+            )),
         }
     }
 }

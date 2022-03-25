@@ -41,7 +41,7 @@ use crate::{
 };
 use datafusion_common::Column;
 use datafusion_expr::Expr;
-use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
+use datafusion_storage::object_store::ObjectStore;
 
 use arrow::{
     array::ArrayRef,
@@ -66,6 +66,7 @@ use tokio::{
     task,
 };
 
+use crate::datasource::listing::PartitionedFile;
 use crate::physical_plan::file_format::SchemaAdapter;
 use async_trait::async_trait;
 
@@ -580,12 +581,13 @@ mod tests {
     use crate::{
         assert_batches_sorted_eq, assert_contains,
         datafusion_storage::{
-            object_store::local::{
-                local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
-            },
+            object_store::local::{local_object_reader_stream, LocalFileSystem},
             FileMeta, SizedFile,
         },
-        datasource::file_format::{parquet::ParquetFormat, FileFormat},
+        datasource::{
+            file_format::{parquet::ParquetFormat, FileFormat},
+            listing::local_unpartitioned_file,
+        },
         physical_plan::collect,
     };
 

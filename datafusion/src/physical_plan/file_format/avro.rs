@@ -174,9 +174,12 @@ impl ExecutionPlan for AvroExec {
 #[cfg(test)]
 #[cfg(feature = "avro")]
 mod tests {
-    use crate::datasource::file_format::{avro::AvroFormat, FileFormat};
     use crate::datasource::object_store::local::{
-        local_object_reader_stream, local_unpartitioned_file, LocalFileSystem,
+        local_object_reader_stream, LocalFileSystem,
+    };
+    use crate::datasource::{
+        file_format::{avro::AvroFormat, FileFormat},
+        listing::local_unpartitioned_file,
     };
     use crate::scalar::ScalarValue;
     use arrow::datatypes::{DataType, Field, Schema};

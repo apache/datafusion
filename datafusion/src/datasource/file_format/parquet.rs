@@ -89,6 +89,7 @@ impl FileFormat for ParquetFormat {
 
     async fn infer_schema(&self, readers: ObjectReaderStream) -> Result<SchemaRef> {
         let merged_schema = readers
+            .map_err(DataFusionError::IoError)
             .try_fold(Schema::empty(), |acc, reader| async {
                 let next_schema = fetch_schema(reader);
                 Schema::try_merge([acc, next_schema?])
@@ -351,16 +352,17 @@ impl ChunkReader for ChunkObjectReader {
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
         self.0
             .sync_chunk_reader(start, length)
+            .map_err(DataFusionError::IoError)
             .map_err(|e| ParquetError::ArrowError(e.to_string()))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::datasource::listing::local_unpartitioned_file;
     use crate::physical_plan::collect;
     use datafusion_storage::object_store::local::{
-        local_object_reader, local_object_reader_stream, local_unpartitioned_file,
-        LocalFileSystem,
+        local_object_reader, local_object_reader_stream, LocalFileSystem,
     };
 
     use super::*;

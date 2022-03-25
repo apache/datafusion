@@ -885,17 +885,17 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
-    use datafusion::datafusion_storage::{
-        object_store::{
-            local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
-            ObjectStore,
-        },
-        SizedFile,
-    };
-    use datafusion::datasource::listing::ListingTable;
-    use datafusion::error::DataFusionError;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
+        datafusion_storage::{
+            self,
+            object_store::{
+                local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+                ObjectStore,
+            },
+            SizedFile,
+        },
+        datasource::listing::ListingTable,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
             ToDFSchema,
@@ -903,6 +903,7 @@ mod roundtrip_tests {
         prelude::*,
         sql::parser::FileType,
     };
+    use std::io;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -913,8 +914,9 @@ mod roundtrip_tests {
         async fn list_file(
             &self,
             _prefix: &str,
-        ) -> datafusion::error::Result<FileMetaStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_storage::Result<FileMetaStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -923,8 +925,9 @@ mod roundtrip_tests {
             &self,
             _prefix: &str,
             _delimiter: Option<String>,
-        ) -> datafusion::error::Result<ListEntryStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_storage::Result<ListEntryStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -932,8 +935,9 @@ mod roundtrip_tests {
         fn file_reader(
             &self,
             _file: SizedFile,
-        ) -> datafusion::error::Result<Arc<dyn ObjectReader>> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_storage::Result<Arc<dyn ObjectReader>> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }

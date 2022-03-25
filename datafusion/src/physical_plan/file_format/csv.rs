@@ -221,9 +221,8 @@ pub async fn plan_to_csv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datafusion_storage::object_store::local::{
-        local_unpartitioned_file, LocalFileSystem,
-    };
+    use crate::datafusion_storage::object_store::local::LocalFileSystem;
+    use crate::datasource::listing::local_unpartitioned_file;
     use crate::prelude::*;
     use crate::test_util::aggr_test_schema_with_missing_col;
     use crate::{scalar::ScalarValue, test_util::aggr_test_schema};

@@ -18,7 +18,10 @@
 pub mod object_store;
 
 use chrono::{DateTime, Utc};
-use datafusion_common::ScalarValue;
+use std::{io, result};
+
+/// Result type for operations that could result in an io error
+pub type Result<T> = result::Result<T, io::Error>;
 
 /// Represents a specific file or a prefix (folder) that may
 /// require further resolution
@@ -70,35 +73,5 @@ impl FileMeta {
 impl std::fmt::Display for FileMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{} (size: {})", self.path(), self.size())
-    }
-}
-
-#[derive(Debug, Clone)]
-/// A single file that should be read, along with its schema, statistics
-/// and partition column values that need to be appended to each row.
-pub struct PartitionedFile {
-    /// Path for the file (e.g. URL, filesystem path, etc)
-    pub file_meta: FileMeta,
-    /// Values of partition columns to be appended to each row
-    pub partition_values: Vec<ScalarValue>,
-    // We may include row group range here for a more fine-grained parallel execution
-}
-
-impl PartitionedFile {
-    /// Create a simple file without metadata or partition
-    pub fn new(path: String, size: u64) -> Self {
-        Self {
-            file_meta: FileMeta {
-                sized_file: SizedFile { path, size },
-                last_modified: None,
-            },
-            partition_values: vec![],
-        }
-    }
-}
-
-impl std::fmt::Display for PartitionedFile {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.file_meta)
     }
 }
