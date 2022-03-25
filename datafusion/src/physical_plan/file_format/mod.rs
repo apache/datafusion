@@ -171,6 +171,22 @@ impl<'a> Display for FileGroupsDisplay<'a> {
     }
 }
 
+/// A wrapper to customize partitioned file display
+#[derive(Debug)]
+struct ProjectSchemaDisplay<'a>(&'a SchemaRef);
+
+impl<'a> Display for ProjectSchemaDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let parts: Vec<_> = self
+            .0
+            .fields()
+            .iter()
+            .map(|x| x.name().to_owned())
+            .collect::<Vec<String>>();
+        write!(f, "[{}]", parts.join(", "))
+    }
+}
+
 /// A utility which can adapt file-level record batches to a table schema which may have a schema
 /// obtained from merging multiple file-level schemas.
 ///
