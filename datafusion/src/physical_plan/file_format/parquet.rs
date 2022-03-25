@@ -453,10 +453,11 @@ fn read_partition_no_file_columns(
     partition: &[PartitionedFile],
     batch_size: usize,
     response_tx: Sender<ArrowResult<RecordBatch>>,
-    mut limit: Option<usize>,
+    limit: Option<usize>,
     mut partition_column_projector: PartitionColumnProjector,
 ) -> Result<()> {
     use parquet::file::reader::FileReader;
+    let mut limit = limit.unwrap_or(usize::MAX);
     for partitioned_file in partition {
         let object_reader =
             object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
@@ -467,15 +468,9 @@ fn read_partition_no_file_columns(
             .num_rows()
             .try_into()
             .expect("Row count should always be greater than or equal to 0");
-        let remaining_rows = limit.unwrap_or(usize::MAX);
-        if file_rows >= remaining_rows {
-            file_rows = remaining_rows;
-            limit = Some(0);
-        } else if let Some(remaining_limit) = &mut limit {
-            *remaining_limit -= file_rows;
-        }
-
-        while file_rows > batch_size {
+        file_rows = limit.min(file_rows);
+        limit -= file_rows;
+        while file_rows >= batch_size {
             send_result(
                 &response_tx,
                 partition_column_projector
@@ -490,8 +485,7 @@ fn read_partition_no_file_columns(
                     .project_empty(batch_size, &partitioned_file.partition_values),
             )?;
         }
-
-        if limit == Some(0) {
+        if limit == 0 {
             break;
         }
     }
