@@ -215,7 +215,6 @@ message JoinNode {
 
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
-  datafusion.DfSchema schema = 2;
 }
 
 message CrossJoinNode {
@@ -259,6 +258,7 @@ message PhysicalPlanNode {
     CrossJoinExecNode cross_join = 19;
     AvroScanExecNode avro_scan = 20;
     PhysicalExtensionNode extension = 21;
+    UnionExecNode union = 22;
   }
 }
 
@@ -437,6 +437,10 @@ message HashJoinExecNode {
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
+}
+
+message UnionExecNode {
+  repeated PhysicalPlanNode inputs = 1;
 }
 
 message CrossJoinExecNode {

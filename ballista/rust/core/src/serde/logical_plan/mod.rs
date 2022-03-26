@@ -419,11 +419,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                    )));
                 }
 
-                let builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
                 for plan in input_plans {
-                    builder.union(plan)?;
+                    builder = builder.union(plan)?;
                 }
-                builder.build().map_err(|e| e.into())
+                let result = builder.build().map_err(|e| e.into());
+                result
             }
             LogicalPlanType::CrossJoin(crossjoin) => {
                 let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
@@ -849,7 +850,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Union(
                         protobuf::UnionNode {
                             inputs,
-                            schema: None,
                         },
                     ))
                 })
