@@ -52,11 +52,13 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::udaf::create_aggregate_expr as create_aggregate_udf_expr;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion::prelude::SessionContext;
+use datafusion::sql::planner::ContextProvider;
 use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
@@ -319,6 +321,25 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                     &aggr_function.into(),
                                     false,
                                     &[convert_box_required!(agg_node.expr)?],
+                                    &physical_schema,
+                                    name.to_string(),
+                                )?)
+                            }
+                            ExprType::AggregateUdfExpr(agg_node) => {
+                                let name = agg_node.fun_name.as_str();
+                                let udaf_fun_name = &name[0..name.find('(').unwrap()];
+                                let fun = ctx
+                                    .state
+                                    .read()
+                                    .get_aggregate_meta(udaf_fun_name).ok_or_else(|| BallistaError::General(format!("invalid aggregate function message, function {} is not registered in the ExecutionContext", udaf_fun_name)))?;
+                                let args: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr
+                                    .iter()
+                                    .map(|e| e.try_into())
+                                    .collect::<Result<Vec<_>, BallistaError>>()?;
+
+                                Ok(create_aggregate_udf_expr(
+                                    fun.as_ref(),
+                                    &args,
                                     &physical_schema,
                                     name.to_string(),
                                 )?)

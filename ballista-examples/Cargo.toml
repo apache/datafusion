@@ -49,7 +49,6 @@ datafusion = { path = "../datafusion" }
 datafusion-expr = { path = "../datafusion-expr" }
 
 futures = "0.3"
-lazy_static = { version = "^1.4.0" }
 num_cpus = "1.13.0"
 prost = "0.9"
 test-cdylib = "1.1.0"

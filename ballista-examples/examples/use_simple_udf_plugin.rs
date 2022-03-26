@@ -29,30 +29,27 @@ async fn main() -> Result<()> {
         .set("ballista.shuffle.partitions", "1")
         .build()?;
 
-    let ctx = BallistaContext::standalone(&config, 10).await.unwrap();
+    let ctx = BallistaContext::standalone(&config, 1).await.unwrap();
 
     let testdata = datafusion::test_util::arrow_test_data();
 
     // register csv file with the execution context
     ctx.register_csv(
-        "aggregate_test_100",
+        "udaf_test",
         &format!("{}/csv/aggregate_test_100.csv", testdata),
         CsvReadOptions::new(),
     )
     .await?;
 
     // test udf
-    let df = ctx
-        .sql("select array_4(1, c2, 0, 0, 2) from aggregate_test_100 limit 3")
-        .await?;
+    let df = ctx.sql("select pow(1.0, 2.0)").await?;
 
     df.show().await?;
 
-    // TODO The test will get stuck here
     // test udaf
-    // let df = ctx.sql("select geo_mean(2)").await?;
-    //
-    // df.show().await?;
+    let df = ctx.sql("select geo_mean(c11) from udaf_test").await?;
+
+    df.show().await?;
 
     Ok(())
 }
