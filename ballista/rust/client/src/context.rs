@@ -365,8 +365,6 @@ impl BallistaContext {
 
 #[cfg(test)]
 mod tests {
-    use datafusion::arrow::util::pretty::pretty_format_batches;
-    use std::io::BufRead;
 
     #[tokio::test]
     #[cfg(feature = "standalone")]
