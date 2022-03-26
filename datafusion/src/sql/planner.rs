@@ -2347,9 +2347,9 @@ mod tests {
     #[test]
     fn select_neg_filter() {
         let sql = "SELECT id, first_name, last_name \
-                   FROM person WHERE NOT state";
+                   FROM person WHERE NOT state IS NULL";
         let expected = "Projection: #person.id, #person.first_name, #person.last_name\
-                        \n  Filter: NOT #person.state\
+                        \n  Filter: NOT #person.state IS NULL\
                         \n    TableScan: person projection=None";
         quick_test(sql, expected);
     }
