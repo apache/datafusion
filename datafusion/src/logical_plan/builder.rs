@@ -1204,7 +1204,7 @@ fn check_plan_invalid(plan: &LogicalPlan) -> Result<()> {
         | LogicalPlan::Analyze(Analyze { input, .. }) => check_plan_invalid(input),
 
         LogicalPlan::Union(Union { inputs, .. }) => {
-            inputs.iter().map(check_plan_invalid).collect()
+            inputs.iter().try_for_each(check_plan_invalid)
         }
 
         LogicalPlan::TableScan(TableScan {
@@ -1232,10 +1232,7 @@ fn check_plan_invalid(plan: &LogicalPlan) -> Result<()> {
 
 /// find first error in the exprs
 fn check_any_invalid_expr(exprs: &[Expr], schema: &DFSchemaRef) -> Result<()> {
-    exprs
-        .iter()
-        .map(|e| check_invalid_expr(e, schema))
-        .collect()
+    exprs.iter().try_for_each(|e| check_invalid_expr(e, schema))
 }
 
 /// do some checks for exprs in a logical plan
