@@ -50,6 +50,7 @@ message LogicalPlanNode {
     ValuesNode values = 16;
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
+    UnionNode union = 19;
   }
 }
 
@@ -210,6 +211,11 @@ message JoinNode {
   repeated datafusion.Column left_join_column = 5;
   repeated datafusion.Column right_join_column = 6;
   bool null_equals_null = 7;
+}
+
+message UnionNode {
+  repeated LogicalPlanNode inputs = 1;
+  datafusion.DfSchema schema = 2;
 }
 
 message CrossJoinNode {
