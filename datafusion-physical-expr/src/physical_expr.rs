@@ -43,7 +43,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
     fn nullable(&self, input_schema: &Schema) -> Result<bool>;
     /// Evaluate an expression against a RecordBatch
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue>;
-    /// Evaluate an expression against a RecordBatch with validity array
+    /// Evaluate an expression against a RecordBatch after first applying a
+    /// validity array
     fn evaluate_selection(
         &self,
         batch: &RecordBatch,
