@@ -16,10 +16,11 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Schema};
+use arrow::error::Result as ArrowResult;
 
 use arrow::record_batch::RecordBatch;
 
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::Result;
 
 use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
@@ -50,6 +51,9 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
+        if selection.iter().all(|b| b == Some(true)) {
+            return self.evaluate(batch);
+        }
         let mut indices = vec![];
         for (i, b) in selection.iter().enumerate() {
             if let Some(true) = b {
@@ -60,11 +64,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         let tmp_columns = batch
             .columns()
             .iter()
-            .map(|c| {
-                take(c.as_ref(), &indices, None)
-                    .map_err(|e| DataFusionError::Execution(e.to_string()))
-            })
-            .collect::<Result<Vec<Arc<dyn Array>>>>()?;
+            .map(|c| take(c.as_ref(), &indices, None))
+            .collect::<ArrowResult<Vec<Arc<dyn Array>>>>()?;
 
         let tmp_batch = RecordBatch::try_new(batch.schema(), tmp_columns)?;
         let tmp_result = self.evaluate(&tmp_batch)?;
@@ -114,4 +115,46 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
     let data = mutable.freeze();
     Ok(make_array(data))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int32Array;
+    use datafusion_common::Result;
+
+    #[test]
+    fn scatter_int() -> Result<()> {
+        let truthy = Arc::new(Int32Array::from(vec![1, 10, 11, 100]));
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+
+        // the output array is expected to be the same length as the mask array
+        let expected =
+            Int32Array::from_iter(vec![Some(1), Some(10), None, None, Some(11)]);
+        let result = scatter(&mask, truthy.as_ref())?;
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn scatter_boolean() -> Result<()> {
+        let truthy = Arc::new(BooleanArray::from(vec![false, false, false, true]));
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+
+        // the output array is expected to be the same length as the mask array
+        let expected = BooleanArray::from_iter(vec![
+            Some(false),
+            Some(false),
+            None,
+            None,
+            Some(false),
+        ]);
+        let result = scatter(&mask, truthy.as_ref())?;
+        let result = result.as_any().downcast_ref::<BooleanArray>().unwrap();
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
 }
