@@ -1243,9 +1243,9 @@ fn check_invalid_expr(expr: &Expr, schema: &DFSchemaRef) -> Result<()> {
     match expr {
         Expr::Not(bool_expr) if bool_expr.get_type(schema)? != DataType::Boolean => {
             Err(DataFusionError::Plan(format!(
-                "Invalid Not Expression -- Type of expression({}) must be of a boolean type({})",
+                "Invalid Not Expression -- Type({}) of expression({}) must be of a boolean type",
+                bool_expr.get_type(schema)?,
                 bool_expr,
-                bool_expr.get_type(schema)?
             )))
         }
         Expr::Negative(signed_num_expr) => match signed_num_expr.get_type(schema)? {
@@ -1519,7 +1519,7 @@ mod tests {
                 assert_eq!(
                     e.to_string(),
                     "Error during planning: Invalid Not Expression -- \
-                    Type of expression(#employee_csv.id) must be of a boolean type(Int32)"
+                    Type(Int32) of expression(#employee_csv.id) must be of a boolean type"
                 )
             }
         }
