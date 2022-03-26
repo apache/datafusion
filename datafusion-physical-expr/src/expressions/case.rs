@@ -330,8 +330,6 @@ impl CaseExpr {
         // We only consider non-null values while comparing with whens
         let mut remainder = not(&base_nulls)?;
         for i in 0..self.when_then_expr.len() {
-            let i = i as usize;
-
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
