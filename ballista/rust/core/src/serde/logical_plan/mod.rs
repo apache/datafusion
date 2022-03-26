@@ -847,10 +847,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<_, BallistaError>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Union(
-                        protobuf::UnionNode {
-                            inputs,
-                        },
-                    ))
+                        protobuf::UnionNode { inputs },
+                    )),
                 })
             }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
