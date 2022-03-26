@@ -379,8 +379,6 @@ impl CaseExpr {
         let mut current_value = new_null_array(&return_type, batch.num_rows());
         let mut remainder = BooleanArray::from(vec![true; batch.num_rows()]);
         for i in 0..self.when_then_expr.len() {
-            let i = i as usize;
-
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
