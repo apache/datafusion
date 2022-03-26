@@ -423,8 +423,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 for plan in input_plans {
                     builder = builder.union(plan)?;
                 }
-                let result = builder.build().map_err(|e| e.into());
-                result
+                builder.build().map_err(|e| e.into())
             }
             LogicalPlanType::CrossJoin(crossjoin) => {
                 let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
