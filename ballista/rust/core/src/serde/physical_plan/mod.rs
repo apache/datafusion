@@ -876,7 +876,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             })
         } else if let Some(union) = plan.downcast_ref::<UnionExec>() {
             let mut inputs: Vec<PhysicalPlanNode> = vec![];
-            for input in &union.inputs {
+            for input in union.inputs() {
                 inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
                     input.to_owned(),
                     extension_codec,

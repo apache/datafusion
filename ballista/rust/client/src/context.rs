@@ -569,6 +569,7 @@ mod tests {
         use ballista_core::config::{
             BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
         };
+        use datafusion::arrow::util::pretty::pretty_format_batches;
         use datafusion::assert_batches_eq;
         let config = BallistaConfigBuilder::default()
             .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")

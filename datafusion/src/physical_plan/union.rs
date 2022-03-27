@@ -43,7 +43,7 @@ use async_trait::async_trait;
 #[derive(Debug)]
 pub struct UnionExec {
     /// Input execution plan
-    pub inputs: Vec<Arc<dyn ExecutionPlan>>,
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
 }
@@ -55,6 +55,11 @@ impl UnionExec {
             inputs,
             metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+
+    /// Get inputs of the execution plan
+    pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
+        &self.inputs
     }
 }
 
