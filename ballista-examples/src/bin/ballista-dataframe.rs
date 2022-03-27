@@ -16,7 +16,7 @@
 // under the License.
 
 use ballista::prelude::*;
-use datafusion::prelude::{col, lit};
+use datafusion::prelude::{col, lit, ParquetReadOptions};
 
 /// This example demonstrates executing a simple query against an Arrow data source (Parquet) and
 /// fetching results, using the DataFrame trait
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
 
     // define the query using the DataFrame trait
     let df = ctx
-        .read_parquet(filename)
+        .read_parquet(filename, ParquetReadOptions::default())
         .await?
         .select_columns(&["id", "bool_col", "timestamp_col"])?
         .filter(col("id").gt(lit(1)))?;

@@ -325,6 +325,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
+                    table_partition_cols: create_extern_table
+                        .table_partition_cols
+                        .clone(),
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -752,6 +755,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 file_type,
                 has_header,
                 schema: df_schema,
+                table_partition_cols,
             }) => {
                 use datafusion::sql::parser::FileType;
 
@@ -770,6 +774,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             file_type: pb_file_type as i32,
                             has_header: *has_header,
                             schema: Some(df_schema.into()),
+                            table_partition_cols: table_partition_cols.clone(),
                         },
                     )),
                 })

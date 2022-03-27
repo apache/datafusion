@@ -92,7 +92,9 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions};
+use super::options::{
+    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
@@ -461,14 +463,20 @@ impl SessionContext {
     pub async fn read_parquet(
         &mut self,
         uri: impl Into<String>,
+        options: ParquetReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan =
-            LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
-                .await?
-                .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_parquet(
+            object_store,
+            path,
+            options,
+            None,
+            target_partitions,
+        )
+        .await?
+        .build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
     }
 
