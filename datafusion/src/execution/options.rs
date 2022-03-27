@@ -141,6 +141,8 @@ pub struct ParquetReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+    /// Should DataFusion parquet reader using the predicate to prune data, following execution::context::SessionConfig
+    pub parquet_pruning: bool,
 }
 
 impl<'a> Default for ParquetReadOptions<'a> {
@@ -148,11 +150,18 @@ impl<'a> Default for ParquetReadOptions<'a> {
         Self {
             file_extension: DEFAULT_PARQUET_EXTENSION,
             table_partition_cols: vec![],
+            parquet_pruning: ParquetFormat::default().enable_pruning(),
         }
     }
 }
 
 impl<'a> ParquetReadOptions<'a> {
+    /// Specify parquet_pruning
+    pub fn parquet_pruning(mut self, parquet_pruning: bool) -> Self {
+        self.parquet_pruning = parquet_pruning;
+        self
+    }
+
     /// Specify table_partition_cols for partition pruning
     pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
         self.table_partition_cols = table_partition_cols;
@@ -161,7 +170,8 @@ impl<'a> ParquetReadOptions<'a> {
 
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
-        let file_format = ParquetFormat::default();
+        let file_format =
+            ParquetFormat::default().with_enable_pruning(self.parquet_pruning);
 
         ListingOptions {
             format: Arc::new(file_format),

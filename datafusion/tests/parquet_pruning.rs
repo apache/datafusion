@@ -37,7 +37,7 @@ use datafusion::{
         accept, file_format::ParquetExec, metrics::MetricsSet, ExecutionPlan,
         ExecutionPlanVisitor,
     },
-    prelude::{SessionConfig, SessionContext},
+    prelude::{ParquetReadOptions, SessionConfig, SessionContext},
     scalar::ScalarValue,
 };
 use parquet::{arrow::ArrowWriter, file::properties::WriterProperties};

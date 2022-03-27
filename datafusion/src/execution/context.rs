@@ -564,8 +564,13 @@ impl SessionContext {
         uri: &str,
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
-        let listing_options =
-            options.to_listing_options(self.copied_config().target_partitions);
+        let (target_partitions, parquet_pruning) = {
+            let conf = self.copied_config();
+            (conf.target_partitions, conf.parquet_pruning)
+        };
+        let listing_options = options
+            .parquet_pruning(parquet_pruning)
+            .to_listing_options(target_partitions);
 
         self.register_listing_table(name, uri, listing_options, None)
             .await?;
