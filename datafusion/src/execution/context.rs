@@ -558,20 +558,14 @@ impl SessionContext {
 
     /// Registers a Parquet data source so that it can be referenced from SQL statements
     /// executed against this context.
-    pub async fn register_parquet(&mut self, name: &str, uri: &str) -> Result<()> {
-        let (target_partitions, enable_pruning) = {
-            let conf = self.copied_config();
-            (conf.target_partitions, conf.parquet_pruning)
-        };
-        let file_format = ParquetFormat::default().with_enable_pruning(enable_pruning);
-
-        let listing_options = ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: true,
-            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
-            target_partitions,
-            table_partition_cols: vec![],
-        };
+    pub async fn register_parquet(
+        &mut self,
+        name: &str,
+        uri: &str,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<()> {
+        let listing_options =
+            options.to_listing_options(self.copied_config().target_partitions);
 
         self.register_listing_table(name, uri, listing_options, None)
             .await?;

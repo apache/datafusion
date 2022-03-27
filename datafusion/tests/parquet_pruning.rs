@@ -482,7 +482,9 @@ impl ContextWithParquet {
         // now, setup a the file as a data source and run a query against it
         let mut ctx = SessionContext::with_config(config);
 
-        ctx.register_parquet("t", &parquet_path).await.unwrap();
+        ctx.register_parquet("t", &parquet_path, ParquetReadOptions::default())
+            .await
+            .unwrap();
         let provider = ctx.deregister_table("t").unwrap().unwrap();
         ctx.register_table("t", provider.clone()).unwrap();
 

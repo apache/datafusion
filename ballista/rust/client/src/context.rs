@@ -516,7 +516,11 @@ mod tests {
 
         let testdata = datafusion::test_util::parquet_test_data();
         context
-            .register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
+            .register_parquet(
+                "single_nan",
+                &format!("{}/single_nan.parquet", testdata),
+                ParquetReadOptions::default(),
+            )
             .await
             .unwrap();
 

@@ -52,9 +52,13 @@ async fn parquet_query() {
 async fn parquet_single_nan_schema() {
     let mut ctx = SessionContext::new();
     let testdata = datafusion::test_util::parquet_test_data();
-    ctx.register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
-        .await
-        .unwrap();
+    ctx.register_parquet(
+        "single_nan",
+        &format!("{}/single_nan.parquet", testdata),
+        ParquetReadOptions::default(),
+    )
+    .await
+    .unwrap();
     let sql = "SELECT mycol FROM single_nan";
     let plan = ctx.create_logical_plan(sql).unwrap();
     let plan = ctx.optimize(&plan).unwrap();
@@ -75,6 +79,7 @@ async fn parquet_list_columns() {
     ctx.register_parquet(
         "list_columns",
         &format!("{}/list_columns.parquet", testdata),
+        ParquetReadOptions::default(),
     )
     .await
     .unwrap();
