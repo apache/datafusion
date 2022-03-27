@@ -51,14 +51,12 @@ Aggregate functions operate on a set of values to compute a single result. Pleas
 
 `approx_percentile_cont(x, p) -> x` return the approximate percentile (TDigest) of input values, where `p` is a float64 between 0 and 1 (inclusive).
 
-it supports raw data as input and build Tdigest sketches during query time.
-
-it is approximately equal to `approx_percentile_cont_with_weight(x, 1, p)`.
+It supports raw data as input and build Tdigest sketches during query time, and is approximately equal to `approx_percentile_cont_with_weight(x, 1, p)`.
 
 ### approx_percentile_cont_with_weight
 
-`approx_percentile_cont_with_weight(x, w, p) -> x` return the approximate percentile (TDigest) of input values with weight, where `w` is weight column expression and `p` is a float64 between 0 and 1 (inclusive).
+`approx_percentile_cont_with_weight(x, w, p) -> x` returns the approximate percentile (TDigest) of input values with weight, where `w` is weight column expression and `p` is a float64 between 0 and 1 (inclusive).
 
-it supports raw data as input or pre-aggregated TDigest sketches, then build or merge Tdigest sketches during query time. TDigest sketches are a list of centroid `(x, w)`, where `x` stands for mean and `w` stands for weight.
+It supports raw data as input or pre-aggregated TDigest sketches, then builds or merges Tdigest sketches during query time. TDigest sketches are a list of centroid `(x, w)`, where `x` stands for mean and `w` stands for weight.
 
-it is suitable for low latency OLAP system where streaming compute engine (e.g. Spark Streaming/Flink) pre-aggregate data to a data store, then query by Datafusion.
+It is suitable for low latency OLAP system where a streaming compute engine (e.g. Spark Streaming/Flink) pre-aggregates data to a data store, then queries using Datafusion.
