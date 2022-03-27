@@ -32,6 +32,7 @@ use crate::logical_plan::plan::{
 use crate::optimizer::utils;
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
+use arrow::compute::can_cast_types;
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -1240,7 +1241,8 @@ fn check_invalid_expr(expr: &Expr, schema: &DFSchemaRef) -> Result<()> {
     match expr {
         Expr::Not(bool_expr) if bool_expr.get_type(schema)? != DataType::Boolean => {
             Err(DataFusionError::Plan(format!(
-                "Invalid Not Expression -- Type({}) of expression({}) must be of a boolean type",
+                "Invalid Not Expression({}) -- Type({}) of expression({}) must be of a boolean type",
+                expr,
                 bool_expr.get_type(schema)?,
                 bool_expr,
             )))
@@ -1253,11 +1255,19 @@ fn check_invalid_expr(expr: &Expr, schema: &DFSchemaRef) -> Result<()> {
             | DataType::Float32
             | DataType::Float64 => Ok(()),
             _ => Err(DataFusionError::Plan(format!(
-                "Invalid Negative Expression -- The operand({}) must be of a signed numeric type({})",
+                "Invalid Negative Expression({}) -- The operand({}) must be of a signed numeric type({})",
+                expr,
                 signed_num_expr,
                 signed_num_expr.get_type(schema)?
             ))),
         },
+        Expr::Cast { expr: cast_expr, data_type}
+            if !can_cast_types(&cast_expr.get_type(schema)?, data_type) =>
+                Err(DataFusionError::Plan(format!(
+                    "Invalid Cast Expression({}) -- {} cannot cast to {}",
+                    expr,
+                    cast_expr.get_type(schema)?,
+                    data_type))),
         Expr::Wildcard | Expr::QualifiedWildcard { .. } => Err(DataFusionError::Plan(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
@@ -1515,8 +1525,38 @@ mod tests {
             Err(e) => {
                 assert_eq!(
                     e.to_string(),
-                    "Error during planning: Invalid Not Expression -- \
+                    "Error during planning: \
+                    Invalid Not Expression(NOT #employee_csv.id) -- \
                     Type(Int32) of expression(#employee_csv.id) must be of a boolean type"
+                )
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_plan_cast_utf8_boolean() -> Result<()> {
+        let mut plan = LogicalPlanBuilder::scan_empty(
+            Some("employee_csv"),
+            &employee_schema(),
+            Some(vec![0, 1, 2, 3, 4]),
+        )?;
+        let col = Expr::Column(Column {
+            relation: None,
+            name: "first_name".to_owned(),
+        });
+        plan = plan.project(vec![Expr::Cast {
+            expr: Box::new(col),
+            data_type: DataType::Boolean,
+        }])?;
+        match plan.build() {
+            Ok(_) => panic!("Unexpect Ok"),
+            Err(e) => {
+                assert_eq!(
+                    e.to_string(),
+                    "Error during planning: \
+                    Invalid Cast Expression(CAST(#employee_csv.first_name AS Boolean)) -- \
+                    Utf8 cannot cast to Boolean"
                 )
             }
         }
