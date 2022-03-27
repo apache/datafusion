@@ -76,6 +76,9 @@
   - [x] nullif
 - Approximation functions
   - [x] approx_distinct
+  - [x] approx_median
+  - [x] approx_percentile_cont
+  - [x] approx_percentile_cont_with_weight
 - Common date/time functions
   - [ ] Basic date functions
   - [ ] Basic time functions
