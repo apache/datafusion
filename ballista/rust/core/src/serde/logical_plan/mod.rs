@@ -406,6 +406,25 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 builder.build().map_err(|e| e.into())
             }
+            LogicalPlanType::Union(union) => {
+                let mut input_plans: Vec<LogicalPlan> = union
+                    .inputs
+                    .iter()
+                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
+                    .collect::<Result<_, BallistaError>>()?;
+
+                if input_plans.len() < 2 {
+                    return  Err( BallistaError::General(String::from(
+                       "Protobuf deserialization error, Union was require at least two input.",
+                   )));
+                }
+
+                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                for plan in input_plans {
+                    builder = builder.union(plan)?;
+                }
+                builder.build().map_err(|e| e.into())
+            }
             LogicalPlanType::CrossJoin(crossjoin) => {
                 let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
                 let right = into_logical_plan!(crossjoin.right, &ctx, extension_codec)?;
@@ -815,7 +834,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::Union(union) => {
+                let inputs: Vec<LogicalPlanNode> = union
+                    .inputs
+                    .iter()
+                    .map(|i| {
+                        protobuf::LogicalPlanNode::try_from_logical_plan(
+                            i,
+                            extension_codec,
+                        )
+                    })
+                    .collect::<Result<_, BallistaError>>()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Union(
+                        protobuf::UnionNode { inputs },
+                    )),
+                })
+            }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left = protobuf::LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),

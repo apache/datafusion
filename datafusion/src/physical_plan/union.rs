@@ -56,6 +56,11 @@ impl UnionExec {
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
+
+    /// Get inputs of the execution plan
+    pub fn inputs(&self) -> &Vec<Arc<dyn ExecutionPlan>> {
+        &self.inputs
+    }
 }
 
 #[async_trait]

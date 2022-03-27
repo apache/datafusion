@@ -561,4 +561,64 @@ mod tests {
         let df = context.sql(sql).await.unwrap();
         assert!(!df.collect().await.unwrap().is_empty());
     }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_union_and_union_all() {
+        use super::*;
+        use ballista_core::config::{
+            BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+        };
+        use datafusion::arrow::util::pretty::pretty_format_batches;
+        use datafusion::assert_batches_eq;
+        let config = BallistaConfigBuilder::default()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
+            .build()
+            .unwrap();
+        let context = BallistaContext::standalone(&config, 1).await.unwrap();
+
+        let df = context
+            .sql("SELECT 1 as NUMBER union SELECT 1 as NUMBER;")
+            .await
+            .unwrap();
+        let res1 = df.collect().await.unwrap();
+        let expected1 = vec![
+            "+--------+",
+            "| number |",
+            "+--------+",
+            "| 1      |",
+            "+--------+",
+        ];
+        assert_eq!(
+            expected1,
+            pretty_format_batches(&*res1)
+                .unwrap()
+                .to_string()
+                .trim()
+                .lines()
+                .collect::<Vec<&str>>()
+        );
+        let expected2 = vec![
+            "+--------+",
+            "| number |",
+            "+--------+",
+            "| 1      |",
+            "| 1      |",
+            "+--------+",
+        ];
+        let df = context
+            .sql("SELECT 1 as NUMBER union all SELECT 1 as NUMBER;")
+            .await
+            .unwrap();
+        let res2 = df.collect().await.unwrap();
+        assert_eq!(
+            expected2,
+            pretty_format_batches(&*res2)
+                .unwrap()
+                .to_string()
+                .trim()
+                .lines()
+                .collect::<Vec<&str>>()
+        );
+    }
 }
