@@ -49,7 +49,7 @@ pub struct CsvReadOptions<'a> {
     /// File extension; only files with this extension are selected for data input.
     /// Defaults to DEFAULT_CSV_EXTENSION.
     pub file_extension: &'a str,
-    // Partition Columns
+    /// Partition Columns
     pub table_partition_cols: Vec<String>,
 }
 
@@ -139,7 +139,7 @@ pub struct ParquetReadOptions<'a> {
     /// File extension; only files with this extension are selected for data input.
     /// Defaults to ".parquet".
     pub file_extension: &'a str,
-    // Partition Columns
+    /// Partition Columns
     pub table_partition_cols: Vec<String>,
 }
 
@@ -182,7 +182,7 @@ pub struct AvroReadOptions<'a> {
     /// File extension; only files with this extension are selected for data input.
     /// Defaults to DEFAULT_AVRO_EXTENSION.
     pub file_extension: &'a str,
-    // Partition Columns
+    /// Partition Columns
     pub table_partition_cols: Vec<String>,
 }
 
@@ -229,7 +229,7 @@ pub struct NdJsonReadOptions<'a> {
     /// File extension; only files with this extension are selected for data input.
     /// Defaults to DEFAULT_JSON_EXTENSION.
     pub file_extension: &'a str,
-    // Partition Columns
+    /// Partition Columns
     pub table_partition_cols: Vec<String>,
 }
 

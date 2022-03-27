@@ -78,7 +78,7 @@ pub struct CreateExternalTable {
     pub has_header: bool,
     /// Path to file
     pub location: String,
-    // Partition Columns
+    /// Partition Columns
     pub table_partition_cols: Vec<String>,
 }
 
