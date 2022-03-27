@@ -3426,7 +3426,9 @@ mod tests {
 
         async fn call_read_parquet(&self) -> Arc<DataFrame> {
             let mut ctx = SessionContext::new();
-            ctx.read_parquet("dummy").await.unwrap()
+            ctx.read_parquet("dummy", ParquetReadOptions::default())
+                .await
+                .unwrap()
         }
     }
 }

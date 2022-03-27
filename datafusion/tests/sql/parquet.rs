@@ -214,7 +214,10 @@ async fn schema_merge_ignores_metadata() {
     // (no errors)
     let mut ctx = SessionContext::new();
     let df = ctx
-        .read_parquet(table_dir.to_str().unwrap().to_string())
+        .read_parquet(
+            table_dir.to_str().unwrap().to_string(),
+            ParquetReadOptions::default(),
+        )
         .await
         .unwrap();
     let result = df.collect().await.unwrap();
