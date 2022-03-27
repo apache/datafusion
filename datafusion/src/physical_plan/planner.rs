@@ -1586,7 +1586,7 @@ mod tests {
             let logical_plan = LogicalPlanBuilder::scan_csv(
                 Arc::new(LocalFileSystem {}),
                 &path,
-                options,
+                options.clone(),
                 None,
                 1,
             )

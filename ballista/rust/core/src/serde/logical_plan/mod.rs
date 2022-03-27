@@ -1093,6 +1093,7 @@ mod roundtrip_tests {
                     location: String::from("employee.csv"),
                     file_type: *file,
                     has_header: true,
+                    table_partition_cols: vec![],
                 });
 
             roundtrip_test!(create_table_node);
