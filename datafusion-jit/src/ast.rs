@@ -16,6 +16,7 @@
 // under the License.
 
 use cranelift::codegen::ir;
+use datafusion_common::{DataFusionError, ScalarValue};
 use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug)]
@@ -33,7 +34,7 @@ pub enum Stmt {
     Declare(String, JITType),
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 /// Shorthand typed literals
 pub enum TypedLit {
     Bool(bool),
@@ -42,7 +43,7 @@ pub enum TypedLit {
     Double(f64),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 /// Expression
 pub enum Expr {
     /// literal
@@ -103,7 +104,7 @@ impl BinaryExpr {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 /// Binary expression
 pub enum BinaryExpr {
     /// ==
@@ -128,13 +129,53 @@ pub enum BinaryExpr {
     Div(Box<Expr>, Box<Expr>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 /// Literal
 pub enum Literal {
     /// Parsable literal with type
     Parsing(String, JITType),
     /// Shorthand literals of common types
     Typed(TypedLit),
+}
+
+impl TryFrom<datafusion_expr::Expr> for Expr {
+    type Error = DataFusionError;
+
+    fn try_from(value: datafusion_expr::Expr) -> Result<Self, Self::Error> {
+        match &value {
+            datafusion_expr::Expr::BinaryExpr { left, op, right } => {
+                Ok(Expr::Binary(match op {
+                    datafusion_expr::Operator::Eq => BinaryExpr::Eq(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::NotEq => BinaryExpr::Ne(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::Plus => BinaryExpr::Add(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    _ => {
+                        return Err(DataFusionError::NotImplemented(
+                            format!(
+                                "Compiling binary expression {:?} not yet supported",
+                                value
+                            )
+                            .to_string(),
+                        ));
+                    }
+                }))
+            }
+            datafusion_expr::Expr::Literal(ScalarValue::Float32(Some(f))) => {
+                Ok(Expr::Literal(Literal::Typed(TypedLit::Float(*f))))
+            }
+            _ => Err(DataFusionError::NotImplemented(
+                format!("Compiling {:?} not yet supported", value).to_string(),
+            )),
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Hash)]
