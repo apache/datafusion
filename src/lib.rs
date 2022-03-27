@@ -23,6 +23,16 @@ mod tests {
         roundtrip("SELECT * FROM data WHERE a > 1").await
     }
 
+    #[tokio::test]
+    async fn select_with_filter_date() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE c > CAST('2020-01-01' AS DATE)").await
+    }
+
+    #[tokio::test]
+    async fn select_with_filter_bool_expr() -> Result<()> {
+        roundtrip("SELECT * FROM data WHERE d AND a > 1").await
+    }
+
     async fn roundtrip(sql: &str) -> Result<()> {
         let mut ctx = ExecutionContext::new();
         ctx.register_csv("data", "testdata/data.csv", CsvReadOptions::new())

@@ -94,6 +94,33 @@ pub fn to_substrait_rel(plan: &LogicalPlan) -> Result<Box<Rel>> {
     }
 }
 
+pub fn operator_to_reference(op: Operator) -> u32 {
+    match op {
+        Operator::Eq => 1,
+        Operator::NotEq => 2,
+        Operator::Lt => 3,
+        Operator::LtEq => 4,
+        Operator::Gt => 5,
+        Operator::GtEq => 6,
+        Operator::Plus => 7,
+        Operator::Minus => 8,
+        Operator::Multiply => 9,
+        Operator::Divide => 10,
+        Operator::Modulo => 11,
+        Operator::And => 12,
+        Operator::Or => 13,
+        Operator::Like => 14,
+        Operator::NotLike => 15,
+        Operator::IsDistinctFrom => 16,
+        Operator::IsNotDistinctFrom => 17,
+        Operator::RegexMatch => 18,
+        Operator::RegexIMatch => 19,
+        Operator::RegexNotMatch => 20,
+        Operator::RegexNotIMatch => 21,
+        Operator::BitwiseAnd => 22,
+    }
+}
+
 /// Convert DataFusion Expr to Substrait Rex
 pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression> {
     match expr {
@@ -114,19 +141,7 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
         Expr::BinaryExpr { left, op, right } => {
             let l = to_substrait_rex(left, schema)?;
             let r = to_substrait_rex(right, schema)?;
-            let function_reference: u32 = match op {
-                Operator::Eq => 1,
-                Operator::Lt => 2,
-                Operator::LtEq => 3,
-                Operator::Gt => 4,
-                Operator::GtEq => 5,
-                _ => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Unsupported operator: {:?}",
-                        op
-                    )))
-                }
-            };
+            let function_reference: u32 = operator_to_reference(*op);
             Ok(Expression {
                 rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                     function_reference,
@@ -141,6 +156,14 @@ pub fn to_substrait_rex(expr: &Expr, schema: &DFSchemaRef) -> Result<Expression>
                 ScalarValue::Int16(Some(n)) => Some(LiteralType::I16(*n as i32)),
                 ScalarValue::Int32(Some(n)) => Some(LiteralType::I32(*n)),
                 ScalarValue::Int64(Some(n)) => Some(LiteralType::I64(*n)),
+                ScalarValue::Boolean(Some(b)) => Some(LiteralType::Boolean(*b)),
+                ScalarValue::Float32(Some(f)) => Some(LiteralType::Fp32(*f)),
+                ScalarValue::Float64(Some(f)) => Some(LiteralType::Fp64(*f)),
+                ScalarValue::Utf8(Some(s)) => Some(LiteralType::String(s.clone())),
+                ScalarValue::LargeUtf8(Some(s)) => Some(LiteralType::String(s.clone())),
+                ScalarValue::Binary(Some(b)) => Some(LiteralType::Binary(b.clone())),
+                ScalarValue::LargeBinary(Some(b)) => Some(LiteralType::Binary(b.clone())),
+                ScalarValue::Date32(Some(d)) => Some(LiteralType::Date(*d)),
                 _ => {
                     return Err(DataFusionError::NotImplemented(format!(
                         "Unsupported literal: {:?}",
