@@ -135,48 +135,57 @@ fn is_not_distinct_from_bool(
 // TODO move decimal kernels to to arrow-rs
 // https://github.com/apache/arrow-rs/issues/1200
 
-// TODO use iter added for for decimal array in
-// https://github.com/apache/arrow-rs/issues/1083
+/// Creates an BooleanArray the same size as `left`,
+/// applying `op` to all non-null elements of left
+fn compare_decimal_scalar<F>(
+    left: &DecimalArray,
+    right: i128, op: F) -> Result<BooleanArray>
+where
+    F: Fn(i128, i128) -> bool
+{
+    Ok(left.iter()
+        .map(|left| left.map(|left| op(left, right)))
+        .collect())
+}
+
+/// Creates an BooleanArray the same size as `left`,
+/// by applying `op` to all non-null elements of left and right
+fn compare_decimal<F>(
+    left: &DecimalArray,
+    right: &DecimalArray,
+    op: F) -> Result<BooleanArray>
+where
+    F: Fn(i128, i128) -> bool
+{
+    Ok(left.iter()
+        .zip(right.iter())
+        .map(|(left, right)| {
+            if let (Some(left), Some(right)) = (left, right) {
+                Some(left == right)
+            } else {
+                None
+            }
+        })
+        .collect()
+    )
+}
+
 pub(super) fn eq_decimal_scalar(
     left: &DecimalArray,
     right: i128,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) == right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left == right)
 }
 
 pub(super) fn eq_decimal(
     left: &DecimalArray,
     right: &DecimalArray,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) == right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left == right)
 }
 
 fn neq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) != right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left != right)
 }
 
 fn neq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
