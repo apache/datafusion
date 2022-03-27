@@ -210,6 +210,7 @@ impl SessionContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref table_partition_cols,
             }) => {
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
@@ -236,7 +237,7 @@ impl SessionContext {
                     collect_stat: false,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: vec![],
+                    table_partition_cols: table_partition_cols.clone(),
                 };
 
                 // TODO make schema in CreateExternalTable optional instead of empty

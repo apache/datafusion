@@ -55,6 +55,21 @@ WITH HEADER ROW
 LOCATION '/path/to/aggregate_test_100.csv';
 ```
 
+If data sources are already partitioned in Hive style, `PARTITIONED BY` can be used for partition pruning.
+
+```
+/mnt/nyctaxi/year=2022/month=01/tripdata.parquet
+/mnt/nyctaxi/year=2021/month=12/tripdata.parquet
+/mnt/nyctaxi/year=2021/month=11/tripdata.parquet
+```
+
+```sql
+CREATE EXTERNAL TABLE taxi
+STORED AS PARQUET
+PARTITIONED BY (year, month)
+LOCATION '/mnt/nyctaxi';
+```
+
 ## CREATE MEMORY TABLE
 
 Memory table can be created with query.
