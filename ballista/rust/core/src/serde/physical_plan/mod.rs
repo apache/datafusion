@@ -52,6 +52,7 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
@@ -381,6 +382,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     partition_mode,
                     &hashjoin.null_equals_null,
                 )?))
+            }
+            PhysicalPlanType::Union(union) => {
+                let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
+                for input in &union.inputs {
+                    inputs.push(input.try_into_physical_plan(ctx, extension_codec)?);
+                }
+                Ok(Arc::new(UnionExec::new(inputs)))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 let left: Arc<dyn ExecutionPlan> =
@@ -864,6 +872,19 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         input_partition_count: exec.input_partition_count as u32,
                         output_partition_count: exec.output_partition_count as u32,
                     },
+                )),
+            })
+        } else if let Some(union) = plan.downcast_ref::<UnionExec>() {
+            let mut inputs: Vec<PhysicalPlanNode> = vec![];
+            for input in union.inputs() {
+                inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
+                    input.to_owned(),
+                    extension_codec,
+                )?);
+            }
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Union(
+                    protobuf::UnionExecNode { inputs },
                 )),
             })
         } else {
