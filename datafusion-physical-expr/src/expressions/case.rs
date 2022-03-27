@@ -20,7 +20,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use arrow::array::{self, *};
-use arrow::compute::{eq, eq_utf8};
+use arrow::compute::{and, eq, eq_utf8, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
@@ -323,39 +323,44 @@ impl CaseExpr {
         let base_value = expr.evaluate(batch)?;
         let base_type = expr.data_type(&batch.schema())?;
         let base_value = base_value.into_array(batch.num_rows());
+        let base_nulls = is_null(base_value.as_ref())?;
 
-        // start with the else condition, or nulls
-        let mut current_value: Option<ArrayRef> = if let Some(e) = &self.else_expr {
-            // keep `else_expr`'s data type and return type consistent
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| e.clone());
-            Some(expr.evaluate(batch)?.into_array(batch.num_rows()))
-        } else {
-            Some(new_null_array(&return_type, batch.num_rows()))
-        };
-
-        // walk backwards through the when/then expressions
-        for i in (0..self.when_then_expr.len()).rev() {
-            let i = i as usize;
-
-            let when_value = self.when_then_expr[i].0.evaluate(batch)?;
+        // start with nulls as default output
+        let mut current_value = new_null_array(&return_type, batch.num_rows());
+        // We only consider non-null values while comparing with whens
+        let mut remainder = not(&base_nulls)?;
+        for i in 0..self.when_then_expr.len() {
+            let when_value = self.when_then_expr[i]
+                .0
+                .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows());
-
-            let then_value = self.when_then_expr[i].1.evaluate(batch)?;
-            let then_value = then_value.into_array(batch.num_rows());
-
             // build boolean array representing which rows match the "when" value
             let when_match = array_equals(&base_type, when_value, base_value.clone())?;
 
-            current_value = Some(if_then_else(
-                &when_match,
-                then_value,
-                current_value.unwrap(),
-                &return_type,
-            )?);
+            let then_value = self.when_then_expr[i]
+                .1
+                .evaluate_selection(batch, &when_match)?;
+            let then_value = then_value.into_array(batch.num_rows());
+
+            current_value =
+                if_then_else(&when_match, then_value, current_value, &return_type)?;
+
+            remainder = and(&remainder, &or_kleene(&not(&when_match)?, &base_nulls)?)?;
         }
 
-        Ok(ColumnarValue::Array(current_value.unwrap()))
+        if let Some(e) = &self.else_expr {
+            // keep `else_expr`'s data type and return type consistent
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| e.clone());
+            // null and unmatched tuples should be assigned else value
+            remainder = or(&base_nulls, &remainder)?;
+            let else_ = expr
+                .evaluate_selection(batch, &remainder)?
+                .into_array(batch.num_rows());
+            current_value = if_then_else(&remainder, else_, current_value, &return_type)?;
+        }
+
+        Ok(ColumnarValue::Array(current_value))
     }
 
     /// This function evaluates the form of CASE where each WHEN expression is a boolean
@@ -368,20 +373,13 @@ impl CaseExpr {
     fn case_when_no_expr(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
 
-        // start with the else condition, or nulls
-        let mut current_value: Option<ArrayRef> = if let Some(e) = &self.else_expr {
-            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
-                .unwrap_or_else(|_| e.clone());
-            Some(expr.evaluate(batch)?.into_array(batch.num_rows()))
-        } else {
-            Some(new_null_array(&return_type, batch.num_rows()))
-        };
-
-        // walk backwards through the when/then expressions
-        for i in (0..self.when_then_expr.len()).rev() {
-            let i = i as usize;
-
-            let when_value = self.when_then_expr[i].0.evaluate(batch)?;
+        // start with nulls as default output
+        let mut current_value = new_null_array(&return_type, batch.num_rows());
+        let mut remainder = BooleanArray::from(vec![true; batch.num_rows()]);
+        for i in 0..self.when_then_expr.len() {
+            let when_value = self.when_then_expr[i]
+                .0
+                .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows());
             let when_value = when_value
                 .as_ref()
@@ -389,23 +387,38 @@ impl CaseExpr {
                 .downcast_ref::<BooleanArray>()
                 .expect("WHEN expression did not return a BooleanArray");
 
-            let then_value = self.when_then_expr[i].1.evaluate(batch)?;
+            let then_value = self.when_then_expr[i]
+                .1
+                .evaluate_selection(batch, when_value)?;
             let then_value = then_value.into_array(batch.num_rows());
 
-            current_value = Some(if_then_else(
-                when_value,
-                then_value,
-                current_value.unwrap(),
-                &return_type,
-            )?);
+            current_value =
+                if_then_else(when_value, then_value, current_value, &return_type)?;
+
+            // Succeed tuples should be filtered out for short-circuit evaluation,
+            // null values for the current when expr should be kept
+            remainder = and(
+                &remainder,
+                &or_kleene(&not(when_value)?, &is_null(when_value)?)?,
+            )?;
         }
 
-        Ok(ColumnarValue::Array(current_value.unwrap()))
+        if let Some(e) = &self.else_expr {
+            // keep `else_expr`'s data type and return type consistent
+            let expr = try_cast(e.clone(), &*batch.schema(), return_type.clone())
+                .unwrap_or_else(|_| e.clone());
+            let else_ = expr
+                .evaluate_selection(batch, &remainder)?
+                .into_array(batch.num_rows());
+            current_value = if_then_else(&remainder, else_, current_value, &return_type)?;
+        }
+
+        Ok(ColumnarValue::Array(current_value))
     }
 }
 
 impl PhysicalExpr for CaseExpr {
-    /// Return a reference to Any that can be used for downcasting
+    /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -455,10 +468,11 @@ pub fn case(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::binary;
     use crate::expressions::col;
     use crate::expressions::lit;
+    use crate::expressions::{binary, cast};
     use arrow::array::StringArray;
+    use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::ScalarValue;
     use datafusion_expr::Operator;
@@ -524,6 +538,39 @@ mod tests {
     }
 
     #[test]
+    fn case_with_expr_divide_by_zero() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE a when 0 THEN float64(null) ELSE 25.0 / cast(a, float64)  END
+        let when1 = lit(ScalarValue::Int32(Some(0)));
+        let then1 = lit(ScalarValue::Float64(None));
+        let else_value = binary(
+            lit(ScalarValue::Float64(Some(25.0))),
+            Operator::Divide,
+            cast(col("a", &schema)?, &batch.schema(), Float64)?,
+            &batch.schema(),
+        )?;
+
+        let expr = case(
+            Some(col("a", &schema)?),
+            &[(when1, then1)],
+            Some(else_value),
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Int32Array");
+
+        let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
     fn case_without_expr() -> Result<()> {
         let batch = case_test_batch()?;
         let schema = batch.schema();
@@ -556,6 +603,47 @@ mod tests {
         assert_eq!(expected, result);
 
         Ok(())
+    }
+
+    #[test]
+    fn case_without_expr_divide_by_zero() -> Result<()> {
+        let batch = case_test_batch1()?;
+        let schema = batch.schema();
+
+        // CASE WHEN a > 0 THEN 25.0 / cast(a, float64) ELSE float64(null) END
+        let when1 = binary(
+            col("a", &schema)?,
+            Operator::Gt,
+            lit(ScalarValue::Int32(Some(0))),
+            &batch.schema(),
+        )?;
+        let then1 = binary(
+            lit(ScalarValue::Float64(Some(25.0))),
+            Operator::Divide,
+            cast(col("a", &schema)?, &batch.schema(), Float64)?,
+            &batch.schema(),
+        )?;
+        let x = lit(ScalarValue::Float64(None));
+
+        let expr = case(None, &[(when1, then1)], Some(x))?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Int32Array");
+
+        let expected = &Float64Array::from(vec![Some(25.0), None, None, Some(5.0)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    fn case_test_batch1() -> Result<RecordBatch> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let a = Int32Array::from(vec![Some(1), Some(0), None, Some(5)]);
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        Ok(batch)
     }
 
     #[test]
