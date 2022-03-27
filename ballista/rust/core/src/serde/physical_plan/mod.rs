@@ -34,7 +34,7 @@ use crate::{convert_box_required, convert_required, into_physical_plan, into_req
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datafusion_storage::object_store::local::LocalFileSystem;
-use datafusion::datafusion_storage::PartitionedFile;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::physical_plan::aggregates::create_aggregate_expr;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
@@ -53,6 +53,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::udaf::create_aggregate_expr as create_aggregate_udf_expr;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
@@ -402,6 +403,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     partition_mode,
                     &hashjoin.null_equals_null,
                 )?))
+            }
+            PhysicalPlanType::Union(union) => {
+                let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
+                for input in &union.inputs {
+                    inputs.push(input.try_into_physical_plan(ctx, extension_codec)?);
+                }
+                Ok(Arc::new(UnionExec::new(inputs)))
             }
             PhysicalPlanType::CrossJoin(crossjoin) => {
                 let left: Arc<dyn ExecutionPlan> =
@@ -887,6 +895,19 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 )),
             })
+        } else if let Some(union) = plan.downcast_ref::<UnionExec>() {
+            let mut inputs: Vec<PhysicalPlanNode> = vec![];
+            for input in union.inputs() {
+                inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
+                    input.to_owned(),
+                    extension_codec,
+                )?);
+            }
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Union(
+                    protobuf::UnionExecNode { inputs },
+                )),
+            })
         } else {
             let mut buf: Vec<u8> = vec![];
             extension_codec.try_encode(plan_clone.clone(), &mut buf)?;
@@ -962,32 +983,29 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
-    use datafusion::datafusion_storage::{
-        object_store::local::LocalFileSystem, PartitionedFile,
-    };
-    use datafusion::physical_plan::sorts::sort::SortExec;
-    use datafusion::prelude::SessionContext;
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
+        datafusion_storage::object_store::local::LocalFileSystem,
+        datasource::listing::PartitionedFile,
         logical_plan::{JoinType, Operator},
         physical_plan::{
             empty::EmptyExec,
             expressions::{binary, col, lit, InListExpr, NotExpr},
             expressions::{Avg, Column, PhysicalSortExpr},
+            file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
             hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
-            AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr,
+            sorts::sort::SortExec,
+            AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
         },
+        prelude::SessionContext,
         scalar::ScalarValue,
     };
-
-    use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
-    use datafusion::physical_plan::Statistics;
 
     use super::super::super::error::Result;
     use super::super::protobuf;

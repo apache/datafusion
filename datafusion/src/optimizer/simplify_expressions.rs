@@ -1051,7 +1051,6 @@ mod tests {
         // parenthesization matters: can't rewrite
         // (rand() + 1) + 2 --> (rand() + 1) + 2)
         let fun = BuiltinScalarFunction::Random;
-        assert_eq!(fun.volatility(), Volatility::Volatile);
         let rand = Expr::ScalarFunction { args: vec![], fun };
         let expr = (rand + lit(1)) + lit(2);
         test_evaluate(expr.clone(), expr);

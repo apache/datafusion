@@ -38,12 +38,13 @@ pub use csv::CsvExec;
 pub(crate) use json::plan_to_json;
 pub use json::NdJsonExec;
 
+use crate::datasource::listing::PartitionedFile;
 use crate::{
     error::{DataFusionError, Result},
     scalar::ScalarValue,
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
-use datafusion_storage::{object_store::ObjectStore, PartitionedFile};
+use datafusion_storage::object_store::ObjectStore;
 use lazy_static::lazy_static;
 use log::info;
 use std::{
@@ -167,6 +168,22 @@ impl<'a> Display for FileGroupsDisplay<'a> {
                     .join(", ")
             })
             .collect();
+        write!(f, "[{}]", parts.join(", "))
+    }
+}
+
+/// A wrapper to customize partitioned file display
+#[derive(Debug)]
+struct ProjectSchemaDisplay<'a>(&'a SchemaRef);
+
+impl<'a> Display for ProjectSchemaDisplay<'a> {
+    fn fmt(&self, f: &mut Formatter) -> FmtResult {
+        let parts: Vec<_> = self
+            .0
+            .fields()
+            .iter()
+            .map(|x| x.name().to_owned())
+            .collect::<Vec<String>>();
         write!(f, "[{}]", parts.join(", "))
     }
 }

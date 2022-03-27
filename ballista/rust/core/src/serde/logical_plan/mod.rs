@@ -406,6 +406,25 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 builder.build().map_err(|e| e.into())
             }
+            LogicalPlanType::Union(union) => {
+                let mut input_plans: Vec<LogicalPlan> = union
+                    .inputs
+                    .iter()
+                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
+                    .collect::<Result<_, BallistaError>>()?;
+
+                if input_plans.len() < 2 {
+                    return  Err( BallistaError::General(String::from(
+                       "Protobuf deserialization error, Union was require at least two input.",
+                   )));
+                }
+
+                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                for plan in input_plans {
+                    builder = builder.union(plan)?;
+                }
+                builder.build().map_err(|e| e.into())
+            }
             LogicalPlanType::CrossJoin(crossjoin) => {
                 let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
                 let right = into_logical_plan!(crossjoin.right, &ctx, extension_codec)?;
@@ -815,7 +834,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::Union(union) => {
+                let inputs: Vec<LogicalPlanNode> = union
+                    .inputs
+                    .iter()
+                    .map(|i| {
+                        protobuf::LogicalPlanNode::try_from_logical_plan(
+                            i,
+                            extension_codec,
+                        )
+                    })
+                    .collect::<Result<_, BallistaError>>()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Union(
+                        protobuf::UnionNode { inputs },
+                    )),
+                })
+            }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left = protobuf::LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
@@ -885,17 +920,17 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
-    use datafusion::datafusion_storage::{
-        object_store::{
-            local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
-            ObjectStore,
-        },
-        SizedFile,
-    };
-    use datafusion::datasource::listing::ListingTable;
-    use datafusion::error::DataFusionError;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
+        datafusion_storage::{
+            self,
+            object_store::{
+                local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+                ObjectStore,
+            },
+            SizedFile,
+        },
+        datasource::listing::ListingTable,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
             ToDFSchema,
@@ -903,6 +938,7 @@ mod roundtrip_tests {
         prelude::*,
         sql::parser::FileType,
     };
+    use std::io;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -913,8 +949,9 @@ mod roundtrip_tests {
         async fn list_file(
             &self,
             _prefix: &str,
-        ) -> datafusion::error::Result<FileMetaStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_storage::Result<FileMetaStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -923,8 +960,9 @@ mod roundtrip_tests {
             &self,
             _prefix: &str,
             _delimiter: Option<String>,
-        ) -> datafusion::error::Result<ListEntryStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_storage::Result<ListEntryStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -932,8 +970,9 @@ mod roundtrip_tests {
         fn file_reader(
             &self,
             _file: SizedFile,
-        ) -> datafusion::error::Result<Arc<dyn ObjectReader>> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_storage::Result<Arc<dyn ObjectReader>> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
