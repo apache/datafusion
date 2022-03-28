@@ -171,7 +171,7 @@ impl TryFrom<datafusion_expr::Expr> for Expr {
                 Ok(Expr::Literal(Literal::Typed(TypedLit::Float(*f))))
             }
             _ => Err(DataFusionError::NotImplemented(
-                format!("Compiling {:?} not yet supported", value).to_string(),
+                format!("Compiling {:?} not yet supported", value),
             )),
         }
     }
