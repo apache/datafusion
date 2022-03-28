@@ -3514,13 +3514,25 @@ mod tests {
     }
 
     #[test]
-    fn union_schemas_should_be_same() {
+    fn union_with_different_column_names() {
         let sql = "SELECT order_id from orders UNION ALL SELECT customer_id FROM orders";
-        let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            "Plan(\"UNION ALL schemas are expected to be the same\")",
-            format!("{:?}", err)
-        );
+        let expected = "Union\
+            \n  Projection: #orders.order_id\
+            \n    TableScan: orders projection=None\
+            \n  Projection: #orders.customer_id\
+            \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_values_with_no_alias() {
+        let sql = "SELECT 1, 2 UNION ALL SELECT 3, 4";
+        let expected = "Union\
+            \n  Projection: Int64(1) AS column0, Int64(2) AS column1\
+            \n    EmptyRelation\
+            \n  Projection: Int64(3) AS column0, Int64(4) AS column1\
+            \n    EmptyRelation";
+        quick_test(sql, expected);
     }
 
     #[test]
