@@ -430,7 +430,7 @@ jobs:
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
           cd datafusion
           # Force all hash values to collide
-          cargo test --features=force_hash_collisions
+          cargo test --all --features=force_hash_collisions
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"

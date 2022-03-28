@@ -28,6 +28,8 @@ build = "build.rs"
 
 [features]
 simd = ["datafusion/simd"]
+# Used for testing ONLY: causes all values to hash to the same value (test for collisions)
+force_hash_collisions = ["datafusion/force_hash_collisions"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
