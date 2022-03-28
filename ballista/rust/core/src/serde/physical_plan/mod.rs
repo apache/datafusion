@@ -420,7 +420,11 @@ impl AsExecutionPlan for PhysicalPlanNode {
             PhysicalPlanType::Union(union) => {
                 let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
                 for input in &union.inputs {
-                    inputs.push(input.try_into_physical_plan(registry, runtime, extension_codec)?);
+                    inputs.push(input.try_into_physical_plan(
+                        registry,
+                        runtime,
+                        extension_codec,
+                    )?);
                 }
                 Ok(Arc::new(UnionExec::new(inputs)))
             }
