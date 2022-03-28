@@ -19,8 +19,8 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_limit() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 2";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec!["+----+", "| c1 |", "+----+", "| c  |", "| d  |", "+----+"];
@@ -30,8 +30,8 @@ async fn csv_query_limit() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 200";
     let actual = execute_to_batches(&ctx, sql).await;
     // println!("{}", pretty_format_batches(&a).unwrap());
@@ -56,8 +56,8 @@ async fn csv_query_limit_bigger_than_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c2 FROM aggregate_test_100 LIMIT 100";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -81,8 +81,8 @@ async fn csv_query_limit_with_same_nbr_of_rows() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_limit_zero() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 0";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec!["++", "++"];

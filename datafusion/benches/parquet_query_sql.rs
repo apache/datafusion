@@ -193,7 +193,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     assert!(Path::new(&file_path).exists(), "path not found");
     println!("Using parquet file {}", file_path);
 
-    let mut context = SessionContext::new();
+    let context = SessionContext::new();
 
     let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
     rt.block_on(context.register_parquet("t", file_path.as_str()))
@@ -219,7 +219,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         let query = query.as_str();
         c.bench_function(query, |b| {
             b.iter(|| {
-                let mut context = context.clone();
+                let context = context.clone();
                 rt.block_on(async move {
                     let query = context.sql(query).await.unwrap();
                     let mut stream = query.execute_stream().await.unwrap();

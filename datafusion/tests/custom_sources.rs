@@ -210,7 +210,7 @@ impl TableProvider for CustomTableProvider {
 
 #[tokio::test]
 async fn custom_source_dataframe() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let table = ctx.read_table(Arc::new(CustomTableProvider))?;
     let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
@@ -257,7 +257,7 @@ async fn custom_source_dataframe() -> Result<()> {
 
 #[tokio::test]
 async fn optimizers_catch_all_statistics() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(CustomTableProvider))
         .unwrap();
 

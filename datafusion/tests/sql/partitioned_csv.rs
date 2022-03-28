@@ -78,8 +78,7 @@ pub async fn create_ctx(
     tmp_dir: &TempDir,
     partition_count: usize,
 ) -> Result<SessionContext> {
-    let mut ctx =
-        SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
     let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
 

@@ -58,7 +58,7 @@ async fn join() -> Result<()> {
         ],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let table1 = MemTable::try_new(schema1, vec![vec![batch1]])?;
     let table2 = MemTable::try_new(schema2, vec![vec![batch2]])?;
@@ -96,7 +96,7 @@ async fn sort_on_unprojected_columns() -> Result<()> {
     )
     .unwrap();
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
     ctx.register_table("t", Arc::new(provider)).unwrap();
 
@@ -132,7 +132,7 @@ async fn filter_with_alias_overwrite() -> Result<()> {
     )
     .unwrap();
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch]]).unwrap();
     ctx.register_table("t", Arc::new(provider)).unwrap();
 

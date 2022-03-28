@@ -34,7 +34,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let mut ctx = SessionContext::new();
+//! let ctx = SessionContext::new();
 //!
 //! // create the dataframe
 //! let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
@@ -73,7 +73,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<()> {
-//! let mut ctx = SessionContext::new();
+//! let ctx = SessionContext::new();
 //!
 //! ctx.register_csv("example", "tests/example.csv", CsvReadOptions::new()).await?;
 //!

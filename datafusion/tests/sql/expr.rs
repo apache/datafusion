@@ -124,7 +124,7 @@ async fn query_not() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT NOT c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -143,12 +143,12 @@ async fn query_not() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_sum_cast() {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     // c8 = i32; c9 = i64
     let sql = "SELECT c8 + c9 FROM aggregate_test_100";
     // check that the physical and logical schemas are equal
-    execute(&mut ctx, sql).await;
+    execute(&ctx, sql).await;
 }
 
 #[tokio::test]
@@ -166,7 +166,7 @@ async fn query_is_null() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT c1 IS NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -198,7 +198,7 @@ async fn query_is_not_null() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT c1 IS NOT NULL FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -262,7 +262,7 @@ async fn query_scalar_minus_array() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT 4 - c1 FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -658,9 +658,9 @@ async fn test_cast_expressions() -> Result<()> {
 
 #[tokio::test]
 async fn test_random_expression() -> Result<()> {
-    let mut ctx = create_ctx()?;
+    let ctx = create_ctx()?;
     let sql = "SELECT random() r1";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let r1 = actual[0][0].parse::<f64>().unwrap();
     assert!(0.0 <= r1);
     assert!(r1 < 1.0);
@@ -685,8 +685,8 @@ async fn case_with_bool_type_result() -> Result<()> {
 
 #[tokio::test]
 async fn in_list_array() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv_by_sql(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_aggregate_csv_by_sql(&ctx).await;
     let sql = "SELECT
             c1 IN ('a', 'c') AS utf8_in_true
             ,c1 IN ('x', 'y') AS utf8_in_false
@@ -810,8 +810,8 @@ async fn test_in_list_scalar() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_boolean_eq_neq() {
-    let mut ctx = SessionContext::new();
-    register_boolean(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for eq and neq
     let sql = "SELECT a, b, a = b as eq, b = true as eq_scalar, a != b as neq, a != true as neq_scalar FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -836,8 +836,8 @@ async fn csv_query_boolean_eq_neq() {
 
 #[tokio::test]
 async fn csv_query_boolean_lt_lt_eq() {
-    let mut ctx = SessionContext::new();
-    register_boolean(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for < and <=
     let sql = "SELECT a, b, a < b as lt, b = true as lt_scalar, a <= b as lt_eq, a <= true as lt_eq_scalar FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -862,8 +862,8 @@ async fn csv_query_boolean_lt_lt_eq() {
 
 #[tokio::test]
 async fn csv_query_boolean_gt_gt_eq() {
-    let mut ctx = SessionContext::new();
-    register_boolean(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for > and >=
     let sql = "SELECT a, b, a > b as gt, b = true as gt_scalar, a >= b as gt_eq, a >= true as gt_eq_scalar FROM t1";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -888,8 +888,8 @@ async fn csv_query_boolean_gt_gt_eq() {
 
 #[tokio::test]
 async fn csv_query_boolean_distinct_from() {
-    let mut ctx = SessionContext::new();
-    register_boolean(&mut ctx).await.unwrap();
+    let ctx = SessionContext::new();
+    register_boolean(&ctx).await.unwrap();
     // verify the plumbing is all hooked up for is distinct from and is not distinct from
     let sql = "SELECT a, b, \
                a is distinct from b as df, \
@@ -919,10 +919,10 @@ async fn csv_query_boolean_distinct_from() {
 
 #[tokio::test]
 async fn csv_query_nullif_divide_by_0() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c8/nullif(c7, 0) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let actual = &actual[80..90]; // We just want to compare rows 80-89
     let expected = vec![
         vec!["258"],
@@ -941,8 +941,8 @@ async fn csv_query_nullif_divide_by_0() -> Result<()> {
 }
 #[tokio::test]
 async fn csv_count_star() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT COUNT(*), COUNT(1) AS c, COUNT(c1) FROM aggregate_test_100";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -958,10 +958,10 @@ async fn csv_count_star() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_avg_sqrt() -> Result<()> {
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = create_ctx()?;
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c12)) FROM aggregate_test_100";
-    let mut actual = execute(&mut ctx, sql).await;
+    let mut actual = execute(&ctx, sql).await;
     actual.sort();
     let expected = vec![vec!["0.6706002946036462"]];
     assert_float_eq(&expected, &actual);
@@ -971,10 +971,10 @@ async fn csv_query_avg_sqrt() -> Result<()> {
 // this query used to deadlock due to the call udf(udf())
 #[tokio::test]
 async fn csv_query_sqrt_sqrt() -> Result<()> {
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = create_ctx()?;
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT sqrt(sqrt(c12)) FROM aggregate_test_100 LIMIT 1";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
     let expected = vec![vec!["0.9818650561397431"]];
     assert_float_eq(&expected, &actual);

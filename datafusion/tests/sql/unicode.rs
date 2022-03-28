@@ -116,10 +116,10 @@ async fn generic_query_length<T: 'static + Array + From<Vec<&'static str>>>(
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT length(c1) FROM test";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0"], vec!["1"], vec!["2"], vec!["3"]];
     assert_eq!(expected, actual);
     Ok(())

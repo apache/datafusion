@@ -116,7 +116,7 @@ const DEFAULT_SCHEMA: &str = "public";
 /// # use datafusion::error::Result;
 /// # #[tokio::main]
 /// # async fn main() -> Result<()> {
-/// let mut ctx = SessionContext::new();
+/// let ctx = SessionContext::new();
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
@@ -170,7 +170,7 @@ impl SessionContext {
 
     /// Creates a new session context using the provided configuration and RuntimeEnv.
     pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
-        let state = SessionState::with_config(config, runtime);
+        let state = SessionState::with_config_rt(config, runtime);
         Self {
             session_id: state.session_id.clone(),
             session_start_time: chrono::Utc::now(),
@@ -192,6 +192,11 @@ impl SessionContext {
         self.state.read().runtime_env.clone()
     }
 
+    /// Return the session_id of this Session
+    pub fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
+
     /// Return a copied version of config for this Session
     pub fn copied_config(&self) -> SessionConfig {
         self.state.read().config.clone()
@@ -201,7 +206,7 @@ impl SessionContext {
     ///
     /// This method is `async` because queries of type `CREATE EXTERNAL TABLE`
     /// might require the schema to be inferred.
-    pub async fn sql(&mut self, sql: &str) -> Result<Arc<DataFrame>> {
+    pub async fn sql(&self, sql: &str) -> Result<Arc<DataFrame>> {
         let plan = self.create_logical_plan(sql)?;
         match plan {
             LogicalPlan::CreateExternalTable(CreateExternalTable {
@@ -381,7 +386,7 @@ impl SessionContext {
 
     /// Creates a DataFrame for reading an Avro data source.
     pub async fn read_avro(
-        &mut self,
+        &self,
         uri: impl Into<String>,
         options: AvroReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
@@ -435,7 +440,7 @@ impl SessionContext {
 
     /// Creates a DataFrame for reading a CSV data source.
     pub async fn read_csv(
-        &mut self,
+        &self,
         uri: impl Into<String>,
         options: CsvReadOptions<'_>,
     ) -> Result<Arc<DataFrame>> {
@@ -457,10 +462,7 @@ impl SessionContext {
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
-    pub async fn read_parquet(
-        &mut self,
-        uri: impl Into<String>,
-    ) -> Result<Arc<DataFrame>> {
+    pub async fn read_parquet(&self, uri: impl Into<String>) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
@@ -472,10 +474,7 @@ impl SessionContext {
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.
-    pub fn read_table(
-        &mut self,
-        provider: Arc<dyn TableProvider>,
-    ) -> Result<Arc<DataFrame>> {
+    pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
             &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
@@ -486,7 +485,7 @@ impl SessionContext {
     /// find the files to be processed
     /// This is async because it might need to resolve the schema.
     pub async fn register_listing_table<'a>(
-        &'a mut self,
+        &'a self,
         name: &'a str,
         uri: &'a str,
         options: ListingOptions,
@@ -512,7 +511,7 @@ impl SessionContext {
     /// Registers a CSV data source so that it can be referenced from SQL statements
     /// executed against this context.
     pub async fn register_csv(
-        &mut self,
+        &self,
         name: &str,
         uri: &str,
         options: CsvReadOptions<'_>,
@@ -534,7 +533,7 @@ impl SessionContext {
     // Registers a Json data source so that it can be referenced from SQL statements
     /// executed against this context.
     pub async fn register_json(
-        &mut self,
+        &self,
         name: &str,
         uri: &str,
         options: NdJsonReadOptions<'_>,
@@ -549,7 +548,7 @@ impl SessionContext {
 
     /// Registers a Parquet data source so that it can be referenced from SQL statements
     /// executed against this context.
-    pub async fn register_parquet(&mut self, name: &str, uri: &str) -> Result<()> {
+    pub async fn register_parquet(&self, name: &str, uri: &str) -> Result<()> {
         let (target_partitions, enable_pruning) = {
             let conf = self.copied_config();
             (conf.target_partitions, conf.parquet_pruning)
@@ -572,7 +571,7 @@ impl SessionContext {
     /// Registers an Avro data source so that it can be referenced from SQL statements
     /// executed against this context.
     pub async fn register_avro(
-        &mut self,
+        &self,
         name: &str,
         uri: &str,
         options: AvroReadOptions<'_>,
@@ -623,7 +622,7 @@ impl SessionContext {
     /// Returns the `TableProvider` previously registered for this
     /// reference, if any
     pub fn register_table<'a>(
-        &'a mut self,
+        &'a self,
         table_ref: impl Into<TableReference<'a>>,
         provider: Arc<dyn TableProvider>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
@@ -638,7 +637,7 @@ impl SessionContext {
     ///
     /// Returns the registered provider, if any
     pub fn deregister_table<'a>(
-        &'a mut self,
+        &'a self,
         table_ref: impl Into<TableReference<'a>>,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         let table_ref = table_ref.into();
@@ -947,6 +946,33 @@ impl SessionConfig {
         self.parquet_pruning = enabled;
         self
     }
+
+    /// Convert configuration to name-value pairs
+    pub fn to_props(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert(BATCH_SIZE.to_owned(), format!("{}", self.batch_size));
+        map.insert(
+            TARGET_PARTITIONS.to_owned(),
+            format!("{}", self.target_partitions),
+        );
+        map.insert(
+            REPARTITION_JOINS.to_owned(),
+            format!("{}", self.repartition_joins),
+        );
+        map.insert(
+            REPARTITION_AGGREGATIONS.to_owned(),
+            format!("{}", self.repartition_aggregations),
+        );
+        map.insert(
+            REPARTITION_WINDOWS.to_owned(),
+            format!("{}", self.repartition_windows),
+        );
+        map.insert(
+            PARQUET_PRUNING.to_owned(),
+            format!("{}", self.parquet_pruning),
+        );
+        map
+    }
 }
 
 /// Holds per-execution properties and data (such as starting timestamps, etc).
@@ -1015,7 +1041,7 @@ impl ExecutionProps {
 #[derive(Clone)]
 pub struct SessionState {
     /// Uuid for the session
-    session_id: String,
+    pub session_id: String,
     /// Responsible for optimizing a logical plan
     pub optimizers: Vec<Arc<dyn OptimizerRule + Send + Sync>>,
     /// Responsible for optimizing a physical execution plan
@@ -1036,9 +1062,17 @@ pub struct SessionState {
     pub runtime_env: Arc<RuntimeEnv>,
 }
 
+/// Default session builder using the provided configuration
+pub fn default_session_builder(config: SessionConfig) -> SessionState {
+    SessionState::with_config_rt(
+        config,
+        Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap()),
+    )
+}
+
 impl SessionState {
     /// Returns new SessionState using the provided configuration and runtime
-    pub fn with_config(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
+    pub fn with_config_rt(config: SessionConfig, runtime: Arc<RuntimeEnv>) -> Self {
         let session_id = Uuid::new_v4().to_string();
 
         let catalog_list = Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
@@ -1309,13 +1343,17 @@ pub enum TaskProperties {
 /// Task Execution Context
 pub struct TaskContext {
     /// Session Id
-    pub session_id: String,
+    session_id: String,
     /// Optional Task Identify
-    pub task_id: Option<String>,
+    task_id: Option<String>,
     /// Task properties
-    pub properties: TaskProperties,
+    properties: TaskProperties,
+    /// Scalar functions associated with this task context
+    scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    /// Aggregate functions associated with this task context
+    aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Runtime environment associated with this task context
-    pub runtime: Arc<RuntimeEnv>,
+    runtime: Arc<RuntimeEnv>,
 }
 
 impl TaskContext {
@@ -1323,13 +1361,17 @@ impl TaskContext {
     pub fn new(
         task_id: String,
         session_id: String,
-        task_settings: HashMap<String, String>,
+        task_props: HashMap<String, String>,
+        scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+        aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
             task_id: Some(task_id),
             session_id,
-            properties: TaskProperties::KVPairs(task_settings),
+            properties: TaskProperties::KVPairs(task_props),
+            scalar_functions,
+            aggregate_functions,
             runtime,
         }
     }
@@ -1369,18 +1411,42 @@ impl TaskContext {
             TaskProperties::SessionConfig(session_config) => session_config.clone(),
         }
     }
+
+    /// Return the session_id of this [TaskContext]
+    pub fn session_id(&self) -> String {
+        self.session_id.clone()
+    }
+
+    /// Return the task_id of this [TaskContext]
+    pub fn task_id(&self) -> Option<String> {
+        self.task_id.clone()
+    }
+
+    /// Return the [RuntimeEnv] associated with this [TaskContext]
+    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
+        self.runtime.clone()
+    }
 }
 
 /// Create a new task context instance from SessionContext
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
         let session_id = session.session_id.clone();
-        let config = session.state.read().config.clone();
+        let (config, scalar_functions, aggregate_functions) = {
+            let session_state = session.state.read();
+            (
+                session_state.config.clone(),
+                session_state.scalar_functions.clone(),
+                session_state.aggregate_functions.clone(),
+            )
+        };
         let runtime = session.runtime_env();
         Self {
             task_id: None,
             session_id,
             properties: TaskProperties::SessionConfig(config),
+            scalar_functions,
+            aggregate_functions,
             runtime,
         }
     }
@@ -1391,13 +1457,45 @@ impl From<&SessionState> for TaskContext {
     fn from(state: &SessionState) -> Self {
         let session_id = state.session_id.clone();
         let config = state.config.clone();
+        let scalar_functions = state.scalar_functions.clone();
+        let aggregate_functions = state.aggregate_functions.clone();
         let runtime = state.runtime_env.clone();
         Self {
             task_id: None,
             session_id,
             properties: TaskProperties::SessionConfig(config),
+            scalar_functions,
+            aggregate_functions,
             runtime,
         }
+    }
+}
+
+impl FunctionRegistry for TaskContext {
+    fn udfs(&self) -> HashSet<String> {
+        self.scalar_functions.keys().cloned().collect()
+    }
+
+    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
+        let result = self.scalar_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "There is no UDF named \"{}\" in the TaskContext",
+                name
+            ))
+        })
+    }
+
+    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
+        let result = self.aggregate_functions.get(name);
+
+        result.cloned().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "There is no UDAF named \"{}\" in the TaskContext",
+                name
+            ))
+        })
     }
 }
 
@@ -1479,7 +1577,7 @@ mod tests {
         ctx.register_table("dual", provider)?;
 
         let results =
-            plan_and_collect(&mut ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
+            plan_and_collect(&ctx, "SELECT @@version, @name, @integer + 1 FROM dual")
                 .await?;
 
         let expected = vec![
@@ -1498,7 +1596,7 @@ mod tests {
     async fn register_deregister() -> Result<()> {
         let tmp_dir = TempDir::new()?;
         let partition_count = 4;
-        let mut ctx = create_ctx(&tmp_dir, partition_count).await?;
+        let ctx = create_ctx(&tmp_dir, partition_count).await?;
 
         let provider = test::create_table_dual();
         ctx.register_table("dual", provider)?;
@@ -1757,11 +1855,11 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_min() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
-        let result = plan_and_collect(&mut ctx, "select min(c1) from d_table")
+        let result = plan_and_collect(&ctx, "select min(c1) from d_table")
             .await
             .unwrap();
         let expected = vec![
@@ -1781,12 +1879,12 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_max() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
 
-        let result = plan_and_collect(&mut ctx, "select max(c1) from d_table")
+        let result = plan_and_collect(&ctx, "select max(c1) from d_table")
             .await
             .unwrap();
         let expected = vec![
@@ -1806,11 +1904,11 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_sum() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
-        let result = plan_and_collect(&mut ctx, "select sum(c1) from d_table")
+        let result = plan_and_collect(&ctx, "select sum(c1) from d_table")
             .await
             .unwrap();
         let expected = vec![
@@ -1830,11 +1928,11 @@ mod tests {
 
     #[tokio::test]
     async fn aggregate_decimal_avg() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         // the data type of c1 is decimal(10,3)
         ctx.register_table("d_table", test::table_with_decimal())
             .unwrap();
-        let result = plan_and_collect(&mut ctx, "select avg(c1) from d_table")
+        let result = plan_and_collect(&ctx, "select avg(c1) from d_table")
             .await
             .unwrap();
         let expected = vec![
@@ -2145,7 +2243,7 @@ mod tests {
     #[tokio::test]
     async fn group_by_date_trunc() -> Result<()> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let schema = Arc::new(Schema::new(vec![
             Field::new("c2", DataType::UInt64, false),
             Field::new(
@@ -2176,7 +2274,7 @@ mod tests {
         .await?;
 
         let results = plan_and_collect(
-            &mut ctx,
+            &ctx,
             "SELECT date_trunc('week', t1) as week, SUM(c2) FROM test GROUP BY date_trunc('week', t1)",
         ).await?;
 
@@ -2196,7 +2294,7 @@ mod tests {
     #[tokio::test]
     async fn group_by_largeutf8() {
         {
-            let mut ctx = SessionContext::new();
+            let ctx = SessionContext::new();
 
             // input data looks like:
             // A, 1
@@ -2227,7 +2325,7 @@ mod tests {
             ctx.register_table("t", Arc::new(provider)).unwrap();
 
             let results =
-                plan_and_collect(&mut ctx, "SELECT str, count(val) FROM t GROUP BY str")
+                plan_and_collect(&ctx, "SELECT str, count(val) FROM t GROUP BY str")
                     .await
                     .expect("ran plan correctly");
 
@@ -2246,7 +2344,7 @@ mod tests {
 
     #[tokio::test]
     async fn unprojected_filter() {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let df = ctx
             .read_table(test::table_with_sequence(1, 3).unwrap())
             .unwrap();
@@ -2271,7 +2369,7 @@ mod tests {
     #[tokio::test]
     async fn group_by_dictionary() {
         async fn run_test_case<K: ArrowDictionaryKeyType>() {
-            let mut ctx = SessionContext::new();
+            let ctx = SessionContext::new();
 
             // input data looks like:
             // A, 1
@@ -2299,12 +2397,10 @@ mod tests {
             let provider = MemTable::try_new(schema.clone(), vec![vec![batch]]).unwrap();
             ctx.register_table("t", Arc::new(provider)).unwrap();
 
-            let results = plan_and_collect(
-                &mut ctx,
-                "SELECT dict, count(val) FROM t GROUP BY dict",
-            )
-            .await
-            .expect("ran plan correctly");
+            let results =
+                plan_and_collect(&ctx, "SELECT dict, count(val) FROM t GROUP BY dict")
+                    .await
+                    .expect("ran plan correctly");
 
             let expected = vec![
                 "+------+--------------+",
@@ -2319,7 +2415,7 @@ mod tests {
 
             // Now, use dict as an aggregate
             let results =
-                plan_and_collect(&mut ctx, "SELECT val, count(dict) FROM t GROUP BY val")
+                plan_and_collect(&ctx, "SELECT val, count(dict) FROM t GROUP BY val")
                     .await
                     .expect("ran plan correctly");
 
@@ -2336,7 +2432,7 @@ mod tests {
 
             // Now, use dict as an aggregate
             let results = plan_and_collect(
-                &mut ctx,
+                &ctx,
                 "SELECT val, count(distinct dict) FROM t GROUP BY val",
             )
             .await
@@ -2368,7 +2464,7 @@ mod tests {
         partitions: Vec<Vec<(&str, u64)>>,
     ) -> Result<Vec<RecordBatch>> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let schema = Arc::new(Schema::new(vec![
             Field::new("c_group", DataType::Utf8, false),
             Field::new("c_int8", DataType::Int8, false),
@@ -2407,7 +2503,7 @@ mod tests {
         .await?;
 
         let results = plan_and_collect(
-            &mut ctx,
+            &ctx,
             "
               SELECT
                 c_group,
@@ -2517,14 +2613,13 @@ mod tests {
     #[tokio::test]
     async fn limit() -> Result<()> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = create_ctx(&tmp_dir, 1).await?;
+        let ctx = create_ctx(&tmp_dir, 1).await?;
         ctx.register_table("t", test::table_with_sequence(1, 1000).unwrap())
             .unwrap();
 
-        let results =
-            plan_and_collect(&mut ctx, "SELECT i FROM t ORDER BY i DESC limit 3")
-                .await
-                .unwrap();
+        let results = plan_and_collect(&ctx, "SELECT i FROM t ORDER BY i DESC limit 3")
+            .await
+            .unwrap();
 
         let expected = vec![
             "+------+", "| i    |", "+------+", "| 1000 |", "| 999  |", "| 998  |",
@@ -2533,7 +2628,7 @@ mod tests {
 
         assert_batches_eq!(expected, &results);
 
-        let results = plan_and_collect(&mut ctx, "SELECT i FROM t ORDER BY i limit 3")
+        let results = plan_and_collect(&ctx, "SELECT i FROM t ORDER BY i limit 3")
             .await
             .unwrap();
 
@@ -2543,7 +2638,7 @@ mod tests {
 
         assert_batches_eq!(expected, &results);
 
-        let results = plan_and_collect(&mut ctx, "SELECT i FROM t limit 3")
+        let results = plan_and_collect(&ctx, "SELECT i FROM t limit 3")
             .await
             .unwrap();
 
@@ -2557,7 +2652,7 @@ mod tests {
     #[tokio::test]
     async fn limit_multi_partitions() -> Result<()> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = create_ctx(&tmp_dir, 1).await?;
+        let ctx = create_ctx(&tmp_dir, 1).await?;
 
         let partitions = vec![
             vec![test::make_partition(0)],
@@ -2573,14 +2668,14 @@ mod tests {
         ctx.register_table("t", provider).unwrap();
 
         // select all rows
-        let results = plan_and_collect(&mut ctx, "SELECT i FROM t").await.unwrap();
+        let results = plan_and_collect(&ctx, "SELECT i FROM t").await.unwrap();
 
         let num_rows: usize = results.into_iter().map(|b| b.num_rows()).sum();
         assert_eq!(num_rows, 15);
 
         for limit in 1..10 {
             let query = format!("SELECT i FROM t limit {}", limit);
-            let results = plan_and_collect(&mut ctx, &query).await.unwrap();
+            let results = plan_and_collect(&ctx, &query).await.unwrap();
 
             let num_rows: usize = results.into_iter().map(|b| b.num_rows()).sum();
             assert_eq!(num_rows, limit, "mismatch with query {}", query);
@@ -2591,7 +2686,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_functions() {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2603,19 +2698,19 @@ mod tests {
             "+-----------+",
         ];
 
-        let results = plan_and_collect(&mut ctx, "SELECT sqrt(i) FROM t")
+        let results = plan_and_collect(&ctx, "SELECT sqrt(i) FROM t")
             .await
             .unwrap();
 
         assert_batches_sorted_eq!(expected, &results);
 
-        let results = plan_and_collect(&mut ctx, "SELECT SQRT(i) FROM t")
+        let results = plan_and_collect(&ctx, "SELECT SQRT(i) FROM t")
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
 
         // Using double quotes allows specifying the function name with capitalization
-        let err = plan_and_collect(&mut ctx, "SELECT \"SQRT\"(i) FROM t")
+        let err = plan_and_collect(&ctx, "SELECT \"SQRT\"(i) FROM t")
             .await
             .unwrap_err();
         assert_eq!(
@@ -2623,7 +2718,7 @@ mod tests {
             "Error during planning: Invalid function 'SQRT'"
         );
 
-        let results = plan_and_collect(&mut ctx, "SELECT \"sqrt\"(i) FROM t")
+        let results = plan_and_collect(&ctx, "SELECT \"sqrt\"(i) FROM t")
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
@@ -2631,7 +2726,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_builtin_math_expression() {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         let type_values = vec![
             (
@@ -2691,7 +2786,7 @@ mod tests {
                 "| 1         |",
                 "+-----------+",
             ];
-            let results = plan_and_collect(&mut ctx, "SELECT sqrt(v) FROM t")
+            let results = plan_and_collect(&ctx, "SELECT sqrt(v) FROM t")
                 .await
                 .unwrap();
 
@@ -2717,7 +2812,7 @@ mod tests {
         ));
 
         // doesn't work as it was registered with non lowercase
-        let err = plan_and_collect(&mut ctx, "SELECT MY_FUNC(i) FROM t")
+        let err = plan_and_collect(&ctx, "SELECT MY_FUNC(i) FROM t")
             .await
             .unwrap_err();
         assert_eq!(
@@ -2726,7 +2821,7 @@ mod tests {
         );
 
         // Can call it if you put quotes
-        let result = plan_and_collect(&mut ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
+        let result = plan_and_collect(&ctx, "SELECT \"MY_FUNC\"(i) FROM t").await?;
 
         let expected = vec![
             "+--------------+",
@@ -2742,7 +2837,7 @@ mod tests {
 
     #[tokio::test]
     async fn case_sensitive_identifiers_aggregates() {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
             .unwrap();
 
@@ -2754,19 +2849,19 @@ mod tests {
             "+----------+",
         ];
 
-        let results = plan_and_collect(&mut ctx, "SELECT max(i) FROM t")
+        let results = plan_and_collect(&ctx, "SELECT max(i) FROM t")
             .await
             .unwrap();
 
         assert_batches_sorted_eq!(expected, &results);
 
-        let results = plan_and_collect(&mut ctx, "SELECT MAX(i) FROM t")
+        let results = plan_and_collect(&ctx, "SELECT MAX(i) FROM t")
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
 
         // Using double quotes allows specifying the function name with capitalization
-        let err = plan_and_collect(&mut ctx, "SELECT \"MAX\"(i) FROM t")
+        let err = plan_and_collect(&ctx, "SELECT \"MAX\"(i) FROM t")
             .await
             .unwrap_err();
         assert_eq!(
@@ -2774,7 +2869,7 @@ mod tests {
             "Error during planning: Invalid function 'MAX'"
         );
 
-        let results = plan_and_collect(&mut ctx, "SELECT \"max\"(i) FROM t")
+        let results = plan_and_collect(&ctx, "SELECT \"max\"(i) FROM t")
             .await
             .unwrap();
         assert_batches_sorted_eq!(expected, &results);
@@ -2799,7 +2894,7 @@ mod tests {
         ctx.register_udaf(my_avg);
 
         // doesn't work as it was registered as non lowercase
-        let err = plan_and_collect(&mut ctx, "SELECT MY_AVG(i) FROM t")
+        let err = plan_and_collect(&ctx, "SELECT MY_AVG(i) FROM t")
             .await
             .unwrap_err();
         assert_eq!(
@@ -2808,7 +2903,7 @@ mod tests {
         );
 
         // Can call it if you put quotes
-        let result = plan_and_collect(&mut ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
+        let result = plan_and_collect(&ctx, "SELECT \"MY_AVG\"(i) FROM t").await?;
 
         let expected = vec![
             "+-------------+",
@@ -2829,7 +2924,7 @@ mod tests {
         // The main stipulation of this test: use a file extension that isn't .csv.
         let file_extension = ".tst";
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let schema = populate_csv_partitions(&tmp_dir, 2, file_extension)?;
         ctx.register_csv(
             "test",
@@ -2840,8 +2935,7 @@ mod tests {
         )
         .await?;
         let results =
-            plan_and_collect(&mut ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test")
-                .await?;
+            plan_and_collect(&ctx, "SELECT SUM(c1), SUM(c2), COUNT(*) FROM test").await?;
 
         assert_eq!(results.len(), 1);
         let expected = vec![
@@ -2885,7 +2979,7 @@ mod tests {
 
     #[tokio::test]
     async fn ctx_sql_should_optimize_plan() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let plan1 = ctx
             .create_logical_plan("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
 
@@ -2916,13 +3010,13 @@ mod tests {
             vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
         )?;
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         let provider =
             MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
         ctx.register_table("t", Arc::new(provider))?;
 
-        let result = plan_and_collect(&mut ctx, "SELECT AVG(a) FROM t").await?;
+        let result = plan_and_collect(&ctx, "SELECT AVG(a) FROM t").await?;
 
         let batch = &result[0];
         assert_eq!(1, batch.num_columns());
@@ -2942,9 +3036,9 @@ mod tests {
     #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
-        let session_state = SessionState::with_config(SessionConfig::new(), runtime)
+        let session_state = SessionState::with_config_rt(SessionConfig::new(), runtime)
             .with_query_planner(Arc::new(MyQueryPlanner {}));
-        let mut ctx = SessionContext::with_state(session_state);
+        let ctx = SessionContext::with_state(session_state);
 
         let df = ctx.sql("SELECT 1").await?;
         df.collect().await.expect_err("query not supported");
@@ -2953,7 +3047,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_default_catalog_and_schema() -> Result<()> {
-        let mut ctx = SessionContext::with_config(
+        let ctx = SessionContext::with_config(
             SessionConfig::new().create_default_catalog_and_schema(false),
         );
 
@@ -2996,8 +3090,7 @@ mod tests {
     }
 
     async fn catalog_and_schema_test(config: SessionConfig) {
-        let mut ctx = SessionContext::with_config(config);
-
+        let ctx = SessionContext::with_config(config);
         let catalog = MemoryCatalogProvider::new();
         let schema = MemorySchemaProvider::new();
         schema
@@ -3010,7 +3103,7 @@ mod tests {
 
         for table_ref in &["my_catalog.my_schema.test", "my_schema.test", "test"] {
             let result = plan_and_collect(
-                &mut ctx,
+                &ctx,
                 &format!("SELECT COUNT(*) AS count FROM {}", table_ref),
             )
             .await
@@ -3029,7 +3122,7 @@ mod tests {
 
     #[tokio::test]
     async fn cross_catalog_access() -> Result<()> {
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         let catalog_a = MemoryCatalogProvider::new();
         let schema_a = MemorySchemaProvider::new();
@@ -3046,7 +3139,7 @@ mod tests {
         ctx.register_catalog("catalog_b", Arc::new(catalog_b));
 
         let result = plan_and_collect(
-            &mut ctx,
+            &ctx,
             "SELECT cat, SUM(i) AS total FROM (
                     SELECT i, 'a' AS cat FROM catalog_a.schema_a.table_a
                     UNION ALL
@@ -3097,7 +3190,7 @@ mod tests {
     #[tokio::test]
     async fn sql_create_schema() -> Result<()> {
         // the information schema used to introduce cyclic Arcs
-        let mut ctx = SessionContext::with_config(
+        let ctx = SessionContext::with_config(
             SessionConfig::new().with_information_schema(true),
         );
 
@@ -3120,7 +3213,7 @@ mod tests {
     #[tokio::test]
     async fn normalized_column_identifiers() {
         // create local execution context
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         // register csv file with the execution context
         ctx.register_csv(
@@ -3132,7 +3225,7 @@ mod tests {
         .unwrap();
 
         let sql = "SELECT A, b FROM case_insensitive_test";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3145,7 +3238,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &result);
 
         let sql = "SELECT t.A, b FROM case_insensitive_test AS t";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3160,7 +3253,7 @@ mod tests {
         // Aliases
 
         let sql = "SELECT t.A as x, b FROM case_insensitive_test AS t";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3173,7 +3266,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &result);
 
         let sql = "SELECT t.A AS X, b FROM case_insensitive_test AS t";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3186,7 +3279,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &result);
 
         let sql = r#"SELECT t.A AS "X", b FROM case_insensitive_test AS t"#;
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3201,7 +3294,7 @@ mod tests {
         // Order by
 
         let sql = "SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY x";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3214,7 +3307,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &result);
 
         let sql = "SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY X";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3227,7 +3320,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &result);
 
         let sql = r#"SELECT t.A AS "X", b FROM case_insensitive_test AS t ORDER BY "X""#;
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3242,7 +3335,7 @@ mod tests {
         // Where
 
         let sql = "SELECT a, b FROM case_insensitive_test where A IS NOT null";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3257,7 +3350,7 @@ mod tests {
         // Group by
 
         let sql = "SELECT a as x, count(*) as c FROM case_insensitive_test GROUP BY X";
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3271,7 +3364,7 @@ mod tests {
 
         let sql =
             r#"SELECT a as "X", count(*) as c FROM case_insensitive_test GROUP BY "X""#;
-        let result = plan_and_collect(&mut ctx, sql)
+        let result = plan_and_collect(&ctx, sql)
             .await
             .expect("ran plan correctly");
         let expected = vec![
@@ -3327,7 +3420,7 @@ mod tests {
 
     /// Execute SQL and return results
     async fn plan_and_collect(
-        ctx: &mut SessionContext,
+        ctx: &SessionContext,
         sql: &str,
     ) -> Result<Vec<RecordBatch>> {
         ctx.sql(sql).await?.collect().await
@@ -3336,8 +3429,8 @@ mod tests {
     /// Execute SQL and return results
     async fn execute(sql: &str, partition_count: usize) -> Result<Vec<RecordBatch>> {
         let tmp_dir = TempDir::new()?;
-        let mut ctx = create_ctx(&tmp_dir, partition_count).await?;
-        plan_and_collect(&mut ctx, sql).await
+        let ctx = create_ctx(&tmp_dir, partition_count).await?;
+        plan_and_collect(&ctx, sql).await
     }
 
     /// Generate CSV partitions within the supplied directory
@@ -3374,7 +3467,7 @@ mod tests {
         tmp_dir: &TempDir,
         partition_count: usize,
     ) -> Result<SessionContext> {
-        let mut ctx =
+        let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
         let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
@@ -3404,19 +3497,19 @@ mod tests {
     #[async_trait]
     impl CallReadTrait for CallRead {
         async fn call_read_csv(&self) -> Arc<DataFrame> {
-            let mut ctx = SessionContext::new();
+            let ctx = SessionContext::new();
             ctx.read_csv("dummy", CsvReadOptions::new()).await.unwrap()
         }
 
         async fn call_read_avro(&self) -> Arc<DataFrame> {
-            let mut ctx = SessionContext::new();
+            let ctx = SessionContext::new();
             ctx.read_avro("dummy", AvroReadOptions::default())
                 .await
                 .unwrap()
         }
 
         async fn call_read_parquet(&self) -> Arc<DataFrame> {
-            let mut ctx = SessionContext::new();
+            let ctx = SessionContext::new();
             ctx.read_parquet("dummy").await.unwrap()
         }
     }

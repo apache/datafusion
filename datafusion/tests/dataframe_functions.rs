@@ -55,7 +55,7 @@ fn create_test_table() -> Result<Arc<DataFrame>> {
         ],
     )?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let table = MemTable::try_new(schema, vec![vec![batch]])?;
 

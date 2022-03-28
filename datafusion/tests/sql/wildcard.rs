@@ -19,8 +19,8 @@ use super::*;
 
 #[tokio::test]
 async fn select_qualified_wildcard() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT agg.* FROM aggregate_simple as agg order by c1";
     let results = execute_to_batches(&ctx, sql).await;
@@ -54,8 +54,8 @@ async fn select_qualified_wildcard() -> Result<()> {
 
 #[tokio::test]
 async fn select_non_alias_qualified_wildcard() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT aggregate_simple.* FROM aggregate_simple order by c1";
     let results = execute_to_batches(&ctx, sql).await;
@@ -132,8 +132,8 @@ async fn select_non_alias_qualified_wildcard_join() -> Result<()> {
 
 #[tokio::test]
 async fn select_wrong_qualified_wildcard() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql = "SELECT agg.* FROM aggregate_simple order by c1";
     let result = ctx.create_logical_plan(sql);

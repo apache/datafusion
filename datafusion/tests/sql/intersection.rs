@@ -49,8 +49,8 @@ async fn intersect_with_null_equal() {
 
 #[tokio::test]
 async fn test_intersect_all() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_alltypes_parquet(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT ALL SELECT int_col, double_col FROM alltypes_plain LIMIT 4";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -70,8 +70,8 @@ async fn test_intersect_all() -> Result<()> {
 
 #[tokio::test]
 async fn test_intersect_distinct() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_alltypes_parquet(&mut ctx).await;
+    let ctx = SessionContext::new();
+    register_alltypes_parquet(&ctx).await;
     // execute the query
     let sql = "SELECT int_col, double_col FROM alltypes_plain where int_col > 0 INTERSECT SELECT int_col, double_col FROM alltypes_plain";
     let actual = execute_to_batches(&ctx, sql).await;

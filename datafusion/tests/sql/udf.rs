@@ -27,10 +27,10 @@ use datafusion::{
 /// physical plan have the same schema.
 #[tokio::test]
 async fn csv_query_custom_udf_with_cast() -> Result<()> {
-    let mut ctx = create_ctx()?;
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = create_ctx()?;
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(custom_sqrt(c11)) FROM aggregate_test_100";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let expected = vec![vec!["0.6584408483418833"]];
     assert_float_eq(&expected, &actual);
     Ok(())
@@ -172,7 +172,7 @@ async fn simple_udaf() -> Result<()> {
 
     ctx.register_udaf(my_avg);
 
-    let result = plan_and_collect(&mut ctx, "SELECT MY_AVG(a) FROM t").await?;
+    let result = plan_and_collect(&ctx, "SELECT MY_AVG(a) FROM t").await?;
 
     let expected = vec![
         "+-------------+",

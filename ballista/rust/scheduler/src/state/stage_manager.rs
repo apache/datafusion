@@ -28,6 +28,7 @@ use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf;
 use ballista_core::serde::protobuf::{task_status, FailedTask, TaskStatus};
 
+/// job_id + stage_id
 pub type StageKey = (String, u32);
 
 #[derive(Clone)]

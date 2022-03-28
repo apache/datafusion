@@ -225,25 +225,26 @@ fn build_exec_plan_diagram(
     Ok(node_id)
 }
 
-/// Create a DataFusion context that uses the BallistaQueryPlanner to send logical plans
+/// Create a client DataFusion context that uses the BallistaQueryPlanner to send logical plans
 /// to a Ballista scheduler
 pub fn create_df_ctx_with_ballista_query_planner<T: 'static + AsLogicalPlan>(
-    scheduler_host: &str,
-    scheduler_port: u16,
+    scheduler_url: String,
+    session_id: String,
     config: &BallistaConfig,
 ) -> SessionContext {
-    let scheduler_url = format!("http://{}:{}", scheduler_host, scheduler_port);
     let planner: Arc<BallistaQueryPlanner<T>> =
         Arc::new(BallistaQueryPlanner::new(scheduler_url, config.clone()));
 
     let session_config = SessionConfig::new()
         .with_target_partitions(config.default_shuffle_partitions())
         .with_information_schema(true);
-    let session_state = SessionState::with_config(
+    let mut session_state = SessionState::with_config_rt(
         session_config,
         Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap()),
     )
     .with_query_planner(planner);
+    session_state.session_id = session_id;
+    // the SessionContext created here is the client side context, but the session_id is from server side.
     SessionContext::with_state(session_state)
 }
 
@@ -297,7 +298,7 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
     async fn create_physical_plan(
         &self,
         logical_plan: &LogicalPlan,
-        _session_state: &SessionState,
+        session_state: &SessionState,
     ) -> std::result::Result<Arc<dyn ExecutionPlan>, DataFusionError> {
         match logical_plan {
             LogicalPlan::CreateExternalTable(_) => {
@@ -310,6 +311,7 @@ impl<T: 'static + AsLogicalPlan> QueryPlanner for BallistaQueryPlanner<T> {
                 logical_plan.clone(),
                 self.extension_codec.clone(),
                 self.plan_repr,
+                session_state.session_id.clone(),
             ))),
         }
     }

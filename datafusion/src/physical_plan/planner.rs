@@ -1469,7 +1469,7 @@ mod tests {
 
     fn make_session_state() -> SessionState {
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
-        SessionState::with_config(SessionConfig::new(), runtime)
+        SessionState::with_config_rt(SessionConfig::new(), runtime)
     }
 
     async fn plan(logical_plan: &LogicalPlan) -> Result<Arc<dyn ExecutionPlan>> {
