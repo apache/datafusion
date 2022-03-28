@@ -533,7 +533,7 @@ impl SessionContext {
     // Registers a Json data source so that it can be referenced from SQL statements
     /// executed against this context.
     pub async fn register_json(
-        &mut self,
+        &self,
         name: &str,
         uri: &str,
         options: NdJsonReadOptions<'_>,

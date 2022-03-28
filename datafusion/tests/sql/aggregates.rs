@@ -478,8 +478,8 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
 
     // compare approx_percentile_cont and approx_percentile_cont_with_weight
     let sql = "SELECT c1, approx_percentile_cont(c3, 0.95) AS c3_p95 FROM aggregate_test_100 GROUP BY 1 ORDER BY 1";
@@ -517,7 +517,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     let results = plan_and_collect(
-        &mut ctx,
+        &ctx,
         "SELECT approx_percentile_cont_with_weight(c1, c2, 0.95) FROM aggregate_test_100",
     )
     .await
@@ -525,7 +525,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     assert_eq!(results.to_string(), "Error during planning: The function ApproxPercentileContWithWeight does not support inputs of type Utf8.");
 
     let results = plan_and_collect(
-        &mut ctx,
+        &ctx,
         "SELECT approx_percentile_cont_with_weight(c3, c1, 0.95) FROM aggregate_test_100",
     )
     .await
@@ -533,7 +533,7 @@ async fn csv_query_approx_percentile_cont_with_weight() -> Result<()> {
     assert_eq!(results.to_string(), "Error during planning: The weight argument for ApproxPercentileContWithWeight does not support inputs of type Utf8.");
 
     let results = plan_and_collect(
-        &mut ctx,
+        &ctx,
         "SELECT approx_percentile_cont_with_weight(c3, c2, c1) FROM aggregate_test_100",
     )
     .await
