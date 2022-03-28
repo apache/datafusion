@@ -17,6 +17,7 @@
 
 //! Ballista executor logic
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ballista_core::error::BallistaError;
@@ -25,9 +26,11 @@ use ballista_core::serde::protobuf;
 use ballista_core::serde::protobuf::ExecutorRegistration;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::TaskContext;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::udaf::AggregateUDF;
+use datafusion::physical_plan::udf::ScalarUDF;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion::prelude::SessionContext;
 
 /// Ballista executor
 pub struct Executor {
@@ -37,8 +40,14 @@ pub struct Executor {
     /// Directory for storing partial results
     pub work_dir: String,
 
-    /// DataFusion session context
-    pub ctx: Arc<SessionContext>,
+    /// Scalar functions that are registered in the Executor
+    pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+
+    /// Aggregate functions registered in the Executor
+    pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+
+    /// Runtime environment for Executor
+    pub runtime: Arc<RuntimeEnv>,
 }
 
 impl Executor {
@@ -46,12 +55,15 @@ impl Executor {
     pub fn new(
         metadata: ExecutorRegistration,
         work_dir: &str,
-        ctx: Arc<SessionContext>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
             metadata,
             work_dir: work_dir.to_owned(),
-            ctx,
+            // TODO add logic to dynamically load UDF/UDAFs libs from files
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            runtime,
         }
     }
 }

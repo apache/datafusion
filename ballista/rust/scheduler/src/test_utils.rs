@@ -28,7 +28,7 @@ pub const TPCH_TABLES: &[&str] = &[
 pub async fn datafusion_test_context(path: &str) -> Result<SessionContext> {
     let default_shuffle_partitions = 2;
     let config = SessionConfig::new().with_target_partitions(default_shuffle_partitions);
-    let mut ctx = SessionContext::with_config(config);
+    let ctx = SessionContext::with_config(config);
     for table in TPCH_TABLES {
         let schema = get_tpch_schema(table);
         let options = CsvReadOptions::new()

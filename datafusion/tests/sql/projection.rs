@@ -35,8 +35,8 @@ async fn projection_same_fields() -> Result<()> {
 
 #[tokio::test]
 async fn projection_type_alias() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     // Query that aliases one column to the name of a different column
     // that also has a different type (c1 == float32, c3 == boolean)
@@ -58,8 +58,8 @@ async fn projection_type_alias() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_avg_with_projection() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT avg(c12), c1 FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![

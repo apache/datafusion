@@ -23,7 +23,7 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local execution context
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
 

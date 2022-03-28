@@ -57,7 +57,7 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> datafusion::error::Result<()> {
   // register the table
-  let mut ctx = SessionContext::new();
+  let ctx = SessionContext::new();
   ctx.register_csv("test", "<PATH_TO_YOUR_CSV_FILE>", CsvReadOptions::new()).await?;
 
   // create a plan to run a SQL query

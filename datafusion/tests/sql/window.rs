@@ -20,8 +20,8 @@ use super::*;
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_empty_over() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
                count(c5) over (), \
@@ -49,8 +49,8 @@ async fn csv_query_window_with_empty_over() -> Result<()> {
 /// for window functions without order by the first, last, and nth function call does not make sense
 #[tokio::test]
 async fn csv_query_window_with_partition_by() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
                sum(cast(c4 as Int)) over (partition by c3), \
@@ -79,8 +79,8 @@ async fn csv_query_window_with_partition_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_window_with_order_by() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
                sum(c5) over (order by c9), \
@@ -112,8 +112,8 @@ async fn csv_query_window_with_order_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "select \
                c9, \
                sum(c5) over (partition by c4 order by c9), \

@@ -19,8 +19,8 @@ use super::*;
 
 #[tokio::test]
 async fn csv_query_group_by_int_min_max() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c2, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c2";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -40,8 +40,8 @@ async fn csv_query_group_by_int_min_max() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_float32() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql =
         "SELECT COUNT(*) as cnt, c1 FROM aggregate_simple GROUP BY c1 ORDER BY cnt DESC";
@@ -65,8 +65,8 @@ async fn csv_query_group_by_float32() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_float64() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql =
         "SELECT COUNT(*) as cnt, c2 FROM aggregate_simple GROUP BY c2 ORDER BY cnt DESC";
@@ -90,8 +90,8 @@ async fn csv_query_group_by_float64() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_boolean() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_simple_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_simple_csv(&ctx).await?;
 
     let sql =
         "SELECT COUNT(*) as cnt, c3 FROM aggregate_simple GROUP BY c3 ORDER BY cnt DESC";
@@ -112,8 +112,8 @@ async fn csv_query_group_by_boolean() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_two_columns() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, c2, MIN(c3) FROM aggregate_test_100 GROUP BY c1, c2";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -153,8 +153,8 @@ async fn csv_query_group_by_two_columns() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_and_having() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, MIN(c3) AS m FROM aggregate_test_100 GROUP BY c1 HAVING m < -100 AND MAX(c3) > 70";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -171,8 +171,8 @@ async fn csv_query_group_by_and_having() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_and_having_and_where() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, MIN(c3) AS m
                FROM aggregate_test_100
                WHERE c1 IN ('a', 'b')
@@ -192,8 +192,8 @@ async fn csv_query_group_by_and_having_and_where() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_having_without_group_by() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, c2, c3 FROM aggregate_test_100 HAVING c2 >= 4 AND c3 > 90";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -213,8 +213,8 @@ async fn csv_query_having_without_group_by() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_avg() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, avg(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -234,8 +234,8 @@ async fn csv_query_group_by_avg() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, count(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -255,8 +255,8 @@ async fn csv_query_group_by_int_count() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_with_aliased_aggregate() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, count(c12) AS count FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -276,8 +276,8 @@ async fn csv_query_group_with_aliased_aggregate() -> Result<()> {
 
 #[tokio::test]
 async fn csv_query_group_by_string_min_max() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1, MIN(c12), MAX(c12) FROM aggregate_test_100 GROUP BY c1";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -312,7 +312,7 @@ async fn query_group_on_null() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COUNT(*), c1 FROM test GROUP BY c1";
 
@@ -371,7 +371,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COUNT(*), c1, c2 FROM test GROUP BY c1, c2";
 
@@ -400,7 +400,7 @@ async fn query_group_on_null_multi_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_group_by_date() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let schema = Arc::new(Schema::new(vec![
         Field::new("date", DataType::Date32, false),
         Field::new("cnt", DataType::Int32, false),

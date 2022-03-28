@@ -24,10 +24,13 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{convert::TryInto, io::Cursor};
 
-use datafusion::logical_plan::{JoinConstraint, JoinType, LogicalPlan, Operator};
+use datafusion::logical_plan::{
+    FunctionRegistry, JoinConstraint, JoinType, LogicalPlan, Operator,
+};
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Extension;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
@@ -132,7 +135,8 @@ pub trait AsExecutionPlan: Debug + Send + Sync + Clone {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &SessionContext,
+        registry: &dyn FunctionRegistry,
+        runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
 
@@ -149,7 +153,7 @@ pub trait PhysicalExtensionCodec: Debug + Send + Sync {
         &self,
         buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
-        ctx: &SessionContext,
+        registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError>;
 
     fn try_encode(
@@ -167,7 +171,7 @@ impl PhysicalExtensionCodec for DefaultPhysicalExtensionCodec {
         &self,
         _buf: &[u8],
         _inputs: &[Arc<dyn ExecutionPlan>],
-        _ctx: &SessionContext,
+        _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         Err(BallistaError::NotImplemented(
             "PhysicalExtensionCodec is not provided".to_string(),
@@ -353,7 +357,8 @@ mod tests {
     use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
     use datafusion::logical_plan::plan::Extension;
     use datafusion::logical_plan::{
-        col, DFSchemaRef, Expr, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
+        col, DFSchemaRef, Expr, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
+        UserDefinedLogicalNode,
     };
     use datafusion::physical_plan::expressions::PhysicalSortExpr;
     use datafusion::physical_plan::planner::{DefaultPhysicalPlanner, ExtensionPlanner};
@@ -369,6 +374,7 @@ mod tests {
     use std::convert::TryInto;
     use std::fmt;
     use std::fmt::{Debug, Formatter};
+    use std::ops::Deref;
     use std::sync::Arc;
 
     pub mod proto {
@@ -660,7 +666,7 @@ mod tests {
             &self,
             buf: &[u8],
             inputs: &[Arc<dyn ExecutionPlan>],
-            _ctx: &SessionContext,
+            _registry: &dyn FunctionRegistry,
         ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
             if let Some((input, _)) = inputs.split_first() {
                 let proto = TopKExecProto::decode(buf).map_err(|e| {
@@ -701,8 +707,9 @@ mod tests {
     async fn test_extension_plan() -> crate::error::Result<()> {
         let store = Arc::new(LocalFileSystem {});
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
-        let session_state = SessionState::with_config(SessionConfig::new(), runtime)
-            .with_query_planner(Arc::new(TopKQueryPlanner {}));
+        let session_state =
+            SessionState::with_config_rt(SessionConfig::new(), runtime.clone())
+                .with_query_planner(Arc::new(TopKQueryPlanner {}));
 
         let ctx = SessionContext::with_state(session_state);
 
@@ -736,7 +743,8 @@ mod tests {
             topk_exec.clone(),
             &extension_codec,
         )?;
-        let physical_round_trip = proto.try_into_physical_plan(&ctx, &extension_codec)?;
+        let physical_round_trip =
+            proto.try_into_physical_plan(&ctx, runtime.deref(), &extension_codec)?;
 
         assert_eq!(
             format!("{:?}", topk_exec),

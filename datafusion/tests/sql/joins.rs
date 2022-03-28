@@ -552,21 +552,21 @@ async fn equijoin_implicit_syntax_reversed() -> Result<()> {
 
 #[tokio::test]
 async fn cross_join() {
-    let mut ctx = create_join_context("t1_id", "t2_id").unwrap();
+    let ctx = create_join_context("t1_id", "t2_id").unwrap();
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
 
     assert_eq!(4 * 4, actual.len());
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1, t2 WHERE 1=1 ORDER BY t1_id";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
 
     assert_eq!(4 * 4, actual.len());
 
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN t2";
 
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     assert_eq!(4 * 4, actual.len());
 
     let actual = execute_to_batches(&ctx, sql).await;
@@ -597,13 +597,13 @@ async fn cross_join() {
 
     // Two partitions (from UNION) on the left
     let sql = "SELECT * FROM (SELECT t1_id, t1_name FROM t1 UNION ALL SELECT t1_id, t1_name FROM t1) AS t1 CROSS JOIN t2";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
 
     assert_eq!(4 * 4 * 2, actual.len());
 
     // Two partitions (from UNION) on the right
     let sql = "SELECT t1_id, t1_name, t2_name FROM t1 CROSS JOIN (SELECT t2_name FROM t2 UNION ALL SELECT t2_name FROM t2) AS t2";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
 
     assert_eq!(4 * 4 * 2, actual.len());
 }
@@ -648,7 +648,7 @@ async fn cross_join_unbalanced() {
 
 #[tokio::test]
 async fn test_join_timestamp() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // register time table
     let timestamp_schema = Arc::new(Schema::new(vec![Field::new(
@@ -691,7 +691,7 @@ async fn test_join_timestamp() -> Result<()> {
 
 #[tokio::test]
 async fn test_join_float32() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // register population table
     let population_schema = Arc::new(Schema::new(vec![
@@ -732,7 +732,7 @@ async fn test_join_float32() -> Result<()> {
 
 #[tokio::test]
 async fn test_join_float64() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // register population table
     let population_schema = Arc::new(Schema::new(vec![
@@ -857,7 +857,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
     .unwrap();
     let cities = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("countries", Arc::new(countries))?;
     ctx.register_table("cities", Arc::new(cities))?;
 
@@ -885,7 +885,7 @@ async fn join_tables_with_duplicated_column_name_not_in_on_constraint() -> Resul
 
 #[tokio::test]
 async fn join_timestamp() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("t", table_with_timestamps()).unwrap();
 
     let expected = vec![

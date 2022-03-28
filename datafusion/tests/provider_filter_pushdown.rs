@@ -173,7 +173,7 @@ async fn assert_provider_row_count(value: i64, expected_count: u64) -> Result<()
         one_batch: create_batch(1, 5)?,
     };
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let df = ctx
         .read_table(Arc::new(provider.clone()))?
         .filter(col("flag").eq(lit(value)))?

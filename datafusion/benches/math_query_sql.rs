@@ -69,7 +69,7 @@ fn create_context(
         })
         .collect::<Vec<_>>();
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![batches])?;
