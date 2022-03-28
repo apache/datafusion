@@ -144,67 +144,43 @@ impl TryFrom<datafusion_expr::Expr> for Expr {
     fn try_from(value: datafusion_expr::Expr) -> Result<Self, Self::Error> {
         match &value {
             datafusion_expr::Expr::BinaryExpr { left, op, right } => {
-                Ok(Expr::Binary(match op {
-                    datafusion_expr::Operator::Eq => BinaryExpr::Eq(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::NotEq => BinaryExpr::Ne(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::Plus => BinaryExpr::Add(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::Minus => BinaryExpr::Sub(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::Multiply => BinaryExpr::Mul(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::Divide => BinaryExpr::Div(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::Lt => BinaryExpr::Lt(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::LtEq => BinaryExpr::Le(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::Gt => BinaryExpr::Gt(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-                    datafusion_expr::Operator::GtEq => BinaryExpr::Gt(
-                        Box::new((*left.clone()).try_into()?),
-                        Box::new((*right.clone()).try_into()?),
-                    ),
-
+                let op = match op {
+                    datafusion_expr::Operator::Eq => BinaryExpr::Eq,
+                    datafusion_expr::Operator::NotEq => BinaryExpr::Ne,
+                    datafusion_expr::Operator::Lt => BinaryExpr::Lt,
+                    datafusion_expr::Operator::LtEq => BinaryExpr::Le,
+                    datafusion_expr::Operator::Gt => BinaryExpr::Gt,
+                    datafusion_expr::Operator::GtEq => BinaryExpr::Ge,
+                    datafusion_expr::Operator::Plus => BinaryExpr::Add,
+                    datafusion_expr::Operator::Minus => BinaryExpr::Sub,
+                    datafusion_expr::Operator::Multiply => BinaryExpr::Mul,
+                    datafusion_expr::Operator::Divide => BinaryExpr::Div,
                     _ => {
                         return Err(DataFusionError::NotImplemented(format!(
                             "Compiling binary expression {} not yet supported",
                             value
-                        )));
+                        )))
                     }
-                }))
+                };
+                Ok(Expr::Binary(op(
+                    Box::new((*left.clone()).try_into()?),
+                    Box::new((*right.clone()).try_into()?),
+                )))
             }
-            datafusion_expr::Expr::Literal(ScalarValue::Float32(Some(f))) => {
-                Ok(Expr::Literal(Literal::Typed(TypedLit::Float(*f))))
-            }
-            datafusion_expr::Expr::Literal(ScalarValue::Float64(Some(f))) => {
-                Ok(Expr::Literal(Literal::Typed(TypedLit::Double(*f))))
-            }
-            datafusion_expr::Expr::Literal(ScalarValue::Int64(Some(i))) => {
-                Ok(Expr::Literal(Literal::Typed(TypedLit::Int(*i))))
-            }
-            datafusion_expr::Expr::Literal(ScalarValue::Boolean(Some(b))) => {
-                Ok(Expr::Literal(Literal::Typed(TypedLit::Bool(*b))))
+            datafusion_expr::Expr::Literal(s) => {
+                let lit = match s {
+                    ScalarValue::Boolean(Some(b)) => TypedLit::Bool(*b),
+                    ScalarValue::Float32(Some(f)) => TypedLit::Float(*f),
+                    ScalarValue::Float64(Some(f)) => TypedLit::Double(*f),
+                    ScalarValue::Int64(Some(i)) => TypedLit::Int(*i),
+                    _ => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Scalar {} not yet supported",
+                            s
+                        )))
+                    }
+                };
+                Ok(Expr::Literal(Literal::Typed(lit)))
             }
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Compiling {} not yet supported",
