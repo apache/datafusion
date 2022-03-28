@@ -85,20 +85,22 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
 
 Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to seconds resolution.
 
-## `EXTRACT, date_part`
+## `extract`
 
-`EXTRACT(field FROM source)`
+`extract(field FROM source)`
 
 - The `extract` function retrieves subfields such as year or hour from date/time values.
   `source` must be a value expression of type timestamp, Data32, or Data64. `field` is an identifier that selects what field to extract from the source value.
   The `extract` function returns values of type u32.
-  - `year` :`EXTRACT(year FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 2020`
-  - `month`:`EXTRACT(month FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 9`
-  - `week` :`EXTRACT(week FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 37`
-  - `day`: `EXTRACT(day FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 8`
-  - `hour`: `EXTRACT(hour FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 12`
-  - `minute`: `EXTRACT(minute FROM to_timestamp('2020-09-08T12:01:00+00:00')) -> 1`
-  - `second`: `EXTRACT(second FROM to_timestamp('2020-09-08T12:00:03+00:00')) -> 3`
+  - `year` :`extract(year FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 2020`
+  - `month`:`extract(month FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 9`
+  - `week` :`extract(week FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 37`
+  - `day`: `extract(day FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 8`
+  - `hour`: `extract(hour FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 12`
+  - `minute`: `extract(minute FROM to_timestamp('2020-09-08T12:01:00+00:00')) -> 1`
+  - `second`: `extract(second FROM to_timestamp('2020-09-08T12:00:03+00:00')) -> 3`
+
+## `date_part`
 
 `date_part('field', source)`
 
