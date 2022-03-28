@@ -74,6 +74,26 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     ];
     assert_batches_sorted_eq!(expected, &result);
 
+    let actual_row_count: usize = ctx
+        .sql("SELECT id from t")
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|batch| batch.num_rows())
+        .sum();
+
+    let partition_row_count: usize = ctx
+        .sql("SELECT year from t")
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|batch| batch.num_rows())
+        .sum();
+
+    assert_eq!(actual_row_count, partition_row_count);
+
     Ok(())
 }
 

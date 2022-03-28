@@ -294,7 +294,7 @@ impl PartitionColumnProjector {
     }
 
     // Creates a RecordBatch with values from the partition_values. Used when no non-partition values are read
-    fn project_empty(
+    fn project_from_size(
         &mut self,
         batch_size: usize,
         partition_values: &[ScalarValue],
