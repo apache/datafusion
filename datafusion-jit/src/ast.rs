@@ -157,22 +157,59 @@ impl TryFrom<datafusion_expr::Expr> for Expr {
                         Box::new((*left.clone()).try_into()?),
                         Box::new((*right.clone()).try_into()?),
                     ),
+                    datafusion_expr::Operator::Minus => BinaryExpr::Sub(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::Multiply => BinaryExpr::Mul(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::Divide => BinaryExpr::Div(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::Lt => BinaryExpr::Lt(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::LtEq => BinaryExpr::Le(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::Gt => BinaryExpr::Gt(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+                    datafusion_expr::Operator::GtEq => BinaryExpr::Gt(
+                        Box::new((*left.clone()).try_into()?),
+                        Box::new((*right.clone()).try_into()?),
+                    ),
+
                     _ => {
-                        return Err(DataFusionError::NotImplemented(
-                            format!(
-                                "Compiling binary expression {:?} not yet supported",
-                                value
-                            ),
-                        ));
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "Compiling binary expression {} not yet supported",
+                            value
+                        )));
                     }
                 }))
             }
             datafusion_expr::Expr::Literal(ScalarValue::Float32(Some(f))) => {
                 Ok(Expr::Literal(Literal::Typed(TypedLit::Float(*f))))
             }
-            _ => Err(DataFusionError::NotImplemented(
-                format!("Compiling {:?} not yet supported", value),
-            )),
+            datafusion_expr::Expr::Literal(ScalarValue::Float64(Some(f))) => {
+                Ok(Expr::Literal(Literal::Typed(TypedLit::Double(*f))))
+            }
+            datafusion_expr::Expr::Literal(ScalarValue::Int64(Some(i))) => {
+                Ok(Expr::Literal(Literal::Typed(TypedLit::Int(*i))))
+            }
+            datafusion_expr::Expr::Literal(ScalarValue::Boolean(Some(b))) => {
+                Ok(Expr::Literal(Literal::Typed(TypedLit::Bool(*b))))
+            }
+            _ => Err(DataFusionError::NotImplemented(format!(
+                "Compiling {} not yet supported",
+                value
+            ))),
         }
     }
 }
