@@ -176,7 +176,7 @@ impl TryFrom<datafusion_expr::Expr> for Expr {
                     ScalarValue::Int64(Some(i)) => TypedLit::Int(*i),
                     _ => {
                         return Err(DataFusionError::NotImplemented(format!(
-                            Compiling Scalar {} not yet supported in JIT mode",
+                            "Compiling Scalar {} not yet supported in JIT mode",
                             s
                         )))
                     }

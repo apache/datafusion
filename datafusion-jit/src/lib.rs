@@ -26,7 +26,8 @@ mod tests {
     use crate::api::{Assembler, GeneratedFunction};
     use crate::ast::{BinaryExpr, Expr, Literal, TypedLit, I64};
     use crate::jit::JIT;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::Result;
+    use datafusion_expr::lit;
 
     #[test]
     fn iterative_fib() -> Result<()> {
@@ -87,23 +88,15 @@ mod tests {
 
     #[test]
     fn from_datafusion_expression() -> Result<()> {
-        let e = datafusion_expr::Expr::BinaryExpr {
-            left: Box::new(datafusion_expr::Expr::Literal(ScalarValue::Float32(Some(
-                1.0,
-            )))),
-            right: Box::new(datafusion_expr::Expr::Literal(ScalarValue::Float32(Some(
-                2.0,
-            )))),
-            op: datafusion_expr::Operator::Plus,
-        };
-        let x: crate::ast::Expr = e.try_into()?;
+        let df_expr = lit(1.0f32) + lit(2.0f32);
+        let jit_expr: crate::ast::Expr = df_expr.try_into()?;
 
         assert_eq!(
+            jit_expr,
             Expr::Binary(BinaryExpr::Add(
                 Box::new(Expr::Literal(Literal::Typed(TypedLit::Float(1.0)))),
                 Box::new(Expr::Literal(Literal::Typed(TypedLit::Float(2.0))))
             )),
-            x
         );
 
         Ok(())
