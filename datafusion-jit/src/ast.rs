@@ -141,6 +141,7 @@ pub enum Literal {
 impl TryFrom<datafusion_expr::Expr> for Expr {
     type Error = DataFusionError;
 
+    // Try to JIT compile the Expr for faster evaluation
     fn try_from(value: datafusion_expr::Expr) -> Result<Self, Self::Error> {
         match &value {
             datafusion_expr::Expr::BinaryExpr { left, op, right } => {
