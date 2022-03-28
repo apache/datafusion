@@ -162,8 +162,7 @@ impl TryFrom<datafusion_expr::Expr> for Expr {
                             format!(
                                 "Compiling binary expression {:?} not yet supported",
                                 value
-                            )
-                            .to_string(),
+                            ),
                         ));
                     }
                 }))
