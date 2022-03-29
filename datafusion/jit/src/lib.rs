@@ -24,9 +24,10 @@ pub mod jit;
 #[cfg(test)]
 mod tests {
     use crate::api::{Assembler, GeneratedFunction};
-    use crate::ast::I64;
+    use crate::ast::{BinaryExpr, Expr, Literal, TypedLit, I64};
     use crate::jit::JIT;
     use datafusion_common::Result;
+    use datafusion_expr::lit;
 
     #[test]
     fn iterative_fib() -> Result<()> {
@@ -82,6 +83,22 @@ mod tests {
         assert_eq!(format!("{}", &gen_func), expected);
         let mut jit = assembler.create_jit();
         assert_eq!(55, run_iterative_fib_code(&mut jit, gen_func, 10)?);
+        Ok(())
+    }
+
+    #[test]
+    fn from_datafusion_expression() -> Result<()> {
+        let df_expr = lit(1.0f32) + lit(2.0f32);
+        let jit_expr: crate::ast::Expr = df_expr.try_into()?;
+
+        assert_eq!(
+            jit_expr,
+            Expr::Binary(BinaryExpr::Add(
+                Box::new(Expr::Literal(Literal::Typed(TypedLit::Float(1.0)))),
+                Box::new(Expr::Literal(Literal::Typed(TypedLit::Float(2.0))))
+            )),
+        );
+
         Ok(())
     }
 
