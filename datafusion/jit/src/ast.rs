@@ -166,8 +166,8 @@ impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
                     }
                 };
                 Ok(Expr::Binary(op(
-                    Box::new(((*left.clone(), schema.clone())).try_into()?),
-                    Box::new(((*right.clone(), schema)).try_into()?),
+                    Box::new((*left.clone(), schema.clone()).try_into()?),
+                    Box::new((*right.clone(), schema).try_into()?),
                 )))
             }
             datafusion_expr::Expr::Column(col) => {
