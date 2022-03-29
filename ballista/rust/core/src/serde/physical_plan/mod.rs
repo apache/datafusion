@@ -33,7 +33,7 @@ use crate::serde::{
 use crate::{convert_box_required, convert_required, into_physical_plan, into_required};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::datafusion_storage::object_store::local::LocalFileSystem;
+use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::window_frames::WindowFrame;
@@ -1020,7 +1020,7 @@ mod roundtrip_tests {
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
-        datafusion_storage::object_store::local::LocalFileSystem,
+        datafusion_data_access::object_store::local::LocalFileSystem,
         datasource::listing::PartitionedFile,
         logical_plan::{JoinType, Operator},
         physical_plan::{

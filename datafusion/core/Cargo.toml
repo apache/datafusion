@@ -1,0 +1,127 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+name = "datafusion"
+description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
+version = "7.0.0"
+homepage = "https://github.com/apache/arrow-datafusion"
+repository = "https://github.com/apache/arrow-datafusion"
+readme = "../README.md"
+authors = ["Apache Arrow <dev@arrow.apache.org>"]
+license = "Apache-2.0"
+keywords = [ "arrow", "query", "sql" ]
+include = [
+    "benches/*.rs",
+    "src/**/*.rs",
+    "Cargo.toml",
+]
+edition = "2021"
+rust-version = "1.59"
+
+[lib]
+name = "datafusion"
+path = "src/lib.rs"
+
+[features]
+# Used to enable the avro format
+avro = ["avro-rs", "num-traits", "datafusion-common/avro"]
+crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
+default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
+# Used for testing ONLY: causes all values to hash to the same value (test for collisions)
+force_hash_collisions = []
+# Used to enable JIT code generation
+jit = ["datafusion-jit"]
+pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
+regex_expressions = ["datafusion-physical-expr/regex_expressions"]
+# Used to enable row format experiment
+row = []
+simd = ["arrow/simd"]
+unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
+
+[dependencies]
+ahash = { version = "0.7", default-features = false }
+arrow = { version = "11", features = ["prettyprint"] }
+async-trait = "0.1.41"
+avro-rs = { version = "0.13", features = ["snappy"], optional = true }
+chrono = { version = "0.4", default-features = false }
+datafusion-common = { path = "../common", version = "7.0.0", features = ["parquet"] }
+datafusion-data-access = { path = "../../data-access", version = "1.0.0" }
+datafusion-expr = { path = "../expr", version = "7.0.0" }
+datafusion-jit = { path = "../jit", version = "7.0.0", optional = true }
+datafusion-physical-expr = { path = "../physical-expr", version = "7.0.0" }
+futures = "0.3"
+hashbrown = { version = "0.12", features = ["raw"] }
+lazy_static = { version = "^1.4.0" }
+log = "^0.4"
+num-traits = { version = "0.2", optional = true }
+num_cpus = "1.13.0"
+ordered-float = "2.10"
+parking_lot = "0.12"
+parquet = { version = "11", features = ["arrow"] }
+paste = "^1.0"
+pin-project-lite= "^0.2.7"
+pyo3 = { version = "0.16", optional = true }
+rand = "0.8"
+smallvec = { version = "1.6", features = ["union"] }
+sqlparser = "0.15"
+tempfile = "3"
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
+tokio-stream = "0.1"
+uuid = { version = "0.8", features = ["v4"] }
+
+[dev-dependencies]
+criterion = "0.3"
+doc-comment = "0.3"
+fuzz-utils = { path = "fuzz-utils" }
+
+[[bench]]
+harness = false
+name = "aggregate_query_sql"
+
+[[bench]]
+harness = false
+name = "sort_limit_query_sql"
+
+[[bench]]
+harness = false
+name = "math_query_sql"
+
+[[bench]]
+harness = false
+name = "filter_query_sql"
+
+[[bench]]
+harness = false
+name = "window_query_sql"
+
+[[bench]]
+harness = false
+name = "scalar"
+
+[[bench]]
+harness = false
+name = "physical_plan"
+
+[[bench]]
+harness = false
+name = "parquet_query_sql"
+
+[[bench]]
+harness = false
+name = "jit"
+required-features = ["row", "jit"]

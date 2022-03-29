@@ -33,7 +33,9 @@ use ballista_core::serde::scheduler::{
     ExecutorData, ExecutorDataChange, ExecutorMetadata,
 };
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
-use datafusion::datafusion_storage::object_store::{local::LocalFileSystem, ObjectStore};
+use datafusion::datafusion_data_access::object_store::{
+    local::LocalFileSystem, ObjectStore,
+};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use futures::StreamExt;
