@@ -1516,10 +1516,7 @@ mod tests {
             &employee_schema(),
             Some(vec![0, 1, 2, 3, 4]),
         )?;
-        plan = plan.project(vec![Expr::Not(Box::new(Expr::Column(Column {
-            relation: None,
-            name: "id".to_string(),
-        })))])?;
+        plan = plan.project(vec![col("id").not()])?;
         match plan.build() {
             Ok(_) => panic!("Unexpect Ok"),
             Err(e) => {
