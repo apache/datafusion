@@ -42,10 +42,10 @@ use futures::{stream, StreamExt};
 
 #[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     register_partitioned_aggregate_csv(
-        &mut ctx,
+        &ctx,
         &[
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
@@ -78,10 +78,10 @@ async fn csv_filter_with_file_col() -> Result<()> {
 
 #[tokio::test]
 async fn csv_projection_on_partition() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     register_partitioned_aggregate_csv(
-        &mut ctx,
+        &ctx,
         &[
             "mytable/date=2021-10-27/file.csv",
             "mytable/date=2021-10-28/file.csv",
@@ -114,10 +114,10 @@ async fn csv_projection_on_partition() -> Result<()> {
 
 #[tokio::test]
 async fn csv_grouping_by_partition() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     register_partitioned_aggregate_csv(
-        &mut ctx,
+        &ctx,
         &[
             "mytable/date=2021-10-26/file.csv",
             "mytable/date=2021-10-27/file.csv",
@@ -148,10 +148,10 @@ async fn csv_grouping_by_partition() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_multiple_partitions() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
-        &mut ctx,
+        &ctx,
         &[
             "year=2021/month=09/day=09/file.parquet",
             "year=2021/month=10/day=09/file.parquet",
@@ -190,10 +190,10 @@ async fn parquet_multiple_partitions() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_statistics() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
-        &mut ctx,
+        &ctx,
         &[
             "year=2021/month=09/day=09/file.parquet",
             "year=2021/month=10/day=09/file.parquet",
@@ -249,11 +249,11 @@ async fn parquet_statistics() -> Result<()> {
 
 #[tokio::test]
 async fn parquet_overlapping_columns() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // `id` is both a column of the file and a partitioning col
     register_partitioned_alltypes_parquet(
-        &mut ctx,
+        &ctx,
         &[
             "id=1/file.parquet",
             "id=2/file.parquet",
@@ -275,7 +275,7 @@ async fn parquet_overlapping_columns() -> Result<()> {
 }
 
 fn register_partitioned_aggregate_csv(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
     table_path: &str,
@@ -298,7 +298,7 @@ fn register_partitioned_aggregate_csv(
 }
 
 async fn register_partitioned_alltypes_parquet(
-    ctx: &mut SessionContext,
+    ctx: &SessionContext,
     store_paths: &[&str],
     partition_cols: &[&str],
     table_path: &str,

@@ -353,7 +353,7 @@ mod tests {
     async fn write_json_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
-        let mut ctx =
+        let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
         let path = format!("{}/1.json", TEST_DATA_BASE);
@@ -368,7 +368,7 @@ mod tests {
         df.write_json(&out_dir).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         // register each partition as well as the top level dir
         let json_read_option = NdJsonReadOptions::default();

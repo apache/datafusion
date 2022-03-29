@@ -19,8 +19,8 @@ use super::*;
 
 #[tokio::test]
 async fn qualified_table_references() -> Result<()> {
-    let mut ctx = SessionContext::new();
-    register_aggregate_csv(&mut ctx).await?;
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
 
     for table_ref in &[
         "aggregate_test_100",
@@ -43,7 +43,7 @@ async fn qualified_table_references() -> Result<()> {
 
 #[tokio::test]
 async fn qualified_table_references_and_fields() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let c1: StringArray = vec!["foofoo", "foobar", "foobaz"]
         .into_iter()

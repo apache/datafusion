@@ -459,7 +459,7 @@ mod tests {
     async fn write_csv_results() -> Result<()> {
         // create partitioned input file and context
         let tmp_dir = TempDir::new()?;
-        let mut ctx =
+        let ctx =
             SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
 
         let schema = populate_csv_partitions(&tmp_dir, 8, ".csv")?;
@@ -478,7 +478,7 @@ mod tests {
         df.write_csv(&out_dir).await?;
 
         // create a new context and verify that the results were saved to a partitioned csv file
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("c1", DataType::UInt32, false),

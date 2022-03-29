@@ -247,7 +247,7 @@ pub async fn pruned_partition_list(
         // Filter the partitions using a local datafusion context
         // TODO having the external context would allow us to resolve `Volatility::Stable`
         // scalar functions (`ScalarFunction` & `ScalarUDF`) and `ScalarVariable`s
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
         let mut df = ctx.read_table(Arc::new(mem_table))?;
         for filter in applicable_filters {
             df = df.filter(filter.clone())?;

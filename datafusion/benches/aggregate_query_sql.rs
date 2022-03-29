@@ -40,7 +40,7 @@ fn create_context(
     array_len: usize,
     batch_size: usize,
 ) -> Result<Arc<Mutex<SessionContext>>> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let provider = create_table_provider(partitions_len, array_len, batch_size)?;
     ctx.register_table("t", provider)?;
     Ok(Arc::new(Mutex::new(ctx)))

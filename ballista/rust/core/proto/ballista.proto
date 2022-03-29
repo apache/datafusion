@@ -50,6 +50,7 @@ message LogicalPlanNode {
     ValuesNode values = 16;
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
+    UnionNode union = 19;
   }
 }
 
@@ -213,6 +214,10 @@ message JoinNode {
   bool null_equals_null = 7;
 }
 
+message UnionNode {
+  repeated LogicalPlanNode inputs = 1;
+}
+
 message CrossJoinNode {
   LogicalPlanNode left = 1;
   LogicalPlanNode right = 2;
@@ -254,6 +259,7 @@ message PhysicalPlanNode {
     CrossJoinExecNode cross_join = 19;
     AvroScanExecNode avro_scan = 20;
     PhysicalExtensionNode extension = 21;
+    UnionExecNode union = 22;
   }
 }
 
@@ -432,6 +438,10 @@ message HashJoinExecNode {
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
+}
+
+message UnionExecNode {
+  repeated PhysicalPlanNode inputs = 1;
 }
 
 message CrossJoinExecNode {
@@ -713,6 +723,8 @@ message TaskDefinition {
   bytes plan = 2;
   // Output partition for shuffle writer
   PhysicalHashRepartition output_partitioning = 3;
+  string session_id = 4;
+  repeated KeyValuePair props = 5;
 }
 
 message PollWorkResult {
@@ -758,7 +770,10 @@ message ExecuteQueryParams {
     bytes logical_plan = 1;
     string sql = 2;
   }
-  repeated KeyValuePair settings = 3;
+  oneof optional_session_id {
+    string session_id = 3;
+  }
+  repeated KeyValuePair settings = 4;
 }
 
 message ExecuteSqlParams {
@@ -767,6 +782,7 @@ message ExecuteSqlParams {
 
 message ExecuteQueryResult {
   string job_id = 1;
+  string session_id = 2;
 }
 
 message GetJobStatusParams {

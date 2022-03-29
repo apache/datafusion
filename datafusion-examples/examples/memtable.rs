@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
     let mem_table = create_memtable()?;
 
     // create local execution context
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     // Register the in-memory table containing the data
     ctx.register_table("users", Arc::new(mem_table))?;

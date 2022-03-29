@@ -172,7 +172,7 @@ impl ExecutionPlan for StatisticsValidation {
 }
 
 fn init_ctx(stats: Statistics, schema: Schema) -> Result<SessionContext> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let provider: Arc<dyn TableProvider> =
         Arc::new(StatisticsValidation::new(stats, Arc::new(schema)));
     ctx.register_table("stats_table", provider)?;
@@ -210,7 +210,7 @@ fn fully_defined() -> (Statistics, Schema) {
 #[tokio::test]
 async fn sql_basic() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * from stats_table").await.unwrap();
 
@@ -228,7 +228,7 @@ async fn sql_basic() -> Result<()> {
 #[tokio::test]
 async fn sql_filter() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats, schema)?;
+    let ctx = init_ctx(stats, schema)?;
 
     let df = ctx
         .sql("SELECT * FROM stats_table WHERE c1 = 5")
@@ -249,7 +249,7 @@ async fn sql_filter() -> Result<()> {
 #[tokio::test]
 async fn sql_limit() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx.sql("SELECT * FROM stats_table LIMIT 5").await.unwrap();
     let physical_plan = ctx
@@ -284,7 +284,7 @@ async fn sql_limit() -> Result<()> {
 #[tokio::test]
 async fn sql_window() -> Result<()> {
     let (stats, schema) = fully_defined();
-    let mut ctx = init_ctx(stats.clone(), schema)?;
+    let ctx = init_ctx(stats.clone(), schema)?;
 
     let df = ctx
         .sql("SELECT c2, sum(c1) over (partition by c2) FROM stats_table")

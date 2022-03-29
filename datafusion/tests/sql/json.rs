@@ -21,7 +21,7 @@ const TEST_DATA_BASE: &str = "tests/jsons";
 
 #[tokio::test]
 async fn json_query() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let path = format!("{}/2.json", TEST_DATA_BASE);
     ctx.register_json("t1", &path, NdJsonReadOptions::default())
         .await
@@ -54,7 +54,7 @@ async fn json_query() {
 #[tokio::test]
 #[should_panic]
 async fn json_single_nan_schema() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let path = format!("{}/3.json", TEST_DATA_BASE);
     ctx.register_json("single_nan", &path, NdJsonReadOptions::default())
         .await
@@ -73,14 +73,14 @@ async fn json_single_nan_schema() {
 
 #[tokio::test]
 async fn json_explain() {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let path = format!("{}/2.json", TEST_DATA_BASE);
     ctx.register_json("t1", &path, NdJsonReadOptions::default())
         .await
         .unwrap();
 
     let sql = "EXPLAIN SELECT count(*) from t1";
-    let actual = execute(&mut ctx, sql).await;
+    let actual = execute(&ctx, sql).await;
     let actual = normalize_vec_for_explain(actual);
     let expected = vec![
         vec![

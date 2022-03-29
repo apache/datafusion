@@ -292,7 +292,7 @@ mod tests {
         let catalog = MemoryCatalogProvider::new();
         catalog.register_schema("active", Arc::new(schema)).unwrap();
 
-        let mut ctx = SessionContext::new();
+        let ctx = SessionContext::new();
 
         ctx.register_catalog("cat", Arc::new(catalog));
 

@@ -20,18 +20,19 @@ use parking_lot::RwLock;
 use prost::Message;
 use std::any::type_name;
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 
 use ballista_core::error::{BallistaError, Result};
 
 use ballista_core::serde::protobuf::JobStatus;
 
+use crate::scheduler_server::SessionContextRegistry;
 use crate::state::backend::StateBackendClient;
 use crate::state::stage_manager::StageKey;
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::{protobuf, AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionContext;
 
 #[derive(Clone)]
 pub(crate) struct PersistentSchedulerState<
@@ -46,8 +47,13 @@ pub(crate) struct PersistentSchedulerState<
     // for in-memory cache
     executors_metadata: Arc<RwLock<HashMap<String, ExecutorMetadata>>>,
 
+    // TODO add remove logic
     jobs: Arc<RwLock<HashMap<String, JobStatus>>>,
     stages: Arc<RwLock<HashMap<StageKey, Arc<dyn ExecutionPlan>>>>,
+    job2session: Arc<RwLock<HashMap<String, String>>>,
+
+    /// DataFusion session contexts that are registered within the Scheduler
+    session_context_registry: Arc<SessionContextRegistry>,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
@@ -65,14 +71,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             executors_metadata: Arc::new(RwLock::new(HashMap::new())),
             jobs: Arc::new(RwLock::new(HashMap::new())),
             stages: Arc::new(RwLock::new(HashMap::new())),
+            job2session: Arc::new(RwLock::new(HashMap::new())),
+            session_context_registry: Arc::new(SessionContextRegistry::default()),
         }
     }
 
     /// Load the state stored in storage into memory
-    pub(crate) async fn init(&self, ctx: &SessionContext) -> Result<()> {
+    pub(crate) async fn init(&self) -> Result<()> {
         self.init_executors_metadata_from_storage().await?;
         self.init_jobs_from_storage().await?;
-        self.init_stages_from_storage(ctx).await?;
+        self.init_stages_from_storage().await?;
 
         Ok(())
     }
@@ -110,7 +118,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         Ok(())
     }
 
-    async fn init_stages_from_storage(&self, ctx: &SessionContext) -> Result<()> {
+    async fn init_stages_from_storage(&self) -> Result<()> {
         let entries = self
             .config_client
             .get_from_prefix(&get_stage_prefix(&self.namespace))
@@ -119,9 +127,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         let mut stages = self.stages.write();
         for (key, entry) in entries {
             let (job_id, stage_id) = extract_stage_id_from_stage_key(&key).unwrap();
+            let session_id = self
+                .get_session_from_job(&job_id)
+                .expect("session id does not exist for job");
+            let session_ctx = self
+                .session_context_registry
+                .lookup_session(&session_id)
+                .await
+                .expect("SessionContext does not exist in SessionContextRegistry.");
             let value = U::try_decode(&entry)?;
-            let plan = value
-                .try_into_physical_plan(ctx, self.codec.physical_extension_codec())?;
+            let runtime = session_ctx.runtime_env();
+            let plan = value.try_into_physical_plan(
+                session_ctx.deref(),
+                runtime.deref(),
+                self.codec.physical_extension_codec(),
+            )?;
 
             stages.insert((job_id, stage_id), plan);
         }
@@ -164,6 +184,21 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     pub(crate) fn get_executors_metadata(&self) -> Vec<ExecutorMetadata> {
         let executors_metadata = self.executors_metadata.read();
         executors_metadata.values().cloned().collect()
+    }
+
+    pub(crate) async fn save_job_session(
+        &self,
+        job_id: &str,
+        session_id: &str,
+    ) -> Result<()> {
+        let mut job2_sess = self.job2session.write();
+        job2_sess.insert(job_id.to_string(), session_id.to_string());
+        Ok(())
+    }
+
+    pub(crate) fn get_session_from_job(&self, job_id: &str) -> Option<String> {
+        let job_session = self.job2session.read();
+        job_session.get(job_id).cloned()
     }
 
     pub(crate) async fn save_job_metadata(
@@ -241,6 +276,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
 
         Ok(())
     }
+
+    pub fn session_registry(&self) -> Arc<SessionContextRegistry> {
+        self.session_context_registry.clone()
+    }
 }
 
 fn get_executors_metadata_prefix(namespace: &str) -> String {
@@ -266,7 +305,6 @@ fn get_stage_prefix(namespace: &str) -> String {
 fn get_stage_plan_key(namespace: &str, job_id: &str, stage_id: u32) -> String {
     format!("{}/{}/{}", get_stage_prefix(namespace), job_id, stage_id,)
 }
-
 fn extract_job_id_from_job_key(job_key: &str) -> Result<&str> {
     job_key.split('/').nth(2).ok_or_else(|| {
         BallistaError::Internal(format!("Unexpected task key: {}", job_key))

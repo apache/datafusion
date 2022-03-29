@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -179,18 +180,29 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         );
         info!("Start to run task {}", task_id_log);
 
-        let runtime = self.executor.ctx.runtime_env();
+        let runtime = self.executor.runtime.clone();
+        let session_id = task.session_id;
+        let mut task_props = HashMap::new();
+        for kv_pair in task.props {
+            task_props.insert(kv_pair.key, kv_pair.value);
+        }
 
-        // TODO get session_id from TaskDefinition
-        let session_id = "mock_session".to_owned();
-        // TODO get task_props from TaskDefinition
-        let task_props = HashMap::new();
-
+        let mut task_scalar_functions = HashMap::new();
+        let mut task_aggregate_functions = HashMap::new();
+        // TODO combine the functions from Executor's functions and TaskDefintion's function resources
+        for scalar_func in self.executor.scalar_functions.clone() {
+            task_scalar_functions.insert(scalar_func.0, scalar_func.1);
+        }
+        for agg_func in self.executor.aggregate_functions.clone() {
+            task_aggregate_functions.insert(agg_func.0, agg_func.1);
+        }
         let task_context = Arc::new(TaskContext::new(
             task_id_log.clone(),
             session_id,
             task_props,
-            runtime,
+            task_scalar_functions,
+            task_aggregate_functions,
+            runtime.clone(),
         ));
 
         let encoded_plan = &task.plan.as_slice();
@@ -198,7 +210,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         let plan: Arc<dyn ExecutionPlan> =
             U::try_decode(encoded_plan).and_then(|proto| {
                 proto.try_into_physical_plan(
-                    self.executor.ctx.as_ref(),
+                    task_context.deref(),
+                    runtime.deref(),
                     self.codec.physical_extension_codec(),
                 )
             })?;
