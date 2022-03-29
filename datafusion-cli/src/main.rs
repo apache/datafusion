@@ -105,7 +105,7 @@ pub async fn main() -> Result<()> {
     };
 
     let mut ctx: Context = match (args.host, args.port) {
-        (Some(ref h), Some(p)) => Context::new_remote(h, p)?,
+        (Some(ref h), Some(p)) => Context::new_remote(h, p).await?,
         _ => Context::new_local(&session_config),
     };
 

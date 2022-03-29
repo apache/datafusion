@@ -17,21 +17,21 @@
 
 [workspace]
 members = [
-    "datafusion",
-    "datafusion-common",
-    "datafusion-expr",
-    "datafusion-jit",
-    "datafusion-physical-expr",
+    "datafusion/core",
+    "datafusion/common",
+    "datafusion/expr",
+    "datafusion/jit",
+    "datafusion/physical-expr",
+    "datafusion/proto",
     "datafusion-cli",
     "datafusion-examples",
-    "datafusion-proto",
-    "datafusion-storage",
     "benchmarks",
     "ballista/rust/client",
     "ballista/rust/core",
     "ballista/rust/executor",
     "ballista/rust/scheduler",
     "ballista-examples",
+    "data-access",
 ]
 
 [profile.release]
