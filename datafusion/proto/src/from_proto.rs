@@ -578,7 +578,8 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
             Value::IntervalYearmonthValue(v) => ScalarValue::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => ScalarValue::IntervalDayTime(Some(*v)),
             Value::TimestampValue(v) => {
-                let ts_value = v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                let ts_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
                 let timezone = if v.timezone.is_empty() {
                     None
                 } else {
@@ -848,7 +849,8 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                     Some(v.timezone.clone())
                 };
 
-                let ts_value = v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                let ts_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
 
                 match ts_value {
                     protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(t) => {
