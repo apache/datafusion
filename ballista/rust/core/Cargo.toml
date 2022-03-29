@@ -46,7 +46,7 @@ log = "0.4"
 
 parking_lot = "0.12"
 parse_arg = "0.1.3"
-prost = "0.9"
+prost = "0.10"
 prost-types = "0.9"
 serde = { version = "1", features = ["derive"] }
 sqlparser = "0.15"
