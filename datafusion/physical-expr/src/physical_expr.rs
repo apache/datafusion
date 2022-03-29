@@ -145,10 +145,11 @@ mod tests {
     #[test]
     fn scatter_int_end_with_false() -> Result<()> {
         let truthy = Arc::new(Int32Array::from(vec![1, 10, 11, 100]));
-        let mask = BooleanArray::from(vec![true, false, true, false]);
+        let mask = BooleanArray::from(vec![true, false, true, false, false, false]);
 
         // output should be same length as mask
-        let expected = Int32Array::from_iter(vec![Some(1), None, Some(10), None]);
+        let expected =
+            Int32Array::from_iter(vec![Some(1), None, Some(10), None, None, None]);
         let result = scatter(&mask, truthy.as_ref())?;
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
