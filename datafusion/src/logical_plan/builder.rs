@@ -1541,10 +1541,7 @@ mod tests {
             &employee_schema(),
             Some(vec![0, 1, 2, 3, 4]),
         )?;
-        let col = Expr::Column(Column {
-            relation: None,
-            name: "first_name".to_owned(),
-        });
+        let col = col("first_name");
         plan = plan.project(vec![Expr::Cast {
             expr: Box::new(col),
             data_type: DataType::Boolean,
