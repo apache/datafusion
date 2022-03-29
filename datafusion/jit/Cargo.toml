@@ -41,4 +41,6 @@ cranelift-jit = "0.82.0"
 cranelift-module = "0.82.0"
 cranelift-native = "0.82.0"
 datafusion-common = { path = "../common", version = "7.0.0", features = ["jit"] }
+datafusion-expr = { path = "../expr", version = "7.0.0" }
+
 parking_lot = "0.12"
