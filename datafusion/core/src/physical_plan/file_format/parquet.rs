@@ -503,8 +503,9 @@ fn read_partition(
                     let proj_batch = partition_column_projector
                         .project(adapted_batch, &partitioned_file.partition_values);
 
-                    send_result(&response_tx, proj_batch)?;
-                    if limit.map(|l| total_rows >= l).unwrap_or(false) {
+                    let send_rt = send_result(&response_tx, proj_batch);
+                    if send_rt.is_err() || limit.map(|l| total_rows >= l).unwrap_or(false)
+                    {
                         break 'outer;
                     }
                 }
@@ -515,10 +516,10 @@ fn read_partition(
                     let err_msg =
                         format!("Error reading batch from {}: {}", partitioned_file, e);
                     // send error to operator
-                    send_result(
+                    let _ = send_result(
                         &response_tx,
                         Err(ArrowError::ParquetError(err_msg.clone())),
-                    )?;
+                    );
                     // terminate thread with error
                     return Err(DataFusionError::Execution(err_msg));
                 }
