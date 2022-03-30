@@ -51,7 +51,7 @@ message LogicalPlanNode {
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
     UnionNode union = 19;
-    CreateCatalogNode create_catalog_schema = 20;
+    CreateCatalogNode create_catalog = 20;
   }
 }
 
