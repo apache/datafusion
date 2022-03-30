@@ -32,9 +32,18 @@ Python binding or Ballista always requires a new DataFusion version release.
 
 ## Branching
 
-DataFusion currently only releases from the `master` branch. Given the project
-is still in early development state, we are not maintaining an active stable
-release backport branch.
+### Major Release
+
+DataFusion typically has major releases from the `master` branch every 3 months, including breaking API changes. 
+
+### Minor Release
+
+Starting v7.0.0, we are experimenting with maintaining an active stable release branch (e.g. `maint-7.x`). Every month, we will review the `maint-*` branch and prepare a minor release (e.g. v7.1.0) when necessary. A patch release (v7.0.1) can be requested on demand if it is urgent bug/security fix.
+
+#### How to add changes to `maint-*` branch?
+If you would like to propose your change for inclusion in the maintenance branch
+1. follow normal workflow to create PR to `master` branch and wait for its approval and merges.
+2. after PR is squash merged to `master`, branch from most recent maintenance branch (e.g. `maint-7-x`), cherry-pick the commit and create a PR to maintenance branch (e.g. `maint-7-x`).
 
 ## Prerequisite
 

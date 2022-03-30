@@ -20,7 +20,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use arrow::array::{self, *};
-use arrow::compute::{and, eq, eq_utf8, is_null, not, or, or_kleene};
+use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
@@ -245,70 +245,6 @@ fn if_then_else(
     }
 }
 
-macro_rules! array_equals {
-    ($TY:ty, $L:expr, $R:expr, $eq_fn:expr) => {{
-        let when_value = $L
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$TY>()
-            .expect("array_equals downcast failed");
-
-        let base_value = $R
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$TY>()
-            .expect("array_equals downcast failed");
-
-        $eq_fn(when_value, base_value).map_err(DataFusionError::from)
-    }};
-}
-
-fn array_equals(
-    data_type: &DataType,
-    when_value: ArrayRef,
-    base_value: ArrayRef,
-) -> Result<BooleanArray> {
-    match data_type {
-        DataType::UInt8 => {
-            array_equals!(array::UInt8Array, when_value, base_value, eq)
-        }
-        DataType::UInt16 => {
-            array_equals!(array::UInt16Array, when_value, base_value, eq)
-        }
-        DataType::UInt32 => {
-            array_equals!(array::UInt32Array, when_value, base_value, eq)
-        }
-        DataType::UInt64 => {
-            array_equals!(array::UInt64Array, when_value, base_value, eq)
-        }
-        DataType::Int8 => {
-            array_equals!(array::Int8Array, when_value, base_value, eq)
-        }
-        DataType::Int16 => {
-            array_equals!(array::Int16Array, when_value, base_value, eq)
-        }
-        DataType::Int32 => {
-            array_equals!(array::Int32Array, when_value, base_value, eq)
-        }
-        DataType::Int64 => {
-            array_equals!(array::Int64Array, when_value, base_value, eq)
-        }
-        DataType::Float32 => {
-            array_equals!(array::Float32Array, when_value, base_value, eq)
-        }
-        DataType::Float64 => {
-            array_equals!(array::Float64Array, when_value, base_value, eq)
-        }
-        DataType::Utf8 => {
-            array_equals!(array::StringArray, when_value, base_value, eq_utf8)
-        }
-        other => Err(DataFusionError::Execution(format!(
-            "CASE does not support '{:?}'",
-            other
-        ))),
-    }
-}
-
 impl CaseExpr {
     /// This function evaluates the form of CASE that matches an expression to fixed values.
     ///
@@ -321,7 +257,6 @@ impl CaseExpr {
         let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
         let expr = self.expr.as_ref().unwrap();
         let base_value = expr.evaluate(batch)?;
-        let base_type = expr.data_type(&batch.schema())?;
         let base_value = base_value.into_array(batch.num_rows());
         let base_nulls = is_null(base_value.as_ref())?;
 
@@ -335,7 +270,7 @@ impl CaseExpr {
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows());
             // build boolean array representing which rows match the "when" value
-            let when_match = array_equals(&base_type, when_value, base_value.clone())?;
+            let when_match = eq_dyn(&when_value, base_value.as_ref())?;
 
             let then_value = self.when_then_expr[i]
                 .1
