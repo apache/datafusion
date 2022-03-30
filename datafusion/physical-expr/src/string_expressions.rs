@@ -337,6 +337,8 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
         )));
     }
 
+    let last_arg_null = (&args[args.len() - 1]).is_null(0);
+
     // first map is the iterator, second is for the `Option<_>`
     let result = args[0]
         .iter()
@@ -349,7 +351,9 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
                     if !arg.is_null(index) {
                         owned_string.push_str(arg.value(index));
                         // if not last push separator
-                        if arg_index != args.len() - 1 {
+                        if arg_index != args.len() - 1
+                            && !(arg_index == args.len() - 2 && last_arg_null)
+                        {
                             owned_string.push_str(sep);
                         }
                     }
