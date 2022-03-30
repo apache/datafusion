@@ -352,7 +352,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })?;
 
                 Ok(LogicalPlan::CreateCatalog(CreateCatalog {
-                    catalog_name: create_catalog.schema_name.clone(),
+                    catalog_name: create_catalog.catalog_name.clone(),
                     if_not_exists: create_catalog.if_not_exists,
                     schema: pb_schema.try_into()?,
                 }))
