@@ -560,12 +560,6 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
             Value::Float32Value(v) => ScalarValue::Float32(Some(*v)),
             Value::Float64Value(v) => ScalarValue::Float64(Some(*v)),
             Value::Date32Value(v) => ScalarValue::Date32(Some(*v)),
-            Value::TimeMicrosecondValue(v) => {
-                ScalarValue::TimestampMicrosecond(Some(*v), None)
-            }
-            Value::TimeNanosecondValue(v) => {
-                ScalarValue::TimestampNanosecond(Some(*v), None)
-            }
             Value::ListValue(v) => v.try_into()?,
             Value::NullListValue(v) => ScalarValue::List(None, Box::new(v.try_into()?)),
             Value::NullValue(null_enum) => {
@@ -581,12 +575,31 @@ impl TryFrom<&protobuf::scalar_value::Value> for ScalarValue {
                 )
             }
             Value::Date64Value(v) => ScalarValue::Date64(Some(*v)),
-            Value::TimeSecondValue(v) => ScalarValue::TimestampSecond(Some(*v), None),
-            Value::TimeMillisecondValue(v) => {
-                ScalarValue::TimestampMillisecond(Some(*v), None)
-            }
             Value::IntervalYearmonthValue(v) => ScalarValue::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => ScalarValue::IntervalDayTime(Some(*v)),
+            Value::TimestampValue(v) => {
+                let ts_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+                let timezone = if v.timezone.is_empty() {
+                    None
+                } else {
+                    Some(v.timezone.clone())
+                };
+                match ts_value {
+                    protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(t) => {
+                        ScalarValue::TimestampMicrosecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(t) => {
+                        ScalarValue::TimestampNanosecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeSecondValue(t) => {
+                        ScalarValue::TimestampSecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(t) => {
+                        ScalarValue::TimestampMillisecond(Some(*t), timezone)
+                    }
+                }
+            }
         };
         Ok(scalar)
     }
@@ -794,8 +807,6 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
             Value::Float32Value(v) => Self::Float32(Some(*v)),
             Value::Float64Value(v) => Self::Float64(Some(*v)),
             Value::Date32Value(v) => Self::Date32(Some(*v)),
-            Value::TimeMicrosecondValue(v) => Self::TimestampMicrosecond(Some(*v), None),
-            Value::TimeNanosecondValue(v) => Self::TimestampNanosecond(Some(*v), None),
             Value::ListValue(scalar_list) => {
                 let protobuf::ScalarListValue {
                     values,
@@ -829,10 +840,33 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
             }
             Value::Date64Value(v) => Self::Date64(Some(*v)),
-            Value::TimeSecondValue(v) => Self::TimestampSecond(Some(*v), None),
-            Value::TimeMillisecondValue(v) => Self::TimestampMillisecond(Some(*v), None),
             Value::IntervalYearmonthValue(v) => Self::IntervalYearMonth(Some(*v)),
             Value::IntervalDaytimeValue(v) => Self::IntervalDayTime(Some(*v)),
+            Value::TimestampValue(v) => {
+                let timezone = if v.timezone.is_empty() {
+                    None
+                } else {
+                    Some(v.timezone.clone())
+                };
+
+                let ts_value =
+                    v.value.as_ref().ok_or_else(|| Error::required("value"))?;
+
+                match ts_value {
+                    protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(t) => {
+                        Self::TimestampMicrosecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(t) => {
+                        Self::TimestampNanosecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeSecondValue(t) => {
+                        Self::TimestampSecond(Some(*t), timezone)
+                    }
+                    protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(t) => {
+                        Self::TimestampMillisecond(Some(*t), timezone)
+                    }
+                }
+            }
         })
     }
 }
@@ -1343,12 +1377,37 @@ fn typechecked_scalar_value_conversion(
         (Value::Date32Value(v), PrimitiveScalarType::Date32) => {
             ScalarValue::Date32(Some(*v))
         }
-        (Value::TimeMicrosecondValue(v), PrimitiveScalarType::TimeMicrosecond) => {
-            ScalarValue::TimestampMicrosecond(Some(*v), None)
-        }
-        (Value::TimeNanosecondValue(v), PrimitiveScalarType::TimeMicrosecond) => {
-            ScalarValue::TimestampNanosecond(Some(*v), None)
-        }
+        (
+            Value::TimestampValue(protobuf::ScalarTimestampValue {
+                timezone,
+                value:
+                    Some(protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(v)),
+            }),
+            PrimitiveScalarType::TimeMicrosecond,
+        ) => ScalarValue::TimestampMicrosecond(Some(*v), unwrap_timezone(timezone)),
+        (
+            Value::TimestampValue(protobuf::ScalarTimestampValue {
+                timezone,
+                value:
+                    Some(protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(v)),
+            }),
+            PrimitiveScalarType::TimeNanosecond,
+        ) => ScalarValue::TimestampNanosecond(Some(*v), unwrap_timezone(timezone)),
+        (
+            Value::TimestampValue(protobuf::ScalarTimestampValue {
+                timezone,
+                value: Some(protobuf::scalar_timestamp_value::Value::TimeSecondValue(v)),
+            }),
+            PrimitiveScalarType::TimeSecond,
+        ) => ScalarValue::TimestampSecond(Some(*v), unwrap_timezone(timezone)),
+        (
+            Value::TimestampValue(protobuf::ScalarTimestampValue {
+                timezone,
+                value:
+                    Some(protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(v)),
+            }),
+            PrimitiveScalarType::TimeMillisecond,
+        ) => ScalarValue::TimestampMillisecond(Some(*v), unwrap_timezone(timezone)),
         (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
             ScalarValue::Utf8(Some(v.to_owned()))
         }
@@ -1418,12 +1477,6 @@ fn typechecked_scalar_value_conversion(
         (Value::Date64Value(v), PrimitiveScalarType::Date64) => {
             ScalarValue::Date64(Some(*v))
         }
-        (Value::TimeSecondValue(v), PrimitiveScalarType::TimeSecond) => {
-            ScalarValue::TimestampSecond(Some(*v), None)
-        }
-        (Value::TimeMillisecondValue(v), PrimitiveScalarType::TimeMillisecond) => {
-            ScalarValue::TimestampMillisecond(Some(*v), None)
-        }
         (Value::IntervalYearmonthValue(v), PrimitiveScalarType::IntervalYearmonth) => {
             ScalarValue::IntervalYearMonth(Some(*v))
         }
@@ -1432,6 +1485,14 @@ fn typechecked_scalar_value_conversion(
         }
         _ => return Err(proto_error("Could not convert to the proper type")),
     })
+}
+
+fn unwrap_timezone(proto_value: &str) -> Option<String> {
+    if proto_value.is_empty() {
+        None
+    } else {
+        Some(proto_value.to_string())
+    }
 }
 
 fn from_proto_binary_op(op: &str) -> Result<Operator, Error> {

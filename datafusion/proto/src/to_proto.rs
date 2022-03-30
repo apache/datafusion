@@ -872,14 +872,28 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::Date32Value(*s)
                 })
             }
-            datafusion::scalar::ScalarValue::TimestampMicrosecond(val, _) => {
+            datafusion::scalar::ScalarValue::TimestampMicrosecond(val, tz) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeMicrosecond, |s| {
-                    Value::TimeMicrosecondValue(*s)
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(
+                                *s,
+                            ),
+                        ),
+                    })
                 })
             }
-            datafusion::scalar::ScalarValue::TimestampNanosecond(val, _) => {
+            datafusion::scalar::ScalarValue::TimestampNanosecond(val, tz) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeNanosecond, |s| {
-                    Value::TimeNanosecondValue(*s)
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(
+                                *s,
+                            ),
+                        ),
+                    })
                 })
             }
             datafusion::scalar::ScalarValue::Decimal128(val, p, s) => match *val {
@@ -905,14 +919,26 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     Value::Date64Value(*s)
                 })
             }
-            datafusion::scalar::ScalarValue::TimestampSecond(val, _) => {
+            datafusion::scalar::ScalarValue::TimestampSecond(val, tz) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeSecond, |s| {
-                    Value::TimeSecondValue(*s)
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeSecondValue(*s),
+                        ),
+                    })
                 })
             }
-            datafusion::scalar::ScalarValue::TimestampMillisecond(val, _) => {
+            datafusion::scalar::ScalarValue::TimestampMillisecond(val, tz) => {
                 create_proto_scalar(val, PrimitiveScalarType::TimeMillisecond, |s| {
-                    Value::TimeMillisecondValue(*s)
+                    Value::TimestampValue(protobuf::ScalarTimestampValue {
+                        timezone: tz.as_ref().unwrap_or(&"".to_string()).clone(),
+                        value: Some(
+                            protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(
+                                *s,
+                            ),
+                        ),
+                    })
                 })
             }
             datafusion::scalar::ScalarValue::IntervalYearMonth(val) => {
