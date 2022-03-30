@@ -40,7 +40,7 @@ pub enum BallistaError {
     SqlError(parser::ParserError),
     IoError(io::Error),
     // ReqwestError(reqwest::Error),
-    //HttpError(http::Error),
+    // HttpError(http::Error),
     // KubeAPIError(kube::error::Error),
     // KubeAPIRequestError(k8s_openapi::RequestError),
     // KubeAPIResponseError(k8s_openapi::ResponseError),
@@ -135,6 +135,18 @@ impl From<tonic::Status> for BallistaError {
 impl From<tokio::task::JoinError> for BallistaError {
     fn from(e: tokio::task::JoinError) -> Self {
         BallistaError::TokioError(e)
+    }
+}
+
+impl From<datafusion_proto::from_proto::Error> for BallistaError {
+    fn from(e: datafusion_proto::from_proto::Error) -> Self {
+        BallistaError::General(e.to_string())
+    }
+}
+
+impl From<datafusion_proto::to_proto::Error> for BallistaError {
+    fn from(e: datafusion_proto::to_proto::Error) -> Self {
+        BallistaError::General(e.to_string())
     }
 }
 

@@ -19,6 +19,7 @@
 
 pub use crate::context::BallistaContext;
 pub use ballista_core::config::BallistaConfig;
+pub use ballista_core::config::BALLISTA_DEFAULT_BATCH_SIZE;
 pub use ballista_core::config::BALLISTA_DEFAULT_SHUFFLE_PARTITIONS;
 pub use ballista_core::error::{BallistaError, Result};
 

@@ -176,6 +176,26 @@ impl DistributedPlanner {
     }
 }
 
+/// Returns the unresolved shuffles in the execution plan
+pub fn find_unresolved_shuffles(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Vec<UnresolvedShuffleExec>> {
+    if let Some(unresolved_shuffle) =
+        plan.as_any().downcast_ref::<UnresolvedShuffleExec>()
+    {
+        Ok(vec![unresolved_shuffle.clone()])
+    } else {
+        Ok(plan
+            .children()
+            .iter()
+            .map(find_unresolved_shuffles)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+}
+
 pub fn remove_unresolved_shuffles(
     stage: &dyn ExecutionPlan,
     partition_locations: &HashMap<usize, HashMap<usize, Vec<PartitionLocation>>>,
@@ -259,7 +279,8 @@ mod test {
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };
     use datafusion::physical_plan::{displayable, ExecutionPlan};
-    use datafusion::prelude::ExecutionContext;
+    use datafusion::prelude::SessionContext;
+    use std::ops::Deref;
 
     use ballista_core::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
     use std::sync::Arc;
@@ -273,7 +294,7 @@ mod test {
 
     #[tokio::test]
     async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata").await?;
+        let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
         let df = ctx
@@ -360,7 +381,7 @@ mod test {
 
     #[tokio::test]
     async fn distributed_join_plan() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata").await?;
+        let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 12
         let df = ctx
@@ -509,7 +530,7 @@ order by
         let join_input_2 = join_input_2.children()[0].clone();
         let unresolved_shuffle_reader_2 =
             downcast_exec!(join_input_2, UnresolvedShuffleExec);
-        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); //orders
+        assert_eq!(unresolved_shuffle_reader_2.input_partition_count, 1); // orders
         assert_eq!(unresolved_shuffle_reader_2.output_partition_count, 2);
 
         // final partitioned hash aggregate
@@ -535,7 +556,7 @@ order by
 
     #[tokio::test]
     async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
-        let mut ctx = datafusion_test_context("testdata").await?;
+        let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
         let df = ctx
@@ -574,7 +595,7 @@ order by
     fn roundtrip_operator(
         plan: Arc<dyn ExecutionPlan>,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =
@@ -582,8 +603,12 @@ order by
                 plan.clone(),
                 codec.physical_extension_codec(),
             )?;
-        let result_exec_plan: Arc<dyn ExecutionPlan> =
-            (&proto).try_into_physical_plan(&ctx, codec.physical_extension_codec())?;
+        let runtime = ctx.runtime_env();
+        let result_exec_plan: Arc<dyn ExecutionPlan> = (&proto).try_into_physical_plan(
+            &ctx,
+            runtime.deref(),
+            codec.physical_extension_codec(),
+        )?;
         Ok(result_exec_plan)
     }
 }

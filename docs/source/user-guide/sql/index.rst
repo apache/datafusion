@@ -24,4 +24,5 @@ SQL Reference
    sql_status
    select
    ddl
+   aggregate_functions
    DataFusion Functions <datafusion-functions>

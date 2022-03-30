@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -36,6 +38,7 @@ use ballista_core::serde::protobuf::{
 };
 use ballista_core::serde::scheduler::ExecutorState;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::as_task_status;
@@ -177,12 +180,38 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         );
         info!("Start to run task {}", task_id_log);
 
+        let runtime = self.executor.runtime.clone();
+        let session_id = task.session_id;
+        let mut task_props = HashMap::new();
+        for kv_pair in task.props {
+            task_props.insert(kv_pair.key, kv_pair.value);
+        }
+
+        let mut task_scalar_functions = HashMap::new();
+        let mut task_aggregate_functions = HashMap::new();
+        // TODO combine the functions from Executor's functions and TaskDefintion's function resources
+        for scalar_func in self.executor.scalar_functions.clone() {
+            task_scalar_functions.insert(scalar_func.0, scalar_func.1);
+        }
+        for agg_func in self.executor.aggregate_functions.clone() {
+            task_aggregate_functions.insert(agg_func.0, agg_func.1);
+        }
+        let task_context = Arc::new(TaskContext::new(
+            task_id_log.clone(),
+            session_id,
+            task_props,
+            task_scalar_functions,
+            task_aggregate_functions,
+            runtime.clone(),
+        ));
+
         let encoded_plan = &task.plan.as_slice();
 
         let plan: Arc<dyn ExecutionPlan> =
             U::try_decode(encoded_plan).and_then(|proto| {
                 proto.try_into_physical_plan(
-                    self.executor.ctx.as_ref(),
+                    task_context.deref(),
+                    runtime.deref(),
                     self.codec.physical_extension_codec(),
                 )
             })?;
@@ -197,6 +226,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                task_context,
                 shuffle_output_partitioning,
             )
             .await;
@@ -264,7 +294,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> TaskRunnerPool<T,
             info!("Starting the task runner pool");
             // Use a dedicated executor for CPU bound tasks so that the main tokio
             // executor can still answer requests even when under load
-            //TODO make it configurable
+            // TODO make it configurable
             let dedicated_executor = DedicatedExecutor::new("task_runner", 4);
             loop {
                 if let Some(task) = rx_task.recv().await {

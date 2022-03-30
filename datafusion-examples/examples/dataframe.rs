@@ -23,9 +23,9 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local execution context
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
-    let testdata = datafusion::arrow::util::test_util::parquet_test_data();
+    let testdata = datafusion::test_util::parquet_test_data();
 
     let filename = &format!("{}/alltypes_plain.parquet", testdata);
 

@@ -18,10 +18,10 @@
 .. _api.execution_context:
 .. currentmodule:: datafusion
 
-ExecutionContext
+SessionContext
 ================
 
 .. autosummary::
    :toctree: ../generated/
 
-   ExecutionContext
+   SessionContext

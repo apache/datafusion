@@ -16,39 +16,43 @@
 // under the License.
 
 use anyhow::Context;
-use ballista_core::config::TaskSchedulingPolicy;
-use ballista_core::execution_plans::ShuffleWriterExec;
-use ballista_core::serde::protobuf::execute_query_params::Query;
+use ballista_core::config::{BallistaConfig, TaskSchedulingPolicy};
+use ballista_core::error::BallistaError;
+use ballista_core::serde::protobuf::execute_query_params::{OptionalSessionId, Query};
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::protobuf::executor_registration::OptionalHost;
 use ballista_core::serde::protobuf::scheduler_grpc_server::SchedulerGrpc;
 use ballista_core::serde::protobuf::{
     job_status, ExecuteQueryParams, ExecuteQueryResult, ExecutorHeartbeat, FailedJob,
     FileType, GetFileMetadataParams, GetFileMetadataResult, GetJobStatusParams,
-    GetJobStatusResult, HeartBeatParams, HeartBeatResult, JobStatus, PartitionId,
-    PollWorkParams, PollWorkResult, QueuedJob, RegisterExecutorParams,
-    RegisterExecutorResult, RunningJob, TaskDefinition, TaskStatus,
+    GetJobStatusResult, HeartBeatParams, HeartBeatResult, JobStatus, PollWorkParams,
+    PollWorkResult, QueuedJob, RegisterExecutorParams, RegisterExecutorResult,
     UpdateTaskStatusParams, UpdateTaskStatusResult,
 };
-use ballista_core::serde::scheduler::to_proto::hash_partitioning_to_proto;
-use ballista_core::serde::scheduler::{ExecutorData, ExecutorMetadata};
+use ballista_core::serde::scheduler::{
+    ExecutorData, ExecutorDataChange, ExecutorMetadata,
+};
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan};
+use datafusion::datafusion_data_access::object_store::{
+    local::LocalFileSystem, ObjectStore,
+};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::object_store::{local::LocalFileSystem, ObjectStore};
-use datafusion::physical_plan::ExecutionPlan;
 use futures::StreamExt;
 use log::{debug, error, info, trace, warn};
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use std::collections::HashSet;
 use std::convert::TryInto;
+use std::ops::Deref;
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use std::time::Instant;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::{Request, Response, Status};
 
-use crate::planner::DistributedPlanner;
-use crate::scheduler_server::SchedulerServer;
+use crate::scheduler_server::event::QueryStageSchedulerEvent;
+use crate::scheduler_server::{
+    create_datafusion_context, update_datafusion_context, SchedulerServer,
+};
+use crate::state::task_scheduler::TaskScheduler;
 
 #[tonic::async_trait]
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
@@ -93,8 +97,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 state: None,
             };
             // In case that it's the first time to poll work, do registration
-            if let Some(_executor_meta) = self.state.get_executor_metadata(&metadata.id) {
-            } else {
+            if self.state.get_executor_metadata(&metadata.id).is_none() {
                 self.state
                     .save_executor_metadata(metadata.clone())
                     .await
@@ -104,72 +107,40 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                         tonic::Status::internal(msg)
                     })?;
             }
-            self.state.save_executor_heartbeat(executor_heartbeat);
-            for task_status in task_status {
-                self.state
-                    .save_task_status(&task_status)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Could not save task status: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    })?;
-            }
+            self.state
+                .executor_manager
+                .save_executor_heartbeat(executor_heartbeat);
+            self.update_task_status(task_status).await.map_err(|e| {
+                let msg = format!(
+                    "Fail to update tasks status from executor {:?} due to {:?}",
+                    &metadata.id, e
+                );
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
             let task: Result<Option<_>, Status> = if can_accept_task {
-                let plan = self
+                let mut executors_data = vec![ExecutorData {
+                    executor_id: metadata.id.clone(),
+                    total_task_slots: 1,
+                    available_task_slots: 1,
+                }];
+                let (mut tasks, num_tasks) = self
                     .state
-                    .assign_next_schedulable_task(&metadata.id)
+                    .fetch_schedulable_tasks(&mut executors_data, 1)
                     .await
                     .map_err(|e| {
                         let msg = format!("Error finding next assignable task: {}", e);
                         error!("{}", msg);
                         tonic::Status::internal(msg)
                     })?;
-                if let Some((task, _plan)) = &plan {
-                    let task_id = task.task_id.as_ref().unwrap();
-                    info!(
-                        "Sending new task to {}: {}/{}/{}",
-                        metadata.id,
-                        task_id.job_id,
-                        task_id.stage_id,
-                        task_id.partition_id
-                    );
-                }
-                match plan {
-                    Some((status, plan)) => {
-                        let plan_clone = plan.clone();
-                        let output_partitioning = if let Some(shuffle_writer) =
-                            plan_clone.as_any().downcast_ref::<ShuffleWriterExec>()
-                        {
-                            shuffle_writer.shuffle_output_partitioning()
-                        } else {
-                            return Err(Status::invalid_argument(format!(
-                                "Task root plan was not a ShuffleWriterExec: {:?}",
-                                plan_clone
-                            )));
-                        };
-                        let mut buf: Vec<u8> = vec![];
-                        U::try_from_physical_plan(
-                            plan,
-                            self.codec.physical_extension_codec(),
-                        )
-                        .and_then(|m| m.try_encode(&mut buf))
-                        .map_err(|e| {
-                            Status::internal(format!(
-                                "error serializing execution plan: {:?}",
-                                e
-                            ))
-                        })?;
-                        Ok(Some(TaskDefinition {
-                            plan: buf,
-                            task_id: status.task_id,
-                            output_partitioning: hash_partitioning_to_proto(
-                                output_partitioning,
-                            )
-                            .map_err(|_| Status::internal("TBD".to_string()))?,
-                        }))
-                    }
-                    None => Ok(None),
+                if num_tasks == 0 {
+                    Ok(None)
+                } else {
+                    assert_eq!(tasks.len(), 1);
+                    let mut task = tasks.pop().unwrap();
+                    assert_eq!(task.len(), 1);
+                    let task = task.pop().unwrap();
+                    Ok(Some(task))
                 }
             } else {
                 Ok(None)
@@ -232,7 +203,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 total_task_slots: metadata.specification.task_slots,
                 available_task_slots: metadata.specification.task_slots,
             };
-            self.state.save_executor_data(executor_data);
+            self.state
+                .executor_manager
+                .save_executor_data(executor_data);
             Ok(Response::new(RegisterExecutorResult { success: true }))
         } else {
             warn!("Received invalid register executor request");
@@ -258,7 +231,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 .as_secs(),
             state,
         };
-        self.state.save_executor_heartbeat(executor_heartbeat);
+        self.state
+            .executor_manager
+            .save_executor_heartbeat(executor_heartbeat);
         Ok(Response::new(HeartBeatResult { reregister: false }))
     }
 
@@ -275,43 +250,29 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
             "Received task status update request for executor {:?}",
             executor_id
         );
-        trace!("Related task status is {:?}", task_status);
-        let mut jobs = HashSet::new();
+        let num_tasks = task_status.len();
+        if let Some(executor_data) =
+            self.state.executor_manager.get_executor_data(&executor_id)
         {
-            let num_tasks = task_status.len();
-            for task_status in task_status {
-                self.state
-                    .save_task_status(&task_status)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Could not save task status: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    })?;
-                if let Some(task_id) = task_status.task_id {
-                    jobs.insert(task_id.job_id.clone());
-                }
-            }
-            if let Some(mut executor_data) = self.state.get_executor_data(&executor_id) {
-                executor_data.available_task_slots += num_tasks as u32;
-                self.state.save_executor_data(executor_data);
-            } else {
-                error!("Fail to get executor data for {:?}", &executor_id);
-            }
+            self.state
+                .executor_manager
+                .update_executor_data(&ExecutorDataChange {
+                    executor_id: executor_data.executor_id,
+                    task_slots: num_tasks as i32,
+                });
+        } else {
+            error!("Fail to get executor data for {:?}", &executor_id);
         }
-        if let Some(scheduler_env) = self.scheduler_env.as_ref() {
-            let tx_job = scheduler_env.tx_job.clone();
-            for job_id in jobs {
-                tx_job.send(job_id.clone()).await.map_err(|e| {
-                    let msg = format!(
-                        "Could not send job {} to the channel due to {:?}",
-                        &job_id, e
-                    );
-                    error!("{}", msg);
-                    tonic::Status::internal(msg)
-                })?;
-            }
-        }
+
+        self.update_task_status(task_status).await.map_err(|e| {
+            let msg = format!(
+                "Fail to update tasks status from executor {:?} due to {:?}",
+                &executor_id, e
+            );
+            error!("{}", msg);
+            tonic::Status::internal(msg)
+        })?;
+
         Ok(Response::new(UpdateTaskStatusResult { success: true }))
     }
 
@@ -333,7 +294,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
 
         let file_format: Arc<dyn FileFormat> = match file_type {
             FileType::Parquet => Ok(Arc::new(ParquetFormat::default())),
-            //TODO implement for CSV
+            // TODO implement for CSV
             _ => Err(tonic::Status::unimplemented(
                 "get_file_metadata unsupported file type",
             )),
@@ -365,31 +326,62 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
         &self,
         request: Request<ExecuteQueryParams>,
     ) -> std::result::Result<Response<ExecuteQueryResult>, tonic::Status> {
+        let query_params = request.into_inner();
         if let ExecuteQueryParams {
             query: Some(query),
-            settings: _,
-        } = request.into_inner()
+            settings,
+            optional_session_id,
+        } = query_params
         {
-            let plan = match query {
-                Query::LogicalPlan(message) => {
-                    let ctx = self.ctx.read().await;
-                    T::try_decode(message.as_slice())
-                        .and_then(|m| {
-                            m.try_into_logical_plan(
-                                &ctx,
-                                self.codec.logical_extension_codec(),
-                            )
-                        })
-                        .map_err(|e| {
-                            let msg =
-                                format!("Could not parse logical plan protobuf: {}", e);
-                            error!("{}", msg);
-                            tonic::Status::internal(msg)
-                        })?
+            // parse config
+            let mut config_builder = BallistaConfig::builder();
+            for kv_pair in &settings {
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            }
+            let config = config_builder.build().map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+
+            let df_session = match optional_session_id {
+                Some(OptionalSessionId::SessionId(session_id)) => {
+                    let session_ctx = self
+                        .state
+                        .session_registry()
+                        .lookup_session(session_id.as_str())
+                        .await
+                        .expect(
+                            "SessionContext does not exist in SessionContextRegistry.",
+                        );
+                    update_datafusion_context(session_ctx, &config)
                 }
+                _ => {
+                    let df_session =
+                        create_datafusion_context(&config, self.session_builder);
+                    self.state
+                        .session_registry()
+                        .register_session(df_session.clone())
+                        .await;
+                    df_session
+                }
+            };
+
+            let plan = match query {
+                Query::LogicalPlan(message) => T::try_decode(message.as_slice())
+                    .and_then(|m| {
+                        m.try_into_logical_plan(
+                            df_session.deref(),
+                            self.codec.logical_extension_codec(),
+                        )
+                    })
+                    .map_err(|e| {
+                        let msg = format!("Could not parse logical plan protobuf: {}", e);
+                        error!("{}", msg);
+                        tonic::Status::internal(msg)
+                    })?,
                 Query::Sql(sql) => {
-                    let mut ctx = self.ctx.write().await;
-                    let df = ctx.sql(&sql).await.map_err(|e| {
+                    let df = df_session.sql(&sql).await.map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
                         tonic::Status::internal(msg)
@@ -398,17 +390,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 }
             };
             debug!("Received plan for execution: {:?}", plan);
-            let job_id: String = {
-                let mut rng = thread_rng();
-                std::iter::repeat(())
-                    .map(|()| rng.sample(Alphanumeric))
-                    .map(char::from)
-                    .take(7)
-                    .collect()
-            };
+
+            // Generate job id.
+            // TODO Maybe the format will be changed in the future
+            let job_id = generate_job_id();
+            let session_id = df_session.session_id();
+            let state = self.state.clone();
+            let query_stage_event_sender =
+                self.query_stage_event_loop.get_sender().map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Could not get query stage event sender due to: {}",
+                        e
+                    ))
+                })?;
 
             // Save placeholder job metadata
-            self.state
+            state
                 .save_job_metadata(
                     &job_id,
                     &JobStatus {
@@ -420,135 +417,107 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                     tonic::Status::internal(format!("Could not save job metadata: {}", e))
                 })?;
 
-            let state = self.state.clone();
+            state
+                .save_job_session(&job_id, &session_id)
+                .await
+                .map_err(|e| {
+                    tonic::Status::internal(format!(
+                        "Could not save job session mapping: {}",
+                        e
+                    ))
+                })?;
+
             let job_id_spawn = job_id.clone();
-            let tx_job: Option<mpsc::Sender<String>> = match self.policy {
-                TaskSchedulingPolicy::PullStaged => None,
-                TaskSchedulingPolicy::PushStaged => {
-                    Some(self.scheduler_env.as_ref().unwrap().tx_job.clone())
-                }
-            };
-            let datafusion_ctx = self.ctx.read().await.clone();
+            let ctx = df_session.clone();
             tokio::spawn(async move {
-                // create physical plan using DataFusion
-                macro_rules! fail_job {
-                    ($code :expr) => {{
-                        match $code {
-                            Err(error) => {
-                                warn!("Job {} failed with {}", job_id_spawn, error);
-                                state
-                                    .save_job_metadata(
-                                        &job_id_spawn,
-                                        &JobStatus {
-                                            status: Some(job_status::Status::Failed(
-                                                FailedJob {
-                                                    error: format!("{}", error),
-                                                },
-                                            )),
-                                        },
-                                    )
-                                    .await
-                                    .unwrap();
-                                return;
-                            }
-                            Ok(value) => value,
-                        }
-                    }};
-                }
+                if let Err(e) = async {
+                    // create physical plan
+                    let start = Instant::now();
+                    let plan = async {
+                        let optimized_plan = ctx.optimize(&plan).map_err(|e| {
+                            let msg =
+                                format!("Could not create optimized logical plan: {}", e);
+                            error!("{}", msg);
 
-                let start = Instant::now();
+                            BallistaError::General(msg)
+                        })?;
 
-                let optimized_plan =
-                    fail_job!(datafusion_ctx.optimize(&plan).map_err(|e| {
-                        let msg =
-                            format!("Could not create optimized logical plan: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    }));
+                        debug!("Calculated optimized plan: {:?}", optimized_plan);
 
-                debug!("Calculated optimized plan: {:?}", optimized_plan);
+                        ctx.create_physical_plan(&optimized_plan)
+                            .await
+                            .map_err(|e| {
+                                let msg =
+                                    format!("Could not create physical plan: {}", e);
+                                error!("{}", msg);
 
-                let plan = fail_job!(datafusion_ctx
-                    .create_physical_plan(&optimized_plan)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Could not create physical plan: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    }));
-
-                info!(
-                    "DataFusion created physical plan in {} milliseconds",
-                    start.elapsed().as_millis(),
-                );
-
-                // create distributed physical plan using Ballista
-                if let Err(e) = state
-                    .save_job_metadata(
-                        &job_id_spawn,
-                        &JobStatus {
-                            status: Some(job_status::Status::Running(RunningJob {})),
-                        },
-                    )
-                    .await
-                {
-                    warn!(
-                        "Could not update job {} status to running: {}",
-                        job_id_spawn, e
+                                BallistaError::General(msg)
+                            })
+                    }
+                    .await?;
+                    info!(
+                        "DataFusion created physical plan in {} milliseconds",
+                        start.elapsed().as_millis()
                     );
-                }
-                let mut planner = DistributedPlanner::new();
-                let stages = fail_job!(planner
-                    .plan_query_stages(&job_id_spawn, plan)
-                    .await
-                    .map_err(|e| {
-                        let msg = format!("Could not plan query stages: {}", e);
-                        error!("{}", msg);
-                        tonic::Status::internal(msg)
-                    }));
 
-                // save stages into state
-                for shuffle_writer in stages {
-                    fail_job!(state
-                        .save_stage_plan(
+                    query_stage_event_sender
+                        .post_event(QueryStageSchedulerEvent::JobSubmitted(
+                            job_id_spawn.clone(),
+                            plan,
+                        ))
+                        .await?;
+
+                    Ok::<(), BallistaError>(())
+                }
+                .await
+                {
+                    let msg = format!("Job {} failed due to {}", job_id_spawn, e);
+                    warn!("{}", msg);
+                    state
+                        .save_job_metadata(
                             &job_id_spawn,
-                            shuffle_writer.stage_id(),
-                            shuffle_writer.clone()
+                            &JobStatus {
+                                status: Some(job_status::Status::Failed(FailedJob {
+                                    error: msg.to_string(),
+                                })),
+                            },
                         )
                         .await
-                        .map_err(|e| {
-                            let msg = format!("Could not save stage plan: {}", e);
-                            error!("{}", msg);
-                            tonic::Status::internal(msg)
-                        }));
-                    let num_partitions =
-                        shuffle_writer.output_partitioning().partition_count();
-                    for partition_id in 0..num_partitions {
-                        let pending_status = TaskStatus {
-                            task_id: Some(PartitionId {
-                                job_id: job_id_spawn.clone(),
-                                stage_id: shuffle_writer.stage_id() as u32,
-                                partition_id: partition_id as u32,
-                            }),
-                            status: None,
-                        };
-                        fail_job!(state.save_task_status(&pending_status).await.map_err(
-                            |e| {
-                                let msg = format!("Could not save task status: {}", e);
-                                error!("{}", msg);
-                                tonic::Status::internal(msg)
-                            }
-                        ));
-                    }
-                }
-
-                if let Some(tx_job) = tx_job {
-                    // Send job_id to the scheduler channel
-                    tx_job.send(job_id_spawn).await.unwrap();
+                        .unwrap_or_else(|_| {
+                            panic!(
+                                "Fail to update job status to failed for {}",
+                                job_id_spawn
+                            )
+                        });
                 }
             });
 
-            Ok(Response::new(ExecuteQueryResult { job_id }))
+            Ok(Response::new(ExecuteQueryResult { job_id, session_id }))
+        } else if let ExecuteQueryParams {
+            query: None,
+            settings,
+            optional_session_id: None,
+        } = query_params
+        {
+            // parse config for new session
+            let mut config_builder = BallistaConfig::builder();
+            for kv_pair in &settings {
+                config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+            }
+            let config = config_builder.build().map_err(|e| {
+                let msg = format!("Could not parse configs: {}", e);
+                error!("{}", msg);
+                tonic::Status::internal(msg)
+            })?;
+            let df_session = create_datafusion_context(&config, self.session_builder);
+            self.state
+                .session_registry()
+                .register_session(df_session.clone())
+                .await;
+            Ok(Response::new(ExecuteQueryResult {
+                job_id: "NA".to_owned(),
+                session_id: df_session.session_id(),
+            }))
         } else {
             Err(tonic::Status::internal("Error parsing request"))
         }
@@ -567,14 +536,22 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
     }
 }
 
+fn generate_job_id() -> String {
+    let mut rng = thread_rng();
+    std::iter::repeat(())
+        .map(|()| rng.sample(Alphanumeric))
+        .map(char::from)
+        .take(7)
+        .collect()
+}
+
 #[cfg(all(test, feature = "sled"))]
 mod test {
     use std::sync::Arc;
-    use tokio::sync::RwLock;
 
     use tonic::Request;
 
-    use crate::state::{SchedulerState, StandaloneClient};
+    use crate::state::{backend::standalone::StandaloneClient, SchedulerState};
     use ballista_core::error::BallistaError;
     use ballista_core::serde::protobuf::{
         executor_registration::OptionalHost, ExecutorRegistration, LogicalPlanNode,
@@ -582,7 +559,6 @@ mod test {
     };
     use ballista_core::serde::scheduler::ExecutorSpecification;
     use ballista_core::serde::BallistaCodec;
-    use datafusion::prelude::ExecutionContext;
 
     use super::{SchedulerGrpc, SchedulerServer};
 
@@ -594,7 +570,6 @@ mod test {
             SchedulerServer::new(
                 state_storage.clone(),
                 namespace.to_owned(),
-                Arc::new(RwLock::new(ExecutionContext::new())),
                 BallistaCodec::default(),
             );
         let exec_meta = ExecutorRegistration {
@@ -622,8 +597,7 @@ mod test {
                 namespace.to_string(),
                 BallistaCodec::default(),
             );
-        let ctx = scheduler.ctx.read().await;
-        state.init(&ctx).await?;
+        state.init().await?;
         // executor should be registered
         assert_eq!(state.get_executors_metadata().await.unwrap().len(), 1);
 
@@ -645,8 +619,7 @@ mod test {
                 namespace.to_string(),
                 BallistaCodec::default(),
             );
-        let ctx = scheduler.ctx.read().await;
-        state.init(&ctx).await?;
+        state.init().await?;
         // executor should be registered
         assert_eq!(state.get_executors_metadata().await.unwrap().len(), 1);
         Ok(())

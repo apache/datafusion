@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# Datafusion-Specific Functions
+# DataFusion-Specific Functions
 
 These SQL functions are specific to DataFusion, or they are well known and have functionality which is specific to DataFusion. Specifically, the `to_timestamp_xx()` functions exist due to Arrow's support for multiple timestamp resolutions.
 
@@ -84,3 +84,27 @@ Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolut
 - Other Timestamp() columns or values
 
 Note that `CAST(.. AS Timestamp)` converts to Timestamps with Nanosecond resolution; this function is the only way to convert/cast to seconds resolution.
+
+## `extract`
+
+`extract(field FROM source)`
+
+- The `extract` function retrieves subfields such as year or hour from date/time values.
+  `source` must be a value expression of type timestamp, Data32, or Data64. `field` is an identifier that selects what field to extract from the source value.
+  The `extract` function returns values of type u32.
+  - `year` :`extract(year FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 2020`
+  - `month`:`extract(month FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 9`
+  - `week` :`extract(week FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 37`
+  - `day`: `extract(day FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 8`
+  - `hour`: `extract(hour FROM to_timestamp('2020-09-08T12:00:00+00:00')) -> 12`
+  - `minute`: `extract(minute FROM to_timestamp('2020-09-08T12:01:00+00:00')) -> 1`
+  - `second`: `extract(second FROM to_timestamp('2020-09-08T12:00:03+00:00')) -> 3`
+
+## `date_part`
+
+`date_part('field', source)`
+
+- The `date_part` function is modeled on the postgres equivalent to the SQL-standard function `extract`.
+  Note that here the field parameter needs to be a string value, not a name.
+  The valid field names for `date_part` are the same as for `extract`.
+  - `date_part('second', to_timestamp('2020-09-08T12:00:12+00:00')) -> 12`

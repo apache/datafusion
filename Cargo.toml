@@ -17,11 +17,12 @@
 
 [workspace]
 members = [
-    "datafusion",
-    "datafusion-common",
-    "datafusion-expr",
-    "datafusion-jit",
-    "datafusion-physical-expr",
+    "datafusion/core",
+    "datafusion/common",
+    "datafusion/expr",
+    "datafusion/jit",
+    "datafusion/physical-expr",
+    "datafusion/proto",
     "datafusion-cli",
     "datafusion-examples",
     "benchmarks",
@@ -30,8 +31,9 @@ members = [
     "ballista/rust/executor",
     "ballista/rust/scheduler",
     "ballista-examples",
+    "data-access",
 ]
 
 [profile.release]
-lto = true
 codegen-units = 1
+lto = true

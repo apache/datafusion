@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::{sync::Arc, time::Duration};
@@ -34,6 +36,7 @@ use ballista_core::error::BallistaError;
 use ballista_core::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
 use ballista_core::serde::scheduler::ExecutorSpecification;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use datafusion::execution::context::TaskContext;
 
 pub async fn poll_loop<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>(
     mut scheduler: SchedulerGrpcClient<Channel>,
@@ -124,10 +127,36 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
     info!("Received task {}", task_id_log);
     available_tasks_slots.fetch_sub(1, Ordering::SeqCst);
 
+    let runtime = executor.runtime.clone();
+    let session_id = task.session_id;
+    let mut task_props = HashMap::new();
+    for kv_pair in task.props {
+        task_props.insert(kv_pair.key, kv_pair.value);
+    }
+
+    let mut task_scalar_functions = HashMap::new();
+    let mut task_aggregate_functions = HashMap::new();
+    // TODO combine the functions from Executor's functions and TaskDefintion's function resources
+    for scalar_func in executor.scalar_functions.clone() {
+        task_scalar_functions.insert(scalar_func.0.clone(), scalar_func.1);
+    }
+    for agg_func in executor.aggregate_functions.clone() {
+        task_aggregate_functions.insert(agg_func.0, agg_func.1);
+    }
+    let task_context = Arc::new(TaskContext::new(
+        task_id_log.clone(),
+        session_id,
+        task_props,
+        task_scalar_functions,
+        task_aggregate_functions,
+        runtime.clone(),
+    ));
+
     let plan: Arc<dyn ExecutionPlan> =
         U::try_decode(task.plan.as_slice()).and_then(|proto| {
             proto.try_into_physical_plan(
-                executor.ctx.as_ref(),
+                task_context.deref(),
+                runtime.deref(),
                 codec.physical_extension_codec(),
             )
         })?;
@@ -142,6 +171,7 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
                 task_id.stage_id as usize,
                 task_id.partition_id as usize,
                 plan,
+                task_context,
                 shuffle_output_partitioning,
             )
             .await;

@@ -33,11 +33,12 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateExternalTable, CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan,
-    LogicalPlanBuilder, Repartition, TableScan, Values,
+    Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
+    Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan, Values,
 };
-use datafusion::prelude::ExecutionContext;
+use datafusion::prelude::SessionContext;
 
+use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
 use protobuf::listing_table_scan_node::FileFormatType;
@@ -47,7 +48,6 @@ use std::convert::TryInto;
 use std::sync::Arc;
 
 pub mod from_proto;
-pub mod to_proto;
 
 impl AsLogicalPlan for LogicalPlanNode {
     fn try_decode(buf: &[u8]) -> Result<Self, BallistaError>
@@ -71,7 +71,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
     fn try_into_logical_plan(
         &self,
-        ctx: &ExecutionContext,
+        ctx: &SessionContext,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<LogicalPlan, BallistaError> {
         let plan = self.logical_plan_type.as_ref().ok_or_else(|| {
@@ -96,11 +96,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .values_list
                         .chunks_exact(n_cols)
                         .map(|r| {
-                            r.iter()
-                                .map(|v| v.try_into())
-                                .collect::<Result<Vec<_>, _>>()
+                            r.iter().map(|expr| parse_expr(expr, ctx)).collect::<Result<
+                                Vec<_>,
+                                datafusion_proto::from_proto::Error,
+                            >>(
+                            )
                         })
                         .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| e.into())
                 }?;
                 LogicalPlanBuilder::values(values)?
                     .build()
@@ -108,11 +111,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(projection.input, &ctx, extension_codec)?;
+                    into_logical_plan!(projection.input, ctx, extension_codec)?;
                 let x: Vec<Expr> = projection
                     .expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .project_with_alias(
@@ -128,14 +131,16 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(selection.input, &ctx, extension_codec)?;
+                    into_logical_plan!(selection.input, ctx, extension_codec)?;
                 let expr: Expr = selection
                     .expr
                     .as_ref()
+                    .map(|expr| parse_expr(expr, ctx))
+                    .transpose()?
                     .ok_or_else(|| {
                         BallistaError::General("expression required".to_string())
-                    })?
-                    .try_into()?;
+                    })?;
+                // .try_into()?;
                 LogicalPlanBuilder::from(input)
                     .filter(expr)?
                     .build()
@@ -143,11 +148,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(window.input, &ctx, extension_codec)?;
+                    into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr = window
                     .window_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .window(window_expr)?
@@ -156,16 +161,16 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(aggregate.input, &ctx, extension_codec)?;
+                    into_logical_plan!(aggregate.input, ctx, extension_codec)?;
                 let group_expr = aggregate
                     .group_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 let aggr_expr = aggregate
                     .aggr_expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .aggregate(group_expr, aggr_expr)?
@@ -188,7 +193,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let filters = scan
                     .filters
                     .iter()
-                    .map(|e| e.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let file_format: Arc<dyn FileFormat> =
@@ -223,6 +228,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let object_store = ctx
+                    .runtime_env()
                     .object_store(scan.path.as_str())
                     .map_err(|e| {
                         BallistaError::NotImplemented(format!(
@@ -255,11 +261,11 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(sort.input, &ctx, extension_codec)?;
+                    into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<Expr> = sort
                     .expr
                     .iter()
-                    .map(|expr| expr.try_into())
+                    .map(|expr| parse_expr(expr, ctx))
                     .collect::<Result<Vec<Expr>, _>>()?;
                 LogicalPlanBuilder::from(input)
                     .sort(sort_expr)?
@@ -269,7 +275,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_plan::Partitioning;
                 let input: LogicalPlan =
-                    into_logical_plan!(repartition.input, &ctx, extension_codec)?;
+                    into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
                     BallistaError::General(String::from(
@@ -284,7 +290,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     }) => Partitioning::Hash(
                         pb_hash_expr
                             .iter()
-                            .map(|pb_expr| pb_expr.try_into())
+                            .map(|expr| parse_expr(expr, ctx))
                             .collect::<Result<Vec<_>, _>>()?,
                         partition_count as usize,
                     ),
@@ -321,9 +327,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     has_header: create_extern_table.has_header,
                 }))
             }
+            LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
+                let pb_schema = (create_catalog_schema.schema.clone()).ok_or_else(|| {
+                    BallistaError::General(String::from(
+                        "Protobuf deserialization error, CreateCatalogSchemaNode was missing required field schema.",
+                    ))
+                })?;
+
+                Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                    schema_name: create_catalog_schema.schema_name.clone(),
+                    if_not_exists: create_catalog_schema.if_not_exists,
+                    schema: pb_schema.try_into()?,
+                }))
+            }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(analyze.input, &ctx, extension_codec)?;
+                    into_logical_plan!(analyze.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(analyze.verbose, true)?
                     .build()
@@ -331,7 +350,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(explain.input, &ctx, extension_codec)?;
+                    into_logical_plan!(explain.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(explain.verbose, false)?
                     .build()
@@ -339,7 +358,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(limit.input, &ctx, extension_codec)?;
+                    into_logical_plan!(limit.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .limit(limit.limit as usize)?
                     .build()
@@ -369,17 +388,17 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let builder = LogicalPlanBuilder::from(into_logical_plan!(
                     join.left,
-                    &ctx,
+                    ctx,
                     extension_codec
                 )?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join(
-                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
+                        &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                     )?,
                     JoinConstraint::Using => builder.join_using(
-                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
+                        &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         left_keys,
                     )?,
@@ -387,9 +406,28 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 builder.build().map_err(|e| e.into())
             }
+            LogicalPlanType::Union(union) => {
+                let mut input_plans: Vec<LogicalPlan> = union
+                    .inputs
+                    .iter()
+                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
+                    .collect::<Result<_, BallistaError>>()?;
+
+                if input_plans.len() < 2 {
+                    return  Err( BallistaError::General(String::from(
+                       "Protobuf deserialization error, Union was require at least two input.",
+                   )));
+                }
+
+                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                for plan in input_plans {
+                    builder = builder.union(plan)?;
+                }
+                builder.build().map_err(|e| e.into())
+            }
             LogicalPlanType::CrossJoin(crossjoin) => {
-                let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
-                let right = into_logical_plan!(crossjoin.right, &ctx, extension_codec)?;
+                let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
+                let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
                 LogicalPlanBuilder::from(left)
                     .cross_join(&right)?
@@ -402,7 +440,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|i| i.try_into_logical_plan(ctx, extension_codec))
                     .collect::<Result<_, BallistaError>>()?;
 
-                let extension_node = extension_codec.try_decode(node, &input_plans)?;
+                let extension_node =
+                    extension_codec.try_decode(node, &input_plans, ctx)?;
                 Ok(LogicalPlan::Extension(extension_node))
             }
         }
@@ -458,9 +497,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                         })
                     }
                 };
-                let schema: protobuf::Schema = schema.as_ref().into();
+                let schema: datafusion_proto::protobuf::Schema = schema.as_ref().into();
 
-                let filters: Vec<protobuf::LogicalExprNode> = filters
+                let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> = filters
                     .iter()
                     .map(|filter| filter.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
@@ -531,7 +570,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         )),
                         expr: expr.iter().map(|expr| expr.try_into()).collect::<Result<
                             Vec<_>,
-                            BallistaError,
+                            datafusion_proto::to_proto::Error,
                         >>(
                         )?,
                         optional_alias: alias
@@ -661,10 +700,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input.as_ref(),
                         extension_codec,
                     )?;
-                let selection_expr: Vec<protobuf::LogicalExprNode> = expr
-                    .iter()
-                    .map(|expr| expr.try_into())
-                    .collect::<Result<Vec<_>, BallistaError>>()?;
+                let selection_expr: Vec<datafusion_proto::protobuf::LogicalExprNode> =
+                    expr.iter()
+                        .map(|expr| expr.try_into())
+                        .collect::<Result<Vec<_>, datafusion_proto::to_proto::Error>>()?;
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Sort(Box::new(
                         protobuf::SortNode {
@@ -685,24 +724,28 @@ impl AsLogicalPlan for LogicalPlanNode {
                         extension_codec,
                     )?;
 
-                //Assumed common usize field was batch size
-                //Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
+                // Assumed common usize field was batch size
+                // Used u64 to avoid any nastyness involving large values, most data clusters are probably uniformly 64 bits any ways
                 use protobuf::repartition_node::PartitionMethod;
 
-                let pb_partition_method = match partitioning_scheme {
-                    Partitioning::Hash(exprs, partition_count) => {
-                        PartitionMethod::Hash(protobuf::HashRepartition {
-                            hash_expr: exprs
-                                .iter()
-                                .map(|expr| expr.try_into())
-                                .collect::<Result<Vec<_>, BallistaError>>()?,
-                            partition_count: *partition_count as u64,
-                        })
-                    }
-                    Partitioning::RoundRobinBatch(partition_count) => {
-                        PartitionMethod::RoundRobin(*partition_count as u64)
-                    }
-                };
+                let pb_partition_method =
+                    match partitioning_scheme {
+                        Partitioning::Hash(exprs, partition_count) => {
+                            PartitionMethod::Hash(protobuf::HashRepartition {
+                                hash_expr: exprs
+                                    .iter()
+                                    .map(|expr| expr.try_into())
+                                    .collect::<Result<
+                                    Vec<_>,
+                                    datafusion_proto::to_proto::Error,
+                                >>()?,
+                                partition_count: *partition_count as u64,
+                            })
+                        }
+                        Partitioning::RoundRobinBatch(partition_count) => {
+                            PartitionMethod::RoundRobin(*partition_count as u64)
+                        }
+                    };
 
                 Ok(protobuf::LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Repartition(Box::new(
@@ -750,6 +793,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     )),
                 })
             }
+            LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
+                schema_name,
+                if_not_exists,
+                schema: df_schema,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
+                    protobuf::CreateCatalogSchemaNode {
+                        schema_name: schema_name.clone(),
+                        if_not_exists: *if_not_exists,
+                        schema: Some(df_schema.into()),
+                    },
+                )),
+            }),
             LogicalPlan::Analyze(a) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),
@@ -778,7 +834,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::Union(union) => {
+                let inputs: Vec<LogicalPlanNode> = union
+                    .inputs
+                    .iter()
+                    .map(|i| {
+                        protobuf::LogicalPlanNode::try_from_logical_plan(
+                            i,
+                            extension_codec,
+                        )
+                    })
+                    .collect::<Result<_, BallistaError>>()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Union(
+                        protobuf::UnionNode { inputs },
+                    )),
+                })
+            }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left = protobuf::LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
@@ -833,7 +905,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 macro_rules! into_logical_plan {
     ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_logical_plan(&$CTX, $CODEC)
+            field.as_ref().try_into_logical_plan($CTX, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -848,25 +920,26 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
-    use datafusion::datasource::listing::ListingTable;
-    use datafusion::datasource::object_store::{
-        FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
-    };
-    use datafusion::error::DataFusionError;
     use datafusion::{
-        arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
-        datasource::object_store::local::LocalFileSystem,
+        arrow::datatypes::{DataType, Field, Schema},
+        datafusion_data_access::{
+            self,
+            object_store::{
+                local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+                ObjectStore,
+            },
+            SizedFile,
+        },
+        datasource::listing::ListingTable,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
             ToDFSchema,
         },
-        physical_plan::{aggregates, functions::BuiltinScalarFunction::Sqrt},
         prelude::*,
-        scalar::ScalarValue,
         sql::parser::FileType,
     };
-
-    use std::{convert::TryInto, sync::Arc};
+    use std::io;
+    use std::sync::Arc;
 
     #[derive(Debug)]
     struct TestObjectStore {}
@@ -876,8 +949,9 @@ mod roundtrip_tests {
         async fn list_file(
             &self,
             _prefix: &str,
-        ) -> datafusion::error::Result<FileMetaStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_data_access::Result<FileMetaStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -886,8 +960,9 @@ mod roundtrip_tests {
             &self,
             _prefix: &str,
             _delimiter: Option<String>,
-        ) -> datafusion::error::Result<ListEntryStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_data_access::Result<ListEntryStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -895,14 +970,15 @@ mod roundtrip_tests {
         fn file_reader(
             &self,
             _file: SizedFile,
-        ) -> datafusion::error::Result<Arc<dyn ObjectReader>> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_data_access::Result<Arc<dyn ObjectReader>> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
     }
 
-    //Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
+    // Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
     macro_rules! roundtrip_test {
         ($initial_struct:ident, $proto_type:ty, $struct_type:ty) => {
             let proto: $proto_type = (&$initial_struct).try_into()?;
@@ -918,7 +994,7 @@ mod roundtrip_tests {
             roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
         };
         ($initial_struct:ident) => {
-            let ctx = ExecutionContext::new();
+            let ctx = SessionContext::new();
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
                 protobuf::PhysicalPlanNode,
@@ -1015,532 +1091,6 @@ mod roundtrip_tests {
             });
 
             roundtrip_test!(roundtrip_plan);
-        }
-
-        Ok(())
-    }
-
-    fn new_box_field(name: &str, dt: DataType, nullable: bool) -> Box<Field> {
-        Box::new(Field::new(name, dt, nullable))
-    }
-
-    #[test]
-    fn scalar_values_error_serialization() -> Result<()> {
-        let should_fail_on_seralize: Vec<ScalarValue> = vec![
-            //Should fail due to inconsistent types
-            ScalarValue::List(
-                Some(Box::new(vec![
-                    ScalarValue::Int16(None),
-                    ScalarValue::Float32(Some(32.0)),
-                ])),
-                Box::new(DataType::List(new_box_field("item", DataType::Int16, true))),
-            ),
-            ScalarValue::List(
-                Some(Box::new(vec![
-                    ScalarValue::Float32(None),
-                    ScalarValue::Float32(Some(32.0)),
-                ])),
-                Box::new(DataType::List(new_box_field("item", DataType::Int16, true))),
-            ),
-            ScalarValue::List(
-                Some(Box::new(vec![
-                    ScalarValue::List(
-                        None,
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
-                            true,
-                        ))),
-                    ),
-                    ScalarValue::List(
-                        Some(Box::new(vec![
-                            ScalarValue::Float32(Some(-213.1)),
-                            ScalarValue::Float32(None),
-                            ScalarValue::Float32(Some(5.5)),
-                            ScalarValue::Float32(Some(2.0)),
-                            ScalarValue::Float32(Some(1.0)),
-                        ])),
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
-                            true,
-                        ))),
-                    ),
-                    ScalarValue::List(
-                        None,
-                        Box::new(DataType::List(new_box_field(
-                            "lists are typed inconsistently",
-                            DataType::Int16,
-                            true,
-                        ))),
-                    ),
-                ])),
-                Box::new(DataType::List(new_box_field(
-                    "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
-                    true,
-                ))),
-            ),
-        ];
-
-        for test_case in should_fail_on_seralize.into_iter() {
-            let res: Result<protobuf::ScalarValue> = (&test_case).try_into();
-            if let Ok(val) = res {
-                return Err(BallistaError::General(format!(
-                    "The value {:?} should not have been able to serialize. Serialized to :{:?}",
-                    test_case, val
-                )));
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn round_trip_scalar_values() -> Result<()> {
-        let should_pass: Vec<ScalarValue> = vec![
-            ScalarValue::Boolean(None),
-            ScalarValue::Float32(None),
-            ScalarValue::Float64(None),
-            ScalarValue::Int8(None),
-            ScalarValue::Int16(None),
-            ScalarValue::Int32(None),
-            ScalarValue::Int64(None),
-            ScalarValue::UInt8(None),
-            ScalarValue::UInt16(None),
-            ScalarValue::UInt32(None),
-            ScalarValue::UInt64(None),
-            ScalarValue::Utf8(None),
-            ScalarValue::LargeUtf8(None),
-            ScalarValue::List(None, Box::new(DataType::Boolean)),
-            ScalarValue::Date32(None),
-            ScalarValue::TimestampMicrosecond(None, None),
-            ScalarValue::TimestampNanosecond(None, None),
-            ScalarValue::Boolean(Some(true)),
-            ScalarValue::Boolean(Some(false)),
-            ScalarValue::Float32(Some(1.0)),
-            ScalarValue::Float32(Some(f32::MAX)),
-            ScalarValue::Float32(Some(f32::MIN)),
-            ScalarValue::Float32(Some(-2000.0)),
-            ScalarValue::Float64(Some(1.0)),
-            ScalarValue::Float64(Some(f64::MAX)),
-            ScalarValue::Float64(Some(f64::MIN)),
-            ScalarValue::Float64(Some(-2000.0)),
-            ScalarValue::Int8(Some(i8::MIN)),
-            ScalarValue::Int8(Some(i8::MAX)),
-            ScalarValue::Int8(Some(0)),
-            ScalarValue::Int8(Some(-15)),
-            ScalarValue::Int16(Some(i16::MIN)),
-            ScalarValue::Int16(Some(i16::MAX)),
-            ScalarValue::Int16(Some(0)),
-            ScalarValue::Int16(Some(-15)),
-            ScalarValue::Int32(Some(i32::MIN)),
-            ScalarValue::Int32(Some(i32::MAX)),
-            ScalarValue::Int32(Some(0)),
-            ScalarValue::Int32(Some(-15)),
-            ScalarValue::Int64(Some(i64::MIN)),
-            ScalarValue::Int64(Some(i64::MAX)),
-            ScalarValue::Int64(Some(0)),
-            ScalarValue::Int64(Some(-15)),
-            ScalarValue::UInt8(Some(u8::MAX)),
-            ScalarValue::UInt8(Some(0)),
-            ScalarValue::UInt16(Some(u16::MAX)),
-            ScalarValue::UInt16(Some(0)),
-            ScalarValue::UInt32(Some(u32::MAX)),
-            ScalarValue::UInt32(Some(0)),
-            ScalarValue::UInt64(Some(u64::MAX)),
-            ScalarValue::UInt64(Some(0)),
-            ScalarValue::Utf8(Some(String::from("Test string   "))),
-            ScalarValue::LargeUtf8(Some(String::from("Test Large utf8"))),
-            ScalarValue::Date32(Some(0)),
-            ScalarValue::Date32(Some(i32::MAX)),
-            ScalarValue::TimestampNanosecond(Some(0), None),
-            ScalarValue::TimestampNanosecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMicrosecond(Some(0), None),
-            ScalarValue::TimestampMicrosecond(Some(i64::MAX), None),
-            ScalarValue::TimestampMicrosecond(None, None),
-            ScalarValue::List(
-                Some(Box::new(vec![
-                    ScalarValue::Float32(Some(-213.1)),
-                    ScalarValue::Float32(None),
-                    ScalarValue::Float32(Some(5.5)),
-                    ScalarValue::Float32(Some(2.0)),
-                    ScalarValue::Float32(Some(1.0)),
-                ])),
-                Box::new(DataType::List(new_box_field(
-                    "level1",
-                    DataType::Float32,
-                    true,
-                ))),
-            ),
-            ScalarValue::List(
-                Some(Box::new(vec![
-                    ScalarValue::List(
-                        None,
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
-                            true,
-                        ))),
-                    ),
-                    ScalarValue::List(
-                        Some(Box::new(vec![
-                            ScalarValue::Float32(Some(-213.1)),
-                            ScalarValue::Float32(None),
-                            ScalarValue::Float32(Some(5.5)),
-                            ScalarValue::Float32(Some(2.0)),
-                            ScalarValue::Float32(Some(1.0)),
-                        ])),
-                        Box::new(DataType::List(new_box_field(
-                            "level2",
-                            DataType::Float32,
-                            true,
-                        ))),
-                    ),
-                ])),
-                Box::new(DataType::List(new_box_field(
-                    "level1",
-                    DataType::List(new_box_field("level2", DataType::Float32, true)),
-                    true,
-                ))),
-            ),
-        ];
-
-        for test_case in should_pass.into_iter() {
-            let proto: protobuf::ScalarValue = (&test_case).try_into()?;
-            let _roundtrip: ScalarValue = (&proto).try_into()?;
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn round_trip_scalar_types() -> Result<()> {
-        let should_pass: Vec<DataType> = vec![
-            DataType::Boolean,
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Float32,
-            DataType::Float64,
-            DataType::Date32,
-            DataType::Time64(TimeUnit::Microsecond),
-            DataType::Time64(TimeUnit::Nanosecond),
-            DataType::Utf8,
-            DataType::LargeUtf8,
-            //Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Boolean, true)),
-            DataType::List(new_box_field(
-                "Level1",
-                DataType::List(new_box_field("Level2", DataType::Date32, true)),
-                true,
-            )),
-        ];
-
-        let should_fail: Vec<DataType> = vec![
-            DataType::Null,
-            DataType::Float16,
-            //Add more timestamp tests
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            DataType::Date64,
-            DataType::Time32(TimeUnit::Second),
-            DataType::Time32(TimeUnit::Millisecond),
-            DataType::Time32(TimeUnit::Microsecond),
-            DataType::Time32(TimeUnit::Nanosecond),
-            DataType::Time64(TimeUnit::Second),
-            DataType::Time64(TimeUnit::Millisecond),
-            DataType::Duration(TimeUnit::Second),
-            DataType::Duration(TimeUnit::Millisecond),
-            DataType::Duration(TimeUnit::Microsecond),
-            DataType::Duration(TimeUnit::Nanosecond),
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Binary,
-            DataType::FixedSizeBinary(0),
-            DataType::FixedSizeBinary(1234),
-            DataType::FixedSizeBinary(-432),
-            DataType::LargeBinary,
-            DataType::Decimal(1345, 5431),
-            //Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Binary, true)),
-            DataType::List(new_box_field(
-                "Level1",
-                DataType::List(new_box_field(
-                    "Level2",
-                    DataType::FixedSizeBinary(53),
-                    false,
-                )),
-                true,
-            )),
-            //Fixed size lists
-            DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
-            DataType::FixedSizeList(
-                new_box_field(
-                    "Level1",
-                    DataType::List(new_box_field(
-                        "Level2",
-                        DataType::FixedSizeBinary(53),
-                        false,
-                    )),
-                    true,
-                ),
-                41,
-            ),
-            //Struct Testing
-            DataType::Struct(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Struct(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ]),
-            DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ],
-                UnionMode::Dense,
-            ),
-            DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                    Field::new(
-                        "nested_struct",
-                        DataType::Struct(vec![
-                            Field::new("nullable", DataType::Boolean, false),
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("datatype", DataType::Binary, false),
-                        ]),
-                        true,
-                    ),
-                ],
-                UnionMode::Sparse,
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Utf8),
-                Box::new(DataType::Struct(vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ])),
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Decimal(10, 50)),
-                Box::new(DataType::FixedSizeList(
-                    new_box_field("Level1", DataType::Binary, true),
-                    4,
-                )),
-            ),
-        ];
-
-        for test_case in should_pass.into_iter() {
-            let proto: protobuf::ScalarType = (&test_case).try_into()?;
-            let roundtrip: DataType = (&proto).try_into()?;
-            assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
-        }
-
-        let mut success: Vec<DataType> = Vec::new();
-        for test_case in should_fail.into_iter() {
-            let proto: Result<protobuf::ScalarType> = (&test_case).try_into();
-            if proto.is_ok() {
-                success.push(test_case)
-            }
-        }
-        if !success.is_empty() {
-            return Err(BallistaError::General(format!(
-                "The following items which should have ressulted in an error completed successfully: {:?}",
-                success
-            )));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn round_trip_datatype() -> Result<()> {
-        let test_cases: Vec<DataType> = vec![
-            DataType::Null,
-            DataType::Boolean,
-            DataType::Int8,
-            DataType::Int16,
-            DataType::Int32,
-            DataType::Int64,
-            DataType::UInt8,
-            DataType::UInt16,
-            DataType::UInt32,
-            DataType::UInt64,
-            DataType::Float16,
-            DataType::Float32,
-            DataType::Float64,
-            //Add more timestamp tests
-            DataType::Timestamp(TimeUnit::Millisecond, None),
-            DataType::Date32,
-            DataType::Date64,
-            DataType::Time32(TimeUnit::Second),
-            DataType::Time32(TimeUnit::Millisecond),
-            DataType::Time32(TimeUnit::Microsecond),
-            DataType::Time32(TimeUnit::Nanosecond),
-            DataType::Time64(TimeUnit::Second),
-            DataType::Time64(TimeUnit::Millisecond),
-            DataType::Time64(TimeUnit::Microsecond),
-            DataType::Time64(TimeUnit::Nanosecond),
-            DataType::Duration(TimeUnit::Second),
-            DataType::Duration(TimeUnit::Millisecond),
-            DataType::Duration(TimeUnit::Microsecond),
-            DataType::Duration(TimeUnit::Nanosecond),
-            DataType::Interval(IntervalUnit::YearMonth),
-            DataType::Interval(IntervalUnit::DayTime),
-            DataType::Binary,
-            DataType::FixedSizeBinary(0),
-            DataType::FixedSizeBinary(1234),
-            DataType::FixedSizeBinary(-432),
-            DataType::LargeBinary,
-            DataType::Utf8,
-            DataType::LargeUtf8,
-            DataType::Decimal(1345, 5431),
-            //Recursive list tests
-            DataType::List(new_box_field("Level1", DataType::Binary, true)),
-            DataType::List(new_box_field(
-                "Level1",
-                DataType::List(new_box_field(
-                    "Level2",
-                    DataType::FixedSizeBinary(53),
-                    false,
-                )),
-                true,
-            )),
-            //Fixed size lists
-            DataType::FixedSizeList(new_box_field("Level1", DataType::Binary, true), 4),
-            DataType::FixedSizeList(
-                new_box_field(
-                    "Level1",
-                    DataType::List(new_box_field(
-                        "Level2",
-                        DataType::FixedSizeBinary(53),
-                        false,
-                    )),
-                    true,
-                ),
-                41,
-            ),
-            //Struct Testing
-            DataType::Struct(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-            ]),
-            DataType::Struct(vec![
-                Field::new("nullable", DataType::Boolean, false),
-                Field::new("name", DataType::Utf8, false),
-                Field::new("datatype", DataType::Binary, false),
-                Field::new(
-                    "nested_struct",
-                    DataType::Struct(vec![
-                        Field::new("nullable", DataType::Boolean, false),
-                        Field::new("name", DataType::Utf8, false),
-                        Field::new("datatype", DataType::Binary, false),
-                    ]),
-                    true,
-                ),
-            ]),
-            DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ],
-                UnionMode::Sparse,
-            ),
-            DataType::Union(
-                vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                    Field::new(
-                        "nested_struct",
-                        DataType::Struct(vec![
-                            Field::new("nullable", DataType::Boolean, false),
-                            Field::new("name", DataType::Utf8, false),
-                            Field::new("datatype", DataType::Binary, false),
-                        ]),
-                        true,
-                    ),
-                ],
-                UnionMode::Dense,
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Utf8),
-                Box::new(DataType::Struct(vec![
-                    Field::new("nullable", DataType::Boolean, false),
-                    Field::new("name", DataType::Utf8, false),
-                    Field::new("datatype", DataType::Binary, false),
-                ])),
-            ),
-            DataType::Dictionary(
-                Box::new(DataType::Decimal(10, 50)),
-                Box::new(DataType::FixedSizeList(
-                    new_box_field("Level1", DataType::Binary, true),
-                    4,
-                )),
-            ),
-        ];
-
-        for test_case in test_cases.into_iter() {
-            let proto: protobuf::ArrowType = (&test_case).into();
-            let roundtrip: DataType = (&proto).try_into()?;
-            assert_eq!(format!("{:?}", test_case), format!("{:?}", roundtrip));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_null_scalar_values() -> Result<()> {
-        let test_types = vec![
-            ScalarValue::Boolean(None),
-            ScalarValue::Float32(None),
-            ScalarValue::Float64(None),
-            ScalarValue::Int8(None),
-            ScalarValue::Int16(None),
-            ScalarValue::Int32(None),
-            ScalarValue::Int64(None),
-            ScalarValue::UInt8(None),
-            ScalarValue::UInt16(None),
-            ScalarValue::UInt32(None),
-            ScalarValue::UInt64(None),
-            ScalarValue::Utf8(None),
-            ScalarValue::LargeUtf8(None),
-            ScalarValue::Date32(None),
-            ScalarValue::TimestampMicrosecond(None, None),
-            ScalarValue::TimestampNanosecond(None, None),
-            //ScalarValue::List(None, DataType::Boolean)
-        ];
-
-        for test_case in test_types.into_iter() {
-            let proto_scalar: protobuf::ScalarValue = (&test_case).try_into()?;
-            let returned_scalar: datafusion::scalar::ScalarValue =
-                (&proto_scalar).try_into()?;
-            assert_eq!(
-                format!("{:?}", &test_case),
-                format!("{:?}", returned_scalar)
-            );
         }
 
         Ok(())
@@ -1776,13 +1326,14 @@ mod roundtrip_tests {
 
     #[tokio::test]
     async fn roundtrip_logical_plan_custom_ctx() -> Result<()> {
-        let ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
             BallistaCodec::default();
         let custom_object_store = Arc::new(TestObjectStore {});
-        ctx.register_object_store("test", custom_object_store.clone());
+        ctx.runtime_env()
+            .register_object_store("test", custom_object_store.clone());
 
-        let (os, _) = ctx.object_store("test://foo.csv")?;
+        let (os, _) = ctx.runtime_env().object_store("test://foo.csv")?;
 
         println!("Object Store {:?}", os);
 
@@ -1830,143 +1381,6 @@ mod roundtrip_tests {
         };
 
         assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_not() -> Result<()> {
-        let test_expr = Expr::Not(Box::new(Expr::Literal((1.0).into())));
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_is_null() -> Result<()> {
-        let test_expr = Expr::IsNull(Box::new(col("id")));
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_is_not_null() -> Result<()> {
-        let test_expr = Expr::IsNotNull(Box::new(col("id")));
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_between() -> Result<()> {
-        let test_expr = Expr::Between {
-            expr: Box::new(Expr::Literal((1.0).into())),
-            negated: true,
-            low: Box::new(Expr::Literal((2.0).into())),
-            high: Box::new(Expr::Literal((3.0).into())),
-        };
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_case() -> Result<()> {
-        let test_expr = Expr::Case {
-            expr: Some(Box::new(Expr::Literal((1.0).into()))),
-            when_then_expr: vec![(
-                Box::new(Expr::Literal((2.0).into())),
-                Box::new(Expr::Literal((3.0).into())),
-            )],
-            else_expr: Some(Box::new(Expr::Literal((4.0).into()))),
-        };
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_cast() -> Result<()> {
-        let test_expr = Expr::Cast {
-            expr: Box::new(Expr::Literal((1.0).into())),
-            data_type: DataType::Boolean,
-        };
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_sort_expr() -> Result<()> {
-        let test_expr = Expr::Sort {
-            expr: Box::new(Expr::Literal((1.0).into())),
-            asc: true,
-            nulls_first: true,
-        };
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_negative() -> Result<()> {
-        let test_expr = Expr::Negative(Box::new(Expr::Literal((1.0).into())));
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_inlist() -> Result<()> {
-        let test_expr = Expr::InList {
-            expr: Box::new(Expr::Literal((1.0).into())),
-            list: vec![Expr::Literal((2.0).into())],
-            negated: true,
-        };
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_wildcard() -> Result<()> {
-        let test_expr = Expr::Wildcard;
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_sqrt() -> Result<()> {
-        let test_expr = Expr::ScalarFunction {
-            fun: Sqrt,
-            args: vec![col("col")],
-        };
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
-
-        Ok(())
-    }
-
-    #[test]
-    fn roundtrip_approx_percentile_cont() -> Result<()> {
-        let test_expr = Expr::AggregateFunction {
-            fun: aggregates::AggregateFunction::ApproxPercentileCont,
-            args: vec![col("bananas"), lit(0.42)],
-            distinct: false,
-        };
-
-        roundtrip_test!(test_expr, protobuf::LogicalExprNode, Expr);
 
         Ok(())
     }
