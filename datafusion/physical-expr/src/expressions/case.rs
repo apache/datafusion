@@ -407,6 +407,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::expressions::{binary, cast};
     use arrow::array::StringArray;
+    use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::ScalarValue;
@@ -647,10 +648,94 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn case_with_matches_and_nulls() -> Result<()> {
+        let batch = case_test_batch_nulls()?;
+        let schema = batch.schema();
+
+        // SELECT CASE WHEN load4 = 1.77 THEN load4 END
+        let when = binary(
+            col("load4", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Float64(Some(1.77))),
+            &batch.schema(),
+        )?;
+        let then = col("load4", &schema)?;
+
+        let expr = case(None, &[(when, then)], None)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_matches_and_nulls() -> Result<()> {
+        let batch = case_test_batch_nulls()?;
+        let schema = batch.schema();
+
+        // SELECT CASE load4 WHEN 1.77 THEN load4 END
+        let expr = col("load4", &schema)?;
+        let when = lit(ScalarValue::Float64(Some(1.77)));
+        let then = col("load4", &schema)?;
+
+        let expr = case(Some(expr), &[(when, then)], None)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
     fn case_test_batch() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let a = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        Ok(batch)
+    }
+
+    // Construct an array that has several NULL values whose
+    // underlying buffer actually matches the where expr predicate
+    fn case_test_batch_nulls() -> Result<RecordBatch> {
+        let load4: Float64Array = vec![
+            Some(1.77), // 1.77
+            Some(1.77), // null <-- same value, but will be set to null
+            Some(1.77), // null <-- same value, but will be set to null
+            Some(1.78), // 1.78
+            None,       // null
+            Some(1.77), // 1.77
+        ]
+        .into_iter()
+        .collect();
+
+        //let valid_array = vec![true, false, false, true, false, tru
+        let null_buffer = Buffer::from_slice_ref(&[0b00101001u8]);
+        let load4 = ArrayDataBuilder::new(load4.data_type().clone())
+            .len(load4.len())
+            .null_bit_buffer(null_buffer)
+            .buffers(load4.data().buffers().to_vec())
+            .build()
+            .unwrap();
+        let load4: Float64Array = load4.into();
+
+        let batch =
+            RecordBatch::try_from_iter(vec![("load4", Arc::new(load4) as ArrayRef)])?;
         Ok(batch)
     }
 }
