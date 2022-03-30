@@ -193,7 +193,7 @@ pub struct CreateExternalTable {
 pub struct CreateCatalogSchema {
     /// The table schema
     pub schema_name: String,
-    /// The table name
+    /// Do nothing (except issuing a notice) if a schema with the same name already exists
     pub if_not_exists: bool,
     /// Empty schema
     pub schema: DFSchemaRef,
@@ -202,9 +202,9 @@ pub struct CreateCatalogSchema {
 /// Creates a catalog.
 #[derive(Clone)]
 pub struct CreateCatalog {
-    /// The table schema
+    /// The catalog name
     pub catalog_name: String,
-    /// The table name
+    /// Do nothing (except issuing a notice) if a schema with the same name already exists
     pub if_not_exists: bool,
     /// Empty schema
     pub schema: DFSchemaRef,

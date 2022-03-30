@@ -3249,6 +3249,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_create_catalog() -> Result<()> {
+        // the information schema used to introduce cyclic Arcs
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        // Create schema
+        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+
+        // Add table to schema
+        ctx.sql("CREATE TABLE test.abc.y AS VALUES (1,2,3)")
+            .await?
+            .collect()
+            .await?;
+
+        // Check table exists in schema
+        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+
+        assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn normalized_column_identifiers() {
         // create local execution context
         let ctx = SessionContext::new();
