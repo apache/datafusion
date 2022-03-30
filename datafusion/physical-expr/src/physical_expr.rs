@@ -28,7 +28,7 @@ use std::fmt::{Debug, Display};
 use arrow::array::{
     make_array, Array, ArrayRef, BooleanArray, MutableArrayData, UInt64Array,
 };
-use arrow::compute::{take, SlicesIterator};
+use arrow::compute::{and_kleene, is_not_null, take, SlicesIterator};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -87,6 +87,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
 fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     let truthy = truthy.data();
 
+    // update the mask so that any null values become false
+    // (SlicesIterator doesn't respect nulls)
+    let mask = and_kleene(mask, &is_not_null(mask)?)?;
+
     let mut mutable = MutableArrayData::new(vec![&*truthy], true, mask.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
@@ -97,7 +101,7 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     // keep track of current position we have in truthy array
     let mut true_pos = 0;
 
-    SlicesIterator::new(mask).for_each(|(start, end)| {
+    SlicesIterator::new(&mask).for_each(|(start, end)| {
         // the gap needs to be filled with nulls
         if start > filled {
             mutable.extend_nulls(start - filled);
@@ -109,8 +113,8 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
         filled = end;
     });
     // the remaining part is falsy
-    if filled < truthy.len() {
-        mutable.extend_nulls(truthy.len() - filled);
+    if filled < mask.len() {
+        mutable.extend_nulls(mask.len() - filled);
     }
 
     let data = mutable.freeze();
@@ -131,6 +135,37 @@ mod tests {
         // the output array is expected to be the same length as the mask array
         let expected =
             Int32Array::from_iter(vec![Some(1), Some(10), None, None, Some(11)]);
+        let result = scatter(&mask, truthy.as_ref())?;
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn scatter_int_end_with_false() -> Result<()> {
+        let truthy = Arc::new(Int32Array::from(vec![1, 10, 11, 100]));
+        let mask = BooleanArray::from(vec![true, false, true, false, false, false]);
+
+        // output should be same length as mask
+        let expected =
+            Int32Array::from_iter(vec![Some(1), None, Some(10), None, None, None]);
+        let result = scatter(&mask, truthy.as_ref())?;
+        let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
+
+        assert_eq!(&expected, result);
+        Ok(())
+    }
+
+    #[test]
+    fn scatter_with_null_mask() -> Result<()> {
+        let truthy = Arc::new(Int32Array::from(vec![1, 10, 11]));
+        let mask: BooleanArray = vec![Some(false), None, Some(true), Some(true), None]
+            .into_iter()
+            .collect();
+
+        // output should treat nulls as though they are false
+        let expected = Int32Array::from_iter(vec![None, None, Some(1), Some(10), None]);
         let result = scatter(&mask, truthy.as_ref())?;
         let result = result.as_any().downcast_ref::<Int32Array>().unwrap();
 
