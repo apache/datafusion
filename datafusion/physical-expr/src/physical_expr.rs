@@ -87,7 +87,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
 fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
     let truthy = truthy.data();
 
-    // update the mask so that any null null values become false
+    // update the mask so that any null values become false
     // (SlicesIterator doesn't respect nulls)
     let mask = and_kleene(mask, &is_not_null(mask)?)?;
 
