@@ -40,7 +40,7 @@ async-trait = "0.1.41"
 ballista-core = { path = "../core", version = "0.6.0" }
 clap = { version = "3", features = ["derive", "cargo"] }
 configure_me = "0.4.0"
-datafusion = { path = "../../../datafusion", version = "7.0.0" }
+datafusion = { path = "../../../datafusion/core", version = "7.0.0" }
 env_logger = "0.9"
 etcd-client = { version = "0.8", optional = true }
 futures = "0.3"

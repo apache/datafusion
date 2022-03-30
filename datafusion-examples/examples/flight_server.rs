@@ -19,7 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::SchemaAsIpc;
-use datafusion::datafusion_storage::object_store::local::LocalFileSystem;
+use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
 use futures::Stream;

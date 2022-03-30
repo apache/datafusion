@@ -26,7 +26,7 @@ use crate::serde::{from_proto_binary_op, proto_error, protobuf};
 use crate::{convert_box_required, convert_required};
 use chrono::{TimeZone, Utc};
 
-use datafusion::datafusion_storage::{
+use datafusion::datafusion_data_access::{
     object_store::local::LocalFileSystem, FileMeta, SizedFile,
 };
 use datafusion::datasource::listing::PartitionedFile;
