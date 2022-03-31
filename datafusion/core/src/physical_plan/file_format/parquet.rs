@@ -515,7 +515,8 @@ fn read_partition(
                 Some(Err(e)) => {
                     let err_msg =
                         format!("Error reading batch from {}: {}", partitioned_file, e);
-                    // send error to operator
+                    // send_result error, if any, should not overwrite
+                    // the original ArrowError, so ignore it
                     let _ = send_result(
                         &response_tx,
                         Err(ArrowError::ParquetError(err_msg.clone())),
