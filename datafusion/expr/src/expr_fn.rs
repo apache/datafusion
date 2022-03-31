@@ -297,6 +297,14 @@ pub fn array(args: Vec<Expr>) -> Expr {
     }
 }
 
+/// Returns an coalesce of fixed size with each argument on it.
+pub fn coalesce(args: Vec<Expr>) -> Expr {
+    Expr::ScalarFunction {
+        fun: built_in_function::BuiltinScalarFunction::Coalesce,
+        args,
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
