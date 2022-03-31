@@ -216,8 +216,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
                 )
             })?;
 
-        let shuffle_output_partitioning =
-            parse_protobuf_hash_partitioning(task.output_partitioning.as_ref())?;
+        let shuffle_output_partitioning = parse_protobuf_hash_partitioning(
+            task.output_partitioning.as_ref(),
+            task_context.as_ref(),
+        )?;
 
         let execution_result = self
             .executor
