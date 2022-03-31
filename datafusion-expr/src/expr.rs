@@ -83,7 +83,7 @@ use std::sync::Arc;
 pub enum Expr {
     /// An expression with a specific name.
     Alias(Box<Expr>, String),
-    /// A named reference to a qualified filed in a schema.
+    /// A named reference to a qualified field in a schema.
     Column(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),

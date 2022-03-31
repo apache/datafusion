@@ -17,6 +17,20 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use std::convert::TryFrom;
+use std::iter;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use arrow::{
+    datatypes::{DataType, Schema, SchemaRef},
+    record_batch::RecordBatch,
+};
+
+use datafusion_storage::object_store::ObjectStore;
+
 use crate::datasource::{
     empty::EmptyTable,
     file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
@@ -29,29 +43,17 @@ use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
     TableScan, ToStringifiedPlan, Union, Window,
 };
-use crate::optimizer::utils;
-use crate::prelude::*;
-use crate::scalar::ScalarValue;
-use arrow::compute::can_cast_types;
-use arrow::{
-    datatypes::{DataType, Schema, SchemaRef},
-    record_batch::RecordBatch,
-};
-use datafusion_storage::object_store::ObjectStore;
-use std::convert::TryFrom;
-use std::iter;
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
-
-use super::dfschema::ToDFSchema;
-use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column,
     CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values,
 };
+use crate::optimizer::utils;
+use crate::prelude::*;
+use crate::scalar::ScalarValue;
 use crate::sql::utils::group_window_expr_by_sort_keys;
+
+use super::dfschema::ToDFSchema;
+use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -966,7 +968,6 @@ impl LogicalPlanBuilder {
 
     /// Build the plan
     pub fn build(&self) -> Result<LogicalPlan> {
-        check_plan_invalid(&self.plan)?;
         Ok(self.plan.clone())
     }
 }
@@ -1164,124 +1165,12 @@ pub(crate) fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-/// check whether the logical plan we are building is valid
-fn check_plan_invalid(plan: &LogicalPlan) -> Result<()> {
-    match plan {
-        LogicalPlan::Projection(Projection { expr, input, .. })
-        | LogicalPlan::Sort(Sort { expr, input })
-        | LogicalPlan::Window(Window {
-            window_expr: expr,
-            input,
-            ..
-        }) => check_plan_invalid(input)
-            .and_then(|_| check_any_invalid_expr(expr, input.schema())),
-
-        LogicalPlan::Filter(Filter {
-            predicate: expr,
-            input,
-        }) => check_plan_invalid(input)
-            .and_then(|_| check_invalid_expr(expr, input.schema())),
-
-        LogicalPlan::Aggregate(Aggregate {
-            input,
-            group_expr,
-            aggr_expr,
-            ..
-        }) => {
-            let schema = input.schema();
-            check_plan_invalid(input)
-                .and_then(|_| check_any_invalid_expr(group_expr, schema))
-                .and_then(|_| check_any_invalid_expr(aggr_expr, schema))
-        }
-
-        LogicalPlan::Join(Join { left, right, .. })
-        | LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-            check_plan_invalid(left).and_then(|_| check_plan_invalid(right))
-        }
-
-        LogicalPlan::Repartition(Repartition { input, .. })
-        | LogicalPlan::Limit(Limit { input, .. })
-        | LogicalPlan::Explain(Explain { plan: input, .. })
-        | LogicalPlan::Analyze(Analyze { input, .. }) => check_plan_invalid(input),
-
-        LogicalPlan::Union(Union { inputs, .. }) => {
-            inputs.iter().try_for_each(check_plan_invalid)
-        }
-
-        LogicalPlan::TableScan(TableScan {
-            table_name: _,
-            source,
-            projection,
-            projected_schema,
-            filters,
-            limit: _,
-        }) => {
-            if let Some(projection) = projection {
-                if projection.len() > projected_schema.fields().len() {
-                    return Err(DataFusionError::Plan(
-                        "projection contains columns that doesnt belong to projected schema"
-                            .to_owned(),
-                    ));
-                }
-            }
-            let schema = &source.schema().to_dfschema_ref()?;
-            check_any_invalid_expr(filters, schema)
-        }
-        _ => Ok(()),
-    }
-}
-
-/// find first error in the exprs
-fn check_any_invalid_expr(exprs: &[Expr], schema: &DFSchemaRef) -> Result<()> {
-    exprs.iter().try_for_each(|e| check_invalid_expr(e, schema))
-}
-
-/// do some checks for exprs in a logical plan
-fn check_invalid_expr(expr: &Expr, schema: &DFSchemaRef) -> Result<()> {
-    match expr {
-        Expr::Not(bool_expr) if bool_expr.get_type(schema)? != DataType::Boolean => {
-            Err(DataFusionError::Plan(format!(
-                "Invalid Not Expression({}) -- Type({}) of expression({}) must be of a boolean type",
-                expr,
-                bool_expr.get_type(schema)?,
-                bool_expr,
-            )))
-        }
-        Expr::Negative(signed_num_expr) => match signed_num_expr.get_type(schema)? {
-            DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64 => Ok(()),
-            _ => Err(DataFusionError::Plan(format!(
-                "Invalid Negative Expression({}) -- The operand({}) must be of a signed numeric type({})",
-                expr,
-                signed_num_expr,
-                signed_num_expr.get_type(schema)?
-            ))),
-        },
-        Expr::Cast { expr: cast_expr, data_type}
-            if !can_cast_types(&cast_expr.get_type(schema)?, data_type) =>
-                Err(DataFusionError::Plan(format!(
-                    "Invalid Cast Expression({}) -- {} cannot cast to {}",
-                    expr,
-                    cast_expr.get_type(schema)?,
-                    data_type))),
-        Expr::Wildcard | Expr::QualifiedWildcard { .. } => Err(DataFusionError::Plan(
-            "Wildcard expressions are not valid in a logical query plan".to_owned(),
-        )),
-        _ => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
 
     use crate::logical_plan::StringifiedPlan;
 
-    use super::super::{col, lit, sum};
     use super::*;
 
     #[test]
@@ -1507,53 +1396,5 @@ mod tests {
         );
         assert!(stringified_plan.should_display(true));
         assert!(!stringified_plan.should_display(false));
-    }
-
-    #[test]
-    fn invalid_plan_with_not_non_boolean_expression() -> Result<()> {
-        let mut plan = LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![0, 1, 2, 3, 4]),
-        )?;
-        plan = plan.project(vec![col("id").not()])?;
-        match plan.build() {
-            Ok(_) => panic!("Unexpect Ok"),
-            Err(e) => {
-                assert_eq!(
-                    e.to_string(),
-                    "Error during planning: \
-                    Invalid Not Expression(NOT #employee_csv.id) -- \
-                    Type(Int32) of expression(#employee_csv.id) must be of a boolean type"
-                )
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn invalid_plan_cast_utf8_boolean() -> Result<()> {
-        let mut plan = LogicalPlanBuilder::scan_empty(
-            Some("employee_csv"),
-            &employee_schema(),
-            Some(vec![0, 1, 2, 3, 4]),
-        )?;
-        let col = col("first_name");
-        plan = plan.project(vec![Expr::Cast {
-            expr: Box::new(col),
-            data_type: DataType::Boolean,
-        }])?;
-        match plan.build() {
-            Ok(_) => panic!("Unexpect Ok"),
-            Err(e) => {
-                assert_eq!(
-                    e.to_string(),
-                    "Error during planning: \
-                    Invalid Cast Expression(CAST(#employee_csv.first_name AS Boolean)) -- \
-                    Utf8 cannot cast to Boolean"
-                )
-            }
-        }
-        Ok(())
     }
 }

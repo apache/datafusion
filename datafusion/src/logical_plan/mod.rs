@@ -32,6 +32,7 @@ mod expr_visitor;
 mod extension;
 mod operators;
 pub mod plan;
+pub(crate) mod plan_validator;
 mod registry;
 pub mod window_frames;
 pub use builder::{
