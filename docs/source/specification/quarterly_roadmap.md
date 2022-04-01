@@ -37,6 +37,8 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 - Documentation
   - General improvements to DataFusion website
   - Publish design documents
+- Streaming
+  - Create `StreamProvider` trait
 
 ### Ballista
 
@@ -77,3 +79,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 - Timestamp range predicate pushdown
 - Multi-threaded partition aware execution
 - Production ready Rust SDK
+
+#### [DataFusion-Streams](https://github.com/datafusion-contrib/datafusion-streams)
+
+- Create experimental implementation of `StreamProvider` trait
