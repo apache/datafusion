@@ -17,12 +17,12 @@
 
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array};
+use arrow::array::{new_null_array, Array, BooleanArray};
 use arrow::compute;
 use arrow::compute::kernels::zip::zip;
 use arrow::datatypes::DataType;
 
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
@@ -44,12 +44,18 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         for i in 0..size {
             match column_value {
                 ColumnarValue::Array(array_ref) => {
-                    let bool_arr = compute::is_not_null(array_ref)?;
-                    res = zip(&bool_arr, array_ref, &res)?;
+                    let curr_null_mask = compute::is_null(res.as_ref())?;
+                    let arr_not_null_mask = compute::is_not_null(array_ref)?;
+                    let bool_mask = compute::and(&curr_null_mask, &arr_not_null_mask)?;
+                    res = zip(&bool_mask, array_ref, &res)?;
                 }
                 ColumnarValue::Scalar(scalar) => {
-                    if !scalar.is_null() {
-                        // TODO: Figure out how to set value at index
+                    if !scalar.is_null() && res.is_null(i) {
+                        let vec: Vec<bool> =
+                            (0..size).into_iter().map(|j| j == i).collect();
+                        let bool_arr = BooleanArray::from(vec);
+                        res =
+                            zip(&bool_arr, scalar.to_array_of_size(size).as_ref(), &res)?;
                         continue;
                     }
                 }
