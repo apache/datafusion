@@ -65,3 +65,9 @@ name = "scheduler_policy"
 type = "ballista_core::config::TaskSchedulingPolicy"
 doc = "The scheduing policy for the scheduler, see TaskSchedulingPolicy::variants() for options. Default: PullStaged"
 default = "ballista_core::config::TaskSchedulingPolicy::PullStaged"
+
+[[param]]
+name = "plugin_dir"
+type = "String"
+doc = "plugin dir"
+default = "std::string::String::from(\"\")"
