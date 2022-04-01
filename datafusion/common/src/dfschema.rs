@@ -283,14 +283,26 @@ impl DFSchema {
     }
 
     /// Check to see if fields in 2 Arrow schemas are compatible
-    pub fn check_arrow_schema_type_compatible(&self, arrow_schema: &Schema) -> bool {
+    pub fn check_arrow_schema_type_compatible(
+        &self,
+        arrow_schema: &Schema,
+    ) -> Result<()> {
         let self_arrow_schema: Schema = self.into();
         self_arrow_schema
             .fields()
             .iter()
             .zip(arrow_schema.fields().iter())
-            .all(|(l_field, r_field)| {
-                can_cast_types(r_field.data_type(), l_field.data_type())
+            .try_for_each(|(l_field, r_field)| {
+                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
+                    Err(DataFusionError::Plan(
+                        format!("Column {} (type: {}) is not compatible wiht column {} (type: {})",
+                            r_field.name(),
+                            r_field.data_type(),
+                            l_field.name(),
+                            l_field.data_type())))
+                } else {
+                    Ok(())
+                }
             })
     }
 

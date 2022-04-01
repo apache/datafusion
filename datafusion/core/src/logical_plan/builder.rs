@@ -1076,15 +1076,14 @@ pub fn union_with_alias(
         None => union_schema.strip_qualifiers(),
     });
 
-    if !inputs.iter().skip(1).all(|input_plan| {
-        // we need to check arrow field types cast compatible here
-        union_schema
-            .check_arrow_schema_type_compatible(&((**input_plan.schema()).clone().into()))
-    }) {
-        return Err(DataFusionError::Plan(
-            "UNION ALL schemas are expected to be arrow type compatible".to_string(),
-        ));
-    }
+    inputs
+        .iter()
+        .skip(1)
+        .try_for_each(|input_plan| -> Result<()> {
+            union_schema.check_arrow_schema_type_compatible(
+                &((**input_plan.schema()).clone().into()),
+            )
+        })?;
 
     Ok(LogicalPlan::Union(Union {
         inputs,

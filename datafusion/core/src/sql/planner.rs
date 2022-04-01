@@ -3536,6 +3536,19 @@ mod tests {
     }
 
     #[test]
+    fn union_with_incompatible_data_type() {
+        let sql = "SELECT interval '1 year 1 day' UNION ALL SELECT 1";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"Column Int64(1) (type: Int64) is \
+            not compatible wiht column IntervalMonthDayNano\
+            (\\\"950737950189618795196236955648\\\") \
+            (type: Interval(MonthDayNano))\")",
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
     fn empty_over() {
         let sql = "SELECT order_id, MAX(order_id) OVER () from orders";
         let expected = "\
