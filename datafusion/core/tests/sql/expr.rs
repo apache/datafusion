@@ -555,6 +555,7 @@ async fn test_string_expressions() -> Result<()> {
     test_expression!("concat_ws('|',NULL)", "");
     test_expression!("concat_ws(NULL,'a',NULL,'b','c')", "NULL");
     test_expression!("concat_ws('|','a',NULL)", "a");
+    test_expression!("concat_ws('|','a',NULL,NULL)", "a");
     test_expression!("initcap('')", "");
     test_expression!("initcap('hi THOMAS')", "Hi Thomas");
     test_expression!("initcap(NULL)", "NULL");

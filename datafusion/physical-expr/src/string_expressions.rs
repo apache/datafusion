@@ -337,28 +337,23 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
         )));
     }
 
-    let last_arg_null = (&args[args.len() - 1]).is_null(0);
-
     // first map is the iterator, second is for the `Option<_>`
     let result = args[0]
         .iter()
         .enumerate()
         .map(|(index, x)| {
             x.map(|sep: &str| {
-                let mut owned_string: String = "".to_owned();
-                for arg_index in 1..args.len() {
-                    let arg = &args[arg_index];
-                    if !arg.is_null(index) {
-                        owned_string.push_str(arg.value(index));
-                        // if not last push separator
-                        if arg_index != args.len() - 1
-                            && !(arg_index == args.len() - 2 && last_arg_null)
-                        {
-                            owned_string.push_str(sep);
+                let string_vec = args[1..]
+                    .iter()
+                    .flat_map(|arg| {
+                        if !arg.is_null(index) {
+                            vec![arg.value(index)]
+                        } else {
+                            vec![]
                         }
-                    }
-                }
-                owned_string
+                    })
+                    .collect::<Vec<&str>>();
+                string_vec.join(sep)
             })
         })
         .collect::<StringArray>();
