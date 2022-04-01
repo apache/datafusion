@@ -34,11 +34,11 @@ use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStrea
 use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
-    common, DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan,
-    Partitioning, SendableRecordBatchStream, Statistics,
+    DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
+    RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
-use arrow::array::{Array, ArrayRef, UInt32Array};
+use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
@@ -47,7 +47,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::lock::Mutex;
-use futures::StreamExt;
+use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
 use std::cmp::min;
@@ -57,6 +57,7 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
@@ -133,6 +134,7 @@ impl ExternalSorter2 {
     /// MergeSort in mem batches as well as spills into total order with `SortPreservingMergeStream`.
     async fn sort(&self) -> Result<SendableRecordBatchStream> {
         let partition = self.partition_id();
+        let batch_size = self.session_config.batch_size;
         let mut in_mem_batches = self.in_mem_batches.lock().await;
 
         if self.spilled_before().await {
@@ -145,6 +147,7 @@ impl ExternalSorter2 {
                     &mut *in_mem_batches,
                     self.schema.clone(),
                     &self.expr,
+                    batch_size,
                     tracking_metrics,
                 )?;
                 let prev_used = self.metrics.mem_used().set(0);
@@ -175,6 +178,7 @@ impl ExternalSorter2 {
                 &mut *in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
+                batch_size,
                 tracking_metrics,
             );
             // Report to the memory manager we are no longer using memory
@@ -264,6 +268,7 @@ impl MemoryConsumer for ExternalSorter2 {
             &mut *in_mem_batches,
             self.schema.clone(),
             &*self.expr,
+            self.session_config.batch_size,
             tracking_metrics,
         );
 
@@ -286,6 +291,7 @@ fn in_mem_partial_sort(
     buffered_batches: &mut Vec<RecordBatch>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
+    batch_size: usize,
     tracking_metrics: MemTrackingMetrics,
 ) -> Result<SendableRecordBatchStream> {
     assert_ne!(buffered_batches.len(), 0);
@@ -298,20 +304,16 @@ fn in_mem_partial_sort(
         )))
     } else {
         let batches = buffered_batches.drain(..).collect::<Vec<_>>();
-        let result = {
+        let sorted_iter = {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-
-            // combine all record batches into one for each column
-            let pre_sort = common::combine_batches(&batches, schema.clone())?;
-            pre_sort
-                .map(|batch| sort_batch(batch, schema.clone(), expressions))
-                .transpose()?
+            get_sorted_iter(&batches, expressions, batch_size)?
         };
-        Ok(Box::pin(SizedRecordBatchStream::new(
+        Ok(Box::pin(SortedSizedRecordBatchStream::new(
             schema,
-            vec![Arc::new(result.unwrap())],
+            batches,
+            sorted_iter,
             tracking_metrics,
         )))
     }
@@ -412,6 +414,74 @@ impl Iterator for SortedIterator {
         }
         self.pos += current_size;
         Some(result)
+    }
+}
+
+/// Stream of sorted record batches
+struct SortedSizedRecordBatchStream {
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    sorted_iter: SortedIterator,
+    num_cols: usize,
+    metrics: MemTrackingMetrics,
+}
+
+impl SortedSizedRecordBatchStream {
+    /// new
+    pub fn new(
+        schema: SchemaRef,
+        batches: Vec<RecordBatch>,
+        sorted_iter: SortedIterator,
+        metrics: MemTrackingMetrics,
+    ) -> Self {
+        let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
+        metrics.init_mem_used(size);
+        let num_cols = batches[0].num_columns();
+        SortedSizedRecordBatchStream {
+            schema,
+            batches,
+            sorted_iter,
+            num_cols,
+            metrics,
+        }
+    }
+}
+
+impl Stream for SortedSizedRecordBatchStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        match self.sorted_iter.next() {
+            None => Poll::Ready(None),
+            Some(combined) => {
+                let mut output = Vec::with_capacity(self.num_cols);
+                for i in 0..self.num_cols {
+                    let arrays = self
+                        .batches
+                        .iter()
+                        .map(|b| b.column(i).data())
+                        .collect::<Vec<_>>();
+                    let mut mutable =
+                        MutableArrayData::new(arrays, false, combined.len());
+                    for x in combined.iter() {
+                        mutable.extend(x.batch_idx, x.row_idx, x.row_idx + 1);
+                    }
+                    output.push(make_array(mutable.freeze()))
+                }
+                let batch = RecordBatch::try_new(self.schema.clone(), output);
+                let poll = Poll::Ready(Some(batch));
+                self.metrics.record_poll(poll)
+            }
+        }
+    }
+}
+
+impl RecordBatchStream for SortedSizedRecordBatchStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 
