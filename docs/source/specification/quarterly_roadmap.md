@@ -27,6 +27,7 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 
 - IO Improvements
   - Reading, registering, and writing more file formats from both DataFrame API and SQL
+  - Additional options for IO including partitioning and metadata support
 - Memory Management
   - Add more operators for memory limited execution
 - Performance
