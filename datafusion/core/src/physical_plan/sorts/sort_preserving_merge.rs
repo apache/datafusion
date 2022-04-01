@@ -617,7 +617,7 @@ mod tests {
     use crate::physical_plan::expressions::col;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::memory::MemoryExec;
-    use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::sorts::sort2::SortExec2;
     use crate::physical_plan::{collect, common};
     use crate::test::{self, assert_is_pending};
     use crate::{assert_batches_eq, test_util};
@@ -881,7 +881,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let sort_exec =
-            Arc::new(SortExec::new_with_partitioning(sort.clone(), input, true));
+            Arc::new(SortExec2::new_with_partitioning(sort.clone(), input, true));
         sorted_merge(sort_exec, sort, context).await
     }
 
@@ -891,7 +891,7 @@ mod tests {
         context: Arc<TaskContext>,
     ) -> RecordBatch {
         let merge = Arc::new(CoalescePartitionsExec::new(src));
-        let sort_exec = Arc::new(SortExec::try_new(sort, merge).unwrap());
+        let sort_exec = Arc::new(SortExec2::try_new(sort, merge).unwrap());
         let mut result = collect(sort_exec, context).await.unwrap();
         assert_eq!(result.len(), 1);
         result.remove(0)

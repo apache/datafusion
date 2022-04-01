@@ -245,7 +245,7 @@ mod tests {
     use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::projection::ProjectionExec;
-    use crate::physical_plan::sorts::sort::SortExec;
+    use crate::physical_plan::sorts::sort2::SortExec2;
     use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
     use crate::physical_plan::union::UnionExec;
     use crate::physical_plan::{displayable, Statistics};
@@ -290,7 +290,7 @@ mod tests {
             expr: col("c1", &schema()).unwrap(),
             options: SortOptions::default(),
         }];
-        Arc::new(SortExec::try_new(sort_exprs, input).unwrap())
+        Arc::new(SortExec2::try_new(sort_exprs, input).unwrap())
     }
 
     fn projection_exec(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -413,7 +413,7 @@ mod tests {
             "GlobalLimitExec: limit=100",
             "LocalLimitExec: limit=100",
             // data is sorted so can't repartition here
-            "SortExec: [c1@0 ASC]",
+            "SortExec2: [c1@0 ASC]",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
         ];
 
@@ -431,7 +431,7 @@ mod tests {
             "FilterExec: c1@0",
             // data is sorted so can't repartition here even though
             // filter would benefit from parallelism, the answers might be wrong
-            "SortExec: [c1@0 ASC]",
+            "SortExec2: [c1@0 ASC]",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
         ];
 
@@ -519,7 +519,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: [c1@0 ASC]",
+            "SortExec2: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
@@ -536,7 +536,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: [c1@0 ASC]",
+            "SortExec2: [c1@0 ASC]",
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
@@ -555,7 +555,7 @@ mod tests {
         let expected = &[
             "SortPreservingMergeExec: [c1@0 ASC]",
             // Expect repartition on the input to the sort (as it can benefit from additional parallelism)
-            "SortExec: [c1@0 ASC]",
+            "SortExec2: [c1@0 ASC]",
             "ProjectionExec: expr=[c1@0 as c1]",
             "FilterExec: c1@0",
             // repartition is lowest down

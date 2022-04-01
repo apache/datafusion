@@ -45,7 +45,7 @@ use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
-use crate::physical_plan::sorts::sort::SortExec;
+use crate::physical_plan::sorts::sort2::SortExec2;
 use crate::physical_plan::udf;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
@@ -457,9 +457,9 @@ impl DefaultPhysicalPlanner {
                             })
                             .collect::<Result<Vec<_>>>()?;
                         Arc::new(if can_repartition {
-                            SortExec::new_with_partitioning(sort_keys, input_exec, true)
+                            SortExec2::new_with_partitioning(sort_keys, input_exec, true)
                         } else {
-                            SortExec::try_new(sort_keys, input_exec)?
+                            SortExec2::try_new(sort_keys, input_exec)?
                         })
                     };
 
@@ -704,7 +704,7 @@ impl DefaultPhysicalPlanner {
                             )),
                         })
                         .collect::<Result<Vec<_>>>()?;
-                    Ok(Arc::new(SortExec::try_new(sort_expr, physical_input)?) )
+                    Ok(Arc::new(SortExec2::try_new(sort_expr, physical_input)?) )
                 }
                 LogicalPlan::Join(Join {
                     left,

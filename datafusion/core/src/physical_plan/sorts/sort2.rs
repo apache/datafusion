@@ -204,7 +204,7 @@ impl ExternalSorter2 {
 
 impl Debug for ExternalSorter2 {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("ExternalSorter")
+        f.debug_struct("ExternalSorter2")
             .field("id", &self.id())
             .field("memory_used", &self.used())
             .field("spilled_bytes", &self.spilled_bytes())
@@ -228,7 +228,7 @@ impl Drop for ExternalSorter2 {
 #[async_trait]
 impl MemoryConsumer for ExternalSorter2 {
     fn name(&self) -> String {
-        "ExternalSorter".to_owned()
+        "ExternalSorter2".to_owned()
     }
 
     fn id(&self) -> &MemoryConsumerId {
@@ -672,7 +672,7 @@ impl ExecutionPlan for SortExec2 {
                 children[0].clone(),
             )?)),
             _ => Err(DataFusionError::Internal(
-                "SortExec wrong number of children".to_string(),
+                "SortExec2 wrong number of children".to_string(),
             )),
         }
     }
@@ -685,7 +685,7 @@ impl ExecutionPlan for SortExec2 {
         if !self.preserve_partitioning {
             if 0 != partition {
                 return Err(DataFusionError::Internal(format!(
-                    "SortExec invalid partition {}",
+                    "SortExec2 invalid partition {}",
                     partition
                 )));
             }
@@ -693,7 +693,7 @@ impl ExecutionPlan for SortExec2 {
             // sort needs to operate on a single partition currently
             if 1 != self.input.output_partitioning().partition_count() {
                 return Err(DataFusionError::Internal(
-                    "SortExec requires a single input partition".to_owned(),
+                    "SortExec2 requires a single input partition".to_owned(),
                 ));
             }
         }
@@ -722,7 +722,7 @@ impl ExecutionPlan for SortExec2 {
         match t {
             DisplayFormatType::Default => {
                 let expr: Vec<String> = self.expr.iter().map(|e| e.to_string()).collect();
-                write!(f, "SortExec: [{}]", expr.join(","))
+                write!(f, "SortExec2: [{}]", expr.join(","))
             }
         }
     }

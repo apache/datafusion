@@ -274,7 +274,7 @@ mod test {
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
     use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::hash_join::HashJoinExec;
-    use datafusion::physical_plan::sorts::sort::SortExec;
+    use datafusion::physical_plan::sorts::sort2::SortExec2;
     use datafusion::physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, projection::ProjectionExec,
     };
@@ -361,7 +361,7 @@ mod test {
 
         // verify stage 2
         let stage2 = stages[2].children()[0].clone();
-        let sort = downcast_exec!(stage2, SortExec);
+        let sort = downcast_exec!(stage2, SortExec2);
         let coalesce_partitions = sort.children()[0].clone();
         let coalesce_partitions =
             downcast_exec!(coalesce_partitions, CoalescePartitionsExec);

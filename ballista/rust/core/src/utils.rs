@@ -53,7 +53,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
-use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::sorts::sort2::SortExec2;
 use datafusion::physical_plan::{metrics, ExecutionPlan, RecordBatchStream};
 use futures::{Stream, StreamExt};
 
@@ -153,8 +153,8 @@ fn build_exec_plan_diagram(
 ) -> Result<usize> {
     let operator_str = if plan.as_any().downcast_ref::<HashAggregateExec>().is_some() {
         "HashAggregateExec"
-    } else if plan.as_any().downcast_ref::<SortExec>().is_some() {
-        "SortExec"
+    } else if plan.as_any().downcast_ref::<SortExec2>().is_some() {
+        "SortExec2"
     } else if plan.as_any().downcast_ref::<ProjectionExec>().is_some() {
         "ProjectionExec"
     } else if plan.as_any().downcast_ref::<HashJoinExec>().is_some() {
