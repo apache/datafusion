@@ -347,9 +347,9 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
                     .iter()
                     .flat_map(|arg| {
                         if !arg.is_null(index) {
-                            vec![arg.value(index)]
+                            Some(arg.value(index))
                         } else {
-                            vec![]
+                            None
                         }
                     })
                     .collect::<Vec<&str>>();
