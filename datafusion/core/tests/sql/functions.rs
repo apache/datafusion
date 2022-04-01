@@ -217,7 +217,7 @@ async fn coalesce_result() -> Result<()> {
     let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COALESCE(c1, c2) FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------+",
         "| coalesce(test.c1,test.c2) |",
@@ -237,7 +237,7 @@ async fn coalesce_result() -> Result<()> {
 async fn coalesce_static_empty_value() -> Result<()> {
     let mut ctx = SessionContext::new();
     let sql = "SELECT COALESCE('', 'test')";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------+",
         "| coalesce(Utf8(\"\"),Utf8(\"test\")) |",
@@ -253,7 +253,7 @@ async fn coalesce_static_empty_value() -> Result<()> {
 async fn coalesce_static_value_with_null() -> Result<()> {
     let mut ctx = SessionContext::new();
     let sql = "SELECT COALESCE(NULL, 'test')";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------------------------+",
         "| coalesce(Utf8(NULL),Utf8(\"test\")) |",
@@ -291,7 +291,7 @@ async fn coalesce_result_with_default_value() -> Result<()> {
     let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COALESCE(c1, c2, '-1') FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+--------------------------------------+",
         "| coalesce(test.c1,test.c2,Utf8(\"-1\")) |",
@@ -327,7 +327,7 @@ async fn coalesce_sum_with_default_value() -> Result<()> {
     let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT SUM(COALESCE(c1, c2, 0)) FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------------------------------------+",
         "| SUM(coalesce(test.c1,test.c2,Int64(0))) |",
@@ -359,7 +359,7 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
     let mut ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COALESCE(c1 * c2, 0) FROM test";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------------------+",
         "| coalesce(test.c1 Multiply test.c2,Int64(0)) |",
