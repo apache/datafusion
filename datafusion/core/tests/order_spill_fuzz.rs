@@ -38,12 +38,20 @@ use std::sync::Arc;
 #[tokio::test]
 async fn test_sort_1k_mem() {
     run_sort(1024, vec![(5, false), (2000, true), (1000000, true)]).await;
+}
+
+#[tokio::test]
+async fn test_sort_1k_mem_2() {
     run_sort2(1024, vec![(5, false), (2000, true), (1000000, true)]).await;
 }
 
 #[tokio::test]
 async fn test_sort_100k_mem() {
     run_sort(102400, vec![(5, false), (2000, false), (1000000, true)]).await;
+}
+
+#[tokio::test]
+async fn test_sort_100k_mem_2() {
     run_sort2(102400, vec![(5, false), (2000, false), (1000000, true)]).await;
 }
 
@@ -54,6 +62,10 @@ async fn test_sort_unlimited_mem() {
         vec![(5, false), (2000, false), (1000000, false)],
     )
     .await;
+}
+
+#[tokio::test]
+async fn test_sort_unlimited_mem2() {
     run_sort2(
         usize::MAX,
         vec![(5, false), (2000, false), (1000000, false)],

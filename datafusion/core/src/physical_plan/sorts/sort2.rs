@@ -47,7 +47,7 @@ use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::lock::Mutex;
-use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use log::{debug, error};
 use std::any::Any;
 use std::cmp::min;
