@@ -27,7 +27,6 @@ use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::expressions::{col, PhysicalSortExpr};
 use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
-use datafusion::physical_plan::sorts::sort2::SortExec2;
 use datafusion::physical_plan::{collect, ExecutionPlan};
 use datafusion::prelude::{SessionConfig, SessionContext};
 use fuzz_utils::{add_empty_batches, batches_to_vec, partitions_to_sorted_vec};
@@ -41,32 +40,13 @@ async fn test_sort_1k_mem() {
 }
 
 #[tokio::test]
-async fn test_sort_1k_mem_2() {
-    run_sort2(1024, vec![(5, false), (2000, true), (1000000, true)]).await;
-}
-
-#[tokio::test]
 async fn test_sort_100k_mem() {
     run_sort(102400, vec![(5, false), (2000, false), (1000000, true)]).await;
 }
 
 #[tokio::test]
-async fn test_sort_100k_mem_2() {
-    run_sort2(102400, vec![(5, false), (2000, false), (1000000, true)]).await;
-}
-
-#[tokio::test]
 async fn test_sort_unlimited_mem() {
     run_sort(
-        usize::MAX,
-        vec![(5, false), (2000, false), (1000000, false)],
-    )
-    .await;
-}
-
-#[tokio::test]
-async fn test_sort_unlimited_mem2() {
-    run_sort2(
         usize::MAX,
         vec![(5, false), (2000, false), (1000000, false)],
     )
@@ -94,50 +74,6 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
 
         let exec = MemoryExec::try_new(&input, schema, None).unwrap();
         let sort = Arc::new(SortExec::try_new(sort, Arc::new(exec)).unwrap());
-
-        let runtime_config = RuntimeConfig::new().with_memory_manager(
-            MemoryManagerConfig::try_new_limit(pool_size, 1.0).unwrap(),
-        );
-        let runtime = Arc::new(RuntimeEnv::new(runtime_config).unwrap());
-        let session_ctx = SessionContext::with_config_rt(SessionConfig::new(), runtime);
-
-        let task_ctx = session_ctx.task_ctx();
-        let collected = collect(sort.clone(), task_ctx).await.unwrap();
-
-        let expected = partitions_to_sorted_vec(&input);
-        let actual = batches_to_vec(&collected);
-
-        if spill {
-            assert_ne!(sort.metrics().unwrap().spill_count().unwrap(), 0);
-        } else {
-            assert_eq!(sort.metrics().unwrap().spill_count().unwrap(), 0);
-        }
-
-        assert_eq!(expected, actual, "failure in @ pool_size {}", pool_size);
-    }
-}
-
-/// Sort the input using SortExec and ensure the results are correct according to `Vec::sort`
-async fn run_sort2(pool_size: usize, size_spill: Vec<(usize, bool)>) {
-    for (size, spill) in size_spill {
-        let input = vec![make_staggered_batches(size)];
-        let first_batch = input
-            .iter()
-            .flat_map(|p| p.iter())
-            .next()
-            .expect("at least one batch");
-        let schema = first_batch.schema();
-
-        let sort = vec![PhysicalSortExpr {
-            expr: col("x", &schema).unwrap(),
-            options: SortOptions {
-                descending: false,
-                nulls_first: true,
-            },
-        }];
-
-        let exec = MemoryExec::try_new(&input, schema, None).unwrap();
-        let sort = Arc::new(SortExec2::try_new(sort, Arc::new(exec)).unwrap());
 
         let runtime_config = RuntimeConfig::new().with_memory_manager(
             MemoryManagerConfig::try_new_limit(pool_size, 1.0).unwrap(),

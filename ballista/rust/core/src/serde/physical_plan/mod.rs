@@ -53,7 +53,7 @@ use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::sorts::sort2::SortExec2;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
@@ -522,7 +522,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Arc::new(SortExec2::try_new(exprs, input)?))
+                Ok(Arc::new(SortExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Unresolved(unresolved_shuffle) => {
                 let schema = Arc::new(convert_required!(unresolved_shuffle.schema)?);
@@ -849,7 +849,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 ))),
             })
-        } else if let Some(exec) = plan.downcast_ref::<SortExec2>() {
+        } else if let Some(exec) = plan.downcast_ref::<SortExec>() {
             let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
                 exec.input().to_owned(),
                 extension_codec,
@@ -1032,7 +1032,7 @@ mod roundtrip_tests {
             hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
-            sorts::sort2::SortExec2,
+            sorts::sort::SortExec,
             AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
         },
         prelude::SessionContext,
@@ -1193,7 +1193,7 @@ mod roundtrip_tests {
                 },
             },
         ];
-        roundtrip_test(Arc::new(SortExec2::try_new(
+        roundtrip_test(Arc::new(SortExec::try_new(
             sort_exprs,
             Arc::new(EmptyExec::new(false, schema)),
         )?))

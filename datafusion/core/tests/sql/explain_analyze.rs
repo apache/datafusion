@@ -60,7 +60,7 @@ async fn explain_analyze_baseline_metrics() {
     );
     assert_metrics!(
         &formatted,
-        "SortExec2: [c1@0 ASC NULLS LAST]",
+        "SortExec: [c1@0 ASC NULLS LAST]",
         "metrics=[output_rows=5, elapsed_compute="
     );
     assert_metrics!(
@@ -108,7 +108,7 @@ async fn explain_analyze_baseline_metrics() {
         use datafusion::physical_plan;
         use datafusion::physical_plan::sorts;
 
-        plan.as_any().downcast_ref::<sorts::sort2::SortExec2>().is_some()
+        plan.as_any().downcast_ref::<sorts::sort::SortExec>().is_some()
             || plan.as_any().downcast_ref::<physical_plan::hash_aggregate::HashAggregateExec>().is_some()
             // CoalescePartitionsExec doesn't do any work so is not included
             || plan.as_any().downcast_ref::<physical_plan::filter::FilterExec>().is_some()
@@ -648,7 +648,7 @@ async fn test_physical_plan_display_indent() {
     let physical_plan = ctx.create_physical_plan(&plan).await.unwrap();
     let expected = vec![
         "GlobalLimitExec: limit=10",
-        "  SortExec2: [the_min@2 DESC]",
+        "  SortExec: [the_min@2 DESC]",
         "    CoalescePartitionsExec",
         "      ProjectionExec: expr=[c1@0 as c1, MAX(aggregate_test_100.c12)@1 as MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)@2 as the_min]",
         "        HashAggregateExec: mode=FinalPartitioned, gby=[c1@0 as c1], aggr=[MAX(aggregate_test_100.c12), MIN(aggregate_test_100.c12)]",

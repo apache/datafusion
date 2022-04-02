@@ -37,7 +37,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 pub mod sort;
-pub mod sort2;
 pub mod sort_preserving_merge;
 
 /// A `SortKeyCursor` is created from a `RecordBatch`, and a set of
