@@ -553,45 +553,54 @@ impl SortPreservingMergeStream {
             let elapsed_compute = self.tracking_metrics.elapsed_compute().clone();
             let _timer = elapsed_compute.timer();
 
-            match self.min_heap.pop() {
-                Some(mut cursor) => {
-                    let stream_idx = cursor.stream_idx;
-                    let batch_idx = self.batches[stream_idx].len() - 1;
-                    let row_idx = cursor.advance();
+            let in_progress_empty = self.in_progress.is_empty();
+            let mut cursor = self.min_heap.peek_mut().unwrap();
+            let cursor_finished = cursor.is_finished();
 
-                    let mut cursor_finished = false;
-                    // insert the cursor back to min_heap if the record batch is not exhausted
-                    if !cursor.is_finished() {
-                        self.min_heap.push(cursor);
-                    } else {
-                        cursor_finished = true;
-                        self.cursor_finished[stream_idx] = true;
-                    }
+            if cursor_finished {
+                std::mem::drop(cursor);
+                return if in_progress_empty {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Ready(Some(self.build_record_batch()))
+                };
+            }
 
-                    self.in_progress.push(RowIndex {
-                        stream_idx,
-                        batch_idx,
-                        row_idx,
-                    });
+            let stream_idx = cursor.stream_idx;
+            let row_idx = cursor.advance();
 
-                    if self.in_progress.len() == self.batch_size {
-                        return Poll::Ready(Some(self.build_record_batch()));
-                    }
+            let mut cursor_finished = false;
+            // insert the cursor back to min_heap if the record batch is not exhausted
+            if cursor.is_finished() {
+                std::mem::drop(cursor);
+                cursor_finished = true;
+                self.cursor_finished[stream_idx] = true;
+            } else {
+                std::mem::drop(cursor);
+            }
 
-                    // If removed the last row from the cursor, need to fetch a new record
-                    // batch if possible, before looping round again
-                    if cursor_finished {
-                        match futures::ready!(self.maybe_poll_stream(cx, stream_idx)) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                self.aborted = true;
-                                return Poll::Ready(Some(Err(e)));
-                            }
-                        }
+            let batch_idx = self.batches[stream_idx].len() - 1;
+
+            self.in_progress.push(RowIndex {
+                stream_idx,
+                batch_idx,
+                row_idx,
+            });
+
+            if self.in_progress.len() == self.batch_size {
+                return Poll::Ready(Some(self.build_record_batch()));
+            }
+
+            // If removed the last row from the cursor, need to fetch a new record
+            // batch if possible, before looping round again
+            if cursor_finished {
+                match futures::ready!(self.maybe_poll_stream(cx, stream_idx)) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.aborted = true;
+                        return Poll::Ready(Some(Err(e)));
                     }
                 }
-                None if self.in_progress.is_empty() => return Poll::Ready(None),
-                None => return Poll::Ready(Some(self.build_record_batch())),
             }
         }
     }

@@ -129,6 +129,14 @@ impl SortKeyCursor {
             )));
         }
 
+        if self.is_finished() && other.is_finished() {
+            return Ok(Ordering::Equal);
+        } else if self.is_finished() {
+            return Ok(Ordering::Greater);
+        } else if other.is_finished() {
+            return Ok(Ordering::Less);
+        }
+
         let zipped: Vec<((&ArrayRef, &ArrayRef), &SortOptions)> = self
             .sort_columns
             .iter()

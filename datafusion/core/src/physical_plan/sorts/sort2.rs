@@ -35,29 +35,27 @@ use crate::physical_plan::sorts::SortedStream;
 use crate::physical_plan::stream::RecordBatchReceiverStream;
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
-    RecordBatchStream, SendableRecordBatchStream, Statistics,
+    SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
-use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
+use arrow::array::ArrayRef;
 pub use arrow::compute::SortOptions;
-use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
+use arrow::compute::{lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::lock::Mutex;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use log::{debug, error};
 use std::any::Any;
-use std::cmp::min;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
@@ -138,9 +136,6 @@ impl ExternalSorter2 {
         let mut in_mem_batches = self.in_mem_batches.lock().await;
 
         if self.spilled_before().await {
-            let tracking_metrics = self
-                .metrics_set
-                .new_intermediate_tracking(partition, self.runtime.clone());
             let mut streams: Vec<SortedStream> = vec![];
             if in_mem_batches.len() > 0 {
                 let in_mem_stream = in_mem_partial_sort(
@@ -148,7 +143,10 @@ impl ExternalSorter2 {
                     self.schema.clone(),
                     &self.expr,
                     batch_size,
-                    tracking_metrics,
+                    &self.metrics_set,
+                    partition,
+                    self.runtime.clone(),
+                    false,
                 )?;
                 let prev_used = self.metrics.mem_used().set(0);
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
@@ -171,15 +169,15 @@ impl ExternalSorter2 {
                 self.session_config.batch_size,
             )))
         } else if in_mem_batches.len() > 0 {
-            let tracking_metrics = self
-                .metrics_set
-                .new_final_tracking(partition, self.runtime.clone());
             let result = in_mem_partial_sort(
                 &mut *in_mem_batches,
                 self.schema.clone(),
                 &self.expr,
                 batch_size,
-                tracking_metrics,
+                &self.metrics_set,
+                partition,
+                self.runtime.clone(),
+                true,
             );
             // Report to the memory manager we are no longer using memory
             self.metrics.mem_used().set(0);
@@ -211,12 +209,6 @@ impl Debug for ExternalSorter2 {
             .field("spill_count", &self.spill_count())
             .finish()
     }
-}
-
-#[derive(Debug, Copy, Clone)]
-struct CombinedIndex {
-    batch_idx: usize,
-    row_idx: usize,
 }
 
 impl Drop for ExternalSorter2 {
@@ -259,17 +251,16 @@ impl MemoryConsumer for ExternalSorter2 {
             return Ok(0);
         }
 
-        let tracking_metrics = self
-            .metrics_set
-            .new_intermediate_tracking(partition, self.runtime.clone());
-
         let spillfile = self.runtime.disk_manager.create_tmp_file()?;
         let stream = in_mem_partial_sort(
             &mut *in_mem_batches,
             self.schema.clone(),
             &*self.expr,
             self.session_config.batch_size,
-            tracking_metrics,
+            &self.metrics_set,
+            partition,
+            self.runtime.clone(),
+            false,
         );
 
         spill_partial_sorted_stream(&mut stream?, spillfile.path(), self.schema.clone())
@@ -287,15 +278,28 @@ impl MemoryConsumer for ExternalSorter2 {
 }
 
 /// consume the non-empty `sorted_bathes` and do in_mem_sort
+#[allow(clippy::too_many_arguments)]
 fn in_mem_partial_sort(
     buffered_batches: &mut Vec<RecordBatch>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     batch_size: usize,
-    tracking_metrics: MemTrackingMetrics,
+    metrics_set: &CompositeMetricsSet,
+    partition: usize,
+    runtime: Arc<RuntimeEnv>,
+    final_metric: bool,
 ) -> Result<SendableRecordBatchStream> {
+    let get_metrics = |final_metric| -> MemTrackingMetrics {
+        if final_metric {
+            metrics_set.new_final_tracking(partition, runtime.clone())
+        } else {
+            metrics_set.new_intermediate_tracking(partition, runtime.clone())
+        }
+    };
+
     assert_ne!(buffered_batches.len(), 0);
     if buffered_batches.len() == 1 {
+        let tracking_metrics = get_metrics(final_metric);
         let result = buffered_batches.pop();
         Ok(Box::pin(SizedRecordBatchStream::new(
             schema,
@@ -303,200 +307,30 @@ fn in_mem_partial_sort(
             tracking_metrics,
         )))
     } else {
-        let batches = buffered_batches.drain(..).collect::<Vec<_>>();
-        let sorted_iter = {
-            // NB timer records time taken on drop, so there are no
-            // calls to `timer.done()` below.
-            let _timer = tracking_metrics.elapsed_compute().timer();
-            get_sorted_iter(&batches, expressions, batch_size)?
-        };
-        Ok(Box::pin(SortedSizedRecordBatchStream::new(
+        let sorted_streams = buffered_batches
+            .drain(..)
+            .map(|batch| {
+                let tracking_metrics = get_metrics(false);
+                SortedStream::new(
+                    Box::pin(SizedRecordBatchStream::new(
+                        schema.clone(),
+                        vec![Arc::new(batch)],
+                        tracking_metrics,
+                    )),
+                    0, // do not track mem since been tracked by inner stream
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let tracking_metrics = get_metrics(final_metric);
+        Ok(Box::pin(SortPreservingMergeStream::new_from_streams(
+            sorted_streams,
             schema,
-            batches,
-            sorted_iter,
+            expressions,
             tracking_metrics,
+            batch_size,
         )))
     }
-}
-
-fn get_sorted_iter(
-    batches: &[RecordBatch],
-    expr: &[PhysicalSortExpr],
-    batch_size: usize,
-) -> Result<SortedIterator> {
-    let (batch_grouped, combined): (Vec<Vec<ArrayRef>>, Vec<Vec<CombinedIndex>>) =
-        batches
-            .iter()
-            .enumerate()
-            .map(|(i, batch)| {
-                let col: Vec<ArrayRef> = expr
-                    .iter()
-                    .map(|e| Ok(e.evaluate_to_sort_column(batch)?.values))
-                    .collect::<Result<Vec<_>>>()?;
-
-                let combined_index = (0..batch.num_rows())
-                    .map(|r| CombinedIndex {
-                        batch_idx: i,
-                        row_idx: r,
-                    })
-                    .collect::<Vec<CombinedIndex>>();
-
-                Ok((col, combined_index))
-            })
-            .collect::<Result<Vec<(Vec<ArrayRef>, Vec<CombinedIndex>)>>>()?
-            .into_iter()
-            .unzip();
-
-    let column_grouped = transpose(batch_grouped);
-
-    let sort_columns: Vec<SortColumn> = column_grouped
-        .iter()
-        .zip(expr.iter())
-        .map(|(c, e)| {
-            Ok(SortColumn {
-                values: concat(
-                    &*c.iter().map(|i| i.as_ref()).collect::<Vec<&dyn Array>>(),
-                )?,
-                options: Some(e.options),
-            })
-        })
-        .collect::<Vec<Result<SortColumn>>>()
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?;
-
-    let indices = lexsort_to_indices(&sort_columns, None)?;
-    let combined = combined
-        .into_iter()
-        .flatten()
-        .collect::<Vec<CombinedIndex>>();
-    Ok(SortedIterator::new(indices, combined, batch_size))
-}
-
-struct SortedIterator {
-    pos: usize,
-    indices: UInt32Array,
-    combined: Vec<CombinedIndex>,
-    batch_size: usize,
-    length: usize,
-}
-
-impl SortedIterator {
-    fn new(
-        indices: UInt32Array,
-        combined: Vec<CombinedIndex>,
-        batch_size: usize,
-    ) -> Self {
-        let length = combined.len();
-        Self {
-            pos: 0,
-            indices,
-            combined,
-            batch_size,
-            length,
-        }
-    }
-}
-
-impl Iterator for SortedIterator {
-    type Item = Vec<CombinedIndex>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos >= self.length {
-            return None;
-        }
-
-        let current_size = min(self.batch_size, self.length - self.pos);
-        let mut result = Vec::with_capacity(current_size);
-        for i in 0..current_size {
-            let p = self.pos + i;
-            let c_index = self.indices.value(p) as usize;
-            result.push(self.combined[c_index])
-        }
-        self.pos += current_size;
-        Some(result)
-    }
-}
-
-/// Stream of sorted record batches
-struct SortedSizedRecordBatchStream {
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
-    sorted_iter: SortedIterator,
-    num_cols: usize,
-    metrics: MemTrackingMetrics,
-}
-
-impl SortedSizedRecordBatchStream {
-    /// new
-    pub fn new(
-        schema: SchemaRef,
-        batches: Vec<RecordBatch>,
-        sorted_iter: SortedIterator,
-        metrics: MemTrackingMetrics,
-    ) -> Self {
-        let size = batches.iter().map(|b| batch_byte_size(b)).sum::<usize>();
-        metrics.init_mem_used(size);
-        let num_cols = batches[0].num_columns();
-        SortedSizedRecordBatchStream {
-            schema,
-            batches,
-            sorted_iter,
-            num_cols,
-            metrics,
-        }
-    }
-}
-
-impl Stream for SortedSizedRecordBatchStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        _: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        match self.sorted_iter.next() {
-            None => Poll::Ready(None),
-            Some(combined) => {
-                let mut output = Vec::with_capacity(self.num_cols);
-                for i in 0..self.num_cols {
-                    let arrays = self
-                        .batches
-                        .iter()
-                        .map(|b| b.column(i).data())
-                        .collect::<Vec<_>>();
-                    let mut mutable =
-                        MutableArrayData::new(arrays, false, combined.len());
-                    for x in combined.iter() {
-                        mutable.extend(x.batch_idx, x.row_idx, x.row_idx + 1);
-                    }
-                    output.push(make_array(mutable.freeze()))
-                }
-                let batch = RecordBatch::try_new(self.schema.clone(), output);
-                let poll = Poll::Ready(Some(batch));
-                self.metrics.record_poll(poll)
-            }
-        }
-    }
-}
-
-impl RecordBatchStream for SortedSizedRecordBatchStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-}
-
-fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    assert!(!v.is_empty());
-    let len = v[0].len();
-    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect();
-    (0..len)
-        .map(|_| {
-            iters
-                .iter_mut()
-                .map(|n| n.next().unwrap())
-                .collect::<Vec<T>>()
-        })
-        .collect()
 }
 
 async fn spill_partial_sorted_stream(
@@ -775,8 +609,8 @@ async fn do_sort(
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
     let schema = input.schema();
-    let tracking_metrics = metrics_set
-        .new_intermediate_tracking(partition_id, context.runtime_env().clone());
+    let tracking_metrics =
+        metrics_set.new_intermediate_tracking(partition_id, context.runtime_env());
     let sorter = ExternalSorter2::new(
         partition_id,
         schema.clone(),
