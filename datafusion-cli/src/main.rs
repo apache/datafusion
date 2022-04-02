@@ -109,7 +109,7 @@ pub async fn main() -> Result<()> {
 
     let mut enable_with_information_schema = false;
     if let Some(with_information_schema) = args.with_information_schema {
-        session_config.with_information_schema(with_information_schema);
+        session_config = session_config.with_information_schema(with_information_schema);
         enable_with_information_schema = with_information_schema;
     }
 

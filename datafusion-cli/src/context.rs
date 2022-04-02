@@ -90,7 +90,11 @@ impl BallistaContext {
 pub struct BallistaContext();
 #[cfg(not(feature = "ballista"))]
 impl BallistaContext {
-    pub async fn try_new(_host: &str, _port: u16) -> Result<Self> {
+    pub async fn try_new(
+        _host: &str,
+        _port: u16,
+        _with_information_schema: bool,
+    ) -> Result<Self> {
         Err(DataFusionError::NotImplemented(
             "Remote execution not supported. Compile with feature 'ballista' to enable"
                 .to_string(),
