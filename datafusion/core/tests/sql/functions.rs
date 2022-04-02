@@ -179,7 +179,7 @@ async fn query_count_distinct() -> Result<()> {
 async fn coalesce_plan() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "select COALESCE('', 'test')";
-    let actual = execute_to_batches(&mut ctx, sql).await;
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------+",
         "| coalesce(Utf8(\"\"),Utf8(\"test\")) |",
