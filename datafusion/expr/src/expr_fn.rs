@@ -297,7 +297,8 @@ pub fn array(args: Vec<Expr>) -> Expr {
     }
 }
 
-/// Returns an coalesce of fixed size with each argument on it.
+/// Returns `coalesce(args...)`, which evaluates to the value of the first [Expr]
+/// which is not NULL
 pub fn coalesce(args: Vec<Expr>) -> Expr {
     Expr::ScalarFunction {
         fun: built_in_function::BuiltinScalarFunction::Coalesce,

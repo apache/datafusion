@@ -25,6 +25,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
+/// coalesce evaluates to the first value which is not NULL
 pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     // do not accept 0 arguments.
     if args.is_empty() {

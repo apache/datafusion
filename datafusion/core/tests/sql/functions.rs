@@ -176,9 +176,9 @@ async fn query_count_distinct() -> Result<()> {
 }
 
 #[tokio::test]
-async fn coalesce_plan() -> Result<()> {
+async fn coalesce_static_empty_value() -> Result<()> {
     let ctx = SessionContext::new();
-    let sql = "select COALESCE('', 'test')";
+    let sql = "SELECT COALESCE('', 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------+",
@@ -186,6 +186,22 @@ async fn coalesce_plan() -> Result<()> {
         "+---------------------------------+",
         "|                                 |",
         "+---------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn coalesce_static_value_with_null() -> Result<()> {
+    let ctx = SessionContext::new();
+    let sql = "SELECT COALESCE(NULL, 'test')";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------+",
+        "| coalesce(Utf8(NULL),Utf8(\"test\")) |",
+        "+-----------------------------------+",
+        "| test                              |",
+        "+-----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -228,38 +244,6 @@ async fn coalesce_result() -> Result<()> {
         "| 1                         |",
         "|                           |",
         "+---------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn coalesce_static_empty_value() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "SELECT COALESCE('', 'test')";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+---------------------------------+",
-        "| coalesce(Utf8(\"\"),Utf8(\"test\")) |",
-        "+---------------------------------+",
-        "|                                 |",
-        "+---------------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
-async fn coalesce_static_value_with_null() -> Result<()> {
-    let ctx = SessionContext::new();
-    let sql = "SELECT COALESCE(NULL, 'test')";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-----------------------------------+",
-        "| coalesce(Utf8(NULL),Utf8(\"test\")) |",
-        "+-----------------------------------+",
-        "| test                              |",
-        "+-----------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
