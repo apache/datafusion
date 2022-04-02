@@ -138,7 +138,7 @@ impl ExternalSorter {
                     &self.expr,
                     tracking_metrics,
                 )?;
-                let prev_used = self.metrics.mem_used().set(0);
+                let prev_used = self.free_all_memory();
                 streams.push(SortedStream::new(in_mem_stream, prev_used));
             }
 
@@ -169,11 +169,17 @@ impl ExternalSorter {
                 tracking_metrics,
             );
             // Report to the memory manager we are no longer using memory
-            self.metrics.mem_used().set(0);
+            self.free_all_memory();
             result
         } else {
             Ok(Box::pin(EmptyRecordBatchStream::new(self.schema.clone())))
         }
+    }
+
+    fn free_all_memory(&self) -> usize {
+        let used = self.metrics.mem_used().set(0);
+        self.shrink(used);
+        used
     }
 
     fn used(&self) -> usize {
