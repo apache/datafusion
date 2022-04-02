@@ -32,8 +32,14 @@ pub enum Context {
 
 impl Context {
     /// create a new remote context with given host and port
-    pub async fn new_remote(host: &str, port: u16) -> Result<Context> {
-        Ok(Context::Remote(BallistaContext::try_new(host, port).await?))
+    pub async fn new_remote(
+        host: &str,
+        port: u16,
+        with_information_schema: bool,
+    ) -> Result<Context> {
+        Ok(Context::Remote(
+            BallistaContext::try_new(host, port, with_information_schema).await?,
+        ))
     }
 
     /// create a local context using the given config
@@ -56,10 +62,19 @@ impl Context {
 pub struct BallistaContext(ballista::context::BallistaContext);
 #[cfg(feature = "ballista")]
 impl BallistaContext {
-    pub async fn try_new(host: &str, port: u16) -> Result<Self> {
+    pub async fn try_new(
+        host: &str,
+        port: u16,
+        with_information_schema: bool,
+    ) -> Result<Self> {
         use ballista::context::BallistaContext;
         use ballista::prelude::BallistaConfig;
-        let config: BallistaConfig = BallistaConfig::new()
+        let builder = BallistaConfig::builder();
+        if with_information_schema {
+            builder.set("ballista.with_information_schema", "true");
+        }
+        let config = builder
+            .build()
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
         let remote_ctx = BallistaContext::remote(host, port, &config)
             .await
