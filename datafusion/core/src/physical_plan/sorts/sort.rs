@@ -319,6 +319,7 @@ struct CompositeIndex {
     row_idx: u32,
 }
 
+/// Get sorted iterator by sort concatenated `SortColumn`s
 fn get_sorted_iter(
     batches: &[RecordBatch],
     expr: &[PhysicalSortExpr],
@@ -327,7 +328,7 @@ fn get_sorted_iter(
     let row_indices = batches
         .iter()
         .enumerate()
-        .map(|(i, batch)| {
+        .flat_map(|(i, batch)| {
             (0..batch.num_rows())
                 .map(|r| CompositeIndex {
                     // since we original use UInt32Array to index the combined mono batch,
@@ -338,10 +339,9 @@ fn get_sorted_iter(
                 })
                 .collect::<Vec<CompositeIndex>>()
         })
-        .flatten()
         .collect::<Vec<CompositeIndex>>();
 
-    let sort_columns = batches
+    let sort_arrays = batches
         .iter()
         .map(|batch| {
             expr.iter()
@@ -354,7 +354,7 @@ fn get_sorted_iter(
         .iter()
         .enumerate()
         .map(|(i, expr)| {
-            let columns_i = sort_columns
+            let columns_i = sort_arrays
                 .iter()
                 .map(|cs| cs[i].as_ref())
                 .collect::<Vec<&dyn Array>>();
@@ -403,6 +403,7 @@ impl SortedIterator {
 impl Iterator for SortedIterator {
     type Item = Vec<CompositeIndex>;
 
+    /// Emit a max of `batch_size` positions each time
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.length {
             return None;
