@@ -177,7 +177,7 @@ async fn query_count_distinct() -> Result<()> {
 
 #[tokio::test]
 async fn coalesce_plan() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let sql = "select COALESCE('', 'test')";
     let actual = execute_to_batches(&mut ctx, sql).await;
     let expected = vec![
@@ -214,7 +214,7 @@ async fn coalesce_result() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COALESCE(c1, c2) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -235,7 +235,7 @@ async fn coalesce_result() -> Result<()> {
 
 #[tokio::test]
 async fn coalesce_static_empty_value() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT COALESCE('', 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -251,7 +251,7 @@ async fn coalesce_static_empty_value() -> Result<()> {
 
 #[tokio::test]
 async fn coalesce_static_value_with_null() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     let sql = "SELECT COALESCE(NULL, 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
@@ -288,7 +288,7 @@ async fn coalesce_result_with_default_value() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COALESCE(c1, c2, '-1') FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -324,7 +324,7 @@ async fn coalesce_sum_with_default_value() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT SUM(COALESCE(c1, c2, 0)) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
@@ -356,7 +356,7 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
 
     let table = MemTable::try_new(schema, vec![vec![data]])?;
 
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
     let sql = "SELECT COALESCE(c1 * c2, 0) FROM test";
     let actual = execute_to_batches(&ctx, sql).await;
