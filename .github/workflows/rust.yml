@@ -78,9 +78,9 @@ jobs:
           CARGO_TARGET_DIR: "/github/home/target"
       - name: Check DataFusion CLI builds with ballista
         run: |
-          cargo check -p datafusion-cli
-          cargo check --no-default-features -p datafusion-cli
-          cargo check --features=ballista -p datafusion-cli
+          (cd datafusion-cli && cargo check)
+          (cd datafusion-cli && cargo check --no-default-features)
+          (cd datafusion-cli && cargo check --features=ballista)
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
