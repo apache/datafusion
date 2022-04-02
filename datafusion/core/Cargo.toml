@@ -44,6 +44,8 @@ crypto_expressions = ["datafusion-physical-expr/crypto_expressions"]
 default = ["crypto_expressions", "regex_expressions", "unicode_expressions"]
 # Used for testing ONLY: causes all values to hash to the same value (test for collisions)
 force_hash_collisions = []
+# Used to enable hdfs to be registered in the ObjectStoreRegistry by default
+hdfs = ["datafusion-objectstore-hdfs"]
 # Used to enable JIT code generation
 jit = ["datafusion-jit"]
 pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
@@ -60,9 +62,10 @@ async-trait = "0.1.41"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 chrono = { version = "0.4", default-features = false }
 datafusion-common = { path = "../common", version = "7.0.0", features = ["parquet"] }
-datafusion-data-access = { path = "../../data-access", version = "1.0.0" }
+datafusion-data-access = { git = "https://github.com/apache/arrow-datafusion.git", rev = "41b4e491663029f653e491b110d0b5e74d08a0b6" }
 datafusion-expr = { path = "../expr", version = "7.0.0" }
 datafusion-jit = { path = "../jit", version = "7.0.0", optional = true }
+datafusion-objectstore-hdfs = { git = "https://github.com/datafusion-contrib/datafusion-objectstore-hdfs.git", rev = "11ac75fb87ee2d620a01ad4597b16e89ab5a4869", optional = true }
 datafusion-physical-expr = { path = "../physical-expr", version = "7.0.0" }
 futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
