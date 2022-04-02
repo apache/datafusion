@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crate::error::{DataFusionError, Result};
 use crate::Column;
 
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use std::fmt::{Display, Formatter};
 
@@ -279,6 +280,30 @@ impl DFSchema {
             .iter()
             .zip(arrow_schema.fields().iter())
             .all(|(dffield, arrowfield)| dffield.name() == arrowfield.name())
+    }
+
+    /// Check to see if fields in 2 Arrow schemas are compatible
+    pub fn check_arrow_schema_type_compatible(
+        &self,
+        arrow_schema: &Schema,
+    ) -> Result<()> {
+        let self_arrow_schema: Schema = self.into();
+        self_arrow_schema
+            .fields()
+            .iter()
+            .zip(arrow_schema.fields().iter())
+            .try_for_each(|(l_field, r_field)| {
+                if !can_cast_types(r_field.data_type(), l_field.data_type()) {
+                    Err(DataFusionError::Plan(
+                        format!("Column {} (type: {}) is not compatible wiht column {} (type: {})",
+                            r_field.name(),
+                            r_field.data_type(),
+                            l_field.name(),
+                            l_field.data_type())))
+                } else {
+                    Ok(())
+                }
+            })
     }
 
     /// Strip all field qualifier in schema
