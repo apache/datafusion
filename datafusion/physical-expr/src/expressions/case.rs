@@ -20,7 +20,7 @@ use std::{any::Any, sync::Arc};
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use arrow::array::{self, *};
-use arrow::compute::{and, eq, eq_utf8, is_null, not, or, or_kleene};
+use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
@@ -245,70 +245,6 @@ fn if_then_else(
     }
 }
 
-macro_rules! array_equals {
-    ($TY:ty, $L:expr, $R:expr, $eq_fn:expr) => {{
-        let when_value = $L
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$TY>()
-            .expect("array_equals downcast failed");
-
-        let base_value = $R
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$TY>()
-            .expect("array_equals downcast failed");
-
-        $eq_fn(when_value, base_value).map_err(DataFusionError::from)
-    }};
-}
-
-fn array_equals(
-    data_type: &DataType,
-    when_value: ArrayRef,
-    base_value: ArrayRef,
-) -> Result<BooleanArray> {
-    match data_type {
-        DataType::UInt8 => {
-            array_equals!(array::UInt8Array, when_value, base_value, eq)
-        }
-        DataType::UInt16 => {
-            array_equals!(array::UInt16Array, when_value, base_value, eq)
-        }
-        DataType::UInt32 => {
-            array_equals!(array::UInt32Array, when_value, base_value, eq)
-        }
-        DataType::UInt64 => {
-            array_equals!(array::UInt64Array, when_value, base_value, eq)
-        }
-        DataType::Int8 => {
-            array_equals!(array::Int8Array, when_value, base_value, eq)
-        }
-        DataType::Int16 => {
-            array_equals!(array::Int16Array, when_value, base_value, eq)
-        }
-        DataType::Int32 => {
-            array_equals!(array::Int32Array, when_value, base_value, eq)
-        }
-        DataType::Int64 => {
-            array_equals!(array::Int64Array, when_value, base_value, eq)
-        }
-        DataType::Float32 => {
-            array_equals!(array::Float32Array, when_value, base_value, eq)
-        }
-        DataType::Float64 => {
-            array_equals!(array::Float64Array, when_value, base_value, eq)
-        }
-        DataType::Utf8 => {
-            array_equals!(array::StringArray, when_value, base_value, eq_utf8)
-        }
-        other => Err(DataFusionError::Execution(format!(
-            "CASE does not support '{:?}'",
-            other
-        ))),
-    }
-}
-
 impl CaseExpr {
     /// This function evaluates the form of CASE that matches an expression to fixed values.
     ///
@@ -321,7 +257,6 @@ impl CaseExpr {
         let return_type = self.when_then_expr[0].1.data_type(&batch.schema())?;
         let expr = self.expr.as_ref().unwrap();
         let base_value = expr.evaluate(batch)?;
-        let base_type = expr.data_type(&batch.schema())?;
         let base_value = base_value.into_array(batch.num_rows());
         let base_nulls = is_null(base_value.as_ref())?;
 
@@ -335,7 +270,7 @@ impl CaseExpr {
                 .evaluate_selection(batch, &remainder)?;
             let when_value = when_value.into_array(batch.num_rows());
             // build boolean array representing which rows match the "when" value
-            let when_match = array_equals(&base_type, when_value, base_value.clone())?;
+            let when_match = eq_dyn(&when_value, base_value.as_ref())?;
 
             let then_value = self.when_then_expr[i]
                 .1
@@ -472,6 +407,7 @@ mod tests {
     use crate::expressions::lit;
     use crate::expressions::{binary, cast};
     use arrow::array::StringArray;
+    use arrow::buffer::Buffer;
     use arrow::datatypes::DataType::Float64;
     use arrow::datatypes::*;
     use datafusion_common::ScalarValue;
@@ -712,10 +648,94 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn case_with_matches_and_nulls() -> Result<()> {
+        let batch = case_test_batch_nulls()?;
+        let schema = batch.schema();
+
+        // SELECT CASE WHEN load4 = 1.77 THEN load4 END
+        let when = binary(
+            col("load4", &schema)?,
+            Operator::Eq,
+            lit(ScalarValue::Float64(Some(1.77))),
+            &batch.schema(),
+        )?;
+        let then = col("load4", &schema)?;
+
+        let expr = case(None, &[(when, then)], None)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn case_expr_matches_and_nulls() -> Result<()> {
+        let batch = case_test_batch_nulls()?;
+        let schema = batch.schema();
+
+        // SELECT CASE load4 WHEN 1.77 THEN load4 END
+        let expr = col("load4", &schema)?;
+        let when = lit(ScalarValue::Float64(Some(1.77)));
+        let then = col("load4", &schema)?;
+
+        let expr = case(Some(expr), &[(when, then)], None)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
+        let result = result
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("failed to downcast to Float64Array");
+
+        let expected =
+            &Float64Array::from(vec![Some(1.77), None, None, None, None, Some(1.77)]);
+
+        assert_eq!(expected, result);
+
+        Ok(())
+    }
+
     fn case_test_batch() -> Result<RecordBatch> {
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
         let a = StringArray::from(vec![Some("foo"), Some("baz"), None, Some("bar")]);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)])?;
+        Ok(batch)
+    }
+
+    // Construct an array that has several NULL values whose
+    // underlying buffer actually matches the where expr predicate
+    fn case_test_batch_nulls() -> Result<RecordBatch> {
+        let load4: Float64Array = vec![
+            Some(1.77), // 1.77
+            Some(1.77), // null <-- same value, but will be set to null
+            Some(1.77), // null <-- same value, but will be set to null
+            Some(1.78), // 1.78
+            None,       // null
+            Some(1.77), // 1.77
+        ]
+        .into_iter()
+        .collect();
+
+        //let valid_array = vec![true, false, false, true, false, tru
+        let null_buffer = Buffer::from_slice_ref(&[0b00101001u8]);
+        let load4 = ArrayDataBuilder::new(load4.data_type().clone())
+            .len(load4.len())
+            .null_bit_buffer(null_buffer)
+            .buffers(load4.data().buffers().to_vec())
+            .build()
+            .unwrap();
+        let load4: Float64Array = load4.into();
+
+        let batch =
+            RecordBatch::try_from_iter(vec![("load4", Arc::new(load4) as ArrayRef)])?;
         Ok(batch)
     }
 }

@@ -401,6 +401,16 @@ message ScalarListValue{
     repeated ScalarValue values = 2;
 }
 
+message ScalarTimestampValue {
+  oneof value {
+    int64  time_microsecond_value = 1;
+    int64  time_nanosecond_value = 2;
+    int64 time_second_value = 3;
+    int64 time_millisecond_value = 4;
+  };
+  string timezone = 5;
+}
+
 message ScalarValue{
     oneof value {
         bool   bool_value = 1;
@@ -418,18 +428,15 @@ message ScalarValue{
         double float64_value = 13;
         //Literal Date32 value always has a unit of day
         int32  date_32_value = 14;
-        int64  time_microsecond_value = 15;
-        int64  time_nanosecond_value = 16;
         ScalarListValue list_value = 17;
         ScalarType null_list_value = 18;
 
         PrimitiveScalarType null_value = 19;
         Decimal128 decimal128_value = 20;
         int64 date_64_value = 21;
-        int64 time_second_value = 22;
-        int64 time_millisecond_value = 23;
         int32 interval_yearmonth_value = 24;
         int64 interval_daytime_value = 25;
+        ScalarTimestampValue timestamp_value = 26;
     }
 }
 

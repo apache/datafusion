@@ -16,7 +16,7 @@
 // under the License.
 
 use cranelift::codegen::ir;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use std::fmt::{Display, Formatter};
 
 #[derive(Clone, Debug)]
@@ -138,11 +138,13 @@ pub enum Literal {
     Typed(TypedLit),
 }
 
-impl TryFrom<datafusion_expr::Expr> for Expr {
+impl TryFrom<(datafusion_expr::Expr, DFSchemaRef)> for Expr {
     type Error = DataFusionError;
 
     // Try to JIT compile the Expr for faster evaluation
-    fn try_from(value: datafusion_expr::Expr) -> Result<Self, Self::Error> {
+    fn try_from(
+        (value, schema): (datafusion_expr::Expr, DFSchemaRef),
+    ) -> Result<Self, Self::Error> {
         match &value {
             datafusion_expr::Expr::BinaryExpr { left, op, right } => {
                 let op = match op {
@@ -164,9 +166,29 @@ impl TryFrom<datafusion_expr::Expr> for Expr {
                     }
                 };
                 Ok(Expr::Binary(op(
-                    Box::new((*left.clone()).try_into()?),
-                    Box::new((*right.clone()).try_into()?),
+                    Box::new((*left.clone(), schema.clone()).try_into()?),
+                    Box::new((*right.clone(), schema).try_into()?),
                 )))
+            }
+            datafusion_expr::Expr::Column(col) => {
+                let field = schema.field_from_column(col)?;
+                let ty = field.data_type();
+
+                let jit_type = match ty {
+                    arrow::datatypes::DataType::Int64 => I64,
+                    arrow::datatypes::DataType::Float32 => F32,
+                    arrow::datatypes::DataType::Float64 => F64,
+                    arrow::datatypes::DataType::Boolean => BOOL,
+
+                    _ => {
+                        return Err(DataFusionError::NotImplemented(format!(
+                        "Compiling Expression with type {} not yet supported in JIT mode",
+                        ty
+                    )))
+                    }
+                };
+
+                Ok(Expr::Identifier(field.qualified_name(), jit_type))
             }
             datafusion_expr::Expr::Literal(s) => {
                 let lit = match s {

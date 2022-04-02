@@ -343,18 +343,17 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
         .enumerate()
         .map(|(index, x)| {
             x.map(|sep: &str| {
-                let mut owned_string: String = "".to_owned();
-                for arg_index in 1..args.len() {
-                    let arg = &args[arg_index];
-                    if !arg.is_null(index) {
-                        owned_string.push_str(arg.value(index));
-                        // if not last push separator
-                        if arg_index != args.len() - 1 {
-                            owned_string.push_str(sep);
+                let string_vec = args[1..]
+                    .iter()
+                    .flat_map(|arg| {
+                        if !arg.is_null(index) {
+                            Some(arg.value(index))
+                        } else {
+                            None
                         }
-                    }
-                }
-                owned_string
+                    })
+                    .collect::<Vec<&str>>();
+                string_vec.join(sep)
             })
         })
         .collect::<StringArray>();
