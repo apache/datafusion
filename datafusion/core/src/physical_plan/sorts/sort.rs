@@ -204,7 +204,7 @@ impl ExternalSorter {
 
 impl Debug for ExternalSorter {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        f.debug_struct("ExternalSorter2")
+        f.debug_struct("ExternalSorter")
             .field("id", &self.id())
             .field("memory_used", &self.used())
             .field("spilled_bytes", &self.spilled_bytes())
@@ -228,7 +228,7 @@ impl Drop for ExternalSorter {
 #[async_trait]
 impl MemoryConsumer for ExternalSorter {
     fn name(&self) -> String {
-        "ExternalSorter2".to_owned()
+        "ExternalSorter".to_owned()
     }
 
     fn id(&self) -> &MemoryConsumerId {
