@@ -83,7 +83,7 @@ struct Args {
     )]
     quiet: bool,
 
-    #[clap(long, help = "whether enable with_information_schema")]
+    #[clap(long, help = "Enable with_information_schema")]
     with_information_schema: Option<bool>,
 }
 
