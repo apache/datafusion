@@ -141,7 +141,8 @@ pub struct ParquetReadOptions<'a> {
     pub file_extension: &'a str,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
-    /// Should DataFusion parquet reader using the predicate to prune data, following execution::context::SessionConfig
+    /// Should DataFusion parquet reader using the predicate to prune data,
+    /// overridden by value on execution::context::SessionConfig
     pub parquet_pruning: bool,
 }
 

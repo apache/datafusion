@@ -308,11 +308,11 @@ impl<'a> DFParser<'a> {
 
         let has_header = self.parse_csv_has_header();
 
-        let has_partition = self.parse_has_partition();
-        let mut table_partition_cols: Vec<String> = vec![];
-        if has_partition {
-            table_partition_cols = self.parse_partitions()?;
-        }
+        let table_partition_cols = if self.parse_has_partition() {
+            self.parse_partitions()?
+        } else {
+            vec![]
+        };
 
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
