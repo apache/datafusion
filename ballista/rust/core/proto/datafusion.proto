@@ -176,7 +176,6 @@ enum ScalarFunction {
   Translate=60;
   Trim=61;
   Upper=62;
-  UserDefined = 63;
 }
 
 message ScalarFunctionNode {
