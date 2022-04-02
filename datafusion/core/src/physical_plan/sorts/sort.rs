@@ -213,12 +213,6 @@ impl Debug for ExternalSorter {
     }
 }
 
-#[derive(Debug, Copy, Clone)]
-struct CombinedIndex {
-    batch_idx: usize,
-    row_idx: usize,
-}
-
 impl Drop for ExternalSorter {
     fn drop(&mut self) {
         self.runtime.drop_consumer(self.id(), self.used());
@@ -319,63 +313,66 @@ fn in_mem_partial_sort(
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+struct CompositeIndex {
+    batch_idx: u32,
+    row_idx: u32,
+}
+
 fn get_sorted_iter(
     batches: &[RecordBatch],
     expr: &[PhysicalSortExpr],
     batch_size: usize,
 ) -> Result<SortedIterator> {
-    let (batch_grouped, combined): (Vec<Vec<ArrayRef>>, Vec<Vec<CombinedIndex>>) =
-        batches
-            .iter()
-            .enumerate()
-            .map(|(i, batch)| {
-                let col: Vec<ArrayRef> = expr
-                    .iter()
-                    .map(|e| Ok(e.evaluate_to_sort_column(batch)?.values))
-                    .collect::<Result<Vec<_>>>()?;
-
-                let combined_index = (0..batch.num_rows())
-                    .map(|r| CombinedIndex {
-                        batch_idx: i,
-                        row_idx: r,
-                    })
-                    .collect::<Vec<CombinedIndex>>();
-
-                Ok((col, combined_index))
-            })
-            .collect::<Result<Vec<(Vec<ArrayRef>, Vec<CombinedIndex>)>>>()?
-            .into_iter()
-            .unzip();
-
-    let column_grouped = transpose(batch_grouped);
-
-    let sort_columns: Vec<SortColumn> = column_grouped
+    let row_indices = batches
         .iter()
-        .zip(expr.iter())
-        .map(|(c, e)| {
+        .enumerate()
+        .map(|(i, batch)| {
+            (0..batch.num_rows())
+                .map(|r| CompositeIndex {
+                    // since we original use UInt32Array to index the combined mono batch,
+                    // component record batches won't overflow as well,
+                    // use u32 here for space efficiency.
+                    batch_idx: i as u32,
+                    row_idx: r as u32,
+                })
+                .collect::<Vec<CompositeIndex>>()
+        })
+        .flatten()
+        .collect::<Vec<CompositeIndex>>();
+
+    let sort_columns = batches
+        .iter()
+        .map(|batch| {
+            expr.iter()
+                .map(|e| Ok(e.evaluate_to_sort_column(batch)?.values))
+                .collect::<Result<Vec<_>>>()
+        })
+        .collect::<Result<Vec<Vec<_>>>>()?;
+
+    let sort_columns = expr
+        .iter()
+        .enumerate()
+        .map(|(i, expr)| {
+            let columns_i = sort_columns
+                .iter()
+                .map(|cs| cs[i].as_ref())
+                .collect::<Vec<&dyn Array>>();
             Ok(SortColumn {
-                values: concat(
-                    &*c.iter().map(|i| i.as_ref()).collect::<Vec<&dyn Array>>(),
-                )?,
-                options: Some(e.options),
+                values: concat(columns_i.as_slice())?,
+                options: Some(expr.options),
             })
         })
-        .collect::<Vec<Result<SortColumn>>>()
-        .into_iter()
         .collect::<Result<Vec<_>>>()?;
-
     let indices = lexsort_to_indices(&sort_columns, None)?;
-    let combined = combined
-        .into_iter()
-        .flatten()
-        .collect::<Vec<CombinedIndex>>();
-    Ok(SortedIterator::new(indices, combined, batch_size))
+
+    Ok(SortedIterator::new(indices, row_indices, batch_size))
 }
 
 struct SortedIterator {
     pos: usize,
     indices: UInt32Array,
-    combined: Vec<CombinedIndex>,
+    composite: Vec<CompositeIndex>,
     batch_size: usize,
     length: usize,
 }
@@ -383,22 +380,28 @@ struct SortedIterator {
 impl SortedIterator {
     fn new(
         indices: UInt32Array,
-        combined: Vec<CombinedIndex>,
+        composite: Vec<CompositeIndex>,
         batch_size: usize,
     ) -> Self {
-        let length = combined.len();
+        let length = composite.len();
         Self {
             pos: 0,
             indices,
-            combined,
+            composite,
             batch_size,
             length,
         }
     }
+
+    fn memory_size(&self) -> usize {
+        std::mem::size_of_val(self)
+            + self.indices.get_array_memory_size()
+            + std::mem::size_of_val(&self.composite[..])
+    }
 }
 
 impl Iterator for SortedIterator {
-    type Item = Vec<CombinedIndex>;
+    type Item = Vec<CompositeIndex>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos >= self.length {
@@ -410,7 +413,7 @@ impl Iterator for SortedIterator {
         for i in 0..current_size {
             let p = self.pos + i;
             let c_index = self.indices.value(p) as usize;
-            result.push(self.combined[c_index])
+            result.push(self.composite[c_index])
         }
         self.pos += current_size;
         Some(result)
@@ -434,7 +437,8 @@ impl SortedSizedRecordBatchStream {
         sorted_iter: SortedIterator,
         metrics: MemTrackingMetrics,
     ) -> Self {
-        let size = batches.iter().map(batch_byte_size).sum::<usize>();
+        let size = batches.iter().map(batch_byte_size).sum::<usize>()
+            + sorted_iter.memory_size();
         metrics.init_mem_used(size);
         let num_cols = batches[0].num_columns();
         SortedSizedRecordBatchStream {
@@ -467,7 +471,12 @@ impl Stream for SortedSizedRecordBatchStream {
                     let mut mutable =
                         MutableArrayData::new(arrays, false, combined.len());
                     for x in combined.iter() {
-                        mutable.extend(x.batch_idx, x.row_idx, x.row_idx + 1);
+                        // we cannot extend with slice here, since the lexsort is unstable
+                        mutable.extend(
+                            x.batch_idx as usize,
+                            x.row_idx as usize,
+                            (x.row_idx + 1) as usize,
+                        );
                     }
                     output.push(make_array(mutable.freeze()))
                 }
@@ -483,20 +492,6 @@ impl RecordBatchStream for SortedSizedRecordBatchStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-}
-
-fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
-    assert!(!v.is_empty());
-    let len = v[0].len();
-    let mut iters: Vec<_> = v.into_iter().map(|n| n.into_iter()).collect();
-    (0..len)
-        .map(|_| {
-            iters
-                .iter_mut()
-                .map(|n| n.next().unwrap())
-                .collect::<Vec<T>>()
-        })
-        .collect()
 }
 
 async fn spill_partial_sorted_stream(
