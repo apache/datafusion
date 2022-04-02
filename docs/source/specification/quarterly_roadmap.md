@@ -28,12 +28,17 @@ A quarterly roadmap will be published to give the DataFusion community visibilit
 - IO Improvements
   - Reading, registering, and writing more file formats from both DataFrame API and SQL
   - Additional options for IO including partitioning and metadata support
+- Work Scheduling
+  - Improve predictability, observability and performance of IO and CPU-bound work
+  - Develop a more explicit story for managing parallelism during plan execution
 - Memory Management
   - Add more operators for memory limited execution
 - Performance
   - Incorporate row-format into operators such as aggregate
   - Add row-format benchmarks
+  - Explore JIT-compiling complex expressions
   - Explore LLVM for JIT, with inline Rust functions as the primary goal
+  - Improve performance of Sort and Merge using Row Format / JIT expressions
 - Documentation
   - General improvements to DataFusion website
   - Publish design documents
