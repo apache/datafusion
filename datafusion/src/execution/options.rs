@@ -22,6 +22,7 @@ use std::sync::Arc;
 use arrow::datatypes::{Schema, SchemaRef};
 
 use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
+use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::datasource::{
     file_format::{avro::AvroFormat, csv::CsvFormat},
     listing::ListingOptions,
@@ -40,7 +41,7 @@ pub struct CsvReadOptions<'a> {
     /// An optional schema representing the CSV files. If None, CSV reader will try to infer it
     /// based on data in file.
     pub schema: Option<&'a Schema>,
-    /// Max number of rows to read from CSV files for schema inference if needed. Defaults to 1000.
+    /// Max number of rows to read from CSV files for schema inference if needed. Defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
     pub schema_infer_max_records: usize,
     /// File extension; only files with this extension are selected for data input.
     /// Defaults to ".csv".
@@ -59,7 +60,7 @@ impl<'a> CsvReadOptions<'a> {
         Self {
             has_header: true,
             schema: None,
-            schema_infer_max_records: 1000,
+            schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             delimiter: b',',
             file_extension: ".csv",
         }
@@ -161,7 +162,7 @@ pub struct NdJsonReadOptions<'a> {
     /// The data source schema.
     pub schema: Option<SchemaRef>,
 
-    /// Max number of rows to read from CSV files for schema inference if needed. Defaults to 1000.
+    /// Max number of rows to read from JSON files for schema inference if needed. Defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`.
     pub schema_infer_max_records: usize,
 
     /// File extension; only files with this extension are selected for data input.
@@ -173,7 +174,7 @@ impl<'a> Default for NdJsonReadOptions<'a> {
     fn default() -> Self {
         Self {
             schema: None,
-            schema_infer_max_records: 1000,
+            schema_infer_max_records: DEFAULT_SCHEMA_INFER_MAX_RECORD,
             file_extension: DEFAULT_JSON_EXTENSION,
         }
     }
