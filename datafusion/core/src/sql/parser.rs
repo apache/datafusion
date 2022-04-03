@@ -501,6 +501,20 @@ mod tests {
         });
         expect_parse_ok(sql, expected)?;
 
+        // positive case: it is ok for avro files not to have columns specified
+        let sql =
+            "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: FileType::Parquet,
+            has_header: false,
+            location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
+        });
+        expect_parse_ok(sql, expected)?;
+
         // Error cases: Invalid type
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
