@@ -76,6 +76,9 @@
   - [x] nullif
 - Approximation functions
   - [x] approx_distinct
+  - [x] approx_median
+  - [x] approx_percentile_cont
+  - [x] approx_percentile_cont_with_weight
 - Common date/time functions
   - [ ] Basic date functions
   - [ ] Basic time functions
@@ -84,7 +87,8 @@
     - [x] [to_timestamp_millis](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_millis)
     - [x] [to_timestamp_micros](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_micros)
     - [x] [to_timestamp_seconds](docs/user-guide/book/sql/datafusion-functions.html#to_timestamp_seconds)
-    - [x] [extract, date_part](docs/user-guide/book/sql/datafusion-functions.html#`EXTRACT, date_part`)
+    - [x] [extract](docs/user-guide/book/sql/datafusion-functions.html#extract)
+    - [x] [date_part](docs/user-guide/book/sql/datafusion-functions.html#date_part)
 - nested functions
   - [x] Array of columns
 - [x] Schema Queries

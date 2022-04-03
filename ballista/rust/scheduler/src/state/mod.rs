@@ -23,10 +23,10 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use ballista_core::error::Result;
 
+use crate::scheduler_server::SessionContextRegistry;
 use ballista_core::serde::protobuf::{ExecutorHeartbeat, JobStatus};
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
-use datafusion::prelude::SessionContext;
 
 use crate::state::backend::StateBackendClient;
 use crate::state::executor_manager::ExecutorManager;
@@ -64,8 +64,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         }
     }
 
-    pub async fn init(&self, ctx: &SessionContext) -> Result<()> {
-        self.persistent_state.init(ctx).await?;
+    pub async fn init(&self) -> Result<()> {
+        self.persistent_state.init().await?;
 
         Ok(())
     }
@@ -120,6 +120,16 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             .await
     }
 
+    pub async fn save_job_session(&self, job_id: &str, session_id: &str) -> Result<()> {
+        self.persistent_state
+            .save_job_session(job_id, session_id)
+            .await
+    }
+
+    pub fn get_session_from_job(&self, job_id: &str) -> Option<String> {
+        self.persistent_state.get_session_from_job(job_id)
+    }
+
     pub async fn save_job_metadata(
         &self,
         job_id: &str,
@@ -151,6 +161,10 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
         stage_id: usize,
     ) -> Option<Arc<dyn ExecutionPlan>> {
         self.persistent_state.get_stage_plan(job_id, stage_id)
+    }
+
+    pub fn session_registry(&self) -> Arc<SessionContextRegistry> {
+        self.persistent_state.session_registry()
     }
 }
 

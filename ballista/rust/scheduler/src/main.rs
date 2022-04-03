@@ -46,7 +46,6 @@ use ballista_scheduler::state::backend::{StateBackend, StateBackendClient};
 use ballista_core::config::TaskSchedulingPolicy;
 use ballista_core::serde::BallistaCodec;
 use log::info;
-use tokio::sync::RwLock;
 
 #[macro_use]
 extern crate configure_me;
@@ -62,7 +61,7 @@ mod config {
 }
 
 use config::prelude::*;
-use datafusion::prelude::SessionContext;
+use datafusion::execution::context::default_session_builder;
 
 async fn start_server(
     config_backend: Arc<dyn StateBackendClient>,
@@ -85,13 +84,12 @@ async fn start_server(
                 config_backend.clone(),
                 namespace.clone(),
                 policy,
-                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
+                default_session_builder,
             ),
             _ => SchedulerServer::new(
                 config_backend.clone(),
                 namespace.clone(),
-                Arc::new(RwLock::new(SessionContext::new())),
                 BallistaCodec::default(),
             ),
         };
