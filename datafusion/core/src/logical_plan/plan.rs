@@ -184,6 +184,8 @@ pub struct CreateExternalTable {
     pub file_type: FileType,
     /// Whether the CSV file contains a header
     pub has_header: bool,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
 }
 
 /// Creates a schema.

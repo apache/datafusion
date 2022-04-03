@@ -92,7 +92,9 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions};
+use super::options::{
+    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
@@ -215,6 +217,7 @@ impl SessionContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref table_partition_cols,
             }) => {
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
@@ -241,7 +244,7 @@ impl SessionContext {
                     collect_stat: false,
                     file_extension: file_extension.to_owned(),
                     target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: vec![],
+                    table_partition_cols: table_partition_cols.clone(),
                 };
 
                 // TODO make schema in CreateExternalTable optional instead of empty
@@ -462,14 +465,23 @@ impl SessionContext {
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
-    pub async fn read_parquet(&self, uri: impl Into<String>) -> Result<Arc<DataFrame>> {
+    pub async fn read_parquet(
+        &self,
+        uri: impl Into<String>,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan =
-            LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
-                .await?
-                .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_parquet(
+            object_store,
+            path,
+            options,
+            None,
+            target_partitions,
+        )
+        .await?
+        .build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
     }
 
@@ -548,20 +560,19 @@ impl SessionContext {
 
     /// Registers a Parquet data source so that it can be referenced from SQL statements
     /// executed against this context.
-    pub async fn register_parquet(&self, name: &str, uri: &str) -> Result<()> {
-        let (target_partitions, enable_pruning) = {
+    pub async fn register_parquet(
+        &self,
+        name: &str,
+        uri: &str,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<()> {
+        let (target_partitions, parquet_pruning) = {
             let conf = self.copied_config();
             (conf.target_partitions, conf.parquet_pruning)
         };
-        let file_format = ParquetFormat::default().with_enable_pruning(enable_pruning);
-
-        let listing_options = ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: true,
-            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
-            target_partitions,
-            table_partition_cols: vec![],
-        };
+        let listing_options = options
+            .parquet_pruning(parquet_pruning)
+            .to_listing_options(target_partitions);
 
         self.register_listing_table(name, uri, listing_options, None)
             .await?;
@@ -3510,7 +3521,9 @@ mod tests {
 
         async fn call_read_parquet(&self) -> Arc<DataFrame> {
             let ctx = SessionContext::new();
-            ctx.read_parquet("dummy").await.unwrap()
+            ctx.read_parquet("dummy", ParquetReadOptions::default())
+                .await
+                .unwrap()
         }
     }
 }

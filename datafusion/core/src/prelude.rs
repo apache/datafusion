@@ -27,8 +27,9 @@
 
 pub use crate::dataframe::DataFrame;
 pub use crate::execution::context::{SessionConfig, SessionContext};
-pub use crate::execution::options::AvroReadOptions;
-pub use crate::execution::options::{CsvReadOptions, NdJsonReadOptions};
+pub use crate::execution::options::{
+    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+};
 pub use crate::logical_plan::{
     approx_percentile_cont, array, ascii, avg, bit_length, btrim, character_length, chr,
     col, concat, concat_ws, count, create_udf, date_part, date_trunc, digest, in_list,

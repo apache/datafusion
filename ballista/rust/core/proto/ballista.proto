@@ -146,6 +146,7 @@ message CreateExternalTableNode {
   FileType file_type = 3;
   bool has_header = 4;
   datafusion.DfSchema schema = 5;
+  repeated string table_partition_cols = 6;
 }
 
 message CreateCatalogSchemaNode {

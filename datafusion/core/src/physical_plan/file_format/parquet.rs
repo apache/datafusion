@@ -595,7 +595,7 @@ mod tests {
 
     use super::*;
     use crate::execution::options::CsvReadOptions;
-    use crate::prelude::{SessionConfig, SessionContext};
+    use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::Float32Array;
     use arrow::{
         array::{Int64Array, Int8Array, StringArray},
@@ -1331,15 +1331,32 @@ mod tests {
         let ctx = SessionContext::new();
 
         // register each partition as well as the top level dir
-        ctx.register_parquet("part0", &format!("{}/part-0.parquet", out_dir))
+        ctx.register_parquet(
+            "part0",
+            &format!("{}/part-0.parquet", out_dir),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        ctx.register_parquet(
+            "part1",
+            &format!("{}/part-1.parquet", out_dir),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        ctx.register_parquet(
+            "part2",
+            &format!("{}/part-2.parquet", out_dir),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        ctx.register_parquet(
+            "part3",
+            &format!("{}/part-3.parquet", out_dir),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        ctx.register_parquet("allparts", &out_dir, ParquetReadOptions::default())
             .await?;
-        ctx.register_parquet("part1", &format!("{}/part-1.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("part2", &format!("{}/part-2.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("part3", &format!("{}/part-3.parquet", out_dir))
-            .await?;
-        ctx.register_parquet("allparts", &out_dir).await?;
 
         let part0 = ctx.sql("SELECT c1, c2 FROM part0").await?.collect().await?;
         let allparts = ctx
