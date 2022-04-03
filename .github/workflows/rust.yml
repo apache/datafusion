@@ -210,7 +210,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
       - name: Build datafusion-cli
-        run: cargo build --bin datafusion-cli
+        run: (cd datafusion-cli && cargo build)
       - name: Test Psql Parity
         run: python -m pytest -v integration-tests/test_psql_parity.py
         env:
