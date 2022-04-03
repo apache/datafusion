@@ -624,6 +624,7 @@ async fn register_alltypes_parquet(ctx: &SessionContext) {
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
+        ParquetReadOptions::default(),
     )
     .await
     .unwrap();

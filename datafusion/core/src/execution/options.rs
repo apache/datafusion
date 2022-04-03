@@ -21,14 +21,18 @@ use std::sync::Arc;
 
 use arrow::datatypes::{Schema, SchemaRef};
 
-use crate::datasource::file_format::json::DEFAULT_JSON_EXTENSION;
 use crate::datasource::{
-    file_format::{avro::AvroFormat, csv::CsvFormat, json::JsonFormat},
+    file_format::{
+        avro::{AvroFormat, DEFAULT_AVRO_EXTENSION},
+        csv::{CsvFormat, DEFAULT_CSV_EXTENSION},
+        json::{JsonFormat, DEFAULT_JSON_EXTENSION},
+        parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
+    },
     listing::ListingOptions,
 };
 
 /// CSV file read option
-#[derive(Copy, Clone)]
+#[derive(Clone)]
 pub struct CsvReadOptions<'a> {
     /// Does the CSV file have a header?
     ///
@@ -43,8 +47,10 @@ pub struct CsvReadOptions<'a> {
     /// Max number of rows to read from CSV files for schema inference if needed. Defaults to 1000.
     pub schema_infer_max_records: usize,
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to ".csv".
+    /// Defaults to DEFAULT_CSV_EXTENSION.
     pub file_extension: &'a str,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
 }
 
 impl<'a> Default for CsvReadOptions<'a> {
@@ -61,7 +67,8 @@ impl<'a> CsvReadOptions<'a> {
             schema: None,
             schema_infer_max_records: 1000,
             delimiter: b',',
-            file_extension: ".csv",
+            file_extension: DEFAULT_CSV_EXTENSION,
+            table_partition_cols: vec![],
         }
     }
 
@@ -97,6 +104,12 @@ impl<'a> CsvReadOptions<'a> {
         self
     }
 
+    /// Specify table_partition_cols for partition pruning
+    pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
     /// Configure number of max records to read for schema inference
     pub fn schema_infer_max_records(mut self, max_records: usize) -> Self {
         self.schema_infer_max_records = max_records;
@@ -115,7 +128,58 @@ impl<'a> CsvReadOptions<'a> {
             collect_stat: false,
             file_extension: self.file_extension.to_owned(),
             target_partitions,
+            table_partition_cols: self.table_partition_cols.clone(),
+        }
+    }
+}
+
+/// Parquet read options
+#[derive(Clone)]
+pub struct ParquetReadOptions<'a> {
+    /// File extension; only files with this extension are selected for data input.
+    /// Defaults to ".parquet".
+    pub file_extension: &'a str,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
+    /// Should DataFusion parquet reader using the predicate to prune data,
+    /// overridden by value on execution::context::SessionConfig
+    pub parquet_pruning: bool,
+}
+
+impl<'a> Default for ParquetReadOptions<'a> {
+    fn default() -> Self {
+        Self {
+            file_extension: DEFAULT_PARQUET_EXTENSION,
             table_partition_cols: vec![],
+            parquet_pruning: ParquetFormat::default().enable_pruning(),
+        }
+    }
+}
+
+impl<'a> ParquetReadOptions<'a> {
+    /// Specify parquet_pruning
+    pub fn parquet_pruning(mut self, parquet_pruning: bool) -> Self {
+        self.parquet_pruning = parquet_pruning;
+        self
+    }
+
+    /// Specify table_partition_cols for partition pruning
+    pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
+    /// Helper to convert these user facing options to `ListingTable` options
+    pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
+        let file_format =
+            ParquetFormat::default().with_enable_pruning(self.parquet_pruning);
+
+        ListingOptions {
+            format: Arc::new(file_format),
+            collect_stat: true,
+            file_extension: self.file_extension.to_owned(),
+            target_partitions,
+            table_partition_cols: self.table_partition_cols.clone(),
         }
     }
 }
@@ -127,20 +191,29 @@ pub struct AvroReadOptions<'a> {
     pub schema: Option<SchemaRef>,
 
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to ".avro".
+    /// Defaults to DEFAULT_AVRO_EXTENSION.
     pub file_extension: &'a str,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
 }
 
 impl<'a> Default for AvroReadOptions<'a> {
     fn default() -> Self {
         Self {
             schema: None,
-            file_extension: ".avro",
+            file_extension: DEFAULT_AVRO_EXTENSION,
+            table_partition_cols: vec![],
         }
     }
 }
 
 impl<'a> AvroReadOptions<'a> {
+    /// Specify table_partition_cols for partition pruning
+    pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = AvroFormat::default();
@@ -150,7 +223,7 @@ impl<'a> AvroReadOptions<'a> {
             collect_stat: false,
             file_extension: self.file_extension.to_owned(),
             target_partitions,
-            table_partition_cols: vec![],
+            table_partition_cols: self.table_partition_cols.clone(),
         }
     }
 }
@@ -165,8 +238,10 @@ pub struct NdJsonReadOptions<'a> {
     pub schema_infer_max_records: usize,
 
     /// File extension; only files with this extension are selected for data input.
-    /// Defaults to ".json".
+    /// Defaults to DEFAULT_JSON_EXTENSION.
     pub file_extension: &'a str,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
 }
 
 impl<'a> Default for NdJsonReadOptions<'a> {
@@ -175,11 +250,18 @@ impl<'a> Default for NdJsonReadOptions<'a> {
             schema: None,
             schema_infer_max_records: 1000,
             file_extension: DEFAULT_JSON_EXTENSION,
+            table_partition_cols: vec![],
         }
     }
 }
 
 impl<'a> NdJsonReadOptions<'a> {
+    /// Specify table_partition_cols for partition pruning
+    pub fn table_partition_cols(mut self, table_partition_cols: Vec<String>) -> Self {
+        self.table_partition_cols = table_partition_cols;
+        self
+    }
+
     /// Helper to convert these user facing options to `ListingTable` options
     pub fn to_listing_options(&self, target_partitions: usize) -> ListingOptions {
         let file_format = JsonFormat::default();
@@ -188,7 +270,7 @@ impl<'a> NdJsonReadOptions<'a> {
             collect_stat: false,
             file_extension: self.file_extension.to_owned(),
             target_partitions,
-            table_partition_cols: vec![],
+            table_partition_cols: self.table_partition_cols.clone(),
         }
     }
 }

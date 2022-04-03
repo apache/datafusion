@@ -36,7 +36,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
 use datafusion::prelude::{
-    AvroReadOptions, CsvReadOptions, SessionConfig, SessionContext,
+    AvroReadOptions, CsvReadOptions, ParquetReadOptions, SessionConfig, SessionContext,
 };
 use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
 
@@ -221,13 +221,17 @@ impl BallistaContext {
 
     /// Create a DataFrame representing a Parquet table scan
     /// TODO fetch schema from scheduler instead of resolving locally
-    pub async fn read_parquet(&self, path: &str) -> Result<Arc<DataFrame>> {
+    pub async fn read_parquet(
+        &self,
+        path: &str,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<Arc<DataFrame>> {
         // convert to absolute path because the executor likely has a different working directory
         let path = PathBuf::from(path);
         let path = fs::canonicalize(&path)?;
 
         let ctx = self.context.clone();
-        let df = ctx.read_parquet(path.to_str().unwrap()).await?;
+        let df = ctx.read_parquet(path.to_str().unwrap(), options).await?;
         Ok(df)
     }
 
@@ -272,8 +276,13 @@ impl BallistaContext {
         }
     }
 
-    pub async fn register_parquet(&self, name: &str, path: &str) -> Result<()> {
-        match self.read_parquet(path).await?.to_logical_plan() {
+    pub async fn register_parquet(
+        &self,
+        name: &str,
+        path: &str,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<()> {
+        match self.read_parquet(path, options).await?.to_logical_plan() {
             LogicalPlan::TableScan(TableScan { source, .. }) => {
                 self.register_table(name, source)
             }
@@ -366,6 +375,7 @@ impl BallistaContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref table_partition_cols,
             }) => match file_type {
                 FileType::CSV => {
                     self.register_csv(
@@ -373,18 +383,30 @@ impl BallistaContext {
                         location,
                         CsvReadOptions::new()
                             .schema(&schema.as_ref().to_owned().into())
-                            .has_header(*has_header),
+                            .has_header(*has_header)
+                            .table_partition_cols(table_partition_cols.to_vec()),
                     )
                     .await?;
                     Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
                 }
                 FileType::Parquet => {
-                    self.register_parquet(name, location).await?;
+                    self.register_parquet(
+                        name,
+                        location,
+                        ParquetReadOptions::default()
+                            .table_partition_cols(table_partition_cols.to_vec()),
+                    )
+                    .await?;
                     Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
                 }
                 FileType::Avro => {
-                    self.register_avro(name, location, AvroReadOptions::default())
-                        .await?;
+                    self.register_avro(
+                        name,
+                        location,
+                        AvroReadOptions::default()
+                            .table_partition_cols(table_partition_cols.to_vec()),
+                    )
+                    .await?;
                     Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
                 }
                 _ => Err(DataFusionError::NotImplemented(format!(
@@ -525,7 +547,11 @@ mod tests {
 
         let testdata = datafusion::test_util::parquet_test_data();
         context
-            .register_parquet("single_nan", &format!("{}/single_nan.parquet", testdata))
+            .register_parquet(
+                "single_nan",
+                &format!("{}/single_nan.parquet", testdata),
+                ParquetReadOptions::default(),
+            )
             .await
             .unwrap();
 

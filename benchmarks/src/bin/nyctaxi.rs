@@ -29,7 +29,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::{SessionConfig, SessionContext};
 
 use datafusion::physical_plan::collect;
-use datafusion::prelude::CsvReadOptions;
+use datafusion::prelude::{CsvReadOptions, ParquetReadOptions};
 use structopt::StructOpt;
 
 #[cfg(feature = "snmalloc")]
@@ -82,7 +82,10 @@ async fn main() -> Result<()> {
             let options = CsvReadOptions::new().schema(&schema).has_header(true);
             ctx.register_csv("tripdata", path, options).await?
         }
-        "parquet" => ctx.register_parquet("tripdata", path).await?,
+        "parquet" => {
+            ctx.register_parquet("tripdata", path, ParquetReadOptions::default())
+                .await?
+        }
         other => {
             println!("Invalid file format '{}'", other);
             process::exit(-1);
