@@ -186,6 +186,8 @@ pub struct CreateExternalTable {
     pub has_header: bool,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
 }
 
 /// Creates a schema.

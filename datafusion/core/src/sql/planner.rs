@@ -309,6 +309,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             has_header,
             location,
             table_partition_cols,
+            if_not_exists,
         } = statement;
 
         // semantic checks
@@ -335,6 +336,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             file_type,
             has_header,
             table_partition_cols,
+            if_not_exists,
         }))
     }
 
