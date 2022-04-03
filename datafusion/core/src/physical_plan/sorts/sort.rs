@@ -25,7 +25,7 @@ use crate::execution::memory_manager::{
     human_readable_size, ConsumerType, MemoryConsumer, MemoryConsumerId, MemoryManager,
 };
 use crate::execution::runtime_env::RuntimeEnv;
-use crate::physical_plan::common::{batch_byte_size, IPCWriter, SizedRecordBatchStream};
+use crate::physical_plan::common::{IPCWriter, SizedRecordBatchStream};
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::metrics::{
     BaselineMetrics, CompositeMetricsSet, MemTrackingMetrics, MetricsSet,
@@ -38,7 +38,7 @@ use crate::physical_plan::{
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 use crate::prelude::SessionConfig;
-use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
+use arrow::array::{Array, ArrayRef, UInt32Array};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
@@ -51,6 +51,7 @@ use futures::{Stream, StreamExt};
 use log::{debug, error};
 use std::any::Any;
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::fs::File;
@@ -61,6 +62,144 @@ use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task;
+use crate::row::reader::{MutableRecordBatch, read_as_batch, read_row, RowReader};
+use crate::row::row_supported;
+use crate::row::writer::{RowWriter, write_row};
+
+use crate::row::{estimate_row_width, fixed_size};
+
+const DEFAULT_PAGE_SIZE: usize = 8 * 1024 * 1024; // 8MB by default
+
+///
+pub struct RowWiseBatch {
+    data: Vec<u8>,
+    next_record_offset: usize,
+    capacity: usize,
+    // use u32 since it's capable of indexing ~4GB page
+    offsets: Vec<u32>,
+    schema: SchemaRef,
+}
+
+impl RowWiseBatch {
+    /// new
+    pub fn new(schema: SchemaRef) -> Self {
+        let row_width = estimate_row_width(&schema);
+        let mut estimate_row_num = DEFAULT_PAGE_SIZE / row_width;
+        if !fixed_size(&schema) {
+            // Avoid reallocating `offsets` vector if possible
+            estimate_row_num = (estimate_row_num as f32 * 1.2) as usize;
+        }
+        Self {
+            data: vec![0; DEFAULT_PAGE_SIZE],
+            next_record_offset: 0,
+            capacity: DEFAULT_PAGE_SIZE,
+            offsets: Vec::with_capacity(estimate_row_num),
+            schema,
+        }
+    }
+
+    /// offsets
+    pub fn offsets(&self) -> Vec<usize> {
+        self.offsets.iter().map(|o| *o as usize).collect::<Vec<_>>()
+    }
+
+    pub fn has_enough_space(&self, size_to_append: usize) -> bool {
+        size_to_append + self.next_record_offset <= self.capacity
+    }
+
+    pub fn append(&mut self, writer: &RowWriter, row_width: usize) {
+        self.offsets.push(self.next_record_offset as u32);
+        let row = writer.get_row();
+        self.data[self.next_record_offset..self.next_record_offset + row_width].copy_from_slice(row);
+        self.next_record_offset += row_width;
+    }
+
+    pub fn num_rows(&self) -> usize {
+        self.offsets.len()
+    }
+}
+
+struct BufferedBatches {
+    batches: VecDeque<RowWiseBatch>,
+    sorted_arrays: Vec<Vec<ArrayRef>>,
+}
+
+impl BufferedBatches {
+    fn new() -> Self {
+        BufferedBatches {
+            batches: VecDeque::new(),
+            sorted_arrays: vec![],
+        }
+    }
+
+    /// Number of inserted batches
+    fn len(&self) -> usize {
+        self.sorted_arrays.len()
+    }
+
+    fn read_out(&mut self) -> Result<Vec<RecordBatch>> {
+        self.sorted_arrays = vec![];
+        self.batches.drain(..).map(|batch| {
+            read_as_batch(
+                &batch.data,
+                batch.schema.clone(),
+                &batch.offsets(),
+            )
+        }).collect::<Result<Vec<_>>>()
+    }
+
+    fn read_out_all(&mut self) -> (Vec<Vec<ArrayRef>>, Vec<RowWiseBatch>, Vec<CompositeIndex>) {
+        let sorted_arrays = self.sorted_arrays.drain(..).collect::<Vec<_>>();
+        let batches = self.batches.drain(..).collect::<Vec<_>>();
+        let row_indices = batches.iter().enumerate().flat_map(|(i, batch)| {
+            (0..batch.num_rows()).map(move |r| CompositeIndex {
+                // since we original use UInt32Array to index the combined mono batch,
+                // component record batches won't overflow as well,
+                // use u32 here for space efficiency.
+                batch_idx: i as u32,
+                row_idx: r as u32,
+            })
+        }).collect::<Vec<CompositeIndex>>();
+
+        (sorted_arrays, batches, row_indices)
+    }
+
+    async fn append(&mut self, sorter: &ExternalSorter, input: BatchWithSortArray) -> Result<()> {
+        let BatchWithSortArray { sort_arrays, batch } = input;
+        self.sorted_arrays.push(sort_arrays);
+
+        let schema = &batch.schema();
+        let mut writer = RowWriter::new(schema);
+        for cur_row in 0..batch.num_rows() {
+            let row_width = write_row(&mut writer, cur_row, schema, batch.columns());
+            let to_append = self.batch_to_append(sorter, row_width, schema.clone()).await?;
+            to_append.append(&writer, row_width);
+            writer.reset();
+        }
+        Ok(())
+    }
+
+    async fn batch_to_append(&mut self, sorter: &ExternalSorter, row_width: usize, schema: SchemaRef) -> Result<&mut RowWiseBatch> {
+        if self.batches.is_empty() {
+            sorter.try_grow(DEFAULT_PAGE_SIZE).await?;
+            sorter.metrics.mem_used().add(DEFAULT_PAGE_SIZE);
+            let new = RowWiseBatch::new(schema);
+            self.batches.push_back(new);
+            Ok(self.batches.back_mut().unwrap())
+        } else {
+            let back = self.batches.back().unwrap();
+            if back.has_enough_space(row_width) {
+                Ok(self.batches.back_mut().unwrap())
+            } else {
+                sorter.try_grow(DEFAULT_PAGE_SIZE).await?;
+                sorter.metrics.mem_used().add(DEFAULT_PAGE_SIZE);
+                let new = RowWiseBatch::new(schema);
+                self.batches.push_back(new);
+                Ok(self.batches.back_mut().unwrap())
+            }
+        }
+    }
+}
 
 /// Sort arbitrary size of data to get a total order (may spill several times during sorting based on free memory available).
 ///
@@ -74,7 +213,7 @@ use tokio::task;
 struct ExternalSorter {
     id: MemoryConsumerId,
     schema: SchemaRef,
-    in_mem_batches: Mutex<Vec<BatchWithSortArray>>,
+    in_mem_batches: Mutex<BufferedBatches>,
     spills: Mutex<Vec<NamedTempFile>>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
@@ -82,6 +221,7 @@ struct ExternalSorter {
     runtime: Arc<RuntimeEnv>,
     metrics_set: CompositeMetricsSet,
     metrics: BaselineMetrics,
+    row_buffer_supported: bool,
 }
 
 impl ExternalSorter {
@@ -94,16 +234,18 @@ impl ExternalSorter {
         runtime: Arc<RuntimeEnv>,
     ) -> Self {
         let metrics = metrics_set.new_intermediate_baseline(partition_id);
+        let row_buffer_supported = row_supported(&schema); // TODO by-pass single column row
         Self {
             id: MemoryConsumerId::new(partition_id),
             schema,
-            in_mem_batches: Mutex::new(vec![]),
+            in_mem_batches: Mutex::new(BufferedBatches::new()),
             spills: Mutex::new(vec![]),
             expr,
             session_config,
             runtime,
             metrics_set,
             metrics,
+            row_buffer_supported,
         }
     }
 
@@ -113,15 +255,23 @@ impl ExternalSorter {
         tracking_metrics: &MemTrackingMetrics,
     ) -> Result<()> {
         if input.num_rows() > 0 {
-            let size = batch_byte_size(&input);
-            self.try_grow(size).await?;
-            self.metrics.mem_used().add(size);
-            let mut in_mem_batches = self.in_mem_batches.lock().await;
-            // NB timer records time taken on drop, so there are no
-            // calls to `timer.done()` below.
-            let _timer = tracking_metrics.elapsed_compute().timer();
-            let partial = sort_batch(input, self.schema.clone(), &self.expr)?;
-            in_mem_batches.push(partial);
+            if self.row_buffer_supported {
+                let _timer = tracking_metrics.elapsed_compute().timer();
+                let partial = sort_batch(input, self.schema.clone(), &self.expr)?;
+                drop(_timer);
+                let mut in_mem_batches = self.in_mem_batches.lock().await;
+                in_mem_batches.append(self, partial).await?;
+            } else {
+                // let size = batch_byte_size(&input);
+                // self.try_grow(size).await?;
+                // self.metrics.mem_used().add(size);
+                // let mut in_mem_batches = self.in_mem_batches.lock().await;
+                // // NB timer records time taken on drop, so there are no
+                // // calls to `timer.done()` below.
+                // let _timer = tracking_metrics.elapsed_compute().timer();
+                // let partial = sort_batch(input, self.schema.clone(), &self.expr)?;
+                // in_mem_batches.push(partial);
+            }
         }
         Ok(())
     }
@@ -282,7 +432,7 @@ impl MemoryConsumer for ExternalSorter {
 
 /// consume the non-empty `sorted_bathes` and do in_mem_sort
 fn in_mem_partial_sort(
-    buffered_batches: &mut Vec<BatchWithSortArray>,
+    buffered_batches: &mut BufferedBatches,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     batch_size: usize,
@@ -290,31 +440,19 @@ fn in_mem_partial_sort(
 ) -> Result<SendableRecordBatchStream> {
     assert_ne!(buffered_batches.len(), 0);
     if buffered_batches.len() == 1 {
-        let result = buffered_batches.pop();
+        let result = buffered_batches.read_out()?;
         Ok(Box::pin(SizedRecordBatchStream::new(
             schema,
-            vec![Arc::new(result.unwrap().sorted_batch)],
+            result.into_iter().map(|b| Arc::new(b)).collect::<Vec<_>>(),
             tracking_metrics,
         )))
     } else {
-        let (sorted_arrays, batches): (Vec<Vec<ArrayRef>>, Vec<RecordBatch>) =
-            buffered_batches
-                .drain(..)
-                .into_iter()
-                .map(|b| {
-                    let BatchWithSortArray {
-                        sort_arrays,
-                        sorted_batch: batch,
-                    } = b;
-                    (sort_arrays, batch)
-                })
-                .unzip();
-
+        let (sorted_arrays, batches, row_indices) = buffered_batches.read_out_all();
         let sorted_iter = {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            get_sorted_iter(&sorted_arrays, expressions, batch_size)?
+            get_sorted_iter(row_indices, &sorted_arrays, expressions, batch_size)?
         };
         Ok(Box::pin(SortedSizedRecordBatchStream::new(
             schema,
@@ -333,26 +471,11 @@ struct CompositeIndex {
 
 /// Get sorted iterator by sort concatenated `SortColumn`s
 fn get_sorted_iter(
+    row_indices: Vec<CompositeIndex>,
     sort_arrays: &[Vec<ArrayRef>],
     expr: &[PhysicalSortExpr],
     batch_size: usize,
 ) -> Result<SortedIterator> {
-    let row_indices = sort_arrays
-        .iter()
-        .enumerate()
-        .flat_map(|(i, arrays)| {
-            (0..arrays[0].len())
-                .map(|r| CompositeIndex {
-                    // since we original use UInt32Array to index the combined mono batch,
-                    // component record batches won't overflow as well,
-                    // use u32 here for space efficiency.
-                    batch_idx: i as u32,
-                    row_idx: r as u32,
-                })
-                .collect::<Vec<CompositeIndex>>()
-        })
-        .collect::<Vec<CompositeIndex>>();
-
     let sort_columns = expr
         .iter()
         .enumerate()
@@ -427,9 +550,8 @@ impl Iterator for SortedIterator {
 /// Stream of sorted record batches
 struct SortedSizedRecordBatchStream {
     schema: SchemaRef,
-    batches: Vec<RecordBatch>,
+    batches: Vec<RowWiseBatch>,
     sorted_iter: SortedIterator,
-    num_cols: usize,
     metrics: MemTrackingMetrics,
 }
 
@@ -437,21 +559,34 @@ impl SortedSizedRecordBatchStream {
     /// new
     pub fn new(
         schema: SchemaRef,
-        batches: Vec<RecordBatch>,
+        batches: Vec<RowWiseBatch>,
         sorted_iter: SortedIterator,
         metrics: MemTrackingMetrics,
     ) -> Self {
-        let size = batches.iter().map(batch_byte_size).sum::<usize>()
+        let size = batches.iter().map(|b| b.capacity).sum::<usize>()
             + sorted_iter.memory_size();
         metrics.init_mem_used(size);
-        let num_cols = batches[0].num_columns();
         SortedSizedRecordBatchStream {
             schema,
             batches,
             sorted_iter,
-            num_cols,
             metrics,
         }
+    }
+
+    fn read_as_batch(&self, combined: Vec<CompositeIndex>) -> ArrowResult<RecordBatch> {
+        let row_num = combined.len();
+        let mut output = MutableRecordBatch::new(row_num, self.schema.clone());
+        let mut row = RowReader::new(&self.schema, &[]);
+
+        for comb in combined {
+            let batch = &self.batches[comb.batch_idx as usize];
+            let offset = batch.offsets()[comb.row_idx as usize];
+            row.point_to(offset, &batch.data);
+            read_row(&row, &mut output, &self.schema);
+        }
+
+        output.output()
     }
 }
 
@@ -465,26 +600,7 @@ impl Stream for SortedSizedRecordBatchStream {
         match self.sorted_iter.next() {
             None => Poll::Ready(None),
             Some(combined) => {
-                let mut output = Vec::with_capacity(self.num_cols);
-                for i in 0..self.num_cols {
-                    let arrays = self
-                        .batches
-                        .iter()
-                        .map(|b| b.column(i).data())
-                        .collect::<Vec<_>>();
-                    let mut mutable =
-                        MutableArrayData::new(arrays, false, combined.len());
-                    for x in combined.iter() {
-                        // we cannot extend with slice here, since the lexsort is unstable
-                        mutable.extend(
-                            x.batch_idx as usize,
-                            x.row_idx as usize,
-                            (x.row_idx + 1) as usize,
-                        );
-                    }
-                    output.push(make_array(mutable.freeze()))
-                }
-                let batch = RecordBatch::try_new(self.schema.clone(), output);
+                let batch = self.read_as_batch(combined);
                 let poll = Poll::Ready(Some(batch));
                 self.metrics.record_poll(poll)
             }
@@ -733,7 +849,7 @@ impl ExecutionPlan for SortExec {
 
 struct BatchWithSortArray {
     sort_arrays: Vec<ArrayRef>,
-    sorted_batch: RecordBatch,
+    batch: RecordBatch,
 }
 
 fn sort_batch(
@@ -784,7 +900,7 @@ fn sort_batch(
 
     Ok(BatchWithSortArray {
         sort_arrays,
-        sorted_batch,
+        batch: sorted_batch,
     })
 }
 
@@ -904,6 +1020,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_sort_spill() -> Result<()> {
         // trigger spill there will be 4 batches with 5.5KB for each
         let config = RuntimeConfig::new().with_memory_limit(12288, 1.0);

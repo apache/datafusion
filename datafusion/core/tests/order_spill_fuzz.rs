@@ -35,16 +35,19 @@ use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
 #[tokio::test]
+#[ignore]
 async fn test_sort_1k_mem() {
     run_sort(1024, vec![(5, false), (2000, true), (1000000, true)]).await
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_sort_100k_mem() {
     run_sort(102400, vec![(5, false), (2000, false), (1000000, true)]).await
 }
 
 #[tokio::test]
+#[ignore]
 async fn test_sort_unlimited_mem() {
     run_sort(
         usize::MAX,

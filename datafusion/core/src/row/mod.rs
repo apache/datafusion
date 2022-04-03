@@ -48,7 +48,7 @@
 //!
 
 use arrow::datatypes::{DataType, Schema};
-use arrow::util::bit_util::{get_bit_raw, round_upto_power_of_2};
+use arrow::util::bit_util::{ceil, get_bit_raw, round_upto_power_of_2};
 use std::fmt::Write;
 use std::sync::Arc;
 
@@ -165,8 +165,11 @@ fn type_width(dt: &DataType) -> usize {
     }
 }
 
-fn estimate_row_width(null_width: usize, schema: &Arc<Schema>) -> usize {
-    let mut width = null_width;
+/// Estimate row width based on schema
+pub fn estimate_row_width(schema: &Arc<Schema>) -> usize {
+    let null_free = schema_null_free(schema);
+    let field_count = schema.fields().len();
+    let mut width = if null_free { 0 } else { ceil(field_count, 8) };
     for f in schema.fields() {
         width += type_width(f.data_type());
         match f.data_type() {
@@ -178,11 +181,12 @@ fn estimate_row_width(null_width: usize, schema: &Arc<Schema>) -> usize {
     round_upto_power_of_2(width, 8)
 }
 
-fn fixed_size(schema: &Arc<Schema>) -> bool {
+/// Tell if the row is of fixed size
+pub fn fixed_size(schema: &Arc<Schema>) -> bool {
     schema.fields().iter().all(|f| !var_length(f.data_type()))
 }
 
-fn supported(schema: &Arc<Schema>) -> bool {
+pub fn row_supported(schema: &Arc<Schema>) -> bool {
     schema
         .fields()
         .iter()
@@ -222,9 +226,11 @@ mod tests {
     use super::*;
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::file_format::FileFormat;
+    use crate::datasource::listing::local_unpartitioned_file;
     use crate::error::Result;
     use crate::physical_plan::file_format::FileScanConfig;
     use crate::physical_plan::{collect, ExecutionPlan};
+    use crate::prelude::SessionContext;
     use crate::row::reader::read_as_batch;
     #[cfg(feature = "jit")]
     use crate::row::reader::read_as_batch_jit;
@@ -234,14 +240,14 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow::util::bit_util::{ceil, set_bit_raw, unset_bit_raw};
     use arrow::{array::*, datatypes::*};
+    use datafusion_data_access::object_store::local::LocalFileSystem;
+    use datafusion_data_access::object_store::local::{
+        local_object_reader, local_object_reader_stream,
+    };
     #[cfg(feature = "jit")]
     use datafusion_jit::api::Assembler;
     use rand::Rng;
     use DataType::*;
-    use datafusion_data_access::object_store::local::{local_object_reader, local_object_reader_stream};
-    use crate::datasource::listing::local_unpartitioned_file;
-    use crate::prelude::SessionContext;
-    use datafusion_data_access::object_store::local::LocalFileSystem;
 
     fn test_validity(bs: &[bool]) {
         let n = bs.len();
@@ -333,7 +339,7 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -349,7 +355,7 @@ mod tests {
                     let assembler = Assembler::default();
                     let row_offsets =
                         { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
-                    let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+                    let output_batch = { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -364,7 +370,7 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -381,7 +387,7 @@ mod tests {
                     let assembler = Assembler::default();
                     let row_offsets =
                         { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
-                    let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+                    let output_batch = { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -483,7 +489,7 @@ mod tests {
         let mut vector = vec![0; 8192];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -509,7 +515,7 @@ mod tests {
             )?
         };
         let output_batch =
-            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+            { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -523,7 +529,7 @@ mod tests {
         let mut vector = vec![0; 8192];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -548,7 +554,7 @@ mod tests {
             )?
         };
         let output_batch =
-            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+            { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -568,7 +574,7 @@ mod tests {
         let mut vector = vec![0; 20480];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(*batch, output_batch);
 
         Ok(())
@@ -594,7 +600,7 @@ mod tests {
         )]));
         let vector = vec![0; 1024];
         let row_offsets = vec![0];
-        read_as_batch(&vector, schema, row_offsets).unwrap();
+        read_as_batch(&vector, schema, &row_offsets).unwrap();
     }
 
     async fn get_exec(

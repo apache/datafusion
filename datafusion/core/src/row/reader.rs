@@ -23,7 +23,7 @@ use crate::reg_fn;
 #[cfg(feature = "jit")]
 use crate::row::fn_name;
 use crate::row::{
-    all_valid, get_offsets, schema_null_free, supported, NullBitsFormatter,
+    all_valid, get_offsets, schema_null_free, row_supported, NullBitsFormatter,
 };
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
@@ -42,14 +42,14 @@ use std::sync::Arc;
 pub fn read_as_batch(
     data: &[u8],
     schema: Arc<Schema>,
-    offsets: Vec<usize>,
+    offsets: &[usize],
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
     let mut row = RowReader::new(&schema, data);
 
     for offset in offsets.iter().take(row_num) {
-        row.point_to(*offset);
+        row.point_to(*offset, data);
         read_row(&row, &mut output, &schema);
     }
 
@@ -61,7 +61,7 @@ pub fn read_as_batch(
 pub fn read_as_batch_jit(
     data: &[u8],
     schema: Arc<Schema>,
-    offsets: Vec<usize>,
+    offsets: &[usize],
     assembler: &Assembler,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
@@ -76,7 +76,7 @@ pub fn read_as_batch_jit(
     };
 
     for offset in offsets.iter().take(row_num) {
-        row.point_to(*offset);
+        row.point_to(*offset, data);
         code_fn(&row, &mut output);
     }
 
@@ -157,7 +157,7 @@ impl<'a> std::fmt::Debug for RowReader<'a> {
 impl<'a> RowReader<'a> {
     /// new
     pub fn new(schema: &Arc<Schema>, data: &'a [u8]) -> Self {
-        assert!(supported(schema));
+        assert!(row_supported(schema));
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
         let null_width = if null_free { 0 } else { ceil(field_count, 8) };
@@ -173,8 +173,9 @@ impl<'a> RowReader<'a> {
     }
 
     /// Update this row to point to position `offset` in `base`
-    pub fn point_to(&mut self, offset: usize) {
+    pub fn point_to(&mut self, offset: usize, data: &'a [u8]) {
         self.base_offset = offset;
+        self.data = data;
     }
 
     #[inline]
@@ -293,7 +294,7 @@ impl<'a> RowReader<'a> {
     }
 }
 
-fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
+pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
     if row.null_free || row.all_valid() {
         for ((col_idx, to), field) in batch
             .arrays
@@ -538,18 +539,18 @@ fn read_field_null_free(
     }
 }
 
-struct MutableRecordBatch {
+pub struct MutableRecordBatch {
     arrays: Vec<Box<dyn ArrayBuilder>>,
     schema: Arc<Schema>,
 }
 
 impl MutableRecordBatch {
-    fn new(target_batch_size: usize, schema: Arc<Schema>) -> Self {
+    pub fn new(target_batch_size: usize, schema: Arc<Schema>) -> Self {
         let arrays = new_arrays(&schema, target_batch_size);
         Self { arrays, schema }
     }
 
-    fn output(&mut self) -> ArrowResult<RecordBatch> {
+    pub fn output(&mut self) -> ArrowResult<RecordBatch> {
         let result = make_batch(self.schema.clone(), self.arrays.drain(..).collect());
         result
     }
