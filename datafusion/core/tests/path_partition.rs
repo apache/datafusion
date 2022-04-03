@@ -46,7 +46,7 @@ async fn parquet_distinct_partition_col() -> Result<()> {
     let mut ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
-        &mut ctx,
+        &ctx,
         &[
             "year=2021/month=09/day=09/file.parquet",
             "year=2021/month=10/day=09/file.parquet",
