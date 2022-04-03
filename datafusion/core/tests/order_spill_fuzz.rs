@@ -47,7 +47,6 @@ async fn test_sort_100k_mem() {
 }
 
 #[tokio::test]
-#[ignore]
 async fn test_sort_unlimited_mem() {
     run_sort(
         usize::MAX,

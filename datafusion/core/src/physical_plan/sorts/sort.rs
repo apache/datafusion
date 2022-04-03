@@ -581,7 +581,7 @@ impl SortedSizedRecordBatchStream {
 
         for comb in combined {
             let batch = &self.batches[comb.batch_idx as usize];
-            let offset = batch.offsets()[comb.row_idx as usize];
+            let offset = batch.offsets[comb.row_idx as usize] as usize;
             row.point_to(offset, &batch.data);
             read_row(&row, &mut output, &self.schema);
         }
