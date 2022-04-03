@@ -15,24 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, pin::Pin};
-
-use crate::serde::scheduler::PartitionLocation;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_plan::RecordBatchStream,
-};
-use log::info;
-use std::fmt::Formatter;
 
 /// UnresolvedShuffleExec represents a dependency on the results of a ShuffleWriterExec node which hasn't computed yet.
 ///
@@ -81,7 +74,7 @@ impl ExecutionPlan for UnresolvedShuffleExec {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        //TODO the output partition is known and should be populated here!
+        // TODO the output partition is known and should be populated here!
         // see https://github.com/apache/arrow-datafusion/issues/758
         Partitioning::UnknownPartitioning(self.output_partition_count)
     }
@@ -111,7 +104,7 @@ impl ExecutionPlan for UnresolvedShuffleExec {
     async fn execute(
         &self,
         _partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Err(DataFusionError::Plan(
             "Ballista UnresolvedShuffleExec does not support execution".to_owned(),

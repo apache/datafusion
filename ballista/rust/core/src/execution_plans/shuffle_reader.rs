@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt::Formatter;
 use std::sync::Arc;
 use std::{any::Any, pin::Pin};
 
@@ -25,25 +24,22 @@ use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::error::Result as ArrowResult;
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::execution::runtime_env::RuntimeEnv;
+
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, SendableRecordBatchStream,
-    Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion::{
     error::{DataFusionError, Result},
     physical_plan::RecordBatchStream,
 };
-use futures::{future, Stream, StreamExt};
-use hashbrown::HashMap;
+use futures::{future, StreamExt};
+
+use datafusion::execution::context::TaskContext;
 use log::info;
-use std::time::Instant;
 
 /// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
 /// being executed by an executor
@@ -110,7 +106,7 @@ impl ExecutionPlan for ShuffleReaderExec {
     async fn execute(
         &self,
         partition: usize,
-        _runtime: Arc<RuntimeEnv>,
+        _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         info!("ShuffleReaderExec::execute({})", partition);
 
@@ -205,14 +201,14 @@ fn stats_for_partitions(
 
 async fn fetch_partition(
     location: &PartitionLocation,
-) -> Result<Pin<Box<dyn RecordBatchStream + Send + Sync>>> {
+) -> Result<Pin<Box<dyn RecordBatchStream + Send>>> {
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
     let mut ballista_client =
         BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-    Ok(ballista_client
+    ballista_client
         .fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
@@ -220,7 +216,7 @@ async fn fetch_partition(
             &location.path,
         )
         .await
-        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
+        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))
 }
 
 #[cfg(test)]

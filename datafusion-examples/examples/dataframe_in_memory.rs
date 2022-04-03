@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     )?;
 
     // declare a new context. In spark API, this corresponds to a new spark SQLsession
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
     // declare a table in memory. In spark API, this corresponds to createDataFrame(...).
     let provider = MemTable::try_new(schema, vec![vec![batch]])?;

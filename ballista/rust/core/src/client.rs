@@ -17,9 +17,8 @@
 
 //! Client API for sending requests to executors.
 
-use parking_lot::Mutex;
 use std::sync::Arc;
-use std::{collections::HashMap, pin::Pin};
+
 use std::{
     convert::{TryFrom, TryInto},
     task::{Context, Poll},
@@ -27,27 +26,22 @@ use std::{
 
 use crate::error::{ballista_error, BallistaError, Result};
 use crate::serde::protobuf::{self};
-use crate::serde::scheduler::{
-    Action, ExecutePartition, ExecutePartitionResult, PartitionId, PartitionStats,
-};
+use crate::serde::scheduler::Action;
 
 use arrow_flight::utils::flight_data_to_arrow_batch;
 use arrow_flight::Ticket;
 use arrow_flight::{flight_service_client::FlightServiceClient, FlightData};
 use datafusion::arrow::{
-    array::{StringArray, StructArray},
     datatypes::{Schema, SchemaRef},
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use datafusion::physical_plan::common::collect;
-use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
-use datafusion::{logical_plan::LogicalPlan, physical_plan::RecordBatchStream};
+
+use datafusion::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use futures::{Stream, StreamExt};
 use log::debug;
 use prost::Message;
 use tonic::Streaming;
-use uuid::Uuid;
 
 /// Client for interacting with Ballista executors.
 #[derive(Clone)]
@@ -135,16 +129,13 @@ impl BallistaClient {
 }
 
 struct FlightDataStream {
-    stream: Mutex<Streaming<FlightData>>,
+    stream: Streaming<FlightData>,
     schema: SchemaRef,
 }
 
 impl FlightDataStream {
     pub fn new(stream: Streaming<FlightData>, schema: SchemaRef) -> Self {
-        Self {
-            stream: Mutex::new(stream),
-            schema,
-        }
+        Self { stream, schema }
     }
 }
 
@@ -152,11 +143,10 @@ impl Stream for FlightDataStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
-        self: std::pin::Pin<&mut Self>,
+        mut self: std::pin::Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let mut stream = self.stream.lock();
-        stream.poll_next_unpin(cx).map(|x| match x {
+        self.stream.poll_next_unpin(cx).map(|x| match x {
             Some(flight_data_chunk_result) => {
                 let converted_chunk = flight_data_chunk_result
                     .map_err(|e| ArrowError::from_external_error(Box::new(e)))

@@ -23,7 +23,7 @@
 
 
 # Base image extends debian:buster-slim
-FROM rust:1.58.0-buster AS builder
+FROM rust:1.59.0-buster AS builder
 
 RUN apt update && apt -y install musl musl-dev musl-tools libssl-dev openssl
 
@@ -59,7 +59,7 @@ RUN echo "Building OpenSSL" && \
 
 RUN echo "Building zlib" && \
     cd /tmp && \
-    ZLIB_VERSION=1.2.11 && \
+    ZLIB_VERSION=1.2.12 && \
     curl -LO "http://zlib.net/zlib-$ZLIB_VERSION.tar.gz" && \
     tar xzf "zlib-$ZLIB_VERSION.tar.gz" && cd "zlib-$ZLIB_VERSION" && \
     CC=musl-gcc ./configure --static --prefix=/usr/local/musl && \

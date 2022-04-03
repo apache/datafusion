@@ -17,121 +17,40 @@
 
 //! Serde code to convert from protocol buffers to Rust data structures.
 
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::sync::Arc;
 
 use crate::error::BallistaError;
-use crate::execution_plans::{
-    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
-};
-use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
-use crate::serde::protobuf::ShuffleReaderPartition;
-use crate::serde::scheduler::PartitionLocation;
-use crate::serde::{from_proto_binary_op, proto_error, protobuf, str_to_byte};
-use crate::{convert_box_required, convert_required, into_required};
+
+use crate::serde::{from_proto_binary_op, proto_error, protobuf};
+use crate::{convert_box_required, convert_required};
 use chrono::{TimeZone, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
-use datafusion::catalog::catalog::{
-    CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
+
+use datafusion::datafusion_data_access::{
+    object_store::local::LocalFileSystem, FileMeta, SizedFile,
 };
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::datasource::object_store::{FileMeta, ObjectStoreRegistry, SizedFile};
-use datafusion::datasource::PartitionedFile;
-use datafusion::execution::context::{
-    ExecutionConfig, ExecutionContextState, ExecutionProps,
-};
-use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_plan::{
-    window_frames::WindowFrame, DFSchema, Expr, JoinConstraint, JoinType,
-};
-use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateFunction};
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::file_format::{
-    AvroExec, CsvExec, FileScanConfig, ParquetExec,
-};
-use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
-use datafusion::physical_plan::hash_join::PartitionMode;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::planner::DefaultPhysicalPlanner;
-use datafusion::physical_plan::sorts::sort::{SortExec, SortOptions};
-use datafusion::physical_plan::window_functions::{
-    BuiltInWindowFunction, WindowFunction,
-};
-use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::execution::context::ExecutionProps;
+
+use datafusion::physical_plan::file_format::FileScanConfig;
+
+use datafusion::physical_plan::window_functions::WindowFunction;
+
 use datafusion::physical_plan::{
-    coalesce_batches::CoalesceBatchesExec,
-    cross_join::CrossJoinExec,
-    empty::EmptyExec,
     expressions::{
-        col, Avg, BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr,
-        IsNullExpr, Literal, NegativeExpr, NotExpr, PhysicalSortExpr, TryCastExpr,
-        DEFAULT_DATAFUSION_CAST_OPTIONS,
+        BinaryExpr, CaseExpr, CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr,
+        Literal, NegativeExpr, NotExpr, TryCastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
     },
-    filter::FilterExec,
-    functions::{self, BuiltinScalarFunction, ScalarFunctionExpr},
-    hash_join::HashJoinExec,
-    limit::{GlobalLimitExec, LocalLimitExec},
-    projection::ProjectionExec,
-    repartition::RepartitionExec,
+    functions::{self, ScalarFunctionExpr},
     Partitioning,
 };
-use datafusion::physical_plan::{
-    AggregateExpr, ColumnStatistics, ExecutionPlan, PhysicalExpr, Statistics, WindowExpr,
-};
-use datafusion::prelude::CsvReadOptions;
-use log::debug;
+use datafusion::physical_plan::{ColumnStatistics, PhysicalExpr, Statistics};
+
 use protobuf::physical_expr_node::ExprType;
-use protobuf::physical_plan_node::PhysicalPlanType;
 
 impl From<&protobuf::PhysicalColumn> for Column {
     fn from(c: &protobuf::PhysicalColumn) -> Column {
         Column::new(&c.name, c.index as usize)
-    }
-}
-
-impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
-    fn from(f: &protobuf::ScalarFunction) -> BuiltinScalarFunction {
-        use protobuf::ScalarFunction;
-        match f {
-            ScalarFunction::Sqrt => BuiltinScalarFunction::Sqrt,
-            ScalarFunction::Sin => BuiltinScalarFunction::Sin,
-            ScalarFunction::Cos => BuiltinScalarFunction::Cos,
-            ScalarFunction::Tan => BuiltinScalarFunction::Tan,
-            ScalarFunction::Asin => BuiltinScalarFunction::Asin,
-            ScalarFunction::Acos => BuiltinScalarFunction::Acos,
-            ScalarFunction::Atan => BuiltinScalarFunction::Atan,
-            ScalarFunction::Exp => BuiltinScalarFunction::Exp,
-            ScalarFunction::Log => BuiltinScalarFunction::Log,
-            ScalarFunction::Log2 => BuiltinScalarFunction::Log2,
-            ScalarFunction::Log10 => BuiltinScalarFunction::Log10,
-            ScalarFunction::Floor => BuiltinScalarFunction::Floor,
-            ScalarFunction::Ceil => BuiltinScalarFunction::Ceil,
-            ScalarFunction::Round => BuiltinScalarFunction::Round,
-            ScalarFunction::Trunc => BuiltinScalarFunction::Trunc,
-            ScalarFunction::Abs => BuiltinScalarFunction::Abs,
-            ScalarFunction::Signum => BuiltinScalarFunction::Signum,
-            ScalarFunction::Octetlength => BuiltinScalarFunction::OctetLength,
-            ScalarFunction::Concat => BuiltinScalarFunction::Concat,
-            ScalarFunction::Lower => BuiltinScalarFunction::Lower,
-            ScalarFunction::Upper => BuiltinScalarFunction::Upper,
-            ScalarFunction::Trim => BuiltinScalarFunction::Trim,
-            ScalarFunction::Ltrim => BuiltinScalarFunction::Ltrim,
-            ScalarFunction::Rtrim => BuiltinScalarFunction::Rtrim,
-            ScalarFunction::Totimestamp => BuiltinScalarFunction::ToTimestamp,
-            ScalarFunction::Array => BuiltinScalarFunction::Array,
-            ScalarFunction::Nullif => BuiltinScalarFunction::NullIf,
-            ScalarFunction::Datepart => BuiltinScalarFunction::DatePart,
-            ScalarFunction::Datetrunc => BuiltinScalarFunction::DateTrunc,
-            ScalarFunction::Md5 => BuiltinScalarFunction::MD5,
-            ScalarFunction::Sha224 => BuiltinScalarFunction::SHA224,
-            ScalarFunction::Sha256 => BuiltinScalarFunction::SHA256,
-            ScalarFunction::Sha384 => BuiltinScalarFunction::SHA384,
-            ScalarFunction::Sha512 => BuiltinScalarFunction::SHA512,
-            ScalarFunction::Digest => BuiltinScalarFunction::Digest,
-            ScalarFunction::Ln => BuiltinScalarFunction::Ln,
-            ScalarFunction::Totimestampmillis => BuiltinScalarFunction::ToTimestampMillis,
-        }
     }
 }
 
@@ -220,13 +139,14 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                 convert_required!(e.arrow_type)?,
             )),
             ExprType::ScalarFunction(e) => {
-                let scalar_function = protobuf::ScalarFunction::from_i32(e.fun)
-                    .ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown scalar function: {}",
-                            e.fun,
-                        ))
-                    })?;
+                let scalar_function =
+                    datafusion_proto::protobuf::ScalarFunction::from_i32(e.fun)
+                        .ok_or_else(|| {
+                            proto_error(format!(
+                                "Received an unknown scalar function: {}",
+                                e.fun,
+                            ))
+                        })?;
 
                 let args = e
                     .args
@@ -234,22 +154,12 @@ impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
                     .map(|x| x.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
 
-                let catalog_list =
-                    Arc::new(MemoryCatalogList::new()) as Arc<dyn CatalogList>;
-
-                let ctx_state = ExecutionContextState {
-                    catalog_list,
-                    scalar_functions: Default::default(),
-                    aggregate_functions: Default::default(),
-                    config: ExecutionConfig::new(),
-                    execution_props: ExecutionProps::new(),
-                    object_store_registry: Arc::new(ObjectStoreRegistry::new()),
-                    runtime_env: Arc::new(RuntimeEnv::default()),
-                };
+                // TODO Do not create new the ExecutionProps
+                let execution_props = ExecutionProps::new();
 
                 let fun_expr = functions::create_physical_fun(
                     &(&scalar_function).into(),
-                    &ctx_state.execution_props,
+                    &execution_props,
                 )?;
 
                 Arc::new(ScalarFunctionExpr::new(
@@ -273,23 +183,24 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
     ) -> Result<Self, Self::Error> {
         match expr {
             protobuf::physical_window_expr_node::WindowFunction::AggrFunction(n) => {
-                let f = protobuf::AggregateFunction::from_i32(*n).ok_or_else(|| {
-                    proto_error(format!(
-                        "Received an unknown window aggregate function: {}",
-                        n
-                    ))
-                })?;
+                let f = datafusion_proto::protobuf::AggregateFunction::from_i32(*n)
+                    .ok_or_else(|| {
+                        proto_error(format!(
+                            "Received an unknown window aggregate function: {}",
+                            n
+                        ))
+                    })?;
 
                 Ok(WindowFunction::AggregateFunction(f.into()))
             }
             protobuf::physical_window_expr_node::WindowFunction::BuiltInFunction(n) => {
-                let f =
-                    protobuf::BuiltInWindowFunction::from_i32(*n).ok_or_else(|| {
-                        proto_error(format!(
-                            "Received an unknown window builtin function: {}",
-                            n
-                        ))
-                    })?;
+                let f = datafusion_proto::protobuf::BuiltInWindowFunction::from_i32(*n)
+                    .ok_or_else(|| {
+                    proto_error(format!(
+                        "Received an unknown window builtin function: {}",
+                        n
+                    ))
+                })?;
 
                 Ok(WindowFunction::BuiltInWindowFunction(f.into()))
             }

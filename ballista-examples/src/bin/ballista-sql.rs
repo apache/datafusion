@@ -25,9 +25,9 @@ async fn main() -> Result<()> {
     let config = BallistaConfig::builder()
         .set("ballista.shuffle.partitions", "4")
         .build()?;
-    let ctx = BallistaContext::remote("localhost", 50050, &config);
+    let ctx = BallistaContext::remote("localhost", 50050, &config).await?;
 
-    let testdata = datafusion::arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::test_util::arrow_test_data();
 
     // register csv file with the execution context
     ctx.register_csv(

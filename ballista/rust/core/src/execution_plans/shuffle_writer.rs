@@ -21,19 +21,17 @@
 //! will use the ShuffleReaderExec to read these results.
 
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
-use parking_lot::Mutex;
-use std::fs::File;
+
+use std::any::Any;
 use std::iter::Iterator;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use std::{any::Any, pin::Pin};
 
-use crate::error::BallistaError;
 use crate::utils;
 
 use crate::serde::protobuf::ShuffleWritePartition;
-use crate::serde::scheduler::{PartitionLocation, PartitionStats};
+use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
 use datafusion::arrow::array::{
     Array, ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder,
@@ -41,27 +39,23 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::ipc::reader::FileReader;
-use datafusion::arrow::ipc::writer::FileWriter;
+
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::common::IPCWriter;
 use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
 };
-use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::Partitioning::RoundRobinBatch;
+
 use datafusion::physical_plan::{
-    DisplayFormatType, ExecutionPlan, Metric, Partitioning, RecordBatchStream,
-    SendableRecordBatchStream, Statistics,
+    DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use futures::StreamExt;
-use hashbrown::HashMap;
+
+use datafusion::execution::context::TaskContext;
 use log::{debug, info};
-use uuid::Uuid;
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
 /// can be executed as one unit with each partition being executed in parallel. The output of each
@@ -144,11 +138,11 @@ impl ShuffleWriterExec {
     pub async fn execute_shuffle_write(
         &self,
         input_partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<Vec<ShuffleWritePartition>> {
         let now = Instant::now();
 
-        let mut stream = self.plan.execute(input_partition, runtime).await?;
+        let mut stream = self.plan.execute(input_partition, context).await?;
 
         let mut path = PathBuf::from(&self.work_dir);
         path.push(&self.job_id);
@@ -254,8 +248,8 @@ impl ShuffleWriterExec {
 
                         // write non-empty batch out
 
-                        //TODO optimize so we don't write or fetch empty partitions
-                        //if output_batch.num_rows() > 0 {
+                        // TODO optimize so we don't write or fetch empty partitions
+                        // if output_batch.num_rows() > 0 {
                         let timer = write_metrics.write_time.timer();
                         match &mut writers[output_partition] {
                             Some(w) => {
@@ -364,9 +358,9 @@ impl ExecutionPlan for ShuffleWriterExec {
     async fn execute(
         &self,
         partition: usize,
-        runtime: Arc<RuntimeEnv>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let part_loc = self.execute_shuffle_write(partition, runtime).await?;
+        let part_loc = self.execute_shuffle_write(partition, context).await?;
 
         // build metadata result batch
         let num_writers = part_loc.len();
@@ -452,13 +446,17 @@ mod tests {
     use datafusion::arrow::array::{StringArray, StructArray, UInt32Array, UInt64Array};
     use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use datafusion::physical_plan::expressions::Column;
-    use datafusion::physical_plan::limit::GlobalLimitExec;
+
     use datafusion::physical_plan::memory::MemoryExec;
+    use datafusion::prelude::SessionContext;
     use tempfile::TempDir;
 
     #[tokio::test]
+    // number of rows in each partition is a function of the hash output, so don't test here
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn test() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
 
         let input_plan = Arc::new(CoalescePartitionsExec::new(create_input_plan()?));
         let work_dir = TempDir::new()?;
@@ -469,7 +467,7 @@ mod tests {
             work_dir.into_path().to_str().unwrap().to_owned(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
-        let mut stream = query_stage.execute(0, runtime).await?;
+        let mut stream = query_stage.execute(0, task_ctx).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
@@ -511,8 +509,11 @@ mod tests {
     }
 
     #[tokio::test]
+    // number of rows in each partition is a function of the hash output, so don't test here
+    #[cfg(not(feature = "force_hash_collisions"))]
     async fn test_partitioned() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
 
         let input_plan = create_input_plan()?;
         let work_dir = TempDir::new()?;
@@ -523,7 +524,7 @@ mod tests {
             work_dir.into_path().to_str().unwrap().to_owned(),
             Some(Partitioning::Hash(vec![Arc::new(Column::new("a", 0))], 2)),
         )?;
-        let mut stream = query_stage.execute(0, runtime).await?;
+        let mut stream = query_stage.execute(0, task_ctx).await?;
         let batches = utils::collect_stream(&mut stream)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;

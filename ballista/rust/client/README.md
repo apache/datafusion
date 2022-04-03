@@ -49,8 +49,8 @@ A simple way to start a local cluster for testing purposes is to use cargo to in
 the scheduler and executor crates.
 
 ```bash
-cargo install ballista-scheduler
-cargo install ballista-executor
+cargo install --locked ballista-scheduler
+cargo install --locked ballista-executor
 ```
 
 With these crates installed, it is now possible to start a scheduler process.
@@ -106,7 +106,7 @@ async fn main() -> Result<()> {
        .build()?;
 
    // connect to Ballista scheduler
-   let ctx = BallistaContext::remote("localhost", 50050, &config);
+   let ctx = BallistaContext::remote("localhost", 50050, &config).await?;
 
    // register csv file with the execution context
    ctx.register_csv(

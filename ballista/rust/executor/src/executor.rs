@@ -17,49 +17,53 @@
 
 //! Ballista executor logic
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
-use ballista_core::serde::scheduler::ExecutorSpecification;
+use ballista_core::serde::protobuf::ExecutorRegistration;
 use datafusion::error::DataFusionError;
+use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::udaf::AggregateUDF;
+use datafusion::physical_plan::udf::ScalarUDF;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion::prelude::{ExecutionConfig, ExecutionContext};
 
 /// Ballista executor
 pub struct Executor {
+    /// Metadata
+    pub metadata: ExecutorRegistration,
+
     /// Directory for storing partial results
-    work_dir: String,
+    pub work_dir: String,
 
-    /// Specification like total task slots
-    pub specification: ExecutorSpecification,
+    /// Scalar functions that are registered in the Executor
+    pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
 
-    /// DataFusion execution context
-    pub ctx: Arc<ExecutionContext>,
+    /// Aggregate functions registered in the Executor
+    pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
+
+    /// Runtime environment for Executor
+    pub runtime: Arc<RuntimeEnv>,
 }
 
 impl Executor {
     /// Create a new executor instance
-    pub fn new(work_dir: &str, ctx: Arc<ExecutionContext>) -> Self {
-        Executor::new_with_specification(
-            work_dir,
-            ExecutorSpecification { task_slots: 4 },
-            ctx,
-        )
-    }
-
-    pub fn new_with_specification(
+    pub fn new(
+        metadata: ExecutorRegistration,
         work_dir: &str,
-        specification: ExecutorSpecification,
-        ctx: Arc<ExecutionContext>,
+        runtime: Arc<RuntimeEnv>,
     ) -> Self {
         Self {
+            metadata,
             work_dir: work_dir.to_owned(),
-            specification,
-            ctx,
+            // TODO add logic to dynamically load UDF/UDAFs libs from files
+            scalar_functions: HashMap::new(),
+            aggregate_functions: HashMap::new(),
+            runtime,
         }
     }
 }
@@ -74,6 +78,7 @@ impl Executor {
         stage_id: usize,
         part: usize,
         plan: Arc<dyn ExecutionPlan>,
+        task_ctx: Arc<TaskContext>,
         _shuffle_output_partitioning: Option<Partitioning>,
     ) -> Result<Vec<protobuf::ShuffleWritePartition>, BallistaError> {
         let exec = if let Some(shuffle_writer) =
@@ -94,10 +99,7 @@ impl Executor {
             ))
         }?;
 
-        let config = ExecutionConfig::new().with_temp_file_path(self.work_dir.clone());
-        let runtime = Arc::new(RuntimeEnv::new(config.runtime)?);
-
-        let partitions = exec.execute_shuffle_write(part, runtime).await?;
+        let partitions = exec.execute_shuffle_write(part, task_ctx).await?;
 
         println!(
             "=== [{}/{}/{}] Physical plan with metrics ===\n{}\n",

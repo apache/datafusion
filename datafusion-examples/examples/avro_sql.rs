@@ -25,9 +25,9 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local execution context
-    let mut ctx = ExecutionContext::new();
+    let ctx = SessionContext::new();
 
-    let testdata = datafusion::arrow::util::test_util::arrow_test_data();
+    let testdata = datafusion::test_util::arrow_test_data();
 
     // register avro file with the execution context
     let avro_file = &format!("{}/avro/alltypes_plain.avro", testdata);
