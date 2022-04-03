@@ -559,7 +559,7 @@ async fn register_tables(path: &str, file_format: &str, ctx: &BallistaContext) {
             }
             "parquet" => {
                 let path = format!("{}/{}", path, table);
-                ctx.register_parquet(table, &path)
+                ctx.register_parquet(table, &path, ParquetReadOptions::default())
                     .await
                     .map_err(|e| DataFusionError::Plan(format!("{:?}", e)))
                     .unwrap();

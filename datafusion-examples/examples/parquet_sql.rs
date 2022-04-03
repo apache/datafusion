@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
+        ParquetReadOptions::default(),
     )
     .await?;
 

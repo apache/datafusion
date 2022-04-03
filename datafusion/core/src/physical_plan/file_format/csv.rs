@@ -487,8 +487,12 @@ mod tests {
 
         // register each partition as well as the top level dir
         let csv_read_option = CsvReadOptions::new().schema(&schema);
-        ctx.register_csv("part0", &format!("{}/part-0.csv", out_dir), csv_read_option)
-            .await?;
+        ctx.register_csv(
+            "part0",
+            &format!("{}/part-0.csv", out_dir),
+            csv_read_option.clone(),
+        )
+        .await?;
         ctx.register_csv("allparts", &out_dir, csv_read_option)
             .await?;
 
