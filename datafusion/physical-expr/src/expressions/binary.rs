@@ -56,6 +56,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::coercion_rule::binary_rule::coerce_types;
 use crate::expressions::try_cast;
+use crate::string_expressions;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -481,6 +482,20 @@ fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
             other,
             Operator::BitwiseOr
         ))),
+    }
+}
+
+/// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator
+fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    let result = string_expressions::concat(&[
+        ColumnarValue::Array(left),
+        ColumnarValue::Array(right),
+    ])?;
+    match result {
+        ColumnarValue::Array(arrayRef) => Ok(arrayRef),
+        _ => Err(DataFusionError::Execution(
+            "string_concat return type should be Array, but Scalar found".to_string(),
+        )),
     }
 }
 
@@ -1073,6 +1088,8 @@ pub fn binary_operator_data_type(
         | Operator::Divide
         | Operator::Multiply
         | Operator::Modulo => Ok(result_type),
+        // string operations return the same values as the common coerced type
+        Operator::StringConcat => Ok(result_type),
     }
 }
 
@@ -1334,6 +1351,7 @@ impl BinaryExpr {
             }
             Operator::BitwiseAnd => bitwise_and(left, right),
             Operator::BitwiseOr => bitwise_or(left, right),
+            Operator::StringConcat => string_concat(left, right),
         }
     }
 }

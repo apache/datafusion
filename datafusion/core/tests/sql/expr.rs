@@ -281,6 +281,47 @@ async fn query_scalar_minus_array() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_string_concat_operator() -> Result<()> {
+    let ctx = SessionContext::new();
+    // concat 2 strings
+    let sql = "SELECT 'aa' || 'b'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+",
+        "| Utf8(\"aa\") || Utf8(\"b\") |",
+        "+-------------------------+",
+        "| aab                     |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // concat 4 strings as a string concat pipe.
+    let sql = "SELECT 'aa' || 'b' || 'cc' || 'd'";
+    let expected = vec![
+        "+----------------------------------------------------+",
+        "| Utf8(\"aa\") || Utf8(\"b\") || Utf8(\"cc\") || Utf8(\"d\") |",
+        "+----------------------------------------------------+",
+        "| aabccd                                             |",
+        "+----------------------------------------------------+",
+    ];
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    // concat 3 strings with one is NULL
+    let sql = "SELECT 'aa' || NULL || 'd'";
+    let expected = vec![
+        "+---------------------------------------+",
+        "| Utf8(\"aa\") || Utf8(NULL) || Utf8(\"d\") |",
+        "+---------------------------------------+",
+        "| aad                                   |",
+        "+---------------------------------------+",
+    ];
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");

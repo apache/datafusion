@@ -57,7 +57,8 @@ pub(crate) fn coerce_types(
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
+        | Operator::RegexNotIMatch
+        | Operator::StringConcat => string_coercion(lhs_type, rhs_type),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
             eq_coercion(lhs_type, rhs_type)
         }
