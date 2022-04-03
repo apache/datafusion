@@ -43,7 +43,7 @@ use futures::{stream, StreamExt};
 
 #[tokio::test]
 async fn parquet_distinct_partition_col() -> Result<()> {
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     register_partitioned_alltypes_parquet(
         &ctx,
