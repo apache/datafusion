@@ -74,7 +74,7 @@ use tokio::task;
 struct ExternalSorter {
     id: MemoryConsumerId,
     schema: SchemaRef,
-    in_mem_batches: Mutex<Vec<RecordBatch>>,
+    in_mem_batches: Mutex<Vec<BatchWithSortArray>>,
     spills: Mutex<Vec<NamedTempFile>>,
     /// Sort expressions
     expr: Vec<PhysicalSortExpr>,
@@ -282,7 +282,7 @@ impl MemoryConsumer for ExternalSorter {
 
 /// consume the non-empty `sorted_bathes` and do in_mem_sort
 fn in_mem_partial_sort(
-    buffered_batches: &mut Vec<RecordBatch>,
+    buffered_batches: &mut Vec<BatchWithSortArray>,
     schema: SchemaRef,
     expressions: &[PhysicalSortExpr],
     batch_size: usize,
@@ -293,16 +293,28 @@ fn in_mem_partial_sort(
         let result = buffered_batches.pop();
         Ok(Box::pin(SizedRecordBatchStream::new(
             schema,
-            vec![Arc::new(result.unwrap())],
+            vec![Arc::new(result.unwrap().sorted_batch)],
             tracking_metrics,
         )))
     } else {
-        let batches = buffered_batches.drain(..).collect::<Vec<_>>();
+        let (sorted_arrays, batches): (Vec<Vec<ArrayRef>>, Vec<RecordBatch>) =
+            buffered_batches
+                .drain(..)
+                .into_iter()
+                .map(|b| {
+                    let BatchWithSortArray {
+                        sort_arrays,
+                        sorted_batch: batch,
+                    } = b;
+                    (sort_arrays, batch)
+                })
+                .unzip();
+
         let sorted_iter = {
             // NB timer records time taken on drop, so there are no
             // calls to `timer.done()` below.
             let _timer = tracking_metrics.elapsed_compute().timer();
-            get_sorted_iter(&batches, expressions, batch_size)?
+            get_sorted_iter(&sorted_arrays, expressions, batch_size)?
         };
         Ok(Box::pin(SortedSizedRecordBatchStream::new(
             schema,
@@ -321,15 +333,15 @@ struct CompositeIndex {
 
 /// Get sorted iterator by sort concatenated `SortColumn`s
 fn get_sorted_iter(
-    batches: &[RecordBatch],
+    sort_arrays: &[Vec<ArrayRef>],
     expr: &[PhysicalSortExpr],
     batch_size: usize,
 ) -> Result<SortedIterator> {
-    let row_indices = batches
+    let row_indices = sort_arrays
         .iter()
         .enumerate()
-        .flat_map(|(i, batch)| {
-            (0..batch.num_rows())
+        .flat_map(|(i, arrays)| {
+            (0..arrays[0].len())
                 .map(|r| CompositeIndex {
                     // since we original use UInt32Array to index the combined mono batch,
                     // component record batches won't overflow as well,
@@ -340,15 +352,6 @@ fn get_sorted_iter(
                 .collect::<Vec<CompositeIndex>>()
         })
         .collect::<Vec<CompositeIndex>>();
-
-    let sort_arrays = batches
-        .iter()
-        .map(|batch| {
-            expr.iter()
-                .map(|e| Ok(e.evaluate_to_sort_column(batch)?.values))
-                .collect::<Result<Vec<_>>>()
-        })
-        .collect::<Result<Vec<Vec<_>>>>()?;
 
     let sort_columns = expr
         .iter()
@@ -728,22 +731,26 @@ impl ExecutionPlan for SortExec {
     }
 }
 
+struct BatchWithSortArray {
+    sort_arrays: Vec<ArrayRef>,
+    sorted_batch: RecordBatch,
+}
+
 fn sort_batch(
     batch: RecordBatch,
     schema: SchemaRef,
     expr: &[PhysicalSortExpr],
-) -> ArrowResult<RecordBatch> {
+) -> ArrowResult<BatchWithSortArray> {
     // TODO: pushup the limit expression to sort
-    let indices = lexsort_to_indices(
-        &expr
-            .iter()
-            .map(|e| e.evaluate_to_sort_column(&batch))
-            .collect::<Result<Vec<SortColumn>>>()?,
-        None,
-    )?;
+    let sort_columns = expr
+        .iter()
+        .map(|e| e.evaluate_to_sort_column(&batch))
+        .collect::<Result<Vec<SortColumn>>>()?;
+
+    let indices = lexsort_to_indices(&sort_columns, None)?;
 
     // reorder all rows based on sorted indices
-    RecordBatch::try_new(
+    let sorted_batch = RecordBatch::try_new(
         schema,
         batch
             .columns()
@@ -760,7 +767,25 @@ fn sort_batch(
                 )
             })
             .collect::<ArrowResult<Vec<ArrayRef>>>()?,
-    )
+    )?;
+
+    let sort_arrays = sort_columns
+        .into_iter()
+        .map(|sc| {
+            Ok(take(
+                sc.values.as_ref(),
+                &indices,
+                Some(TakeOptions {
+                    check_bounds: false,
+                }),
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(BatchWithSortArray {
+        sort_arrays,
+        sorted_batch,
+    })
 }
 
 async fn do_sort(
