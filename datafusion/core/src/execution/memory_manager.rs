@@ -195,6 +195,12 @@ pub trait MemoryConsumer: Send + Sync {
         Ok(())
     }
 
+    /// Return `freed` memory to the memory manager,
+    /// may wake up other requesters waiting for their minimum memory quota.
+    fn shrink(&self, freed: usize) {
+        self.memory_manager().record_free(freed);
+    }
+
     /// Spill in-memory buffers to disk, free memory, return the previous used
     async fn spill(&self) -> Result<usize>;
 
@@ -303,7 +309,8 @@ impl MemoryManager {
         ));
     }
 
-    fn get_requester_total(&self) -> usize {
+    /// Return the total memory usage for all requesters
+    pub fn get_requester_total(&self) -> usize {
         *self.requesters_total.lock()
     }
 
@@ -342,8 +349,8 @@ impl MemoryManager {
                 // if we cannot acquire at lease 1/2n memory, just wait for others
                 // to spill instead spill self frequently with limited total mem
                 debug!(
-                    "Cannot acquire minimum amount of memory {} on memory manager {}, waiting for others to spill ...",
-                    human_readable_size(min_per_rqt), self);
+                    "Cannot acquire a minimum amount of {} memory from the manager of total {}, waiting for others to spill ...",
+                    human_readable_size(min_per_rqt), human_readable_size(self.pool_size));
                 let now = Instant::now();
                 self.cv.wait(&mut rqt_current_used);
                 let elapsed = now.elapsed();
@@ -361,12 +368,30 @@ impl MemoryManager {
         granted
     }
 
-    fn record_free_then_acquire(&self, freed: usize, acquired: usize) -> usize {
+    fn record_free_then_acquire(&self, freed: usize, acquired: usize) {
         let mut requesters_total = self.requesters_total.lock();
+        debug!(
+            "free_then_acquire: total {}, freed {}, acquired {}",
+            human_readable_size(*requesters_total),
+            human_readable_size(freed),
+            human_readable_size(acquired)
+        );
         assert!(*requesters_total >= freed);
         *requesters_total -= freed;
         *requesters_total += acquired;
-        self.cv.notify_all()
+        self.cv.notify_all();
+    }
+
+    fn record_free(&self, freed: usize) {
+        let mut requesters_total = self.requesters_total.lock();
+        debug!(
+            "free: total {}, freed {}",
+            human_readable_size(*requesters_total),
+            human_readable_size(freed)
+        );
+        assert!(*requesters_total >= freed);
+        *requesters_total -= freed;
+        self.cv.notify_all();
     }
 
     /// Drop a memory consumer and reclaim the memory
@@ -378,6 +403,8 @@ impl MemoryManager {
                 let mut total = self.requesters_total.lock();
                 assert!(*total >= mem_used);
                 *total -= mem_used;
+                self.cv.notify_all();
+                return;
             }
         }
         self.shrink_tracker_usage(mem_used);
