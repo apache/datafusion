@@ -169,6 +169,8 @@ pub struct CreateMemoryTable {
     pub name: String,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
 }
 
 /// Creates an external table.
