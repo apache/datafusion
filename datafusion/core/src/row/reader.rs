@@ -245,7 +245,7 @@ impl<'a> RowReader<'a> {
         let len = (offset_size & 0xffff_ffff) as usize;
         let varlena_offset = self.base_offset + offset;
         let bytes = &self.data[varlena_offset..varlena_offset + len];
-        std::str::from_utf8(bytes).unwrap()
+        unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 
     fn get_binary(&self, idx: usize) -> &[u8] {
