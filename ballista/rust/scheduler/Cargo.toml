@@ -66,4 +66,4 @@ uuid = { version = "0.8", features = ["v4"] }
 
 [build-dependencies]
 configure_me_codegen = "0.4.1"
-tonic-build = { version = "0.6" }
+tonic-build = { version = "0.7" }
