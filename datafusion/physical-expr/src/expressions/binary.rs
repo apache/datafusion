@@ -499,9 +499,7 @@ fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     ])?;
     match result {
         ColumnarValue::Array(array_ref) => Ok(array_ref),
-        _ => Err(DataFusionError::Execution(
-            "string_concat return type should be Array, but Scalar found".to_string(),
-        )),
+        scalar_value => Ok(scalar_value.into_array(1)),
     }
 }
 
