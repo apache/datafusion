@@ -21,52 +21,70 @@
 
 A quarterly roadmap will be published to give the DataFusion community visibility into the priorities of the projects contributors. This roadmap is not binding.
 
-## 2022 Q1
+## 2022 Q2
 
 ### DataFusion Core
 
-- Publish official Arrow2 branch
-- Implementation of memory manager (i.e. to enable spilling to disk as needed)
-
-### Benchmarking
-
-- Inclusion in Db-Benchmark with all quries covered
-- All TPCH queries covered
-
-### Performance Improvements
-
-- Predicate evaluation
-- Improve multi-column comparisons (that can't be vectorized at the moment)
-- Null constant support
-
-### New Features
-
-- Read JSON as table
-- Simplify DDL with DataFusion-Cli
-- Add Decimal128 data type and the attendant features such as Arrow Kernel and UDF support
-- Add new experimental e-graph based optimizer
+- IO Improvements
+  - Reading, registering, and writing more file formats from both DataFrame API and SQL
+  - Additional options for IO including partitioning and metadata support
+- Work Scheduling
+  - Improve predictability, observability and performance of IO and CPU-bound work
+  - Develop a more explicit story for managing parallelism during plan execution
+- Memory Management
+  - Add more operators for memory limited execution
+- Performance
+  - Incorporate row-format into operators such as aggregate
+  - Add row-format benchmarks
+  - Explore JIT-compiling complex expressions
+  - Explore LLVM for JIT, with inline Rust functions as the primary goal
+  - Improve performance of Sort and Merge using Row Format / JIT expressions
+- Documentation
+  - General improvements to DataFusion website
+  - Publish design documents
+- Streaming
+  - Create `StreamProvider` trait
 
 ### Ballista
 
-- Begin work on design documents and plan / priorities for development
+- Make production ready
+  - Shuffle file cleanup
+  - Fill functional gaps between DataFusion and Ballista
+  - Improve task scheduling and data exchange efficiency
+  - Better error handling
+    - Task failure
+    - Executor lost
+    - Schedule restart
+  - Improve monitoring and logging
+  - Auto scaling support
+- Support for multi-scheduler deployments. Initially for resiliency and fault tolerance but ultimately to support sharding for scalability and more efficient caching.
+- Executor deployment grouping based on resource allocation
 
 ### Extensions ([datafusion-contrib](https://github.com/datafusion-contrib]))
 
-- Stable S3 support
-- Begin design discussions and prototyping of a stream provider
+#### [DataFusion-Python](https://github.com/datafusion-contrib/datafusion-python)
 
-## Beyond 2022 Q1
+- Add missing functionality to DataFrame and SessionContext
+- Improve documentation
 
-There is no clear timeline for the below, but community members have expressed interest in working on these topics.
+#### [DataFusion-S3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
 
-### DataFusion Core
+- Create Python bindings to use with datafusion-python
 
-- Custom SQL support
-- Split DataFusion into multiple crates
-- Push based query execution and code generation
+#### [DataFusion-Tui](https://github.com/datafusion-contrib/datafusion-tui)
 
-### Ballista
+- Create multiple SQL editors
+- Expose more Context and query metadata
+- Support new data sources
+  - BigTable, HDFS, HTTP APIs
 
-- Evolve architecture so that it can be deployed in a multi-tenant cloud native environment
-- Ensure Ballista is scalable, elastic, and stable for production usage
-- Develop distributed ML capabilities
+#### [DataFusion-BigTable](https://github.com/datafusion-contrib/datafusion-bigtable)
+
+- Python binding to use with datafusion-python
+- Timestamp range predicate pushdown
+- Multi-threaded partition aware execution
+- Production ready Rust SDK
+
+#### [DataFusion-Streams](https://github.com/datafusion-contrib/datafusion-streams)
+
+- Create experimental implementation of `StreamProvider` trait
