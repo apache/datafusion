@@ -262,25 +262,22 @@ fn not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
 
 //check all filter values of In clause are static.
 //include `CastExpr + Literal` or `Literal`
-fn check_all_static_filter_expr(list: &Vec<Arc<dyn PhysicalExpr>>) -> bool {
-    list.iter().all(|v| match v {
-        x => {
-            let cast = x.as_any().downcast_ref::<expressions::CastExpr>();
-            if cast.is_some() {
-                let x1 = cast.unwrap();
-                x1.expr()
-                    .as_any()
-                    .downcast_ref::<expressions::Literal>()
-                    .is_some()
-            } else {
-                let cast = x.as_any().downcast_ref::<expressions::Literal>();
-                return if cast.is_some() { true } else { false };
-            }
+fn check_all_static_filter_expr(list: &[Arc<dyn PhysicalExpr>]) -> bool {
+    list.iter().all(|v| {
+        let cast = v.as_any().downcast_ref::<expressions::CastExpr>();
+        if let Some(c) = cast {
+            c.expr()
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+                .is_some()
+        } else {
+            let cast = v.as_any().downcast_ref::<expressions::Literal>();
+            cast.is_some()
         }
     })
 }
 
-fn cast_static_filter_to_set(list: &Vec<Arc<dyn PhysicalExpr>>) -> HashSet<ScalarValue> {
+fn cast_static_filter_to_set(list: &[Arc<dyn PhysicalExpr>]) -> HashSet<ScalarValue> {
     HashSet::from_iter(list.iter().map(|expr| {
         if let Some(cast) = expr.as_any().downcast_ref::<expressions::CastExpr>() {
             cast.expr()
@@ -412,12 +409,10 @@ impl std::fmt::Display for InListExpr {
             } else {
                 write!(f, "{} NOT IN ({:?})", self.expr, self.list)
             }
+        } else if self.set.is_some() {
+            write!(f, "Use In_Set{} IN ({:?} use In_Set)", self.expr, self.list)
         } else {
-            if self.set.is_some() {
-                write!(f, "Use In_Set{} IN ({:?} use In_Set)", self.expr, self.list)
-            } else {
-                write!(f, "{} IN ({:?})", self.expr, self.list)
-            }
+            write!(f, "{} IN ({:?})", self.expr, self.list)
         }
     }
 }
