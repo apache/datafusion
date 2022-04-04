@@ -684,6 +684,15 @@ mod tests {
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
 
+        assert_eq!(
+            session_ctx
+                .runtime_env()
+                .memory_manager
+                .get_requester_total(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
+
         Ok(())
     }
 
@@ -760,6 +769,15 @@ mod tests {
         let c7 = as_primitive_array::<UInt8Type>(&columns[6]);
         assert_eq!(c7.value(0), 15);
         assert_eq!(c7.value(c7.len() - 1), 254,);
+
+        assert_eq!(
+            session_ctx
+                .runtime_env()
+                .memory_manager
+                .get_requester_total(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
 
         Ok(())
     }
@@ -946,6 +964,15 @@ mod tests {
         assert_is_pending(&mut fut);
         drop(fut);
         assert_strong_count_converges_to_zero(refs).await;
+
+        assert_eq!(
+            session_ctx
+                .runtime_env()
+                .memory_manager
+                .get_requester_total(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
 
         Ok(())
     }

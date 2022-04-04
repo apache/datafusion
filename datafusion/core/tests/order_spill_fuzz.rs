@@ -93,6 +93,14 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
             assert_eq!(sort.metrics().unwrap().spill_count().unwrap(), 0);
         }
 
+        assert_eq!(
+            session_ctx
+                .runtime_env()
+                .memory_manager
+                .get_requester_total(),
+            0,
+            "The sort should have returned all memory used back to the memory manager"
+        );
         assert_eq!(expected, actual, "failure in @ pool_size {}", pool_size);
     }
 }

@@ -309,7 +309,8 @@ impl MemoryManager {
         ));
     }
 
-    fn get_requester_total(&self) -> usize {
+    /// Return the total memory usage for all requesters
+    pub fn get_requester_total(&self) -> usize {
         *self.requesters_total.lock()
     }
 
