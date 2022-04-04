@@ -39,7 +39,7 @@ CREATE_TABLE_SQL_FILE = "integration-tests/create_test_table.sql"
 def generate_csv_from_datafusion(fname: str):
     return subprocess.check_output(
         [
-            "./target/debug/datafusion-cli",
+            "./datafusion-cli/target/debug/datafusion-cli",
             "-f",
             CREATE_TABLE_SQL_FILE,
             "-f",
