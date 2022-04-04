@@ -49,7 +49,7 @@ parse_arg = "0.1.3"
 prost = "0.9"
 prost-types = "0.9"
 serde = { version = "1", features = ["derive"] }
-sqlparser = "0.15"
+sqlparser = "0.16"
 tokio = "1.0"
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
