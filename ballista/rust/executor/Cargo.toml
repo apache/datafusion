@@ -49,7 +49,7 @@ snmalloc-rs = { version = "0.2", optional = true }
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "parking_lot"] }
 tokio-stream = { version = "0.1", features = ["net"] }
-tonic = "0.6"
+tonic = "0.7"
 uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]

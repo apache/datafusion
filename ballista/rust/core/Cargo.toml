@@ -51,7 +51,7 @@ prost-types = "0.9"
 serde = { version = "1", features = ["derive"] }
 sqlparser = "0.16"
 tokio = "1.0"
-tonic = "0.6"
+tonic = "0.7"
 uuid = { version = "0.8", features = ["v4"] }
 
 [dev-dependencies]
