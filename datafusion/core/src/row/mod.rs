@@ -186,6 +186,8 @@ pub fn fixed_size(schema: &Arc<Schema>) -> bool {
     schema.fields().iter().all(|f| !var_length(f.data_type()))
 }
 
+/// Tell if we can create raw-bytes based rows since we currently
+/// has limited data type supports in the row format
 pub fn row_supported(schema: &Arc<Schema>) -> bool {
     schema
         .fields()

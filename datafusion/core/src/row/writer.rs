@@ -24,7 +24,7 @@ use crate::reg_fn;
 #[cfg(feature = "jit")]
 use crate::row::fn_name;
 use crate::row::{
-    estimate_row_width, fixed_size, get_offsets, schema_null_free, row_supported,
+    estimate_row_width, fixed_size, get_offsets, row_supported, schema_null_free,
 };
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};

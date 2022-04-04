@@ -23,7 +23,7 @@ use crate::reg_fn;
 #[cfg(feature = "jit")]
 use crate::row::fn_name;
 use crate::row::{
-    all_valid, get_offsets, schema_null_free, row_supported, NullBitsFormatter,
+    all_valid, get_offsets, row_supported, schema_null_free, NullBitsFormatter,
 };
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
@@ -294,6 +294,7 @@ impl<'a> RowReader<'a> {
     }
 }
 
+/// Read the row currently pointed by RowWriter to the output columnar batch buffer
 pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
     if row.null_free || row.all_valid() {
         for ((col_idx, to), field) in batch
@@ -539,17 +540,20 @@ fn read_field_null_free(
     }
 }
 
+/// Columnar Batch buffer
 pub struct MutableRecordBatch {
     arrays: Vec<Box<dyn ArrayBuilder>>,
     schema: Arc<Schema>,
 }
 
 impl MutableRecordBatch {
+    /// new
     pub fn new(target_batch_size: usize, schema: Arc<Schema>) -> Self {
         let arrays = new_arrays(&schema, target_batch_size);
         Self { arrays, schema }
     }
 
+    /// Finalize the batch, output and reset this buffer
     pub fn output(&mut self) -> ArrowResult<RecordBatch> {
         let result = make_batch(self.schema.clone(), self.arrays.drain(..).collect());
         result
