@@ -487,6 +487,12 @@ fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
 
 /// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator
 fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    // return NULL if left or right is NULL
+    for i in 0..left.len() {
+        if left.is_null(i) || right.is_null(i) {
+            return Ok(new_null_array(&DataType::Utf8, left.len()));
+        }
+    }
     let result = string_expressions::concat(&[
         ColumnarValue::Array(left),
         ColumnarValue::Array(right),

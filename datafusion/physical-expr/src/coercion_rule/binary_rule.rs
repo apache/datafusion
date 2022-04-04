@@ -57,8 +57,9 @@ pub(crate) fn coerce_types(
         Operator::RegexMatch
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::StringConcat => string_coercion(lhs_type, rhs_type),
+        | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
+        // "||" operator has its own rules, and always return a string type
+        Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
             eq_coercion(lhs_type, rhs_type)
         }
@@ -368,6 +369,18 @@ fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
         }
         _ => None,
     }
+}
+
+/// Coercion rules for string concat.
+/// This is a union of string coercion rules and specified rules that
+/// at lease one side of lhs and rhs should be string.
+fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    string_coercion(lhs_type, rhs_type).or_else(|| match (lhs_type, rhs_type) {
+        (Utf8, _) | (_, Utf8) => Some(Utf8),
+        (LargeUtf8, _) | (_, LargeUtf8) => Some(LargeUtf8),
+        _ => None,
+    })
 }
 
 /// Coercion rules for Strings: the type that both lhs and rhs can be

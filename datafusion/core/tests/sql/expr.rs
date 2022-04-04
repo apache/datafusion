@@ -297,6 +297,7 @@ async fn test_string_concat_operator() -> Result<()> {
 
     // concat 4 strings as a string concat pipe.
     let sql = "SELECT 'aa' || 'b' || 'cc' || 'd'";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+----------------------------------------------------+",
         "| Utf8(\"aa\") || Utf8(\"b\") || Utf8(\"cc\") || Utf8(\"d\") |",
@@ -304,19 +305,30 @@ async fn test_string_concat_operator() -> Result<()> {
         "| aabccd                                             |",
         "+----------------------------------------------------+",
     ];
-    let actual = execute_to_batches(&ctx, sql).await;
     assert_batches_eq!(expected, &actual);
 
-    // concat 3 strings with one is NULL
+    // concat 2 strings and NULL, output should be NULL
     let sql = "SELECT 'aa' || NULL || 'd'";
+    let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+---------------------------------------+",
         "| Utf8(\"aa\") || Utf8(NULL) || Utf8(\"d\") |",
         "+---------------------------------------+",
-        "| aad                                   |",
+        "|                                       |",
         "+---------------------------------------+",
     ];
+    assert_batches_eq!(expected, &actual);
+
+    // concat 1 strings and 2 numeric
+    let sql = "SELECT 'a' || 42 || 23.3";
     let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------------+",
+        "| Utf8(\"a\") || Int64(42) || Float64(23.3) |",
+        "+-----------------------------------------+",
+        "| a4223.3                                 |",
+        "+-----------------------------------------+",
+    ];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
