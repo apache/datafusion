@@ -17,6 +17,9 @@
 
 //! Module containing helper methods for the various file formats
 
+/// default max records to scan to infer the schema
+pub const DEFAULT_SCHEMA_INFER_MAX_RECORD: usize = 1000;
+
 pub mod avro;
 pub mod csv;
 pub mod json;

@@ -30,6 +30,7 @@ use futures::StreamExt;
 
 use super::FileFormat;
 use super::FileScanConfig;
+use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::NdJsonExec;
@@ -40,14 +41,22 @@ use datafusion_data_access::object_store::{ObjectReader, ObjectReaderStream};
 /// The default file extension of json files
 pub const DEFAULT_JSON_EXTENSION: &str = ".json";
 /// New line delimited JSON `FileFormat` implementation.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct JsonFormat {
     schema_infer_max_rec: Option<usize>,
 }
 
+impl Default for JsonFormat {
+    fn default() -> Self {
+        Self {
+            schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
+        }
+    }
+}
+
 impl JsonFormat {
     /// Set a limit in terms of records to scan to infer the schema
-    /// - defaults to `None` (no limit)
+    /// - defaults to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
         self.schema_infer_max_rec = max_rec;
         self
