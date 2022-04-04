@@ -36,9 +36,11 @@ use arrow::{
 use crate::{expressions, PhysicalExpr};
 use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
+use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_common::{ScalarType, ScalarValue};
 use datafusion_expr::ColumnarValue;
+
+static OPTIMIZER_INSET_THRESHOLD: usize = 400;
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
@@ -76,17 +78,12 @@ pub struct InListExpr {
 /// InSet
 #[derive(Debug)]
 pub struct InSet {
-    contains_null: bool,
     set: HashSet<ScalarValue>,
 }
 
 impl InSet {
-    pub fn new(contains_null: bool, set: HashSet<ScalarValue>) -> Self {
-        Self { contains_null, set }
-    }
-
-    pub fn contains_null(&self) -> &bool {
-        &self.contains_null
+    pub fn new(set: HashSet<ScalarValue>) -> Self {
+        Self { set }
     }
 
     pub fn get_set(&self) -> &HashSet<ScalarValue> {
@@ -204,6 +201,26 @@ macro_rules! make_contains_primitive {
     }};
 }
 
+macro_rules! set_contains_with_negated {
+    ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr) => {{
+        if $NEGATED {
+            return Ok(ColumnarValue::Array(Arc::new(
+                $ARRAY
+                    .iter()
+                    .map(|x| x.map(|v| !$LIST_VALUES.contains(&v.try_into().unwrap())))
+                    .collect::<BooleanArray>(),
+            )));
+        } else {
+            return Ok(ColumnarValue::Array(Arc::new(
+                $ARRAY
+                    .iter()
+                    .map(|x| x.map(|v| $LIST_VALUES.contains(&v.try_into().unwrap())))
+                    .collect::<BooleanArray>(),
+            )));
+        }
+    }};
+}
+
 // whether each value on the left (can be null) is contained in the non-null list
 fn in_list_primitive<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
@@ -243,6 +260,45 @@ fn not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(array, values, |x, v: &[&str]| !v.contains(&x))
 }
 
+//check all filter values of In clause are static.
+//include `CastExpr + Literal` or `Literal`
+fn check_all_static_filter_expr(list: &Vec<Arc<dyn PhysicalExpr>>) -> bool {
+    list.iter().all(|v| match v {
+        x => {
+            let cast = x.as_any().downcast_ref::<expressions::CastExpr>();
+            if cast.is_some() {
+                let x1 = cast.unwrap();
+                x1.expr()
+                    .as_any()
+                    .downcast_ref::<expressions::Literal>()
+                    .is_some()
+            } else {
+                let cast = x.as_any().downcast_ref::<expressions::Literal>();
+                return if cast.is_some() { true } else { false };
+            }
+        }
+    })
+}
+
+fn cast_static_filter_to_set(list: &Vec<Arc<dyn PhysicalExpr>>) -> HashSet<ScalarValue> {
+    HashSet::from_iter(list.iter().map(|expr| {
+        if let Some(cast) = expr.as_any().downcast_ref::<expressions::CastExpr>() {
+            cast.expr()
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+                .unwrap()
+                .value()
+                .clone()
+        } else {
+            expr.as_any()
+                .downcast_ref::<expressions::Literal>()
+                .unwrap()
+                .value()
+                .clone()
+        }
+    }))
+}
+
 impl InListExpr {
     /// Create a new InList expression
     pub fn new(
@@ -250,39 +306,12 @@ impl InListExpr {
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
     ) -> Self {
-        //add size check
-        if list.iter().all(|v| match v {
-            x => {
-                let cast = x.as_any().downcast_ref::<expressions::CastExpr>();
-                if cast.is_some() {
-                    let x1 = cast.unwrap();
-                    x1.expr()
-                        .as_any()
-                        .downcast_ref::<expressions::Literal>()
-                        .is_some()
-                } else {
-                    return false;
-                }
-            }
-        }) {
-            let hash_set: HashSet<ScalarValue> =
-                HashSet::from_iter(list.iter().map(|expr| {
-                    let lit = expr
-                        .as_any()
-                        .downcast_ref::<expressions::CastExpr>()
-                        .unwrap()
-                        .expr()
-                        .as_any()
-                        .downcast_ref::<expressions::Literal>()
-                        .unwrap();
-                    lit.value().clone()
-                }));
-
+        if list.len() > OPTIMIZER_INSET_THRESHOLD && check_all_static_filter_expr(&list) {
             Self {
                 expr,
+                set: Some(InSet::new(cast_static_filter_to_set(&list))),
                 list,
                 negated,
-                set: Some(InSet::new(false, hash_set)),
             }
         } else {
             Self {
@@ -378,9 +407,17 @@ impl InListExpr {
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.negated {
-            write!(f, "{} NOT IN ({:?})", self.expr, self.list)
+            if self.set.is_some() {
+                write!(f, "Use In_Set{} NOT IN ({:?})", self.expr, self.list)
+            } else {
+                write!(f, "{} NOT IN ({:?})", self.expr, self.list)
+            }
         } else {
-            write!(f, "{} IN ({:?})", self.expr, self.list)
+            if self.set.is_some() {
+                write!(f, "Use In_Set{} IN ({:?} use In_Set)", self.expr, self.list)
+            } else {
+                write!(f, "{} IN ({:?})", self.expr, self.list)
+            }
         }
     }
 }
@@ -404,38 +441,78 @@ impl PhysicalExpr for InListExpr {
         let value_data_type = value.data_type();
 
         if let Some(in_set) = &self.set {
-            println!("work");
-            // if in_set.contains_null {
             let array = match value {
                 ColumnarValue::Array(array) => array,
                 ColumnarValue::Scalar(scalar) => scalar.to_array(),
             };
-            let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
-            // add change
-            let set = &in_set.set;
-            Ok(ColumnarValue::Array(Arc::new(
-                array
-                    .iter()
-                    .map(|x| x.map(|v| set.contains(&v.try_into().unwrap())))
-                    .collect::<BooleanArray>(),
-            )))
-            // } else {
-            //     let array = match value {
-            //         ColumnarValue::Array(array) => array,
-            //         ColumnarValue::Scalar(scalar) => scalar.to_array(),
-            //     };
-            //     let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-            //     // add change
-            //     let set = &in_set.set;
-            //     Ok(ColumnarValue::Array(Arc::new(
-            //         array
-            //             .iter()
-            //             .map(|x| x.map(|v| set.contains(&v)))
-            //             .collect::<BooleanArray>(),
-            //     )))
-            // }
+            let set = in_set.get_set();
+            match value_data_type {
+                DataType::Boolean => {
+                    let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int8 => {
+                    let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int16 => {
+                    let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int32 => {
+                    let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int64 => {
+                    let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt8 => {
+                    let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt16 => {
+                    let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt32 => {
+                    let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt64 => {
+                    let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Float32 => {
+                    let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Float64 => {
+                    let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Utf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<GenericStringArray<i32>>()
+                        .unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::LargeUtf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<GenericStringArray<i64>>()
+                        .unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                datatype => {
+                    return Result::Err(DataFusionError::NotImplemented(format!(
+                        "InSet does not support datatype {:?}.",
+                        datatype
+                    )))
+                }
+            };
         } else {
-            //println!(" not work");
             let list_values = self
                 .list
                 .iter()
