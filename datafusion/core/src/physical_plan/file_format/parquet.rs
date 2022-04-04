@@ -235,19 +235,32 @@ impl ExecutionPlan for ParquetExec {
         let adapter = SchemaAdapter::new(self.base_config.file_schema.clone());
 
         let join_handle = task::spawn_blocking(move || {
-            if let Err(e) = read_partition(
-                object_store.as_ref(),
-                adapter,
-                partition_index,
-                &partition,
-                metrics,
-                &projection,
-                &pruning_predicate,
-                batch_size,
-                response_tx.clone(),
-                limit,
-                partition_col_proj,
-            ) {
+            let res = if projection.is_empty() {
+                read_partition_no_file_columns(
+                    object_store.as_ref(),
+                    &partition,
+                    batch_size,
+                    response_tx.clone(),
+                    limit,
+                    partition_col_proj,
+                )
+            } else {
+                read_partition(
+                    object_store.as_ref(),
+                    adapter,
+                    partition_index,
+                    &partition,
+                    metrics,
+                    &projection,
+                    &pruning_predicate,
+                    batch_size,
+                    response_tx.clone(),
+                    limit,
+                    partition_col_proj,
+                )
+            };
+
+            if let Err(e) = res {
                 warn!(
                     "Parquet reader thread terminated due to error: {:?} for files: {:?}",
                     e, partition
@@ -446,6 +459,56 @@ fn build_row_group_predicate(
             }
         },
     )
+}
+
+fn read_partition_no_file_columns(
+    object_store: &dyn ObjectStore,
+    partition: &[PartitionedFile],
+    batch_size: usize,
+    response_tx: Sender<ArrowResult<RecordBatch>>,
+    limit: Option<usize>,
+    mut partition_column_projector: PartitionColumnProjector,
+) -> Result<()> {
+    use parquet::file::reader::FileReader;
+    let mut limit = limit.unwrap_or(usize::MAX);
+
+    for partitioned_file in partition {
+        if limit == 0 {
+            break;
+        }
+        let object_reader =
+            object_store.file_reader(partitioned_file.file_meta.sized_file.clone())?;
+        let file_reader = SerializedFileReader::new(ChunkObjectReader(object_reader))?;
+        let mut num_rows = usize::min(limit, file_reader
+                        .metadata()
+                        .file_metadata()
+                        .num_rows()
+                        .try_into()
+                        .expect("Row count should always be greater than or equal to 0 and less than usize::MAX"));
+        limit -= num_rows;
+
+        let partition_batch = partition_column_projector
+            .project_from_size(batch_size, &partitioned_file.partition_values)
+            .map_err(|e| {
+                let err_msg =
+                    format!("Error reading batch from {}: {}", partitioned_file, e);
+                if let Err(send_err) = send_result(
+                    &response_tx,
+                    Err(ArrowError::ParquetError(err_msg.clone())),
+                ) {
+                    return send_err;
+                }
+                DataFusionError::Execution(err_msg)
+            })?;
+
+        while num_rows > batch_size {
+            send_result(&response_tx, Ok(partition_batch.clone()))?;
+            num_rows -= batch_size;
+        }
+        let residual_batch = partition_batch.slice(0, num_rows);
+        send_result(&response_tx, Ok(residual_batch))?;
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
