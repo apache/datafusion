@@ -38,7 +38,138 @@ use datafusion::{
     prelude::SessionContext,
     test_util::{self, arrow_test_data, parquet_test_data},
 };
+use datafusion_common::ScalarValue;
 use futures::{stream, StreamExt};
+
+#[tokio::test]
+async fn parquet_distinct_partition_col() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    register_partitioned_alltypes_parquet(
+        &ctx,
+        &[
+            "year=2021/month=09/day=09/file.parquet",
+            "year=2021/month=10/day=09/file.parquet",
+            "year=2021/month=10/day=28/file.parquet",
+        ],
+        &["year", "month", "day"],
+        "",
+        "alltypes_plain.parquet",
+    )
+    .await;
+    //Test that only selecting partition columns is possible
+    let result = ctx
+        .sql("SELECT distinct year,month,day FROM t")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+------+-------+-----+",
+        "| year | month | day |",
+        "+------+-------+-----+",
+        "| 2021 | 09    | 09  |",
+        "| 2021 | 10    | 09  |",
+        "| 2021 | 10    | 28  |",
+        "+------+-------+-----+",
+    ];
+    assert_batches_sorted_eq!(expected, &result);
+    //Test that the number of rows returned by partition column scan and actually reading the parquet file are the same
+    let actual_row_count: usize = ctx
+        .sql("SELECT id from t")
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|batch| batch.num_rows())
+        .sum();
+
+    let partition_row_count: usize = ctx
+        .sql("SELECT year from t")
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|batch| batch.num_rows())
+        .sum();
+    assert_eq!(actual_row_count, partition_row_count);
+
+    //Test limit logic. 3 test cases
+    //1. limit is contained within a single partition with leftover rows
+    //2. limit is contained within a single partition without leftover rows
+    //3. limit is not contained within a single partition
+    //The id column is included to ensure that the parquet file is actually scanned.
+    let results  = ctx
+        .sql("SELECT COUNT(*) as num_rows_per_month, month, MAX(id) from t group by month order by num_rows_per_month desc")
+        .await?
+        .collect()
+        .await?;
+
+    let mut max_limit = match ScalarValue::try_from_array(results[0].column(0), 0)? {
+        ScalarValue::UInt64(Some(count)) => count,
+        s => panic!("Expected count as Int64 found {}", s),
+    };
+
+    max_limit += 1;
+    let last_batch = results
+        .last()
+        .expect("There shouled be at least one record batch returned");
+    let last_row_idx = last_batch.num_rows() - 1;
+    let mut min_limit =
+        match ScalarValue::try_from_array(last_batch.column(0), last_row_idx)? {
+            ScalarValue::UInt64(Some(count)) => count,
+            s => panic!("Expected count as Int64 found {}", s),
+        };
+
+    min_limit -= 1;
+
+    let sql_cross_partition_boundary = format!("SELECT month FROM t limit {}", max_limit);
+    let resulting_limit: u64 = ctx
+        .sql(sql_cross_partition_boundary.as_str())
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|r| r.num_rows() as u64)
+        .sum();
+
+    assert_eq!(max_limit, resulting_limit);
+
+    let sql_within_partition_boundary =
+        format!("SELECT month from t limit {}", min_limit);
+    let resulting_limit: u64 = ctx
+        .sql(sql_within_partition_boundary.as_str())
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|r| r.num_rows() as u64)
+        .sum();
+
+    assert_eq!(min_limit, resulting_limit);
+
+    let month = match ScalarValue::try_from_array(results[0].column(1), 0)? {
+        ScalarValue::Utf8(Some(month)) => month,
+        s => panic!("Expected count as Int64 found {}", s),
+    };
+
+    let sql_on_partition_boundary = format!(
+        "SELECT month from t where month = '{}' LIMIT {}",
+        month,
+        max_limit - 1
+    );
+    let resulting_limit: u64 = ctx
+        .sql(sql_on_partition_boundary.as_str())
+        .await?
+        .collect()
+        .await?
+        .into_iter()
+        .map(|r| r.num_rows() as u64)
+        .sum();
+    let partition_row_count = max_limit - 1;
+    assert_eq!(partition_row_count, resulting_limit);
+    Ok(())
+}
 
 #[tokio::test]
 async fn csv_filter_with_file_col() -> Result<()> {
