@@ -450,6 +450,11 @@ impl Iterator for SortedIterator {
                 len = 1;
             }
         }
+
+        assert!(
+            len > 0,
+            "There should have at least one record in a sort output slice."
+        );
         slices.push(CompositeSlice {
             batch_idx: last_batch_idx,
             start_row_idx,
