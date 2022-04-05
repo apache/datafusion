@@ -407,7 +407,7 @@ impl SortedIterator {
 }
 
 impl Iterator for SortedIterator {
-    type Item = Vec<CompositeIndex>;
+    type Item = Vec<CompositeSlice>;
 
     /// Emit a max of `batch_size` positions each time
     fn next(&mut self) -> Option<Self::Item> {
@@ -416,16 +416,48 @@ impl Iterator for SortedIterator {
         }
 
         let current_size = min(self.batch_size, self.length - self.pos);
-        let result = (0..current_size)
-            .map(|i| {
-                let p = self.pos + i;
-                let c_index = self.indices.value(p) as usize;
-                self.composite[c_index]
-            })
-            .collect::<Vec<_>>();
+
+        // Combine adjacent indexes from the same batch to make a slice,
+        // for more efficient `extend` later.
+        let mut last_batch_idx = 0;
+        let mut start_row_idx = 0;
+        let mut len = 0;
+
+        let mut slices = vec![];
+        for i in 0..current_size {
+            let p = self.pos + i;
+            let c_index = self.indices.value(p) as usize;
+            let ci = self.composite[c_index];
+
+            if len == 0 {
+                last_batch_idx = ci.batch_idx;
+                start_row_idx = ci.row_idx;
+                len = 1;
+            } else if ci.batch_idx == last_batch_idx {
+                len += 1;
+                // since we have pre-sort each of the incoming batches,
+                // so if we witnessed a wrong order of indexes from the same batch,
+                // it must be of the same key with the row pointed by start_row_index.
+                start_row_idx = min(start_row_idx, ci.row_idx);
+            } else {
+                slices.push(CompositeSlice {
+                    batch_idx: last_batch_idx,
+                    start_row_idx,
+                    len,
+                });
+                last_batch_idx = ci.batch_idx;
+                start_row_idx = ci.row_idx;
+                len = 1;
+            }
+        }
+        slices.push(CompositeSlice {
+            batch_idx: last_batch_idx,
+            start_row_idx,
+            len,
+        });
 
         self.pos += current_size;
-        Some(result)
+        Some(slices)
     }
 }
 
@@ -469,26 +501,26 @@ impl Stream for SortedSizedRecordBatchStream {
     ) -> Poll<Option<Self::Item>> {
         match self.sorted_iter.next() {
             None => Poll::Ready(None),
-            Some(combined) => {
-                let num_rows = combined.len();
-                let slices = combine_adjacent_indexes(combined);
-                let mut output = Vec::with_capacity(self.num_cols);
-                for i in 0..self.num_cols {
-                    let arrays = self
-                        .batches
-                        .iter()
-                        .map(|b| b.column(i).data())
-                        .collect::<Vec<_>>();
-                    let mut mutable = MutableArrayData::new(arrays, false, num_rows);
-                    for x in slices.iter() {
-                        mutable.extend(
-                            x.batch_idx as usize,
-                            x.start_row_idx as usize,
-                            x.start_row_idx as usize + x.len,
-                        );
-                    }
-                    output.push(make_array(mutable.freeze()))
-                }
+            Some(slices) => {
+                let num_rows = slices.iter().map(|s| s.len).sum();
+                let output = (0..self.num_cols)
+                    .map(|i| {
+                        let arrays = self
+                            .batches
+                            .iter()
+                            .map(|b| b.column(i).data())
+                            .collect::<Vec<_>>();
+                        let mut mutable = MutableArrayData::new(arrays, false, num_rows);
+                        for x in slices.iter() {
+                            mutable.extend(
+                                x.batch_idx as usize,
+                                x.start_row_idx as usize,
+                                x.start_row_idx as usize + x.len,
+                            );
+                        }
+                        make_array(mutable.freeze())
+                    })
+                    .collect::<Vec<_>>();
                 let batch = RecordBatch::try_new(self.schema.clone(), output);
                 let poll = Poll::Ready(Some(batch));
                 self.metrics.record_poll(poll)
@@ -501,43 +533,6 @@ struct CompositeSlice {
     batch_idx: u32,
     start_row_idx: u32,
     len: usize,
-}
-
-/// Combine adjacent indexes from the same batch to make a slice, for more efficient `extend` later.
-fn combine_adjacent_indexes(combined: Vec<CompositeIndex>) -> Vec<CompositeSlice> {
-    let mut last_batch_idx = 0;
-    let mut start_row_idx = 0;
-    let mut len = 0;
-
-    let mut slices = vec![];
-    for ci in combined {
-        if len == 0 {
-            last_batch_idx = ci.batch_idx;
-            start_row_idx = ci.row_idx;
-            len = 1;
-        } else if ci.batch_idx == last_batch_idx {
-            len += 1;
-            // since we have pre-sort each of the incoming batches,
-            // so if we witnessed a wrong order of indexes from the same batch,
-            // it must be of the same key with the row pointed by start_row_index.
-            start_row_idx = min(start_row_idx, ci.row_idx);
-        } else {
-            slices.push(CompositeSlice {
-                batch_idx: last_batch_idx,
-                start_row_idx,
-                len,
-            });
-            last_batch_idx = ci.batch_idx;
-            start_row_idx = ci.row_idx;
-            len = 1;
-        }
-    }
-    slices.push(CompositeSlice {
-        batch_idx: last_batch_idx,
-        start_row_idx,
-        len,
-    });
-    slices
 }
 
 impl RecordBatchStream for SortedSizedRecordBatchStream {
