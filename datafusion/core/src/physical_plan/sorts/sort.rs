@@ -373,10 +373,15 @@ fn get_sorted_iter(
 }
 
 struct SortedIterator {
+    /// Current logical position in the iterator
     pos: usize,
+    /// Indexes into the input representing the correctly sorted total output
     indices: UInt32Array,
+    /// Map each each logical input index to where it can be found in the sorted input batches
     composite: Vec<CompositeIndex>,
+    /// Maximum batch size to produce
     batch_size: usize,
+    /// total length of the iterator
     length: usize,
 }
 
