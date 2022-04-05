@@ -341,15 +341,13 @@ fn get_sorted_iter(
         .iter()
         .enumerate()
         .flat_map(|(i, arrays)| {
-            (0..arrays[0].len())
-                .map(|r| CompositeIndex {
-                    // since we original use UInt32Array to index the combined mono batch,
-                    // component record batches won't overflow as well,
-                    // use u32 here for space efficiency.
-                    batch_idx: i as u32,
-                    row_idx: r as u32,
-                })
-                .collect::<Vec<CompositeIndex>>()
+            (0..arrays[0].len()).map(move |r| CompositeIndex {
+                // since we original use UInt32Array to index the combined mono batch,
+                // component record batches won't overflow as well,
+                // use u32 here for space efficiency.
+                batch_idx: i as u32,
+                row_idx: r as u32,
+            })
         })
         .collect::<Vec<CompositeIndex>>();
 
@@ -418,12 +416,14 @@ impl Iterator for SortedIterator {
         }
 
         let current_size = min(self.batch_size, self.length - self.pos);
-        let mut result = Vec::with_capacity(current_size);
-        for i in 0..current_size {
-            let p = self.pos + i;
-            let c_index = self.indices.value(p) as usize;
-            result.push(self.composite[c_index])
-        }
+        let result = (0..current_size)
+            .map(|i| {
+                let p = self.pos + i;
+                let c_index = self.indices.value(p) as usize;
+                self.composite[c_index]
+            })
+            .collect::<Vec<_>>();
+
         self.pos += current_size;
         Some(result)
     }
@@ -470,6 +470,8 @@ impl Stream for SortedSizedRecordBatchStream {
         match self.sorted_iter.next() {
             None => Poll::Ready(None),
             Some(combined) => {
+                let num_rows = combined.len();
+                let slices = combine_adjacent_indexes(combined);
                 let mut output = Vec::with_capacity(self.num_cols);
                 for i in 0..self.num_cols {
                     let arrays = self
@@ -477,14 +479,12 @@ impl Stream for SortedSizedRecordBatchStream {
                         .iter()
                         .map(|b| b.column(i).data())
                         .collect::<Vec<_>>();
-                    let mut mutable =
-                        MutableArrayData::new(arrays, false, combined.len());
-                    for x in combined.iter() {
-                        // we cannot extend with slice here, since the lexsort is unstable
+                    let mut mutable = MutableArrayData::new(arrays, false, num_rows);
+                    for x in slices.iter() {
                         mutable.extend(
                             x.batch_idx as usize,
-                            x.row_idx as usize,
-                            (x.row_idx + 1) as usize,
+                            x.start_row_idx as usize,
+                            x.start_row_idx as usize + x.len,
                         );
                     }
                     output.push(make_array(mutable.freeze()))
@@ -495,6 +495,49 @@ impl Stream for SortedSizedRecordBatchStream {
             }
         }
     }
+}
+
+struct CompositeSlice {
+    batch_idx: u32,
+    start_row_idx: u32,
+    len: usize,
+}
+
+/// Combine adjacent indexes from the same batch to make a slice, for more efficient `extend` later.
+fn combine_adjacent_indexes(combined: Vec<CompositeIndex>) -> Vec<CompositeSlice> {
+    let mut last_batch_idx = 0;
+    let mut start_row_idx = 0;
+    let mut len = 0;
+
+    let mut slices = vec![];
+    for ci in combined {
+        if len == 0 {
+            last_batch_idx = ci.batch_idx;
+            start_row_idx = ci.row_idx;
+            len = 1;
+        } else if ci.batch_idx == last_batch_idx {
+            len += 1;
+            // since we have pre-sort each of the incoming batches,
+            // so if we witnessed a wrong order of indexes from the same batch,
+            // it must be of the same key with the row pointed by start_row_index.
+            start_row_idx = min(start_row_idx, ci.row_idx);
+        } else {
+            slices.push(CompositeSlice {
+                batch_idx: last_batch_idx,
+                start_row_idx,
+                len,
+            });
+            last_batch_idx = ci.batch_idx;
+            start_row_idx = ci.row_idx;
+            len = 1;
+        }
+    }
+    slices.push(CompositeSlice {
+        batch_idx: last_batch_idx,
+        start_row_idx,
+        len,
+    });
+    slices
 }
 
 impl RecordBatchStream for SortedSizedRecordBatchStream {
