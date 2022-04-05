@@ -295,7 +295,16 @@ impl SessionContext {
             }) => {
                 // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
                 // so for now, we default to default catalog
-                let catalog = self.catalog(DEFAULT_CATALOG).ok_or_else(|| {
+                let tokens: Vec<&str> = schema_name.split('.').collect();
+                let (catalog, schema_name) = match tokens.len() {
+                    1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
+                    2 => Ok((tokens[0], tokens[1])),
+                    _ => Err(DataFusionError::Execution(format!(
+                        "Unable to parse catalog from {}",
+                        schema_name
+                    ))),
+                }?;
+                let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Missing '{}' catalog",
                         DEFAULT_CATALOG
@@ -3255,11 +3264,11 @@ mod tests {
             SessionConfig::new().with_information_schema(true),
         );
 
-        // Create schema
-        ctx.sql("CREATE SCHEMA abc").await?.collect().await?;
-
         // Create catalog
         ctx.sql("CREATE DATABASE test").await?.collect().await?;
+
+        // Create schema
+        ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;
 
         // Add table to schema
         ctx.sql("CREATE TABLE test.abc.y AS VALUES (1,2,3)")
