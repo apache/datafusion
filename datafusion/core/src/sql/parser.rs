@@ -375,10 +375,10 @@ impl<'a> DFParser<'a> {
     fn parse_delimiter(&mut self) -> Result<char, ParserError> {
         let token = self.parser.parse_literal_string()?;
         match token.len() {
-            1 => Ok(token.chars().nth(0).unwrap()),
-            _ => Err(ParserError::TokenizerError(format!(
-                "Delimiter must be a single char"
-            ))),
+            1 => Ok(token.chars().next().unwrap()),
+            _ => Err(ParserError::TokenizerError(
+                "Delimiter must be a single char".to_string(),
+            )),
         }
     }
 
