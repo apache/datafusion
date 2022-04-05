@@ -311,7 +311,7 @@ impl SessionContext {
                     ))
                 })?;
 
-                let schema = catalog.schema(&schema_name);
+                let schema = catalog.schema(schema_name);
 
                 match (if_not_exists, schema) {
                     (true, Some(_)) => {
@@ -320,7 +320,7 @@ impl SessionContext {
                     }
                     (true, None) | (false, None) => {
                         let schema = Arc::new(MemorySchemaProvider::new());
-                        catalog.register_schema(&schema_name, schema)?;
+                        catalog.register_schema(schema_name, schema)?;
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
