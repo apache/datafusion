@@ -3256,6 +3256,9 @@ mod tests {
         );
 
         // Create schema
+        ctx.sql("CREATE SCHEMA abc").await?.collect().await?;
+
+        // Create catalog
         ctx.sql("CREATE DATABASE test").await?.collect().await?;
 
         // Add table to schema
