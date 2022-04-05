@@ -66,6 +66,11 @@ impl ExplainExec {
     pub fn stringified_plans(&self) -> &[StringifiedPlan] {
         &self.stringified_plans
     }
+
+    /// access to verbose
+    pub fn verbose(&self) -> bool {
+        self.verbose
+    }
 }
 
 #[async_trait]
