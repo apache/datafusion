@@ -129,7 +129,7 @@ async fn create_external_table_with_timestamps() {
 
 #[tokio::test]
 #[should_panic(expected = "already exists")]
-async fn sql_create_duplicate_table() -> () {
+async fn sql_create_duplicate_table() {
     // the information schema used to introduce cyclic Arcs
     let ctx =
         SessionContext::with_config(SessionConfig::new().with_information_schema(true));
