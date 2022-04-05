@@ -80,6 +80,8 @@ pub struct CreateExternalTable {
     pub location: String,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
 }
 
 /// DataFusion Statement representations.
@@ -298,6 +300,9 @@ impl<'a> DFParser<'a> {
 
     fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
         self.parser.expect_keyword(Keyword::TABLE)?;
+        let if_not_exists =
+            self.parser
+                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name()?;
         let (columns, _) = self.parse_columns()?;
         self.parser
@@ -324,6 +329,7 @@ impl<'a> DFParser<'a> {
             has_header,
             location,
             table_partition_cols,
+            if_not_exists,
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -420,6 +426,7 @@ mod tests {
             has_header: false,
             location: "foo.csv".into(),
             table_partition_cols: vec![],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -433,6 +440,7 @@ mod tests {
             has_header: false,
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -449,6 +457,7 @@ mod tests {
                 has_header: true,
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
+                if_not_exists: false,
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -462,6 +471,7 @@ mod tests {
             has_header: false,
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -474,6 +484,7 @@ mod tests {
             has_header: false,
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -486,6 +497,21 @@ mod tests {
             has_header: false,
             location: "foo.avro".into(),
             table_partition_cols: vec![],
+            if_not_exists: false,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: it is ok for avro files not to have columns specified
+        let sql =
+            "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: FileType::Parquet,
+            has_header: false,
+            location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
         });
         expect_parse_ok(sql, expected)?;
 

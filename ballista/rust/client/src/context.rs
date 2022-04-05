@@ -376,44 +376,58 @@ impl BallistaContext {
                 ref file_type,
                 ref has_header,
                 ref table_partition_cols,
-            }) => match file_type {
-                FileType::CSV => {
-                    self.register_csv(
-                        name,
-                        location,
-                        CsvReadOptions::new()
-                            .schema(&schema.as_ref().to_owned().into())
-                            .has_header(*has_header)
-                            .table_partition_cols(table_partition_cols.to_vec()),
-                    )
-                    .await?;
-                    Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
+                ref if_not_exists,
+            }) => {
+                let table_exists = ctx.table_exist(name.as_str())?;
+
+                match (if_not_exists, table_exists) {
+                    (_, false) => match file_type {
+                        FileType::CSV => {
+                            self.register_csv(
+                                name,
+                                location,
+                                CsvReadOptions::new()
+                                    .schema(&schema.as_ref().to_owned().into())
+                                    .has_header(*has_header)
+                                    .table_partition_cols(table_partition_cols.to_vec()),
+                            )
+                            .await?;
+                            Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
+                        }
+                        FileType::Parquet => {
+                            self.register_parquet(
+                                name,
+                                location,
+                                ParquetReadOptions::default()
+                                    .table_partition_cols(table_partition_cols.to_vec()),
+                            )
+                            .await?;
+                            Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
+                        }
+                        FileType::Avro => {
+                            self.register_avro(
+                                name,
+                                location,
+                                AvroReadOptions::default()
+                                    .table_partition_cols(table_partition_cols.to_vec()),
+                            )
+                            .await?;
+                            Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
+                        }
+                        _ => Err(DataFusionError::NotImplemented(format!(
+                            "Unsupported file type {:?}.",
+                            file_type
+                        ))),
+                    },
+                    (true, true) => {
+                        Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
+                    }
+                    (false, true) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
                 }
-                FileType::Parquet => {
-                    self.register_parquet(
-                        name,
-                        location,
-                        ParquetReadOptions::default()
-                            .table_partition_cols(table_partition_cols.to_vec()),
-                    )
-                    .await?;
-                    Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
-                }
-                FileType::Avro => {
-                    self.register_avro(
-                        name,
-                        location,
-                        AvroReadOptions::default()
-                            .table_partition_cols(table_partition_cols.to_vec()),
-                    )
-                    .await?;
-                    Ok(Arc::new(DataFrame::new(ctx.state.clone(), &plan)))
-                }
-                _ => Err(DataFusionError::NotImplemented(format!(
-                    "Unsupported file type {:?}.",
-                    file_type
-                ))),
-            },
+            }
 
             _ => ctx.sql(sql).await,
         }

@@ -156,6 +156,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 constraints,
                 table_properties,
                 with_options,
+                if_not_exists,
                 ..
             } if columns.is_empty()
                 && constraints.is_empty()
@@ -167,6 +168,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),
                     input: Arc::new(plan),
+                    if_not_exists,
                 }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
@@ -309,6 +311,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             has_header,
             location,
             table_partition_cols,
+            if_not_exists,
         } = statement;
 
         // semantic checks
@@ -335,6 +338,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             file_type,
             has_header,
             table_partition_cols,
+            if_not_exists,
         }))
     }
 

@@ -328,6 +328,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     table_partition_cols: create_extern_table
                         .table_partition_cols
                         .clone(),
+                    if_not_exists: create_extern_table.if_not_exists,
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -775,6 +776,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 has_header,
                 schema: df_schema,
                 table_partition_cols,
+                if_not_exists,
             }) => {
                 use datafusion::sql::parser::FileType;
 
@@ -794,6 +796,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             has_header: *has_header,
                             schema: Some(df_schema.into()),
                             table_partition_cols: table_partition_cols.clone(),
+                            if_not_exists: *if_not_exists,
                         },
                     )),
                 })
@@ -1129,6 +1132,7 @@ mod roundtrip_tests {
                     file_type: *file,
                     has_header: true,
                     table_partition_cols: vec![],
+                    if_not_exists: false,
                 });
 
             roundtrip_test!(create_table_node);
