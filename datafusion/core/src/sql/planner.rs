@@ -309,6 +309,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             columns,
             file_type,
             has_header,
+            delimiter,
             location,
             table_partition_cols,
             if_not_exists,
@@ -337,6 +338,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             location,
             file_type,
             has_header,
+            delimiter,
             table_partition_cols,
             if_not_exists,
         }))
