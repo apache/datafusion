@@ -218,6 +218,7 @@ impl SessionContext {
                 ref file_type,
                 ref has_header,
                 ref table_partition_cols,
+                ref if_not_exists,
             }) => {
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
@@ -238,40 +239,74 @@ impl SessionContext {
                         DEFAULT_JSON_EXTENSION,
                     ),
                 };
-
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: false,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: table_partition_cols.clone(),
-                };
-
-                // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(schema.as_ref().to_owned().into()))
-                };
-                self.register_listing_table(name, location, options, provided_schema)
-                    .await?;
-                let plan = LogicalPlanBuilder::empty(false).build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                let table = self.table(name.as_str());
+                match (if_not_exists, table) {
+                    (true, Ok(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        // TODO make schema in CreateExternalTable optional instead of empty
+                        let provided_schema = if schema.fields().is_empty() {
+                            None
+                        } else {
+                            Some(Arc::new(schema.as_ref().to_owned().into()))
+                        };
+                        let options = ListingOptions {
+                            format: file_format,
+                            collect_stat: false,
+                            file_extension: file_extension.to_owned(),
+                            target_partitions: self.copied_config().target_partitions,
+                            table_partition_cols: table_partition_cols.clone(),
+                        };
+                        self.register_listing_table(
+                            name,
+                            location,
+                            options,
+                            provided_schema,
+                        )
+                        .await?;
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
             }
 
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, input }) => {
-                let plan = self.optimize(&input)?;
-                let physical = Arc::new(DataFrame::new(self.state.clone(), &plan));
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                name,
+                input,
+                if_not_exists,
+            }) => {
+                let table = self.table(name.as_str());
 
-                let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(
-                    Arc::new(plan.schema().as_ref().into()),
-                    batches,
-                )?);
-                self.register_table(name.as_str(), table)?;
+                match (if_not_exists, table) {
+                    (true, Ok(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        let plan = self.optimize(&input)?;
+                        let physical =
+                            Arc::new(DataFrame::new(self.state.clone(), &plan));
 
-                let plan = LogicalPlanBuilder::empty(false).build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        let batches: Vec<_> = physical.collect_partitioned().await?;
+                        let table = Arc::new(MemTable::try_new(
+                            Arc::new(plan.schema().as_ref().into()),
+                            batches,
+                        )?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
             }
 
             LogicalPlan::DropTable(DropTable {

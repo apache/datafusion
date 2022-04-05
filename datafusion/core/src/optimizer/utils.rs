@@ -226,12 +226,15 @@ pub fn from_plan(
             n: *n,
             input: Arc::new(inputs[0].clone()),
         })),
-        LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, .. }) => {
-            Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
-                input: Arc::new(inputs[0].clone()),
-                name: name.clone(),
-            }))
-        }
+        LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+            name,
+            if_not_exists,
+            ..
+        }) => Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+            input: Arc::new(inputs[0].clone()),
+            name: name.clone(),
+            if_not_exists: *if_not_exists,
+        })),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
         })),
