@@ -376,7 +376,10 @@ impl ListingTable {
                 let statistics = if self.options.collect_stat {
                     let object_reader = object_store
                         .file_reader(part_file.file_meta.sized_file.clone())?;
-                    self.options.format.infer_stats(object_reader).await?
+                    self.options
+                        .format
+                        .infer_stats(object_reader, self.file_schema.clone())
+                        .await?
                 } else {
                     Statistics::default()
                 };

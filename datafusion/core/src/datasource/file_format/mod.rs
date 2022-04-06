@@ -56,7 +56,11 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
     /// estimated statistics might vary greatly between file formats.
-    async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics>;
+    async fn infer_stats(
+        &self,
+        reader: Arc<dyn ObjectReader>,
+        table_schema: SchemaRef,
+    ) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.
