@@ -18,12 +18,13 @@
 //! Serde code to convert from protocol buffers to Rust data structures.
 
 use std::convert::{TryFrom, TryInto};
+use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::error::BallistaError;
 
+use crate::convert_required;
 use crate::serde::{from_proto_binary_op, proto_error, protobuf};
-use crate::{convert_box_required, convert_required};
 use chrono::{TimeZone, Utc};
 
 use datafusion::datafusion_data_access::{
@@ -31,6 +32,7 @@ use datafusion::datafusion_data_access::{
 };
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::context::ExecutionProps;
+use datafusion::logical_plan::FunctionRegistry;
 
 use datafusion::physical_plan::file_format::FileScanConfig;
 
@@ -54,125 +56,174 @@ impl From<&protobuf::PhysicalColumn> for Column {
     }
 }
 
-impl TryFrom<&protobuf::PhysicalExprNode> for Arc<dyn PhysicalExpr> {
-    type Error = BallistaError;
+pub(crate) fn parse_physical_expr(
+    proto: &protobuf::PhysicalExprNode,
+    registry: &dyn FunctionRegistry,
+) -> Result<Arc<dyn PhysicalExpr>, BallistaError> {
+    let expr_type = proto
+        .expr_type
+        .as_ref()
+        .ok_or_else(|| proto_error("Unexpected empty physical expression"))?;
 
-    fn try_from(expr: &protobuf::PhysicalExprNode) -> Result<Self, Self::Error> {
-        let expr_type = expr
-            .expr_type
-            .as_ref()
-            .ok_or_else(|| proto_error("Unexpected empty physical expression"))?;
+    let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
+        ExprType::Column(c) => {
+            let pcol: Column = c.into();
+            Arc::new(pcol)
+        }
+        ExprType::Literal(scalar) => {
+            Arc::new(Literal::new(convert_required!(scalar.value)?))
+        }
+        ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
+            parse_required_physical_box_expr(&binary_expr.l, registry, "left")?,
+            from_proto_binary_op(&binary_expr.op)?,
+            parse_required_physical_box_expr(&binary_expr.r, registry, "right")?,
+        )),
+        ExprType::AggregateExpr(_) => {
+            return Err(BallistaError::General(
+                "Cannot convert aggregate expr node to physical expression".to_owned(),
+            ));
+        }
+        ExprType::WindowExpr(_) => {
+            return Err(BallistaError::General(
+                "Cannot convert window expr node to physical expression".to_owned(),
+            ));
+        }
+        ExprType::Sort(_) => {
+            return Err(BallistaError::General(
+                "Cannot convert sort expr node to physical expression".to_owned(),
+            ));
+        }
+        ExprType::IsNullExpr(e) => Arc::new(IsNullExpr::new(
+            parse_required_physical_box_expr(&e.expr, registry, "expr")?,
+        )),
+        ExprType::IsNotNullExpr(e) => Arc::new(IsNotNullExpr::new(
+            parse_required_physical_box_expr(&e.expr, registry, "expr")?,
+        )),
+        ExprType::NotExpr(e) => Arc::new(NotExpr::new(parse_required_physical_box_expr(
+            &e.expr, registry, "expr",
+        )?)),
+        ExprType::Negative(e) => Arc::new(NegativeExpr::new(
+            parse_required_physical_box_expr(&e.expr, registry, "expr")?,
+        )),
+        ExprType::InList(e) => Arc::new(InListExpr::new(
+            parse_required_physical_box_expr(&e.expr, registry, "expr")?,
+            e.list
+                .iter()
+                .map(|x| parse_physical_expr(x, registry))
+                .collect::<Result<Vec<_>, _>>()?,
+            e.negated,
+        )),
+        ExprType::Case(e) => Arc::new(CaseExpr::try_new(
+            e.expr
+                .as_ref()
+                .map(|e| parse_physical_expr(e.as_ref(), registry))
+                .transpose()?,
+            e.when_then_expr
+                .iter()
+                .map(|e| {
+                    Ok((
+                        parse_required_physical_expr(
+                            &e.when_expr,
+                            registry,
+                            "when_expr",
+                        )?,
+                        parse_required_physical_expr(
+                            &e.then_expr,
+                            registry,
+                            "then_expr",
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, BallistaError>>()?
+                .as_slice(),
+            e.else_expr
+                .as_ref()
+                .map(|e| parse_physical_expr(e.as_ref(), registry))
+                .transpose()?,
+        )?),
+        ExprType::Cast(e) => Arc::new(CastExpr::new(
+            parse_required_physical_box_expr(&e.expr, registry, "expr")?,
+            convert_required!(e.arrow_type)?,
+            DEFAULT_DATAFUSION_CAST_OPTIONS,
+        )),
+        ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
+            parse_required_physical_box_expr(&e.expr, registry, "expr")?,
+            convert_required!(e.arrow_type)?,
+        )),
+        ExprType::ScalarFunction(e) => {
+            let scalar_function = datafusion_proto::protobuf::ScalarFunction::from_i32(
+                e.fun,
+            )
+            .ok_or_else(|| {
+                proto_error(format!("Received an unknown scalar function: {}", e.fun,))
+            })?;
 
-        let pexpr: Arc<dyn PhysicalExpr> = match expr_type {
-            ExprType::Column(c) => {
-                let pcol: Column = c.into();
-                Arc::new(pcol)
-            }
-            ExprType::Literal(scalar) => {
-                Arc::new(Literal::new(convert_required!(scalar.value)?))
-            }
-            ExprType::BinaryExpr(binary_expr) => Arc::new(BinaryExpr::new(
-                convert_box_required!(&binary_expr.l)?,
-                from_proto_binary_op(&binary_expr.op)?,
-                convert_box_required!(&binary_expr.r)?,
-            )),
-            ExprType::AggregateExpr(_) => {
-                return Err(BallistaError::General(
-                    "Cannot convert aggregate expr node to physical expression"
-                        .to_owned(),
-                ));
-            }
-            ExprType::WindowExpr(_) => {
-                return Err(BallistaError::General(
-                    "Cannot convert window expr node to physical expression".to_owned(),
-                ));
-            }
-            ExprType::Sort(_) => {
-                return Err(BallistaError::General(
-                    "Cannot convert sort expr node to physical expression".to_owned(),
-                ));
-            }
-            ExprType::IsNullExpr(e) => {
-                Arc::new(IsNullExpr::new(convert_box_required!(e.expr)?))
-            }
-            ExprType::IsNotNullExpr(e) => {
-                Arc::new(IsNotNullExpr::new(convert_box_required!(e.expr)?))
-            }
-            ExprType::NotExpr(e) => {
-                Arc::new(NotExpr::new(convert_box_required!(e.expr)?))
-            }
-            ExprType::Negative(e) => {
-                Arc::new(NegativeExpr::new(convert_box_required!(e.expr)?))
-            }
-            ExprType::InList(e) => Arc::new(InListExpr::new(
-                convert_box_required!(e.expr)?,
-                e.list
-                    .iter()
-                    .map(|x| x.try_into())
-                    .collect::<Result<Vec<_>, _>>()?,
-                e.negated,
-            )),
-            ExprType::Case(e) => Arc::new(CaseExpr::try_new(
-                e.expr.as_ref().map(|e| e.as_ref().try_into()).transpose()?,
-                e.when_then_expr
-                    .iter()
-                    .map(|e| {
-                        Ok((
-                            convert_required!(e.when_expr)?,
-                            convert_required!(e.then_expr)?,
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, BallistaError>>()?
-                    .as_slice(),
-                e.else_expr
-                    .as_ref()
-                    .map(|e| e.as_ref().try_into())
-                    .transpose()?,
-            )?),
-            ExprType::Cast(e) => Arc::new(CastExpr::new(
-                convert_box_required!(e.expr)?,
-                convert_required!(e.arrow_type)?,
-                DEFAULT_DATAFUSION_CAST_OPTIONS,
-            )),
-            ExprType::TryCast(e) => Arc::new(TryCastExpr::new(
-                convert_box_required!(e.expr)?,
-                convert_required!(e.arrow_type)?,
-            )),
-            ExprType::ScalarFunction(e) => {
-                let scalar_function =
-                    datafusion_proto::protobuf::ScalarFunction::from_i32(e.fun)
-                        .ok_or_else(|| {
-                            proto_error(format!(
-                                "Received an unknown scalar function: {}",
-                                e.fun,
-                            ))
-                        })?;
+            let args = e
+                .args
+                .iter()
+                .map(|x| parse_physical_expr(x, registry))
+                .collect::<Result<Vec<_>, _>>()?;
 
-                let args = e
-                    .args
-                    .iter()
-                    .map(|x| x.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
+            // TODO Do not create new the ExecutionProps
+            let execution_props = ExecutionProps::new();
 
-                // TODO Do not create new the ExecutionProps
-                let execution_props = ExecutionProps::new();
+            let fun_expr = functions::create_physical_fun(
+                &(&scalar_function).into(),
+                &execution_props,
+            )?;
 
-                let fun_expr = functions::create_physical_fun(
-                    &(&scalar_function).into(),
-                    &execution_props,
-                )?;
+            Arc::new(ScalarFunctionExpr::new(
+                &e.name,
+                fun_expr,
+                args,
+                &convert_required!(e.return_type)?,
+            ))
+        }
+        ExprType::ScalarUdf(e) => {
+            let scalar_fun = registry.udf(e.name.as_str())?.deref().clone().fun;
 
-                Arc::new(ScalarFunctionExpr::new(
-                    &e.name,
-                    fun_expr,
-                    args,
-                    &convert_required!(e.return_type)?,
-                ))
-            }
-        };
+            let args = e
+                .args
+                .iter()
+                .map(|x| parse_physical_expr(x, registry))
+                .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(pexpr)
-    }
+            Arc::new(ScalarFunctionExpr::new(
+                e.name.as_str(),
+                scalar_fun,
+                args,
+                &convert_required!(e.return_type)?,
+            ))
+        }
+    };
+
+    Ok(pexpr)
+}
+
+fn parse_required_physical_box_expr(
+    expr: &Option<Box<protobuf::PhysicalExprNode>>,
+    registry: &dyn FunctionRegistry,
+    field: &str,
+) -> Result<Arc<dyn PhysicalExpr>, BallistaError> {
+    expr.as_ref()
+        .map(|e| parse_physical_expr(e.as_ref(), registry))
+        .transpose()?
+        .ok_or_else(|| {
+            BallistaError::General(format!("Missing required field {:?}", field))
+        })
+}
+
+fn parse_required_physical_expr(
+    expr: &Option<protobuf::PhysicalExprNode>,
+    registry: &dyn FunctionRegistry,
+    field: &str,
+) -> Result<Arc<dyn PhysicalExpr>, BallistaError> {
+    expr.as_ref()
+        .map(|e| parse_physical_expr(e, registry))
+        .transpose()?
+        .ok_or_else(|| {
+            BallistaError::General(format!("Missing required field {:?}", field))
+        })
 }
 
 impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFunction {
@@ -210,13 +261,14 @@ impl TryFrom<&protobuf::physical_window_expr_node::WindowFunction> for WindowFun
 
 pub fn parse_protobuf_hash_partitioning(
     partitioning: Option<&protobuf::PhysicalHashRepartition>,
+    registry: &dyn FunctionRegistry,
 ) -> Result<Option<Partitioning>, BallistaError> {
     match partitioning {
         Some(hash_part) => {
             let expr = hash_part
                 .hash_expr
                 .iter()
-                .map(|e| e.try_into())
+                .map(|e| parse_physical_expr(e, registry))
                 .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
 
             Ok(Some(Partitioning::Hash(

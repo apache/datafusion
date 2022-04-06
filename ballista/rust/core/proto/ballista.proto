@@ -306,7 +306,15 @@ message PhysicalExprNode {
 
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
+
+    PhysicalScalarUdfNode scalar_udf = 16;
   }
+}
+
+message PhysicalScalarUdfNode {
+  string name = 1;
+  repeated PhysicalExprNode args = 2;
+  datafusion.ArrowType return_type = 4;
 }
 
 message PhysicalAggregateExprNode {
