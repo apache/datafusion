@@ -62,6 +62,9 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                     }
                 }
             }
+            if remainder.iter().all(|x| x == Some(false)) {
+                break;
+            }
         }
         Ok(ColumnarValue::Array(current_value))
     } else {
