@@ -892,7 +892,7 @@ mod tests {
         // batch1: c1(string), c3(int8)
         let batch1 = create_batch(vec![("c1", c1), ("c3", c3.clone())]);
 
-        // batch2: c3(int8), c2(int64), c1(string)
+        // batch2: c3(int8), c2(int64)
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
         let filter = col("c2").eq(lit(0_i64));
