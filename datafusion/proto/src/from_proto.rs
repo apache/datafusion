@@ -16,6 +16,12 @@
 // under the License.
 
 use crate::protobuf;
+use crate::protobuf::plan_type::PlanTypeEnum::{
+    FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+    OptimizedLogicalPlan, OptimizedPhysicalPlan,
+};
+use crate::protobuf::{OptimizedLogicalPlanType, OptimizedPhysicalPlanType};
+use datafusion::logical_plan::plan::StringifiedPlan;
 use datafusion::logical_plan::{FunctionRegistry, PlanType};
 use datafusion::prelude::bit_length;
 use datafusion::{
@@ -41,9 +47,6 @@ use datafusion::{
     scalar::ScalarValue,
 };
 use std::sync::Arc;
-use datafusion::logical_plan::plan::StringifiedPlan;
-use crate::protobuf::{OptimizedLogicalPlanType, OptimizedPhysicalPlanType};
-use crate::protobuf::plan_type::PlanTypeEnum::{FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan, OptimizedPhysicalPlan};
 
 #[derive(Debug)]
 pub enum Error {
@@ -122,8 +125,8 @@ pub trait FromOptionalField<T> {
 }
 
 impl<T, U> FromOptionalField<U> for Option<T>
-    where
-        T: TryInto<U, Error=Error>,
+where
+    T: TryInto<U, Error = Error>,
 {
     fn optional(self) -> Result<Option<U>, Error> {
         self.map(|t| t.try_into()).transpose()
@@ -288,9 +291,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 DataType::Duration(protobuf::TimeUnit::try_from(time_unit)?.into())
             }
             arrow_type::ArrowTypeEnum::Timestamp(protobuf::Timestamp {
-                                                     time_unit,
-                                                     timezone,
-                                                 }) => DataType::Timestamp(
+                time_unit,
+                timezone,
+            }) => DataType::Timestamp(
                 protobuf::TimeUnit::try_from(time_unit)?.into(),
                 match timezone.len() {
                     0 => None,
@@ -307,9 +310,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
                 protobuf::IntervalUnit::try_from(interval_unit)?.into(),
             ),
             arrow_type::ArrowTypeEnum::Decimal(protobuf::Decimal {
-                                                   whole,
-                                                   fractional,
-                                               }) => DataType::Decimal(*whole as usize, *fractional as usize),
+                whole,
+                fractional,
+            }) => DataType::Decimal(*whole as usize, *fractional as usize),
             arrow_type::ArrowTypeEnum::List(list) => {
                 let list_type =
                     list.as_ref().field_type.as_deref().required("field_type")?;
@@ -368,17 +371,30 @@ impl TryFrom<&protobuf::Field> for Field {
 impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
     fn from(stringified_plan: &protobuf::StringifiedPlan) -> Self {
         Self {
-            plan_type: match stringified_plan.plan_type.as_ref().unwrap().plan_type_enum.as_ref().unwrap() {
+            plan_type: match stringified_plan
+                .plan_type
+                .as_ref()
+                .unwrap()
+                .plan_type_enum
+                .as_ref()
+                .unwrap()
+            {
                 InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
-                OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) =>
-                    PlanType::OptimizedLogicalPlan { optimizer_name: optimizer_name.clone() },
+                OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
+                    PlanType::OptimizedLogicalPlan {
+                        optimizer_name: optimizer_name.clone(),
+                    }
+                }
                 FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
                 InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
-                OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) =>
-                    PlanType::OptimizedPhysicalPlan { optimizer_name: optimizer_name.clone() },
-                FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan
+                OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
+                    PlanType::OptimizedPhysicalPlan {
+                        optimizer_name: optimizer_name.clone(),
+                    }
+                }
+                FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
             },
-            plan: Arc::new(stringified_plan.plan.clone())
+            plan: Arc::new(stringified_plan.plan.clone()),
         }
     }
 }
@@ -531,9 +547,9 @@ impl TryFrom<&protobuf::scalar_type::Datatype> for DataType {
                 protobuf::PrimitiveScalarType::try_from(scalar_type)?.into()
             }
             Datatype::List(protobuf::ScalarListType {
-                               deepest_type,
-                               field_names,
-                           }) => {
+                deepest_type,
+                field_names,
+            }) => {
                 if field_names.is_empty() {
                     return Err(Error::at_least_one("field_names"));
                 }
@@ -1400,33 +1416,33 @@ fn typechecked_scalar_value_conversion(
         }
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
-                                      timezone,
-                                      value:
-                                      Some(protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(v)),
-                                  }),
+                timezone,
+                value:
+                    Some(protobuf::scalar_timestamp_value::Value::TimeMicrosecondValue(v)),
+            }),
             PrimitiveScalarType::TimeMicrosecond,
         ) => ScalarValue::TimestampMicrosecond(Some(*v), unwrap_timezone(timezone)),
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
-                                      timezone,
-                                      value:
-                                      Some(protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(v)),
-                                  }),
+                timezone,
+                value:
+                    Some(protobuf::scalar_timestamp_value::Value::TimeNanosecondValue(v)),
+            }),
             PrimitiveScalarType::TimeNanosecond,
         ) => ScalarValue::TimestampNanosecond(Some(*v), unwrap_timezone(timezone)),
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
-                                      timezone,
-                                      value: Some(protobuf::scalar_timestamp_value::Value::TimeSecondValue(v)),
-                                  }),
+                timezone,
+                value: Some(protobuf::scalar_timestamp_value::Value::TimeSecondValue(v)),
+            }),
             PrimitiveScalarType::TimeSecond,
         ) => ScalarValue::TimestampSecond(Some(*v), unwrap_timezone(timezone)),
         (
             Value::TimestampValue(protobuf::ScalarTimestampValue {
-                                      timezone,
-                                      value:
-                                      Some(protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(v)),
-                                  }),
+                timezone,
+                value:
+                    Some(protobuf::scalar_timestamp_value::Value::TimeMillisecondValue(v)),
+            }),
             PrimitiveScalarType::TimeMillisecond,
         ) => ScalarValue::TimestampMillisecond(Some(*v), unwrap_timezone(timezone)),
         (Value::Utf8Value(v), PrimitiveScalarType::Utf8) => {
