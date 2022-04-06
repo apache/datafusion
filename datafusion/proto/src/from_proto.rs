@@ -35,8 +35,9 @@ use datafusion::{
         window_functions::BuiltInWindowFunction,
     },
     prelude::{
-        array, btrim, date_part, date_trunc, lower, lpad, ltrim, md5, octet_length,
-        regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim, upper,
+        array, btrim, coalesce, date_part, date_trunc, lower, lpad, ltrim, md5,
+        octet_length, regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim,
+        upper,
     },
     scalar::ScalarValue,
 };
@@ -429,6 +430,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Now => Self::Now,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
+            ScalarFunction::Coalesce => Self::Coalesce,
         }
     }
 }
@@ -1199,6 +1201,12 @@ pub fn parse_expr(
                     parse_expr(&args[0], registry)?,
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
+                )),
+                ScalarFunction::Coalesce => Ok(coalesce(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
                 )),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
