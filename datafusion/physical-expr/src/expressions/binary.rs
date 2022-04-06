@@ -485,22 +485,31 @@ fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-/// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator
+/// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator.
+/// Besides, any `NULL` exists on lhs or rhs will come out result `NULL`
+/// 1. 'a' || 'b' || 32 = 'ab32'
+/// 2. 'a' || NULL = NULL
 fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
-    // return NULL if left or right is NULL
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            return Ok(new_null_array(&DataType::Utf8, left.len()));
-        }
-    }
-    let result = string_expressions::concat(&[
-        ColumnarValue::Array(left),
-        ColumnarValue::Array(right),
-    ])?;
-    match result {
-        ColumnarValue::Array(array_ref) => Ok(array_ref),
-        scalar_value => Ok(scalar_value.into_array(1)),
-    }
+    let ignore_null = match string_expressions::concat(&[
+        ColumnarValue::Array(left.clone()),
+        ColumnarValue::Array(right.clone()),
+    ])? {
+        ColumnarValue::Array(array_ref) => array_ref,
+        scalar_value => scalar_value.into_array(left.clone().len()),
+    };
+    let ignore_null_array = ignore_null.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = (0..ignore_null_array.len())
+        .into_iter()
+        .map(|index| {
+            if left.is_null(index) || right.is_null(index) {
+                None
+            } else {
+                Some(ignore_null_array.value(index))
+            }
+        })
+        .collect::<StringArray>();
+
+    Ok(Arc::new(result) as ArrayRef)
 }
 
 fn bitwise_and_scalar(
