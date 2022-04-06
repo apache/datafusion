@@ -436,6 +436,7 @@ fn optimize_plan(
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
         | LogicalPlan::Filter { .. }
+        | LogicalPlan::AliasedRelation { .. }
         | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)

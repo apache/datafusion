@@ -51,6 +51,7 @@ message LogicalPlanNode {
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
     UnionNode union = 19;
+    AliasedRelationNode aliased_relation = 20;
   }
 }
 
@@ -231,6 +232,11 @@ message LimitNode {
 
 message SelectionExecNode {
   datafusion.LogicalExprNode expr = 1;
+}
+
+message AliasedRelationNode {
+  LogicalPlanNode input = 1;
+  string alias = 2;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

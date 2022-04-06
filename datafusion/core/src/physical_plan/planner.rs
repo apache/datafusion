@@ -24,7 +24,8 @@ use super::{
 };
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScan, Window,
+    Aggregate, AliasedRelation, EmptyRelation, Filter, Join, Projection, Sort, TableScan,
+    Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
@@ -785,6 +786,10 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
+                LogicalPlan::AliasedRelation(AliasedRelation { input, .. }) => {
+                    // there is no physical plan for an aliased relation
+                    self.create_initial_plan(input, session_state).await
+                }
                 LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;
                     let input = self.create_initial_plan(input, session_state).await?;

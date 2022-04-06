@@ -20,7 +20,8 @@
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Window,
+    Aggregate, AliasedRelation, Analyze, Extension, Filter, Join, Projection, Sort,
+    Window,
 };
 
 use crate::logical_plan::{
@@ -221,6 +222,12 @@ pub fn from_plan(
             let left = inputs[0].clone();
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        }
+        LogicalPlan::AliasedRelation(AliasedRelation { alias, .. }) => {
+            Ok(LogicalPlan::AliasedRelation(AliasedRelation {
+                alias: alias.clone(),
+                input: Arc::new(inputs[0].clone()),
+            }))
         }
         LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
             n: *n,

@@ -25,8 +25,8 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    TableScan, ToStringifiedPlan, Union, Window,
+    Aggregate, AliasedRelation, Analyze, EmptyRelation, Explain, Filter, Join,
+    Projection, Sort, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
@@ -515,6 +515,14 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
+        })))
+    }
+
+    /// Apply an alias
+    pub fn alias(&self, alias: &str) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::AliasedRelation(AliasedRelation {
+            input: Arc::new(self.plan.clone()),
+            alias: alias.to_string(),
         })))
     }
 

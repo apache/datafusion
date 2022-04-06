@@ -28,9 +28,8 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-
 use datafusion::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
+    Aggregate, AliasedRelation, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
     Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
@@ -360,6 +359,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
                     .map_err(|e| e.into())
             }
+            LogicalPlanType::AliasedRelation(aliased_relation) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
+                LogicalPlanBuilder::from(input)
+                    .alias(&aliased_relation.alias)?
+                    .build()
+                    .map_err(|e| e.into())
+            }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
@@ -679,6 +686,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                             left_join_column,
                             right_join_column,
                             null_equals_null: *null_equals_null,
+                        },
+                    ))),
+                })
+            }
+            LogicalPlan::AliasedRelation(AliasedRelation { input, alias }) => {
+                let input: protobuf::LogicalPlanNode =
+                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                        input.as_ref(),
+                        extension_codec,
+                    )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::AliasedRelation(Box::new(
+                        protobuf::AliasedRelationNode {
+                            input: Some(Box::new(input)),
+                            alias: alias.clone(),
                         },
                     ))),
                 })
