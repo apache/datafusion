@@ -58,8 +58,8 @@ use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateCatalogSchema, CreateExternalTable, CreateMemoryTable, DropTable,
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    DropTable, FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -330,14 +330,23 @@ impl SessionContext {
             }) => {
                 // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
                 // so for now, we default to default catalog
-                let catalog = self.catalog(DEFAULT_CATALOG).ok_or_else(|| {
+                let tokens: Vec<&str> = schema_name.split('.').collect();
+                let (catalog, schema_name) = match tokens.len() {
+                    1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
+                    2 => Ok((tokens[0], tokens[1])),
+                    _ => Err(DataFusionError::Execution(format!(
+                        "Unable to parse catalog from {}",
+                        schema_name
+                    ))),
+                }?;
+                let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Missing '{}' catalog",
                         DEFAULT_CATALOG
                     ))
                 })?;
 
-                let schema = catalog.schema(&schema_name);
+                let schema = catalog.schema(schema_name);
 
                 match (if_not_exists, schema) {
                     (true, Some(_)) => {
@@ -346,13 +355,40 @@ impl SessionContext {
                     }
                     (true, None) | (false, None) => {
                         let schema = Arc::new(MemorySchemaProvider::new());
-                        catalog.register_schema(&schema_name, schema)?;
+                        catalog.register_schema(schema_name, schema)?;
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
                         "Schema '{:?}' already exists",
                         schema_name
+                    ))),
+                }
+            }
+            LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name,
+                if_not_exists,
+                ..
+            }) => {
+                let catalog = self.catalog(catalog_name.as_str());
+
+                match (if_not_exists, catalog) {
+                    (true, Some(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (true, None) | (false, None) => {
+                        let new_catalog = Arc::new(MemoryCatalogProvider::new());
+                        self.state
+                            .write()
+                            .catalog_list
+                            .register_catalog(catalog_name, new_catalog);
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                        "Catalog '{:?}' already exists",
+                        catalog_name
                     ))),
                 }
             }
@@ -3251,6 +3287,32 @@ mod tests {
 
         // Check table exists in schema
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+
+        assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sql_create_catalog() -> Result<()> {
+        // the information schema used to introduce cyclic Arcs
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        // Create catalog
+        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+
+        // Create schema
+        ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;
+
+        // Add table to schema
+        ctx.sql("CREATE TABLE test.abc.y AS VALUES (1,2,3)")
+            .await?
+            .collect()
+            .await?;
+
+        // Check table exists in schema
+        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
         Ok(())

@@ -51,6 +51,7 @@ message LogicalPlanNode {
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
     UnionNode union = 19;
+    CreateCatalogNode create_catalog = 20;
   }
 }
 
@@ -152,6 +153,12 @@ message CreateExternalTableNode {
 
 message CreateCatalogSchemaNode {
   string schema_name = 1;
+  bool if_not_exists = 2;
+  datafusion.DfSchema schema = 3;
+}
+
+message CreateCatalogNode {
+  string catalog_name = 1;
   bool if_not_exists = 2;
   datafusion.DfSchema schema = 3;
 }

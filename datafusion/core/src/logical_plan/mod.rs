@@ -63,9 +63,9 @@ pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
-    CreateCatalogSchema, CreateExternalTable, CreateMemoryTable, CrossJoin, DropTable,
-    EmptyRelation, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    PlanVisitor, Repartition, TableScan, Union, Values,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    CrossJoin, DropTable, EmptyRelation, JoinConstraint, JoinType, Limit, LogicalPlan,
+    Partitioning, PlanType, PlanVisitor, Repartition, TableScan, Union, Values,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

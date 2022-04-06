@@ -443,6 +443,7 @@ fn optimize_plan(
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::CreateMemoryTable(_)
         | LogicalPlan::CreateCatalogSchema(_)
+        | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::CrossJoin(_)
         | LogicalPlan::Extension { .. } => {
