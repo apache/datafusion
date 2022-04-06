@@ -217,13 +217,17 @@ impl SessionContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref delimiter,
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
-                        Arc::new(CsvFormat::default().with_has_header(*has_header))
-                            as Arc<dyn FileFormat>,
+                        Arc::new(
+                            CsvFormat::default()
+                                .with_has_header(*has_header)
+                                .with_delimiter(*delimiter as u8),
+                        ) as Arc<dyn FileFormat>,
                         DEFAULT_CSV_EXTENSION,
                     ),
                     FileType::Parquet => (

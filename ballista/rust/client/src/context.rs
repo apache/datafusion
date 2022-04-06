@@ -375,6 +375,7 @@ impl BallistaContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref delimiter,
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
@@ -389,6 +390,7 @@ impl BallistaContext {
                                 CsvReadOptions::new()
                                     .schema(&schema.as_ref().to_owned().into())
                                     .has_header(*has_header)
+                                    .delimiter(*delimiter as u8)
                                     .table_partition_cols(table_partition_cols.to_vec()),
                             )
                             .await?;
@@ -428,7 +430,6 @@ impl BallistaContext {
                     ))),
                 }
             }
-
             _ => ctx.sql(sql).await,
         }
     }

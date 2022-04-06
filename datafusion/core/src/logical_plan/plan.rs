@@ -186,6 +186,8 @@ pub struct CreateExternalTable {
     pub file_type: FileType,
     /// Whether the CSV file contains a header
     pub has_header: bool,
+    /// Delimiter for CSV
+    pub delimiter: char,
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Option to not error if table already exists
