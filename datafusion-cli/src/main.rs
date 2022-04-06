@@ -82,9 +82,6 @@ struct Args {
         help = "Reduce printing other than the results and work quietly"
     )]
     quiet: bool,
-
-    #[clap(long, help = "whether enable with_information_schema")]
-    with_information_schema: Option<bool>,
 }
 
 #[tokio::main]
@@ -107,16 +104,8 @@ pub async fn main() -> Result<()> {
         session_config = session_config.with_batch_size(batch_size);
     };
 
-    let mut enable_with_information_schema = false;
-    if let Some(with_information_schema) = args.with_information_schema {
-        session_config = session_config.with_information_schema(with_information_schema);
-        enable_with_information_schema = with_information_schema;
-    }
-
     let mut ctx: Context = match (args.host, args.port) {
-        (Some(ref h), Some(p)) => {
-            Context::new_remote(h, p, enable_with_information_schema).await?
-        }
+        (Some(ref h), Some(p)) => Context::new_remote(h, p).await?,
         _ => Context::new_local(&session_config),
     };
 
