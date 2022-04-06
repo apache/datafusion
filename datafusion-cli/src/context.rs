@@ -59,7 +59,10 @@ impl BallistaContext {
     pub async fn try_new(host: &str, port: u16) -> Result<Self> {
         use ballista::context::BallistaContext;
         use ballista::prelude::BallistaConfig;
-        let config: BallistaConfig = BallistaConfig::new()
+        let builder =
+            BallistaConfig::builder().set("ballista.with_information_schema", "true");
+        let config = builder
+            .build()
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
         let remote_ctx = BallistaContext::remote(host, port, &config)
             .await
