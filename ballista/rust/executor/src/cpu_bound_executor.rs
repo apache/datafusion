@@ -311,6 +311,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    // related https://github.com/apache/arrow-datafusion/issues/2140
     async fn executor_shutdown_while_task_running() {
         let barrier = Arc::new(Barrier::new(2));
 
