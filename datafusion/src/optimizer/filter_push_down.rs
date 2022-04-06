@@ -228,14 +228,13 @@ fn get_pushable_join_predicates<'a>(
     let schema_columns = schema
         .fields()
         .iter()
-        .map(|f| {
+        .flat_map(|f| {
             [
                 f.qualified_column(),
                 // we need to push down filter using unqualified column as well
                 f.unqualified_column(),
             ]
         })
-        .flatten()
         .collect::<HashSet<_>>();
 
     state
