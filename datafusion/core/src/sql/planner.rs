@@ -4056,6 +4056,18 @@ mod tests {
     }
 
     #[test]
+    fn join_with_aliases() {
+        let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
+        let expected = "Projection: #peeps.id, #folks.first_name\
+                                    \n    InnerJoin: #peeps.id = #folks.id\\
+                                    \n      AliasedRelation: peeps\
+                                    \n        TableScan: person projection=None
+                                    \n      AliasedRelation: folks\
+                                    \n        TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn cte_use_same_name_multiple_times() {
         let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
