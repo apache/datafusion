@@ -786,9 +786,15 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::AliasedRelation(AliasedRelation { input, .. }) => {
-                    // there is no physical plan for an aliased relation
-                    self.create_initial_plan(input, session_state).await
+                LogicalPlan::AliasedRelation(AliasedRelation { input, alias, .. }) => {
+                    match input.as_ref() {
+                        LogicalPlan::TableScan(scan) => {
+                            let mut scan = scan.clone();
+                            scan.table_name = alias.clone();
+                            self.create_initial_plan(input, session_state).await
+                        }
+                        _ => Err(DataFusionError::Plan("AliasedRelation should only wrap TableScan".to_string()))
+                    }
                 }
                 LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;

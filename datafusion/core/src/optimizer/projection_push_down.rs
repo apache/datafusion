@@ -21,7 +21,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, TableScan, Window,
+    Aggregate, AliasedRelation, Analyze, Join, Projection, TableScan, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -432,11 +432,38 @@ fn optimize_plan(
                 alias: alias.clone(),
             }))
         }
+        LogicalPlan::AliasedRelation(AliasedRelation { input, alias, .. }) => {
+            match input.as_ref() {
+                LogicalPlan::TableScan(TableScan { table_name, .. }) => {
+                    let new_required_columns = new_required_columns
+                        .iter()
+                        .map(|c| match &c.relation {
+                            Some(q) if q == alias => Column {
+                                relation: Some(table_name.clone()),
+                                name: c.name.clone(),
+                            },
+                            _ => c.clone(),
+                        })
+                        .collect();
+                    let new_inputs = vec![optimize_plan(
+                        optimizer,
+                        input,
+                        &new_required_columns,
+                        has_projection,
+                        execution_props,
+                    )?];
+                    let expr = vec![];
+                    utils::from_plan(plan, &expr, &new_inputs)
+                }
+                _ => Err(DataFusionError::Plan(
+                    "AliasedRelation should only wrap TableScan".to_string(),
+                )),
+            }
+        }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
         | LogicalPlan::Filter { .. }
-        | LogicalPlan::AliasedRelation { .. }
         | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
