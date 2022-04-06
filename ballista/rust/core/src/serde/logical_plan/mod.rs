@@ -33,8 +33,9 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
-    Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan, Values,
+    Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr,
+    JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan,
+    Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -341,6 +342,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                 Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                     schema_name: create_catalog_schema.schema_name.clone(),
                     if_not_exists: create_catalog_schema.if_not_exists,
+                    schema: pb_schema.try_into()?,
+                }))
+            }
+            LogicalPlanType::CreateCatalog(create_catalog) => {
+                let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
+                    BallistaError::General(String::from(
+                        "Protobuf deserialization error, CreateCatalogNode was missing required field schema.",
+                    ))
+                })?;
+
+                Ok(LogicalPlan::CreateCatalog(CreateCatalog {
+                    catalog_name: create_catalog.catalog_name.clone(),
+                    if_not_exists: create_catalog.if_not_exists,
                     schema: pb_schema.try_into()?,
                 }))
             }
@@ -809,6 +823,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
+                        if_not_exists: *if_not_exists,
+                        schema: Some(df_schema.into()),
+                    },
+                )),
+            }),
+            LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name,
+                if_not_exists,
+                schema: df_schema,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateCatalog(
+                    protobuf::CreateCatalogNode {
+                        catalog_name: catalog_name.clone(),
                         if_not_exists: *if_not_exists,
                         schema: Some(df_schema.into()),
                     },

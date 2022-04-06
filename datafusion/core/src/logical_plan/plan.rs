@@ -197,7 +197,18 @@ pub struct CreateExternalTable {
 pub struct CreateCatalogSchema {
     /// The table schema
     pub schema_name: String,
-    /// The table name
+    /// Do nothing (except issuing a notice) if a schema with the same name already exists
+    pub if_not_exists: bool,
+    /// Empty schema
+    pub schema: DFSchemaRef,
+}
+
+/// Creates a catalog (aka "Database").
+#[derive(Clone)]
+pub struct CreateCatalog {
+    /// The catalog name
+    pub catalog_name: String,
+    /// Do nothing (except issuing a notice) if a schema with the same name already exists
     pub if_not_exists: bool,
     /// Empty schema
     pub schema: DFSchemaRef,
@@ -367,6 +378,8 @@ pub enum LogicalPlan {
     CreateMemoryTable(CreateMemoryTable),
     /// Creates a new catalog schema.
     CreateCatalogSchema(CreateCatalogSchema),
+    /// Creates a new catalog (aka "Database").
+    CreateCatalog(CreateCatalog),
     /// Drops a table.
     DropTable(DropTable),
     /// Values expression. See
@@ -414,6 +427,7 @@ impl LogicalPlan {
             LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
                 schema
             }
+            LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => schema,
             LogicalPlan::DropTable(DropTable { schema, .. }) => schema,
         }
     }
@@ -456,7 +470,8 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(Analyze { schema, .. })
             | LogicalPlan::EmptyRelation(EmptyRelation { schema, .. })
             | LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. })
-            | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. }) => {
+            | LogicalPlan::CreateCatalogSchema(CreateCatalogSchema { schema, .. })
+            | LogicalPlan::CreateCatalog(CreateCatalog { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Limit(Limit { input, .. })
@@ -512,6 +527,7 @@ impl LogicalPlan {
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_)
             | LogicalPlan::CrossJoin(_)
             | LogicalPlan::Analyze { .. }
@@ -548,6 +564,7 @@ impl LogicalPlan {
             | LogicalPlan::Values { .. }
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_) => vec![],
         }
     }
@@ -701,6 +718,7 @@ impl LogicalPlan {
             | LogicalPlan::Values(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateCatalogSchema(_)
+            | LogicalPlan::CreateCatalog(_)
             | LogicalPlan::DropTable(_) => true,
         };
         if !recurse {
@@ -1068,6 +1086,11 @@ impl LogicalPlan {
                         ..
                     }) => {
                         write!(f, "CreateCatalogSchema: {:?}", schema_name)
+                    }
+                    LogicalPlan::CreateCatalog(CreateCatalog {
+                        catalog_name, ..
+                    }) => {
+                        write!(f, "CreateCatalog: {:?}", catalog_name)
                     }
                     LogicalPlan::DropTable(DropTable {
                         name, if_exists, ..
