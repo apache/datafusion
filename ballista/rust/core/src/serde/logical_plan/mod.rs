@@ -326,6 +326,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
+                    delimiter: create_extern_table.delimiter.chars().next().ok_or_else(|| {
+                        BallistaError::General(String::from("Protobuf deserialization error, unable to parse CSV delimiter"))
+                    })?,
                     table_partition_cols: create_extern_table
                         .table_partition_cols
                         .clone(),
@@ -788,6 +791,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 location,
                 file_type,
                 has_header,
+                delimiter,
                 schema: df_schema,
                 table_partition_cols,
                 if_not_exists,
@@ -811,6 +815,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             schema: Some(df_schema.into()),
                             table_partition_cols: table_partition_cols.clone(),
                             if_not_exists: *if_not_exists,
+                            delimiter: String::from(*delimiter),
                         },
                     )),
                 })
@@ -1158,6 +1163,7 @@ mod roundtrip_tests {
                     location: String::from("employee.csv"),
                     file_type: *file,
                     has_header: true,
+                    delimiter: ',',
                     table_partition_cols: vec![],
                     if_not_exists: false,
                 });
