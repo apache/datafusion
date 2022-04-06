@@ -26,7 +26,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
@@ -139,15 +139,10 @@ impl ExecutionPlan for ProjectionExec {
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(ProjectionExec::try_new(
-                self.expr.clone(),
-                children[0].clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "ProjectionExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(ProjectionExec::try_new(
+            self.expr.clone(),
+            children[0].clone(),
+        )?))
     }
 
     async fn execute(

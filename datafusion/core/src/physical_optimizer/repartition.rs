@@ -20,7 +20,9 @@ use std::sync::Arc;
 
 use super::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::Partitioning::*;
-use crate::physical_plan::{repartition::RepartitionExec, ExecutionPlan};
+use crate::physical_plan::{
+    repartition::RepartitionExec, with_new_children_if_necessary, ExecutionPlan,
+};
 use crate::{error::Result, execution::context::SessionConfig};
 
 /// Optimizer that introduces repartition to introduce more
@@ -191,7 +193,7 @@ fn optimize_partitions(
                 )
             })
             .collect::<Result<_>>()?;
-        plan.with_new_children(children)?
+        with_new_children_if_necessary(plan, children)?
     };
 
     // decide if we should bother trying to repartition the output of this plan

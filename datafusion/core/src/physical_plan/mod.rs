@@ -37,6 +37,7 @@ use futures::stream::Stream;
 use std::fmt;
 use std::fmt::Debug;
 
+use datafusion_common::DataFusionError;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
@@ -216,7 +217,6 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>>;
 
     /// Returns a new plan where all children were replaced by new plans.
-    /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
     fn with_new_children(
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
@@ -256,6 +256,32 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Returns the global output statistics for this `ExecutionPlan` node.
     fn statistics(&self) -> Statistics;
+}
+
+/// Returns a new plan where all children were replaced by new plans if the provided children
+/// do not share the same point references with the existing children.
+/// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
+/// Allow the vtable address comparisons for ExecutionPlan Trait Objects，it is harmless even
+/// in the case of 'false-native'.
+#[allow(clippy::vtable_address_comparisons)]
+pub fn with_new_children_if_necessary(
+    plan: Arc<dyn ExecutionPlan>,
+    children: Vec<Arc<dyn ExecutionPlan>>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    if children.len() != plan.children().len() {
+        Err(DataFusionError::Internal(
+            "Wrong number of children".to_string(),
+        ))
+    } else if children.is_empty()
+        || children
+            .iter()
+            .zip(plan.children().iter())
+            .any(|(c1, c2)| !Arc::ptr_eq(c1, c2))
+    {
+        plan.with_new_children(children)
+    } else {
+        Ok(plan)
+    }
 }
 
 /// Return a [wrapper](DisplayableExecutionPlan) around an

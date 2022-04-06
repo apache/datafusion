@@ -120,15 +120,10 @@ impl ExecutionPlan for GlobalLimitExec {
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(GlobalLimitExec::new(
-                children[0].clone(),
-                self.limit,
-            ))),
-            _ => Err(DataFusionError::Internal(
-                "GlobalLimitExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(GlobalLimitExec::new(
+            children[0].clone(),
+            self.limit,
+        )))
     }
 
     async fn execute(

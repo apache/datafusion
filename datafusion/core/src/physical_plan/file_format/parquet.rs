@@ -193,16 +193,9 @@ impl ExecutionPlan for ParquetExec {
 
     fn with_new_children(
         &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(Arc::new(self.clone()))
-        } else {
-            Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {:?}",
-                self
-            )))
-        }
+        Ok(Arc::new(self.clone()))
     }
 
     async fn execute(

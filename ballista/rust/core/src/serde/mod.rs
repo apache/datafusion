@@ -508,15 +508,10 @@ mod tests {
             &self,
             children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-            match children.len() {
-                1 => Ok(Arc::new(TopKExec {
-                    input: children[0].clone(),
-                    k: self.k,
-                })),
-                _ => Err(DataFusionError::Internal(
-                    "TopKExec wrong number of children".to_string(),
-                )),
-            }
+            Ok(Arc::new(TopKExec {
+                input: children[0].clone(),
+                k: self.k,
+            }))
         }
 
         /// Execute one partition and return an iterator over RecordBatch

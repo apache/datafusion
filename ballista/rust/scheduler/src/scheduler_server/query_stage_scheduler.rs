@@ -304,8 +304,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> QueryStageSchedul
                 }
             }
 
-            let plan =
-                remove_unresolved_shuffles(stage_plan.as_ref(), &partition_locations)?;
+            let plan = remove_unresolved_shuffles(stage_plan, &partition_locations)?;
             self.state.save_stage_plan(job_id, stage_id, plan).await?;
         }
 

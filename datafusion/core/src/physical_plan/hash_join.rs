@@ -260,19 +260,14 @@ impl ExecutionPlan for HashJoinExec {
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            2 => Ok(Arc::new(HashJoinExec::try_new(
-                children[0].clone(),
-                children[1].clone(),
-                self.on.clone(),
-                &self.join_type,
-                self.mode,
-                &self.null_equals_null,
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "HashJoinExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(HashJoinExec::try_new(
+            children[0].clone(),
+            children[1].clone(),
+            self.on.clone(),
+            &self.join_type,
+            self.mode,
+            &self.null_equals_null,
+        )?))
     }
 
     fn output_partitioning(&self) -> Partitioning {

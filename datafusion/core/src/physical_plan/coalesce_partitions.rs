@@ -99,12 +99,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone()))),
-            _ => Err(DataFusionError::Internal(
-                "CoalescePartitionsExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone())))
     }
 
     async fn execute(

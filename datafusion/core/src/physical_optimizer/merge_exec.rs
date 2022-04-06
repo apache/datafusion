@@ -19,6 +19,7 @@
 //! with more than one partition, to coalesce them into one partition
 //! when the node needs a single partition
 use super::optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::with_new_children_if_necessary;
 use crate::{
     error::Result,
     physical_plan::{coalesce_partitions::CoalescePartitionsExec, Distribution},
@@ -52,9 +53,14 @@ impl PhysicalOptimizerRule for AddCoalescePartitionsExec {
                 .map(|child| self.optimize(child.clone(), config))
                 .collect::<Result<Vec<_>>>()?;
             match plan.required_child_distribution() {
-                Distribution::UnspecifiedDistribution => plan.with_new_children(children),
-                Distribution::HashPartitioned(_) => plan.with_new_children(children),
-                Distribution::SinglePartition => plan.with_new_children(
+                Distribution::UnspecifiedDistribution => {
+                    with_new_children_if_necessary(plan, children)
+                }
+                Distribution::HashPartitioned(_) => {
+                    with_new_children_if_necessary(plan, children)
+                }
+                Distribution::SinglePartition => with_new_children_if_necessary(
+                    plan,
                     children
                         .iter()
                         .map(|child| {
