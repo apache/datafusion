@@ -1177,9 +1177,9 @@ mod tests {
             _runtime: Arc<RuntimeEnv>,
         ) -> Result<SendableRecordBatchStream> {
             let stream = if self.yield_first {
-                TestYieldingStream::New;
+                TestYieldingStream::New
             } else {
-                TestYieldingStream::Yielded;
+                TestYieldingStream::Yielded
             };
             Ok(Box::pin(stream))
         }
