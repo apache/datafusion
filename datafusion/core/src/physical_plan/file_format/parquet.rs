@@ -889,7 +889,7 @@ mod tests {
 
         let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
 
-        // batch1: c1(string), c2(int64), c3(int8)
+        // batch1: c1(string), c3(int8)
         let batch1 = create_batch(vec![("c1", c1), ("c3", c3.clone())]);
 
         // batch2: c3(int8), c2(int64), c1(string)
