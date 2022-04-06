@@ -19,7 +19,9 @@ use crate::error::BallistaError;
 use crate::execution_plans::{
     ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
 };
-use crate::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+use crate::serde::physical_plan::from_proto::{
+    parse_physical_expr, parse_protobuf_hash_partitioning,
+};
 use crate::serde::protobuf::physical_expr_node::ExprType;
 use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
@@ -30,7 +32,7 @@ use crate::serde::{
     byte_to_string, proto_error, protobuf, str_to_byte, AsExecutionPlan,
     PhysicalExtensionCodec,
 };
-use crate::{convert_box_required, convert_required, into_physical_plan, into_required};
+use crate::{convert_required, into_physical_plan, into_required};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
@@ -112,7 +114,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .expr
                     .iter()
                     .zip(projection.expr_name.iter())
-                    .map(|(expr, name)| Ok((expr.try_into()?, name.to_string())))
+                    .map(|(expr, name)| Ok((parse_physical_expr(expr,registry)?, name.to_string())))
                     .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>, BallistaError>>(
                     )?;
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
@@ -127,13 +129,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let predicate = filter
                     .expr
                     .as_ref()
+                    .map(|expr| parse_physical_expr(expr, registry))
+                    .transpose()?
                     .ok_or_else(|| {
                         BallistaError::General(
                             "filter (FilterExecNode) in PhysicalPlanNode is missing."
                                 .to_owned(),
                         )
-                    })?
-                    .try_into()?;
+                    })?;
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
@@ -184,7 +187,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         let expr = hash_part
                             .hash_expr
                             .iter()
-                            .map(|e| e.try_into())
+                            .map(|e| parse_physical_expr(e, registry))
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
 
                         Ok(Arc::new(RepartitionExec::try_new(
@@ -255,15 +258,29 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         })?;
 
                         match expr_type {
-                            ExprType::WindowExpr(window_node) => Ok(create_window_expr(
-                                &convert_required!(window_node.window_function)?,
-                                name.to_owned(),
-                                &[convert_box_required!(window_node.expr)?],
-                                &[],
-                                &[],
-                                Some(WindowFrame::default()),
-                                &physical_schema,
-                            )?),
+                            ExprType::WindowExpr(window_node) => {
+                                let window_node_expr = window_node
+                                    .expr
+                                    .as_ref()
+                                    .map(|e| parse_physical_expr(e.as_ref(), registry))
+                                    .transpose()?
+                                    .ok_or_else(|| {
+                                        proto_error(
+                                            "missing window_node expr expression"
+                                                .to_string(),
+                                        )
+                                    })?;
+
+                                Ok(create_window_expr(
+                                    &convert_required!(window_node.window_function)?,
+                                    name.to_owned(),
+                                    &[window_node_expr],
+                                    &[],
+                                    &[],
+                                    Some(WindowFrame::default()),
+                                    &physical_schema,
+                                )?)
+                            }
                             _ => Err(BallistaError::General(
                                 "Invalid expression for WindowAggrExec".to_string(),
                             )),
@@ -302,7 +319,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .iter()
                     .zip(hash_agg.group_expr_name.iter())
                     .map(|(expr, name)| {
-                        expr.try_into().map(|expr| (expr, name.to_string()))
+                        parse_physical_expr(expr, registry)
+                            .map(|expr| (expr, name.to_string()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -342,10 +360,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                             },
                                         )?;
 
+                                let input_phy_expr = agg_node.expr.as_ref()
+                                    .map(|e| parse_physical_expr(e.as_ref(), registry))
+                                    .transpose()?
+                                    .ok_or_else(|| proto_error("missing aggregate expression".to_string()))?;
+
                                 Ok(create_aggregate_expr(
                                     &aggr_function.into(),
                                     false,
-                                    &[convert_box_required!(agg_node.expr)?],
+                                    &[input_phy_expr],
                                     &physical_schema,
                                     name.to_string(),
                                 )?)
@@ -453,6 +476,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
                 let output_partitioning = parse_protobuf_hash_partitioning(
                     shuffle_writer.output_partitioning.as_ref(),
+                    registry,
                 )?;
 
                 Ok(Arc::new(ShuffleWriterExec::try_new(
@@ -508,7 +532,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: expr.try_into()?,
+                                expr: parse_physical_expr(expr,registry)?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -1015,6 +1039,14 @@ mod roundtrip_tests {
     use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
+    use datafusion::arrow::array::ArrayRef;
+    use datafusion::execution::context::ExecutionProps;
+    use datafusion::logical_plan::create_udf;
+    use datafusion::physical_plan::functions;
+    use datafusion::physical_plan::functions::{
+        make_scalar_function, BuiltinScalarFunction, ScalarFunctionExpr, Volatility,
+    };
+    use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
@@ -1046,6 +1078,33 @@ mod roundtrip_tests {
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = SessionContext::new();
+        let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+            BallistaCodec::default();
+        let proto: protobuf::PhysicalPlanNode =
+            protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec_plan.clone(),
+                codec.physical_extension_codec(),
+            )
+            .expect("to proto");
+        let runtime = ctx.runtime_env();
+        let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+            .try_into_physical_plan(
+                &ctx,
+                runtime.deref(),
+                codec.physical_extension_codec(),
+            )
+            .expect("from proto");
+        assert_eq!(
+            format!("{:?}", exec_plan),
+            format!("{:?}", result_exec_plan)
+        );
+        Ok(())
+    }
+
+    fn roundtrip_test_with_context(
+        exec_plan: Arc<dyn ExecutionPlan>,
+        ctx: SessionContext,
+    ) -> Result<()> {
         let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
             BallistaCodec::default();
         let proto: protobuf::PhysicalPlanNode =
@@ -1240,5 +1299,70 @@ mod roundtrip_tests {
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
         roundtrip_test(Arc::new(ParquetExec::new(scan_config, Some(predicate))))
+    }
+
+    #[test]
+    fn roundtrip_builtin_scalar_function() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        let input = Arc::new(EmptyExec::new(false, schema.clone()));
+
+        let execution_props = ExecutionProps::new();
+
+        let fun_expr = functions::create_physical_fun(
+            &BuiltinScalarFunction::Abs,
+            &execution_props,
+        )?;
+
+        let expr = ScalarFunctionExpr::new(
+            "abs",
+            fun_expr,
+            vec![col("a", &schema)?],
+            &DataType::Int64,
+        );
+
+        let project =
+            ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+
+        roundtrip_test(Arc::new(project))
+    }
+
+    #[test]
+    fn roundtrip_scalar_udf() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        let input = Arc::new(EmptyExec::new(false, schema.clone()));
+
+        let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
+
+        let scalar_fn = make_scalar_function(fn_impl);
+
+        let udf = create_udf(
+            "dummy",
+            vec![DataType::Int64],
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            scalar_fn.clone(),
+        );
+
+        let expr = ScalarFunctionExpr::new(
+            "dummy",
+            scalar_fn,
+            vec![col("a", &schema)?],
+            &DataType::Int64,
+        );
+
+        let project =
+            ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+
+        let mut ctx = SessionContext::new();
+
+        ctx.register_udf(udf);
+
+        roundtrip_test_with_context(Arc::new(project), ctx)
     }
 }
