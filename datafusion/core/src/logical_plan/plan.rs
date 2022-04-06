@@ -199,7 +199,7 @@ pub struct CreateCatalogSchema {
     pub schema: DFSchemaRef,
 }
 
-/// Creates a catalog.
+/// Creates a catalog (aka "Database").
 #[derive(Clone)]
 pub struct CreateCatalog {
     /// The catalog name
@@ -374,7 +374,7 @@ pub enum LogicalPlan {
     CreateMemoryTable(CreateMemoryTable),
     /// Creates a new catalog schema.
     CreateCatalogSchema(CreateCatalogSchema),
-    /// Creates a new catalog schema.
+    /// Creates a new catalog (aka "Database").
     CreateCatalog(CreateCatalog),
     /// Drops a table.
     DropTable(DropTable),
