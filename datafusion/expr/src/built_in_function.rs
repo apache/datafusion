@@ -36,6 +36,8 @@ pub enum BuiltinScalarFunction {
     Atan,
     /// ceil
     Ceil,
+    /// coalesce
+    Coalesce,
     /// cos
     Cos,
     /// Digest
@@ -174,6 +176,7 @@ impl BuiltinScalarFunction {
             BuiltinScalarFunction::Asin => Volatility::Immutable,
             BuiltinScalarFunction::Atan => Volatility::Immutable,
             BuiltinScalarFunction::Ceil => Volatility::Immutable,
+            BuiltinScalarFunction::Coalesce => Volatility::Immutable,
             BuiltinScalarFunction::Cos => Volatility::Immutable,
             BuiltinScalarFunction::Exp => Volatility::Immutable,
             BuiltinScalarFunction::Floor => Volatility::Immutable,
@@ -270,6 +273,9 @@ impl FromStr for BuiltinScalarFunction {
             "sqrt" => BuiltinScalarFunction::Sqrt,
             "tan" => BuiltinScalarFunction::Tan,
             "trunc" => BuiltinScalarFunction::Trunc,
+
+            // conditional functions
+            "coalesce" => BuiltinScalarFunction::Coalesce,
 
             // string functions
             "array" => BuiltinScalarFunction::Array,

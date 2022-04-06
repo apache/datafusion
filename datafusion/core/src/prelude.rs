@@ -32,9 +32,9 @@ pub use crate::execution::options::{
 };
 pub use crate::logical_plan::{
     approx_percentile_cont, array, ascii, avg, bit_length, btrim, character_length, chr,
-    col, concat, concat_ws, count, create_udf, date_part, date_trunc, digest, in_list,
-    initcap, left, length, lit, lower, lpad, ltrim, max, md5, min, now, octet_length,
-    random, regexp_match, regexp_replace, repeat, replace, reverse, right, rpad, rtrim,
-    sha224, sha256, sha384, sha512, split_part, starts_with, strpos, substr, sum, to_hex,
-    translate, trim, upper, Column, JoinType, Partitioning,
+    coalesce, col, concat, concat_ws, count, create_udf, date_part, date_trunc, digest,
+    in_list, initcap, left, length, lit, lower, lpad, ltrim, max, md5, min, now,
+    octet_length, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
+    rpad, rtrim, sha224, sha256, sha384, sha512, split_part, starts_with, strpos, substr,
+    sum, to_hex, translate, trim, upper, Column, JoinType, Partitioning,
 };
