@@ -690,7 +690,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::AliasedRelation(AliasedRelation { input, alias }) => {
+            LogicalPlan::AliasedRelation(AliasedRelation { input, alias, .. }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),

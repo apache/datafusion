@@ -633,16 +633,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         self.schema_provider.get_table_provider(name.try_into()?),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                        (_, Some(provider)) => LogicalPlanBuilder::scan(
-                            // take alias into account to support `JOIN table1 as table2`
-                            alias
-                                .as_ref()
-                                .map(|a| a.name.value.as_str())
-                                .unwrap_or(&table_name),
-                            provider,
-                            None,
-                        )?
-                        .build(),
+                        (_, Some(provider)) => {
+                            let scan =
+                                LogicalPlanBuilder::scan(&table_name, provider, None);
+                            let scan = match alias {
+                                Some(ref name) => scan?.alias(name.name.value.as_str()),
+                                _ => scan,
+                            };
+                            scan?.build()
+                        }
                         (None, None) => Err(DataFusionError::Plan(format!(
                             "Table or CTE with name '{}' not found",
                             name
@@ -4059,11 +4058,11 @@ mod tests {
     fn join_with_aliases() {
         let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
         let expected = "Projection: #peeps.id, #folks.first_name\
-                                    \n    InnerJoin: #peeps.id = #folks.id\\
-                                    \n      AliasedRelation: peeps\
-                                    \n        TableScan: person projection=None
-                                    \n      AliasedRelation: folks\
-                                    \n        TableScan: person projection=None";
+                                    \n  Inner Join: #peeps.id = #folks.id\
+                                    \n    AliasedRelation: peeps\
+                                    \n      TableScan: person projection=None\
+                                    \n    AliasedRelation: folks\
+                                    \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 

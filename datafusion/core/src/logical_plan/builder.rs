@@ -520,9 +520,13 @@ impl LogicalPlanBuilder {
 
     /// Apply an alias
     pub fn alias(&self, alias: &str) -> Result<Self> {
+        let schema: Schema = self.schema().as_ref().clone().into();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
         Ok(Self::from(LogicalPlan::AliasedRelation(AliasedRelation {
             input: Arc::new(self.plan.clone()),
             alias: alias.to_string(),
+            schema,
         })))
     }
 

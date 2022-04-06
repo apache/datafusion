@@ -94,6 +94,8 @@ pub struct AliasedRelation {
     pub input: Arc<LogicalPlan>,
     /// The alias for the input relation
     pub alias: String,
+    /// The schema with qualified field names
+    pub schema: DFSchemaRef,
 }
 
 /// Filters rows from its input that do not match an
@@ -412,7 +414,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
-            LogicalPlan::AliasedRelation(AliasedRelation { input, .. }) => input.schema(),
+            LogicalPlan::AliasedRelation(AliasedRelation { schema, .. }) => schema,
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }

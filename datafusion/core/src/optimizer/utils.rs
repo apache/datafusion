@@ -223,10 +223,11 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::AliasedRelation(AliasedRelation { alias, .. }) => {
+        LogicalPlan::AliasedRelation(AliasedRelation { alias, schema, .. }) => {
             Ok(LogicalPlan::AliasedRelation(AliasedRelation {
                 alias: alias.clone(),
                 input: Arc::new(inputs[0].clone()),
+                schema: schema.clone(),
             }))
         }
         LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
