@@ -192,6 +192,7 @@ async fn sql_create_table_if_not_exists() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
 async fn create_pipe_delimited_csv_table() -> Result<()> {
     let ctx = SessionContext::new();
 

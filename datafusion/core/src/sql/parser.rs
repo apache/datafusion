@@ -450,6 +450,7 @@ mod tests {
             delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -552,6 +553,7 @@ mod tests {
             columns: vec![],
             file_type: FileType::Parquet,
             has_header: false,
+            delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: true,
