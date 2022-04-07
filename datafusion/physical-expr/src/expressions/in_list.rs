@@ -405,12 +405,12 @@ impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.negated {
             if self.set.is_some() {
-                write!(f, "Use In_Set{} NOT IN ({:?})", self.expr, self.list)
+                write!(f, "{} NOT IN (SET) ({:?})", self.expr, self.list)
             } else {
                 write!(f, "{} NOT IN ({:?})", self.expr, self.list)
             }
         } else if self.set.is_some() {
-            write!(f, "Use In_Set{} IN ({:?} use In_Set)", self.expr, self.list)
+            write!(f, "Use {} IN (SET) ({:?})", self.expr, self.list)
         } else {
             write!(f, "{} IN ({:?})", self.expr, self.list)
         }
