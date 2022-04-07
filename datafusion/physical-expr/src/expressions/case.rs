@@ -19,7 +19,8 @@ use std::{any::Any, sync::Arc};
 
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
-use arrow::array::{self, *};
+use arrow::array::*;
+use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
@@ -107,144 +108,6 @@ impl CaseExpr {
     }
 }
 
-macro_rules! if_then_else {
-    ($BUILDER_TYPE:ty, $ARRAY_TYPE:ty, $BOOLS:expr, $TRUE:expr, $FALSE:expr) => {{
-        let true_values = $TRUE
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$ARRAY_TYPE>()
-            .expect("true_values downcast failed");
-
-        let false_values = $FALSE
-            .as_ref()
-            .as_any()
-            .downcast_ref::<$ARRAY_TYPE>()
-            .expect("false_values downcast failed");
-
-        let mut builder = <$BUILDER_TYPE>::new($BOOLS.len());
-        for i in 0..$BOOLS.len() {
-            if $BOOLS.is_null(i) {
-                if false_values.is_null(i) {
-                    builder.append_null()?;
-                } else {
-                    builder.append_value(false_values.value(i))?;
-                }
-            } else if $BOOLS.value(i) {
-                if true_values.is_null(i) {
-                    builder.append_null()?;
-                } else {
-                    builder.append_value(true_values.value(i))?;
-                }
-            } else {
-                if false_values.is_null(i) {
-                    builder.append_null()?;
-                } else {
-                    builder.append_value(false_values.value(i))?;
-                }
-            }
-        }
-        Ok(Arc::new(builder.finish()))
-    }};
-}
-
-fn if_then_else(
-    bools: &BooleanArray,
-    true_values: ArrayRef,
-    false_values: ArrayRef,
-    data_type: &DataType,
-) -> Result<ArrayRef> {
-    match data_type {
-        DataType::UInt8 => if_then_else!(
-            array::UInt8Builder,
-            array::UInt8Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::UInt16 => if_then_else!(
-            array::UInt16Builder,
-            array::UInt16Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::UInt32 => if_then_else!(
-            array::UInt32Builder,
-            array::UInt32Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::UInt64 => if_then_else!(
-            array::UInt64Builder,
-            array::UInt64Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int8 => if_then_else!(
-            array::Int8Builder,
-            array::Int8Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int16 => if_then_else!(
-            array::Int16Builder,
-            array::Int16Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int32 => if_then_else!(
-            array::Int32Builder,
-            array::Int32Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Int64 => if_then_else!(
-            array::Int64Builder,
-            array::Int64Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Float32 => if_then_else!(
-            array::Float32Builder,
-            array::Float32Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Float64 => if_then_else!(
-            array::Float64Builder,
-            array::Float64Array,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Utf8 => if_then_else!(
-            array::StringBuilder,
-            array::StringArray,
-            bools,
-            true_values,
-            false_values
-        ),
-        DataType::Boolean => if_then_else!(
-            array::BooleanBuilder,
-            array::BooleanArray,
-            bools,
-            true_values,
-            false_values
-        ),
-        other => Err(DataFusionError::Execution(format!(
-            "CASE does not support '{:?}'",
-            other
-        ))),
-    }
-}
-
 impl CaseExpr {
     /// This function evaluates the form of CASE that matches an expression to fixed values.
     ///
@@ -278,7 +141,7 @@ impl CaseExpr {
             let then_value = then_value.into_array(batch.num_rows());
 
             current_value =
-                if_then_else(&when_match, then_value, current_value, &return_type)?;
+                zip(&when_match, then_value.as_ref(), current_value.as_ref())?;
 
             remainder = and(&remainder, &or_kleene(&not(&when_match)?, &base_nulls)?)?;
         }
@@ -292,7 +155,7 @@ impl CaseExpr {
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows());
-            current_value = if_then_else(&remainder, else_, current_value, &return_type)?;
+            current_value = zip(&remainder, else_.as_ref(), current_value.as_ref())?;
         }
 
         Ok(ColumnarValue::Array(current_value))
@@ -327,8 +190,7 @@ impl CaseExpr {
                 .evaluate_selection(batch, when_value)?;
             let then_value = then_value.into_array(batch.num_rows());
 
-            current_value =
-                if_then_else(when_value, then_value, current_value, &return_type)?;
+            current_value = zip(when_value, then_value.as_ref(), current_value.as_ref())?;
 
             // Succeed tuples should be filtered out for short-circuit evaluation,
             // null values for the current when expr should be kept
@@ -345,7 +207,7 @@ impl CaseExpr {
             let else_ = expr
                 .evaluate_selection(batch, &remainder)?
                 .into_array(batch.num_rows());
-            current_value = if_then_else(&remainder, else_, current_value, &return_type)?;
+            current_value = zip(&remainder, else_.as_ref(), current_value.as_ref())?;
         }
 
         Ok(ColumnarValue::Array(current_value))
