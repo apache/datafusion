@@ -119,18 +119,13 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(FilterExec::try_new(
-                self.predicate.clone(),
-                children[0].clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "FilterExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(FilterExec::try_new(
+            self.predicate.clone(),
+            children[0].clone(),
+        )?))
     }
 
     async fn execute(
@@ -242,10 +237,10 @@ mod tests {
 
     use super::*;
     use crate::datafusion_data_access::object_store::local::LocalFileSystem;
-    use crate::physical_plan::collect;
     use crate::physical_plan::expressions::*;
     use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
     use crate::physical_plan::ExecutionPlan;
+    use crate::physical_plan::{collect, with_new_children_if_necessary};
     use crate::prelude::SessionContext;
     use crate::scalar::ScalarValue;
     use crate::test;
@@ -304,6 +299,46 @@ mod tests {
             .for_each(|batch| assert_eq!(13, batch.num_columns()));
         let row_count: usize = results.iter().map(|batch| batch.num_rows()).sum();
         assert_eq!(41, row_count);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[allow(clippy::vtable_address_comparisons)]
+    async fn with_new_children() -> Result<()> {
+        let schema = test_util::aggr_test_schema();
+        let partitions = 4;
+        let (_, files) =
+            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
+        let input = Arc::new(CsvExec::new(
+            FileScanConfig {
+                object_store: Arc::new(LocalFileSystem {}),
+                file_schema: Arc::clone(&schema),
+                file_groups: files,
+                statistics: Statistics::default(),
+                projection: None,
+                limit: None,
+                table_partition_cols: vec![],
+            },
+            true,
+            b',',
+        ));
+
+        let predicate: Arc<dyn PhysicalExpr> = binary(
+            col("c2", &schema)?,
+            Operator::Gt,
+            lit(ScalarValue::from(1u32)),
+            &schema,
+        )?;
+
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input.clone())?);
+
+        let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
+        assert!(!Arc::ptr_eq(&filter, &new_filter));
+
+        let new_filter2 = with_new_children_if_necessary(filter.clone(), vec![input])?;
+        assert!(Arc::ptr_eq(&filter, &new_filter2));
 
         Ok(())
     }

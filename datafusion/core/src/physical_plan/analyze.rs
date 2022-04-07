@@ -92,21 +92,14 @@ impl ExecutionPlan for AnalyzeExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.len() == 1 {
-            Ok(Arc::new(Self::new(
-                self.verbose,
-                children.pop().unwrap(),
-                self.schema.clone(),
-            )))
-        } else {
-            Err(DataFusionError::Internal(format!(
-                "Invalid child count for AnalyzeExec. Expected 1 got {}",
-                children.len()
-            )))
-        }
+        Ok(Arc::new(Self::new(
+            self.verbose,
+            children.pop().unwrap(),
+            self.schema.clone(),
+        )))
     }
 
     async fn execute(

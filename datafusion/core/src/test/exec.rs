@@ -161,8 +161,8 @@ impl ExecutionPlan for MockExec {
     }
 
     fn with_new_children(
-        &self,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -300,8 +300,8 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn with_new_children(
-        &self,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -401,8 +401,8 @@ impl ExecutionPlan for ErrorExec {
     }
 
     fn with_new_children(
-        &self,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
     }
@@ -481,16 +481,10 @@ impl ExecutionPlan for StatisticsExec {
     }
 
     fn with_new_children(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(Arc::new(self.clone()))
-        } else {
-            Err(DataFusionError::Internal(
-                "Children cannot be replaced in CustomExecutionPlan".to_owned(),
-            ))
-        }
+        Ok(self)
     }
 
     async fn execute(
@@ -582,7 +576,7 @@ impl ExecutionPlan for BlockingExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Internal(format!(

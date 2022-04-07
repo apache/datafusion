@@ -1927,7 +1927,7 @@ mod tests {
         }
 
         fn with_new_children(
-            &self,
+            self: Arc<Self>,
             _children: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             unimplemented!("NoOpExecutionPlan::with_new_children");

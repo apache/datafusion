@@ -241,7 +241,7 @@ impl Default for SessionContextRegistry {
 }
 
 impl SessionContextRegistry {
-    /// Create the registry that object stores can registered into.
+    /// Create the registry that session contexts can registered into.
     /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
     pub fn new() -> Self {
         Self {
