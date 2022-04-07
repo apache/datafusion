@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     Statistics,
 };
 
-use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, Literal};
@@ -354,6 +354,18 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+        })
+    }
+}
+
+impl TryFrom<&FileRange> for protobuf::FileRange {
+    type Error = BallistaError;
+
+    fn try_from(value: &FileRange) -> Result<Self, Self::Error> {
+        Ok(protobuf::FileRange {
+            start: value.start,
+            end: value.end,
         })
     }
 }

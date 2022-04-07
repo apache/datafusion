@@ -30,7 +30,7 @@ use chrono::{TimeZone, Utc};
 use datafusion::datafusion_data_access::{
     object_store::local::LocalFileSystem, FileMeta, SizedFile,
 };
-use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::execution::context::ExecutionProps;
 use datafusion::logical_plan::FunctionRegistry;
 
@@ -301,6 +301,18 @@ impl TryFrom<&protobuf::PartitionedFile> for PartitionedFile {
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            range: val.range.as_ref().map(|v| v.try_into()).transpose()?,
+        })
+    }
+}
+
+impl TryFrom<&protobuf::FileRange> for FileRange {
+    type Error = BallistaError;
+
+    fn try_from(value: &protobuf::FileRange) -> Result<Self, Self::Error> {
+        Ok(FileRange {
+            start: value.start,
+            end: value.end,
         })
     }
 }
