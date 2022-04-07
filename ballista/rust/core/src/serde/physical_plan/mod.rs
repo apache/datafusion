@@ -19,7 +19,9 @@ use crate::error::BallistaError;
 use crate::execution_plans::{
     ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
 };
-use crate::serde::physical_plan::from_proto::parse_protobuf_hash_partitioning;
+use crate::serde::physical_plan::from_proto::{
+    parse_physical_expr, parse_protobuf_hash_partitioning,
+};
 use crate::serde::protobuf::physical_expr_node::ExprType;
 use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
 use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
@@ -30,12 +32,14 @@ use crate::serde::{
     byte_to_string, proto_error, protobuf, str_to_byte, AsExecutionPlan,
     PhysicalExtensionCodec,
 };
-use crate::{convert_box_required, convert_required, into_physical_plan, into_required};
+use crate::{convert_required, into_physical_plan, into_required};
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::datasource::PartitionedFile;
+use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::window_frames::WindowFrame;
+use datafusion::logical_plan::FunctionRegistry;
 use datafusion::physical_plan::aggregates::create_aggregate_expr;
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -52,11 +56,11 @@ use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::windows::{create_window_expr, WindowAggExec};
 use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
-use datafusion::prelude::SessionContext;
 use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
@@ -88,7 +92,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
     fn try_into_physical_plan(
         &self,
-        ctx: &SessionContext,
+        registry: &dyn FunctionRegistry,
+        runtime: &RuntimeEnv,
         extension_codec: &dyn PhysicalExtensionCodec,
     ) -> Result<Arc<dyn ExecutionPlan>, BallistaError> {
         let plan = self.physical_plan_type.as_ref().ok_or_else(|| {
@@ -99,34 +104,43 @@ impl AsExecutionPlan for PhysicalPlanNode {
         })?;
         match plan {
             PhysicalPlanType::Projection(projection) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(projection.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    projection.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 let exprs = projection
                     .expr
                     .iter()
                     .zip(projection.expr_name.iter())
-                    .map(|(expr, name)| Ok((expr.try_into()?, name.to_string())))
+                    .map(|(expr, name)| Ok((parse_physical_expr(expr,registry)?, name.to_string())))
                     .collect::<Result<Vec<(Arc<dyn PhysicalExpr>, String)>, BallistaError>>(
                     )?;
                 Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
             }
             PhysicalPlanType::Filter(filter) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(filter.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    filter.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 let predicate = filter
                     .expr
                     .as_ref()
+                    .map(|expr| parse_physical_expr(expr, registry))
+                    .transpose()?
                     .ok_or_else(|| {
                         BallistaError::General(
                             "filter (FilterExecNode) in PhysicalPlanNode is missing."
                                 .to_owned(),
                         )
-                    })?
-                    .try_into()?;
+                    })?;
                 Ok(Arc::new(FilterExec::try_new(predicate, input)?))
             }
             PhysicalPlanType::CsvScan(scan) => Ok(Arc::new(CsvExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), runtime)?,
                 scan.has_header,
                 str_to_byte(&scan.delimiter)?,
             ))),
@@ -134,19 +148,23 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let predicate = scan
                     .pruning_predicate
                     .as_ref()
-                    .map(|expr| parse_expr(expr, ctx))
+                    .map(|expr| parse_expr(expr, registry))
                     .transpose()?;
                 Ok(Arc::new(ParquetExec::new(
-                    decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
+                    decode_scan_config(scan.base_conf.as_ref().unwrap(), runtime)?,
                     predicate,
                 )))
             }
             PhysicalPlanType::AvroScan(scan) => Ok(Arc::new(AvroExec::new(
-                decode_scan_config(scan.base_conf.as_ref().unwrap(), ctx)?,
+                decode_scan_config(scan.base_conf.as_ref().unwrap(), runtime)?,
             ))),
             PhysicalPlanType::CoalesceBatches(coalesce_batches) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(coalesce_batches.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    coalesce_batches.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 Ok(Arc::new(CoalesceBatchesExec::new(
                     input,
                     coalesce_batches.target_batch_size as usize,
@@ -154,18 +172,22 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Merge(merge) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(merge.input, ctx, extension_codec)?;
+                    into_physical_plan!(merge.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(CoalescePartitionsExec::new(input)))
             }
             PhysicalPlanType::Repartition(repart) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(repart.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    repart.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 match repart.partition_method {
                     Some(PartitionMethod::Hash(ref hash_part)) => {
                         let expr = hash_part
                             .hash_expr
                             .iter()
-                            .map(|e| e.try_into())
+                            .map(|e| parse_physical_expr(e, registry))
                             .collect::<Result<Vec<Arc<dyn PhysicalExpr>>, _>>()?;
 
                         Ok(Arc::new(RepartitionExec::try_new(
@@ -199,17 +221,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::GlobalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, ctx, extension_codec)?;
+                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(GlobalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::LocalLimit(limit) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(limit.input, ctx, extension_codec)?;
+                    into_physical_plan!(limit.input, registry, runtime, extension_codec)?;
                 Ok(Arc::new(LocalLimitExec::new(input, limit.limit as usize)))
             }
             PhysicalPlanType::Window(window_agg) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(window_agg.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    window_agg.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 let input_schema = window_agg
                     .input_schema
                     .as_ref()
@@ -232,15 +258,29 @@ impl AsExecutionPlan for PhysicalPlanNode {
                         })?;
 
                         match expr_type {
-                            ExprType::WindowExpr(window_node) => Ok(create_window_expr(
-                                &convert_required!(window_node.window_function)?,
-                                name.to_owned(),
-                                &[convert_box_required!(window_node.expr)?],
-                                &[],
-                                &[],
-                                Some(WindowFrame::default()),
-                                &physical_schema,
-                            )?),
+                            ExprType::WindowExpr(window_node) => {
+                                let window_node_expr = window_node
+                                    .expr
+                                    .as_ref()
+                                    .map(|e| parse_physical_expr(e.as_ref(), registry))
+                                    .transpose()?
+                                    .ok_or_else(|| {
+                                        proto_error(
+                                            "missing window_node expr expression"
+                                                .to_string(),
+                                        )
+                                    })?;
+
+                                Ok(create_window_expr(
+                                    &convert_required!(window_node.window_function)?,
+                                    name.to_owned(),
+                                    &[window_node_expr],
+                                    &[],
+                                    &[],
+                                    Some(WindowFrame::default()),
+                                    &physical_schema,
+                                )?)
+                            }
                             _ => Err(BallistaError::General(
                                 "Invalid expression for WindowAggrExec".to_string(),
                             )),
@@ -255,8 +295,12 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::HashAggregate(hash_agg) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hash_agg.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    hash_agg.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(|| {
                     proto_error(format!(
                         "Received a HashAggregateNode message with unknown AggregateMode {}",
@@ -275,7 +319,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .iter()
                     .zip(hash_agg.group_expr_name.iter())
                     .map(|(expr, name)| {
-                        expr.try_into().map(|expr| (expr, name.to_string()))
+                        parse_physical_expr(expr, registry)
+                            .map(|expr| (expr, name.to_string()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -315,10 +360,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                             },
                                         )?;
 
+                                let input_phy_expr = agg_node.expr.as_ref()
+                                    .map(|e| parse_physical_expr(e.as_ref(), registry))
+                                    .transpose()?
+                                    .ok_or_else(|| proto_error("missing aggregate expression".to_string()))?;
+
                                 Ok(create_aggregate_expr(
                                     &aggr_function.into(),
                                     false,
-                                    &[convert_box_required!(agg_node.expr)?],
+                                    &[input_phy_expr],
                                     &physical_schema,
                                     name.to_string(),
                                 )?)
@@ -340,10 +390,18 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 )?))
             }
             PhysicalPlanType::HashJoin(hashjoin) => {
-                let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.left, ctx, extension_codec)?;
-                let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(hashjoin.right, ctx, extension_codec)?;
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    hashjoin.left,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    hashjoin.right,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 let on: Vec<(Column, Column)> = hashjoin
                     .on
                     .iter()
@@ -382,19 +440,43 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     &hashjoin.null_equals_null,
                 )?))
             }
+            PhysicalPlanType::Union(union) => {
+                let mut inputs: Vec<Arc<dyn ExecutionPlan>> = vec![];
+                for input in &union.inputs {
+                    inputs.push(input.try_into_physical_plan(
+                        registry,
+                        runtime,
+                        extension_codec,
+                    )?);
+                }
+                Ok(Arc::new(UnionExec::new(inputs)))
+            }
             PhysicalPlanType::CrossJoin(crossjoin) => {
-                let left: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.left, ctx, extension_codec)?;
-                let right: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(crossjoin.right, ctx, extension_codec)?;
+                let left: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    crossjoin.left,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
+                let right: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    crossjoin.right,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
                 Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
             }
             PhysicalPlanType::ShuffleWriter(shuffle_writer) => {
-                let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(shuffle_writer.input, ctx, extension_codec)?;
+                let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
+                    shuffle_writer.input,
+                    registry,
+                    runtime,
+                    extension_codec
+                )?;
 
                 let output_partitioning = parse_protobuf_hash_partitioning(
                     shuffle_writer.output_partitioning.as_ref(),
+                    registry,
                 )?;
 
                 Ok(Arc::new(ShuffleWriterExec::try_new(
@@ -427,7 +509,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
             }
             PhysicalPlanType::Sort(sort) => {
                 let input: Arc<dyn ExecutionPlan> =
-                    into_physical_plan!(sort.input, ctx, extension_codec)?;
+                    into_physical_plan!(sort.input, registry, runtime, extension_codec)?;
                 let exprs = sort
                     .expr
                     .iter()
@@ -450,7 +532,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 })?
                                 .as_ref();
                             Ok(PhysicalSortExpr {
-                                expr: expr.try_into()?,
+                                expr: parse_physical_expr(expr,registry)?,
                                 options: SortOptions {
                                     descending: !sort_expr.asc,
                                     nulls_first: sort_expr.nulls_first,
@@ -481,13 +563,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 let inputs: Vec<Arc<dyn ExecutionPlan>> = extension
                     .inputs
                     .iter()
-                    .map(|i| i.try_into_physical_plan(ctx, extension_codec))
+                    .map(|i| i.try_into_physical_plan(registry, runtime, extension_codec))
                     .collect::<Result<_, BallistaError>>()?;
 
                 let extension_node = extension_codec.try_decode(
                     extension.node.as_slice(),
                     &inputs,
-                    ctx,
+                    registry,
                 )?;
 
                 Ok(extension_node)
@@ -866,6 +948,19 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 )),
             })
+        } else if let Some(union) = plan.downcast_ref::<UnionExec>() {
+            let mut inputs: Vec<PhysicalPlanNode> = vec![];
+            for input in union.inputs() {
+                inputs.push(protobuf::PhysicalPlanNode::try_from_physical_plan(
+                    input.to_owned(),
+                    extension_codec,
+                )?);
+            }
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Union(
+                    protobuf::UnionExecNode { inputs },
+                )),
+            })
         } else {
             let mut buf: Vec<u8> = vec![];
             extension_codec.try_encode(plan_clone.clone(), &mut buf)?;
@@ -887,7 +982,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
 
 fn decode_scan_config(
     proto: &protobuf::FileScanExecConf,
-    ctx: &SessionContext,
+    runtime: &RuntimeEnv,
 ) -> Result<FileScanConfig, BallistaError> {
     let schema = Arc::new(convert_required!(proto.schema)?);
     let projection = proto
@@ -909,7 +1004,7 @@ fn decode_scan_config(
         .collect::<Result<Vec<_>, _>>()?;
 
     let object_store = if let Some(file) = file_groups.get(0).and_then(|h| h.get(0)) {
-        ctx.runtime_env().object_store(file.file_meta.path())?.0
+        runtime.object_store(file.file_meta.path())?.0
     } else {
         Arc::new(LocalFileSystem {})
     };
@@ -927,9 +1022,11 @@ fn decode_scan_config(
 
 #[macro_export]
 macro_rules! into_physical_plan {
-    ($PB:expr, $CTX:expr, $CODEC:expr) => {{
+    ($PB:expr, $REG:expr, $RUNTIME:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_physical_plan(&$CTX, $CODEC)
+            field
+                .as_ref()
+                .try_into_physical_plan($REG, $RUNTIME, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -938,34 +1035,41 @@ macro_rules! into_physical_plan {
 
 #[cfg(test)]
 mod roundtrip_tests {
+    use std::ops::Deref;
     use std::sync::Arc;
 
     use crate::serde::{AsExecutionPlan, BallistaCodec};
-    use datafusion::datasource::object_store::local::LocalFileSystem;
-    use datafusion::datasource::PartitionedFile;
-    use datafusion::physical_plan::sorts::sort::SortExec;
-    use datafusion::prelude::SessionContext;
+    use datafusion::arrow::array::ArrayRef;
+    use datafusion::execution::context::ExecutionProps;
+    use datafusion::logical_plan::create_udf;
+    use datafusion::physical_plan::functions;
+    use datafusion::physical_plan::functions::{
+        make_scalar_function, BuiltinScalarFunction, ScalarFunctionExpr, Volatility,
+    };
+    use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::{
         arrow::{
             compute::kernels::sort::SortOptions,
             datatypes::{DataType, Field, Schema},
         },
+        datafusion_data_access::object_store::local::LocalFileSystem,
+        datasource::listing::PartitionedFile,
         logical_plan::{JoinType, Operator},
         physical_plan::{
             empty::EmptyExec,
             expressions::{binary, col, lit, InListExpr, NotExpr},
             expressions::{Avg, Column, PhysicalSortExpr},
+            file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
             hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
-            AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr,
+            sorts::sort::SortExec,
+            AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, Statistics,
         },
+        prelude::SessionContext,
         scalar::ScalarValue,
     };
-
-    use datafusion::physical_plan::file_format::{FileScanConfig, ParquetExec};
-    use datafusion::physical_plan::Statistics;
 
     use super::super::super::error::Result;
     use super::super::protobuf;
@@ -982,8 +1086,40 @@ mod roundtrip_tests {
                 codec.physical_extension_codec(),
             )
             .expect("to proto");
+        let runtime = ctx.runtime_env();
         let result_exec_plan: Arc<dyn ExecutionPlan> = proto
-            .try_into_physical_plan(&ctx, codec.physical_extension_codec())
+            .try_into_physical_plan(
+                &ctx,
+                runtime.deref(),
+                codec.physical_extension_codec(),
+            )
+            .expect("from proto");
+        assert_eq!(
+            format!("{:?}", exec_plan),
+            format!("{:?}", result_exec_plan)
+        );
+        Ok(())
+    }
+
+    fn roundtrip_test_with_context(
+        exec_plan: Arc<dyn ExecutionPlan>,
+        ctx: SessionContext,
+    ) -> Result<()> {
+        let codec: BallistaCodec<LogicalPlanNode, PhysicalPlanNode> =
+            BallistaCodec::default();
+        let proto: protobuf::PhysicalPlanNode =
+            protobuf::PhysicalPlanNode::try_from_physical_plan(
+                exec_plan.clone(),
+                codec.physical_extension_codec(),
+            )
+            .expect("to proto");
+        let runtime = ctx.runtime_env();
+        let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+            .try_into_physical_plan(
+                &ctx,
+                runtime.deref(),
+                codec.physical_extension_codec(),
+            )
             .expect("from proto");
         assert_eq!(
             format!("{:?}", exec_plan),
@@ -1163,5 +1299,70 @@ mod roundtrip_tests {
 
         let predicate = datafusion::prelude::col("col").eq(datafusion::prelude::lit("1"));
         roundtrip_test(Arc::new(ParquetExec::new(scan_config, Some(predicate))))
+    }
+
+    #[test]
+    fn roundtrip_builtin_scalar_function() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        let input = Arc::new(EmptyExec::new(false, schema.clone()));
+
+        let execution_props = ExecutionProps::new();
+
+        let fun_expr = functions::create_physical_fun(
+            &BuiltinScalarFunction::Abs,
+            &execution_props,
+        )?;
+
+        let expr = ScalarFunctionExpr::new(
+            "abs",
+            fun_expr,
+            vec![col("a", &schema)?],
+            &DataType::Int64,
+        );
+
+        let project =
+            ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+
+        roundtrip_test(Arc::new(project))
+    }
+
+    #[test]
+    fn roundtrip_scalar_udf() -> Result<()> {
+        let field_a = Field::new("a", DataType::Int64, false);
+        let field_b = Field::new("b", DataType::Int64, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+        let input = Arc::new(EmptyExec::new(false, schema.clone()));
+
+        let fn_impl = |args: &[ArrayRef]| Ok(Arc::new(args[0].clone()) as ArrayRef);
+
+        let scalar_fn = make_scalar_function(fn_impl);
+
+        let udf = create_udf(
+            "dummy",
+            vec![DataType::Int64],
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            scalar_fn.clone(),
+        );
+
+        let expr = ScalarFunctionExpr::new(
+            "dummy",
+            scalar_fn,
+            vec![col("a", &schema)?],
+            &DataType::Int64,
+        );
+
+        let project =
+            ProjectionExec::try_new(vec![(Arc::new(expr), "a".to_string())], input)?;
+
+        let mut ctx = SessionContext::new();
+
+        ctx.register_udf(udf);
+
+        roundtrip_test_with_context(Arc::new(project), ctx)
     }
 }

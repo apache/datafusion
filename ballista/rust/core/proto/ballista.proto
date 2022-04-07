@@ -50,6 +50,8 @@ message LogicalPlanNode {
     ValuesNode values = 16;
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
+    UnionNode union = 19;
+    CreateCatalogNode create_catalog = 20;
   }
 }
 
@@ -151,10 +153,19 @@ message CreateExternalTableNode {
   FileType file_type = 3;
   bool has_header = 4;
   datafusion.DfSchema schema = 5;
+  repeated string table_partition_cols = 6;
+  bool if_not_exists = 7;
+  string delimiter = 8;
 }
 
 message CreateCatalogSchemaNode {
   string schema_name = 1;
+  bool if_not_exists = 2;
+  datafusion.DfSchema schema = 3;
+}
+
+message CreateCatalogNode {
+  string catalog_name = 1;
   bool if_not_exists = 2;
   datafusion.DfSchema schema = 3;
 }
@@ -218,6 +229,10 @@ message JoinNode {
   bool null_equals_null = 7;
 }
 
+message UnionNode {
+  repeated LogicalPlanNode inputs = 1;
+}
+
 message CrossJoinNode {
   LogicalPlanNode left = 1;
   LogicalPlanNode right = 2;
@@ -259,6 +274,7 @@ message PhysicalPlanNode {
     CrossJoinExecNode cross_join = 19;
     AvroScanExecNode avro_scan = 20;
     PhysicalExtensionNode extension = 21;
+    UnionExecNode union = 22;
   }
 }
 
@@ -296,7 +312,15 @@ message PhysicalExprNode {
 
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
+
+    PhysicalScalarUdfNode scalar_udf = 16;
   }
+}
+
+message PhysicalScalarUdfNode {
+  string name = 1;
+  repeated PhysicalExprNode args = 2;
+  datafusion.ArrowType return_type = 4;
 }
 
 message PhysicalAggregateExprNode {
@@ -437,6 +461,10 @@ message HashJoinExecNode {
   JoinType join_type = 4;
   PartitionMode partition_mode = 6;
   bool null_equals_null = 7;
+}
+
+message UnionExecNode {
+  repeated PhysicalPlanNode inputs = 1;
 }
 
 message CrossJoinExecNode {
@@ -718,6 +746,8 @@ message TaskDefinition {
   bytes plan = 2;
   // Output partition for shuffle writer
   PhysicalHashRepartition output_partitioning = 3;
+  string session_id = 4;
+  repeated KeyValuePair props = 5;
 }
 
 message PollWorkResult {
@@ -763,7 +793,10 @@ message ExecuteQueryParams {
     bytes logical_plan = 1;
     string sql = 2;
   }
-  repeated KeyValuePair settings = 3;
+  oneof optional_session_id {
+    string session_id = 3;
+  }
+  repeated KeyValuePair settings = 4;
 }
 
 message ExecuteSqlParams {
@@ -772,6 +805,7 @@ message ExecuteSqlParams {
 
 message ExecuteQueryResult {
   string job_id = 1;
+  string session_id = 2;
 }
 
 message GetJobStatusParams {

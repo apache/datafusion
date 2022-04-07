@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     Statistics,
 };
 
-use datafusion::datasource::{FileRange, PartitionedFile};
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, Literal};
@@ -286,24 +286,38 @@ impl TryFrom<Arc<dyn PhysicalExpr>> for protobuf::PhysicalExprNode {
                 )),
             })
         } else if let Some(expr) = expr.downcast_ref::<ScalarFunctionExpr>() {
-            let fun: BuiltinScalarFunction =
-                BuiltinScalarFunction::from_str(expr.name())?;
-            let fun: datafusion_proto::protobuf::ScalarFunction = (&fun).try_into()?;
             let args: Vec<protobuf::PhysicalExprNode> = expr
                 .args()
                 .iter()
                 .map(|e| e.to_owned().try_into())
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(protobuf::PhysicalExprNode {
-                expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarFunction(
-                    protobuf::PhysicalScalarFunctionNode {
-                        name: expr.name().to_string(),
-                        fun: fun.into(),
-                        args,
-                        return_type: Some(expr.return_type().into()),
-                    },
-                )),
-            })
+            if let Ok(fun) = BuiltinScalarFunction::from_str(expr.name()) {
+                let fun: datafusion_proto::protobuf::ScalarFunction =
+                    (&fun).try_into()?;
+
+                Ok(protobuf::PhysicalExprNode {
+                    expr_type: Some(
+                        protobuf::physical_expr_node::ExprType::ScalarFunction(
+                            protobuf::PhysicalScalarFunctionNode {
+                                name: expr.name().to_string(),
+                                fun: fun.into(),
+                                args,
+                                return_type: Some(expr.return_type().into()),
+                            },
+                        ),
+                    ),
+                })
+            } else {
+                Ok(protobuf::PhysicalExprNode {
+                    expr_type: Some(protobuf::physical_expr_node::ExprType::ScalarUdf(
+                        protobuf::PhysicalScalarUdfNode {
+                            name: expr.name().to_string(),
+                            args,
+                            return_type: Some(expr.return_type().into()),
+                        },
+                    )),
+                })
+            }
         } else {
             Err(BallistaError::General(format!(
                 "physical_plan::to_proto() unsupported expression {:?}",
@@ -340,18 +354,6 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
-            range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
-        })
-    }
-}
-
-impl TryFrom<&FileRange> for protobuf::FileRange {
-    type Error = BallistaError;
-
-    fn try_from(value: &FileRange) -> Result<Self, Self::Error> {
-        Ok(protobuf::FileRange {
-            start: value.start,
-            end: value.end,
         })
     }
 }

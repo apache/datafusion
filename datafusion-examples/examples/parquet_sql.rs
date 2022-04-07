@@ -23,7 +23,7 @@ use datafusion::prelude::*;
 #[tokio::main]
 async fn main() -> Result<()> {
     // create local session context
-    let mut ctx = SessionContext::new();
+    let ctx = SessionContext::new();
 
     let testdata = datafusion::test_util::parquet_test_data();
 
@@ -31,6 +31,7 @@ async fn main() -> Result<()> {
     ctx.register_parquet(
         "alltypes_plain",
         &format!("{}/alltypes_plain.parquet", testdata),
+        ParquetReadOptions::default(),
     )
     .await?;
 

@@ -33,8 +33,9 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
-    Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan, Values,
+    Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr,
+    JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan,
+    Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -111,7 +112,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(projection.input, &ctx, extension_codec)?;
+                    into_logical_plan!(projection.input, ctx, extension_codec)?;
                 let x: Vec<Expr> = projection
                     .expr
                     .iter()
@@ -131,7 +132,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Selection(selection) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(selection.input, &ctx, extension_codec)?;
+                    into_logical_plan!(selection.input, ctx, extension_codec)?;
                 let expr: Expr = selection
                     .expr
                     .as_ref()
@@ -148,7 +149,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(window.input, &ctx, extension_codec)?;
+                    into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr = window
                     .window_expr
                     .iter()
@@ -161,7 +162,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Aggregate(aggregate) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(aggregate.input, &ctx, extension_codec)?;
+                    into_logical_plan!(aggregate.input, ctx, extension_codec)?;
                 let group_expr = aggregate
                     .group_expr
                     .iter()
@@ -261,7 +262,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(sort.input, &ctx, extension_codec)?;
+                    into_logical_plan!(sort.input, ctx, extension_codec)?;
                 let sort_expr: Vec<Expr> = sort
                     .expr
                     .iter()
@@ -275,7 +276,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Repartition(repartition) => {
                 use datafusion::logical_plan::Partitioning;
                 let input: LogicalPlan =
-                    into_logical_plan!(repartition.input, &ctx, extension_codec)?;
+                    into_logical_plan!(repartition.input, ctx, extension_codec)?;
                 use protobuf::repartition_node::PartitionMethod;
                 let pb_partition_method = repartition.partition_method.clone().ok_or_else(|| {
                     BallistaError::General(String::from(
@@ -325,6 +326,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                     location: create_extern_table.location.clone(),
                     file_type: pb_file_type.into(),
                     has_header: create_extern_table.has_header,
+                    delimiter: create_extern_table.delimiter.chars().next().ok_or_else(|| {
+                        BallistaError::General(String::from("Protobuf deserialization error, unable to parse CSV delimiter"))
+                    })?,
+                    table_partition_cols: create_extern_table
+                        .table_partition_cols
+                        .clone(),
+                    if_not_exists: create_extern_table.if_not_exists,
                 }))
             }
             LogicalPlanType::CreateCatalogSchema(create_catalog_schema) => {
@@ -340,9 +348,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema: pb_schema.try_into()?,
                 }))
             }
+            LogicalPlanType::CreateCatalog(create_catalog) => {
+                let pb_schema = (create_catalog.schema.clone()).ok_or_else(|| {
+                    BallistaError::General(String::from(
+                        "Protobuf deserialization error, CreateCatalogNode was missing required field schema.",
+                    ))
+                })?;
+
+                Ok(LogicalPlan::CreateCatalog(CreateCatalog {
+                    catalog_name: create_catalog.catalog_name.clone(),
+                    if_not_exists: create_catalog.if_not_exists,
+                    schema: pb_schema.try_into()?,
+                }))
+            }
             LogicalPlanType::Analyze(analyze) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(analyze.input, &ctx, extension_codec)?;
+                    into_logical_plan!(analyze.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(analyze.verbose, true)?
                     .build()
@@ -350,7 +371,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Explain(explain) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(explain.input, &ctx, extension_codec)?;
+                    into_logical_plan!(explain.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .explain(explain.verbose, false)?
                     .build()
@@ -358,7 +379,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
-                    into_logical_plan!(limit.input, &ctx, extension_codec)?;
+                    into_logical_plan!(limit.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
                     .limit(limit.limit as usize)?
                     .build()
@@ -388,17 +409,17 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let builder = LogicalPlanBuilder::from(into_logical_plan!(
                     join.left,
-                    &ctx,
+                    ctx,
                     extension_codec
                 )?);
                 let builder = match join_constraint.into() {
                     JoinConstraint::On => builder.join(
-                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
+                        &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         (left_keys, right_keys),
                     )?,
                     JoinConstraint::Using => builder.join_using(
-                        &into_logical_plan!(join.right, &ctx, extension_codec)?,
+                        &into_logical_plan!(join.right, ctx, extension_codec)?,
                         join_type.into(),
                         left_keys,
                     )?,
@@ -406,9 +427,28 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 builder.build().map_err(|e| e.into())
             }
+            LogicalPlanType::Union(union) => {
+                let mut input_plans: Vec<LogicalPlan> = union
+                    .inputs
+                    .iter()
+                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
+                    .collect::<Result<_, BallistaError>>()?;
+
+                if input_plans.len() < 2 {
+                    return  Err( BallistaError::General(String::from(
+                       "Protobuf deserialization error, Union was require at least two input.",
+                   )));
+                }
+
+                let mut builder = LogicalPlanBuilder::from(input_plans.pop().unwrap());
+                for plan in input_plans {
+                    builder = builder.union(plan)?;
+                }
+                builder.build().map_err(|e| e.into())
+            }
             LogicalPlanType::CrossJoin(crossjoin) => {
-                let left = into_logical_plan!(crossjoin.left, &ctx, extension_codec)?;
-                let right = into_logical_plan!(crossjoin.right, &ctx, extension_codec)?;
+                let left = into_logical_plan!(crossjoin.left, ctx, extension_codec)?;
+                let right = into_logical_plan!(crossjoin.right, ctx, extension_codec)?;
 
                 LogicalPlanBuilder::from(left)
                     .cross_join(&right)?
@@ -751,7 +791,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 location,
                 file_type,
                 has_header,
+                delimiter,
                 schema: df_schema,
+                table_partition_cols,
+                if_not_exists,
             }) => {
                 use datafusion::sql::parser::FileType;
 
@@ -770,6 +813,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             file_type: pb_file_type as i32,
                             has_header: *has_header,
                             schema: Some(df_schema.into()),
+                            table_partition_cols: table_partition_cols.clone(),
+                            if_not_exists: *if_not_exists,
+                            delimiter: String::from(*delimiter),
                         },
                     )),
                 })
@@ -782,6 +828,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                 logical_plan_type: Some(LogicalPlanType::CreateCatalogSchema(
                     protobuf::CreateCatalogSchemaNode {
                         schema_name: schema_name.clone(),
+                        if_not_exists: *if_not_exists,
+                        schema: Some(df_schema.into()),
+                    },
+                )),
+            }),
+            LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name,
+                if_not_exists,
+                schema: df_schema,
+            }) => Ok(protobuf::LogicalPlanNode {
+                logical_plan_type: Some(LogicalPlanType::CreateCatalog(
+                    protobuf::CreateCatalogNode {
+                        catalog_name: catalog_name.clone(),
                         if_not_exists: *if_not_exists,
                         schema: Some(df_schema.into()),
                     },
@@ -815,7 +874,23 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::Union(_) => unimplemented!(),
+            LogicalPlan::Union(union) => {
+                let inputs: Vec<LogicalPlanNode> = union
+                    .inputs
+                    .iter()
+                    .map(|i| {
+                        protobuf::LogicalPlanNode::try_from_logical_plan(
+                            i,
+                            extension_codec,
+                        )
+                    })
+                    .collect::<Result<_, BallistaError>>()?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::Union(
+                        protobuf::UnionNode { inputs },
+                    )),
+                })
+            }
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left = protobuf::LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
@@ -870,7 +945,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 macro_rules! into_logical_plan {
     ($PB:expr, $CTX:expr, $CODEC:expr) => {{
         if let Some(field) = $PB.as_ref() {
-            field.as_ref().try_into_logical_plan(&$CTX, $CODEC)
+            field.as_ref().try_into_logical_plan($CTX, $CODEC)
         } else {
             Err(proto_error("Missing required field in protobuf"))
         }
@@ -885,14 +960,17 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
-    use datafusion::datasource::listing::ListingTable;
-    use datafusion::datasource::object_store::{
-        FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, SizedFile,
-    };
-    use datafusion::error::DataFusionError;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
-        datasource::object_store::local::LocalFileSystem,
+        datafusion_data_access::{
+            self,
+            object_store::{
+                local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
+                ObjectStore,
+            },
+            SizedFile,
+        },
+        datasource::listing::ListingTable,
         logical_plan::{
             col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
             ToDFSchema,
@@ -900,6 +978,7 @@ mod roundtrip_tests {
         prelude::*,
         sql::parser::FileType,
     };
+    use std::io;
     use std::sync::Arc;
 
     #[derive(Debug)]
@@ -910,8 +989,9 @@ mod roundtrip_tests {
         async fn list_file(
             &self,
             _prefix: &str,
-        ) -> datafusion::error::Result<FileMetaStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_data_access::Result<FileMetaStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -920,8 +1000,9 @@ mod roundtrip_tests {
             &self,
             _prefix: &str,
             _delimiter: Option<String>,
-        ) -> datafusion::error::Result<ListEntryStream> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_data_access::Result<ListEntryStream> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -929,8 +1010,9 @@ mod roundtrip_tests {
         fn file_reader(
             &self,
             _file: SizedFile,
-        ) -> datafusion::error::Result<Arc<dyn ObjectReader>> {
-            Err(DataFusionError::NotImplemented(
+        ) -> datafusion_data_access::Result<Arc<dyn ObjectReader>> {
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
         }
@@ -1081,6 +1163,9 @@ mod roundtrip_tests {
                     location: String::from("employee.csv"),
                     file_type: *file,
                     has_header: true,
+                    delimiter: ',',
+                    table_partition_cols: vec![],
+                    if_not_exists: false,
                 });
 
             roundtrip_test!(create_table_node);

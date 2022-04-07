@@ -19,9 +19,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::SchemaAsIpc;
+use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::ListingOptions;
-use datafusion::datasource::object_store::local::LocalFileSystem;
 use futures::Stream;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status, Streaming};
@@ -90,7 +90,7 @@ impl FlightService for FlightServiceImpl {
                 println!("do_get: {}", sql);
 
                 // create local execution context
-                let mut ctx = SessionContext::new();
+                let ctx = SessionContext::new();
 
                 let testdata = datafusion::test_util::parquet_test_data();
 
@@ -98,6 +98,7 @@ impl FlightService for FlightServiceImpl {
                 ctx.register_parquet(
                     "alltypes_plain",
                     &format!("{}/alltypes_plain.parquet", testdata),
+                    ParquetReadOptions::default(),
                 )
                 .await
                 .map_err(to_tonic_err)?;

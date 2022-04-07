@@ -32,6 +32,7 @@ use tonic::transport::Server;
 use uuid::Uuid;
 
 use ballista_core::config::TaskSchedulingPolicy;
+use ballista_core::error::BallistaError;
 use ballista_core::serde::protobuf::{
     executor_registration, scheduler_grpc_client::SchedulerGrpcClient,
     ExecutorRegistration, LogicalPlanNode, PhysicalPlanNode,
@@ -42,7 +43,7 @@ use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
 use config::prelude::*;
-use datafusion::prelude::SessionContext;
+use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
 #[macro_use]
 extern crate configure_me;
@@ -111,11 +112,13 @@ async fn main() -> Result<()> {
             .into(),
         ),
     };
-    let executor = Arc::new(Executor::new(
-        executor_meta,
-        &work_dir,
-        Arc::new(SessionContext::new()),
-    ));
+
+    let config = RuntimeConfig::new().with_temp_file_path(work_dir.clone());
+    let runtime = Arc::new(RuntimeEnv::new(config).map_err(|_| {
+        BallistaError::Internal("Failed to init Executor RuntimeEnv".to_owned())
+    })?);
+
+    let executor = Arc::new(Executor::new(executor_meta, &work_dir, runtime));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await

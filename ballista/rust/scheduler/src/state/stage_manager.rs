@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use log::{error, info, warn};
+use log::{debug, error, warn};
 use parking_lot::RwLock;
 use rand::Rng;
 
@@ -28,6 +28,7 @@ use ballista_core::error::{BallistaError, Result};
 use ballista_core::serde::protobuf;
 use ballista_core::serde::protobuf::{task_status, FailedTask, TaskStatus};
 
+/// job_id + stage_id
 pub type StageKey = (String, u32);
 
 #[derive(Clone)]
@@ -305,7 +306,7 @@ impl StageScheduler for StageManager {
         let stage_distribution = self.stage_distribution.read();
         let stages_running = &stage_distribution.stages_running;
         if stages_running.is_empty() {
-            info!("There's no running stages");
+            debug!("There's no running stages");
             return None;
         }
         let stages = stages_running

@@ -28,6 +28,11 @@ use crate::error::{BallistaError, Result};
 use datafusion::arrow::datatypes::DataType;
 
 pub const BALLISTA_DEFAULT_SHUFFLE_PARTITIONS: &str = "ballista.shuffle.partitions";
+pub const BALLISTA_DEFAULT_BATCH_SIZE: &str = "ballista.batch.size";
+pub const BALLISTA_REPARTITION_JOINS: &str = "ballista.repartition.joins";
+pub const BALLISTA_REPARTITION_AGGREGATIONS: &str = "ballista.repartition.aggregations";
+pub const BALLISTA_REPARTITION_WINDOWS: &str = "ballista.repartition.windows";
+pub const BALLISTA_PARQUET_PRUNING: &str = "ballista.parquet.pruning";
 pub const BALLISTA_WITH_INFORMATION_SCHEMA: &str = "ballista.with_information_schema";
 
 pub type ParseResult<T> = result::Result<T, String>;
@@ -148,6 +153,21 @@ impl BallistaConfig {
             ConfigEntry::new(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS.to_string(),
                 "Sets the default number of partitions to create when repartitioning query stages".to_string(),
                 DataType::UInt16, Some("2".to_string())),
+            ConfigEntry::new(BALLISTA_DEFAULT_BATCH_SIZE.to_string(),
+                             "Sets the default batch size".to_string(),
+                             DataType::UInt16, Some("8192".to_string())),
+            ConfigEntry::new(BALLISTA_REPARTITION_JOINS.to_string(),
+                             "Configuration for repartition joins".to_string(),
+                             DataType::Boolean, Some("true".to_string())),
+            ConfigEntry::new(BALLISTA_REPARTITION_AGGREGATIONS.to_string(),
+                             "Configuration for repartition aggregations".to_string(),
+                             DataType::Boolean,Some("true".to_string())),
+            ConfigEntry::new(BALLISTA_REPARTITION_WINDOWS.to_string(),
+                             "Configuration for repartition windows".to_string(),
+                             DataType::Boolean,Some("true".to_string())),
+            ConfigEntry::new(BALLISTA_PARQUET_PRUNING.to_string(),
+                             "Configuration for parquet prune".to_string(),
+                             DataType::Boolean,Some("true".to_string())),
             ConfigEntry::new(BALLISTA_WITH_INFORMATION_SCHEMA.to_string(),
                 "Sets whether enable information_schema".to_string(),
                 DataType::Boolean,Some("false".to_string())),
@@ -164,6 +184,26 @@ impl BallistaConfig {
 
     pub fn default_shuffle_partitions(&self) -> usize {
         self.get_usize_setting(BALLISTA_DEFAULT_SHUFFLE_PARTITIONS)
+    }
+
+    pub fn default_batch_size(&self) -> usize {
+        self.get_usize_setting(BALLISTA_DEFAULT_BATCH_SIZE)
+    }
+
+    pub fn repartition_joins(&self) -> bool {
+        self.get_bool_setting(BALLISTA_REPARTITION_JOINS)
+    }
+
+    pub fn repartition_aggregations(&self) -> bool {
+        self.get_bool_setting(BALLISTA_REPARTITION_AGGREGATIONS)
+    }
+
+    pub fn repartition_windows(&self) -> bool {
+        self.get_bool_setting(BALLISTA_REPARTITION_WINDOWS)
+    }
+
+    pub fn parquet_pruning(&self) -> bool {
+        self.get_bool_setting(BALLISTA_PARQUET_PRUNING)
     }
 
     pub fn default_with_information_schema(&self) -> bool {

@@ -34,9 +34,9 @@ path = "examples/avro_sql.rs"
 required-features = ["datafusion/avro"]
 
 [dev-dependencies]
-arrow-flight = { version = "11" }
+arrow-flight = { version = "11.1" }
 async-trait = "0.1.41"
-datafusion = { path = "../datafusion" }
+datafusion = { path = "../datafusion/core" }
 futures = "0.3"
 num_cpus = "1.13.0"
 prost = "0.9"

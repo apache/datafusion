@@ -28,6 +28,7 @@ use ballista_core::event_loop::EventLoop;
 use ballista_core::serde::protobuf::executor_grpc_client::ExecutorGrpcClient;
 use ballista_core::serde::protobuf::TaskStatus;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
+use datafusion::execution::context::{default_session_builder, SessionState};
 use datafusion::prelude::{SessionConfig, SessionContext};
 
 use crate::scheduler_server::event::{QueryStageSchedulerEvent, SchedulerServerEvent};
@@ -49,6 +50,7 @@ mod grpc;
 mod query_stage_scheduler;
 
 type ExecutorsClient = Arc<RwLock<HashMap<String, ExecutorGrpcClient<Channel>>>>;
+type SessionBuilder = fn(SessionConfig) -> SessionState;
 
 #[derive(Clone)]
 pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> {
@@ -58,23 +60,38 @@ pub struct SchedulerServer<T: 'static + AsLogicalPlan, U: 'static + AsExecutionP
     executors_client: Option<ExecutorsClient>,
     event_loop: Option<EventLoop<SchedulerServerEvent>>,
     query_stage_event_loop: EventLoop<QueryStageSchedulerEvent>,
-    ctx: Arc<RwLock<SessionContext>>,
     codec: BallistaCodec<T, U>,
+    /// SessionState Builder
+    session_builder: SessionBuilder,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T, U> {
     pub fn new(
         config: Arc<dyn StateBackendClient>,
         namespace: String,
-        ctx: Arc<RwLock<SessionContext>>,
         codec: BallistaCodec<T, U>,
     ) -> Self {
         SchedulerServer::new_with_policy(
             config,
             namespace,
             TaskSchedulingPolicy::PullStaged,
-            ctx,
             codec,
+            default_session_builder,
+        )
+    }
+
+    pub fn new_with_builder(
+        config: Arc<dyn StateBackendClient>,
+        namespace: String,
+        codec: BallistaCodec<T, U>,
+        session_builder: SessionBuilder,
+    ) -> Self {
+        SchedulerServer::new_with_policy(
+            config,
+            namespace,
+            TaskSchedulingPolicy::PullStaged,
+            codec,
+            session_builder,
         )
     }
 
@@ -82,8 +99,8 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
         config: Arc<dyn StateBackendClient>,
         namespace: String,
         policy: TaskSchedulingPolicy,
-        ctx: Arc<RwLock<SessionContext>>,
         codec: BallistaCodec<T, U>,
+        session_builder: SessionBuilder,
     ) -> Self {
         let state = Arc::new(SchedulerState::new(config, namespace, codec.clone()));
 
@@ -115,16 +132,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
             executors_client,
             event_loop,
             query_stage_event_loop,
-            ctx,
             codec,
+            session_builder,
         }
     }
 
     pub async fn init(&mut self) -> Result<()> {
         {
             // initialize state
-            let ctx = self.ctx.read().await;
-            self.state.init(&ctx).await?;
+            self.state.init().await?;
         }
 
         {
@@ -180,10 +196,19 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerServer<T
 }
 
 /// Create a DataFusion session context that is compatible with Ballista Configuration
-pub fn create_datafusion_context(config: &BallistaConfig) -> SessionContext {
-    let config =
-        SessionConfig::new().with_target_partitions(config.default_shuffle_partitions());
-    SessionContext::with_config(config)
+pub fn create_datafusion_context(
+    config: &BallistaConfig,
+    session_builder: SessionBuilder,
+) -> Arc<SessionContext> {
+    let config = SessionConfig::new()
+        .with_target_partitions(config.default_shuffle_partitions())
+        .with_batch_size(config.default_batch_size())
+        .with_repartition_joins(config.repartition_joins())
+        .with_repartition_aggregations(config.repartition_aggregations())
+        .with_repartition_windows(config.repartition_windows())
+        .with_parquet_pruning(config.parquet_pruning());
+    let session_state = session_builder(config);
+    Arc::new(SessionContext::with_state(session_state))
 }
 
 /// Update the existing DataFusion session context with Ballista Configuration
@@ -191,17 +216,68 @@ pub fn update_datafusion_context(
     session_ctx: Arc<SessionContext>,
     config: &BallistaConfig,
 ) -> Arc<SessionContext> {
-    session_ctx.state.write().config.target_partitions =
-        config.default_shuffle_partitions();
+    {
+        let mut mut_state = session_ctx.state.write();
+        mut_state.config.target_partitions = config.default_shuffle_partitions();
+        mut_state.config.batch_size = config.default_batch_size();
+        mut_state.config.repartition_joins = config.repartition_joins();
+        mut_state.config.repartition_aggregations = config.repartition_aggregations();
+        mut_state.config.repartition_windows = config.repartition_windows();
+        mut_state.config.parquet_pruning = config.parquet_pruning();
+    }
     session_ctx
 }
 
+/// A Registry holds all the datafusion session contexts
+pub struct SessionContextRegistry {
+    /// A map from session_id to SessionContext
+    pub running_sessions: RwLock<HashMap<String, Arc<SessionContext>>>,
+}
+
+impl Default for SessionContextRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionContextRegistry {
+    /// Create the registry that object stores can registered into.
+    /// ['LocalFileSystem'] store is registered in by default to support read local files natively.
+    pub fn new() -> Self {
+        Self {
+            running_sessions: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Adds a new session to this registry.
+    pub async fn register_session(
+        &self,
+        session_ctx: Arc<SessionContext>,
+    ) -> Option<Arc<SessionContext>> {
+        let session_id = session_ctx.session_id();
+        let mut sessions = self.running_sessions.write().await;
+        sessions.insert(session_id, session_ctx)
+    }
+
+    /// Lookup the session context registered
+    pub async fn lookup_session(&self, session_id: &str) -> Option<Arc<SessionContext>> {
+        let sessions = self.running_sessions.read().await;
+        sessions.get(session_id).cloned()
+    }
+
+    /// Remove a session from this registry.
+    pub async fn unregister_session(
+        &self,
+        session_id: &str,
+    ) -> Option<Arc<SessionContext>> {
+        let mut sessions = self.running_sessions.write().await;
+        sessions.remove(session_id)
+    }
+}
 #[cfg(all(test, feature = "sled"))]
 mod test {
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-
-    use tokio::sync::RwLock;
 
     use ballista_core::config::TaskSchedulingPolicy;
     use ballista_core::error::{BallistaError, Result};
@@ -213,6 +289,7 @@ mod test {
     use ballista_core::serde::scheduler::ExecutorData;
     use ballista_core::serde::BallistaCodec;
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::execution::context::default_session_builder;
     use datafusion::logical_plan::{col, sum, LogicalPlan, LogicalPlanBuilder};
     use datafusion::prelude::{SessionConfig, SessionContext};
 
@@ -250,9 +327,7 @@ mod test {
         plan_of_linear_stages: LogicalPlan,
         total_available_task_slots: usize,
     ) -> Result<()> {
-        let config =
-            SessionConfig::new().with_target_partitions(total_available_task_slots);
-        let scheduler = test_scheduler(policy, config).await?;
+        let scheduler = test_scheduler(policy).await?;
         if matches!(policy, TaskSchedulingPolicy::PushStaged) {
             let executors = test_executors(total_available_task_slots);
             for executor_data in executors {
@@ -262,9 +337,10 @@ mod test {
                     .save_executor_data(executor_data);
             }
         }
-
+        let config =
+            SessionConfig::new().with_target_partitions(total_available_task_slots);
+        let ctx = Arc::new(SessionContext::with_config(config));
         let plan = async {
-            let ctx = scheduler.ctx.read().await.clone();
             let optimized_plan = ctx.optimize(&plan_of_linear_stages).map_err(|e| {
                 BallistaError::General(format!(
                     "Could not create optimized logical plan: {}",
@@ -284,7 +360,15 @@ mod test {
         .await?;
 
         let job_id = "job";
-
+        scheduler
+            .state
+            .session_registry()
+            .register_session(ctx.clone())
+            .await;
+        scheduler
+            .state
+            .save_job_session(job_id, ctx.session_id().as_str())
+            .await?;
         {
             // verify job submit
             scheduler
@@ -459,7 +543,6 @@ mod test {
 
     async fn test_scheduler(
         policy: TaskSchedulingPolicy,
-        config: SessionConfig,
     ) -> Result<SchedulerServer<LogicalPlanNode, PhysicalPlanNode>> {
         let state_storage = Arc::new(StandaloneClient::try_new_temporary()?);
         let mut scheduler: SchedulerServer<LogicalPlanNode, PhysicalPlanNode> =
@@ -467,8 +550,8 @@ mod test {
                 state_storage.clone(),
                 "default".to_owned(),
                 policy,
-                Arc::new(RwLock::new(SessionContext::with_config(config))),
                 BallistaCodec::default(),
+                default_session_builder,
             );
         scheduler.init().await?;
 
