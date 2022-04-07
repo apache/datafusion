@@ -58,8 +58,7 @@ async fn run_sort(pool_size: usize, size_spill: Vec<(usize, bool)>) {
         let input = vec![make_staggered_batches(size)];
         let first_batch = input
             .iter()
-            .map(|p| p.iter())
-            .flatten()
+            .flat_map(|p| p.iter())
             .next()
             .expect("at least one batch");
         let schema = first_batch.schema();
