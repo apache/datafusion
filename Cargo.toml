@@ -23,7 +23,6 @@ members = [
     "datafusion/jit",
     "datafusion/physical-expr",
     "datafusion/proto",
-    "datafusion-cli",
     "datafusion-examples",
     "benchmarks",
     "ballista/rust/client",
@@ -33,6 +32,7 @@ members = [
     "ballista-examples",
     "data-access",
 ]
+exclude = ["datafusion-cli"]
 
 [profile.release]
 codegen-units = 1

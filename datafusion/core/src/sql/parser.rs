@@ -76,8 +76,14 @@ pub struct CreateExternalTable {
     pub file_type: FileType,
     /// CSV Header row?
     pub has_header: bool,
+    /// User defined delimiter for CSVs
+    pub delimiter: char,
     /// Path to file
     pub location: String,
+    /// Partition Columns
+    pub table_partition_cols: Vec<String>,
+    /// Option to not error if table already exists
+    pub if_not_exists: bool,
 }
 
 /// DataFusion Statement representations.
@@ -192,6 +198,35 @@ impl<'a> DFParser<'a> {
         }
     }
 
+    fn parse_partitions(&mut self) -> Result<Vec<String>, ParserError> {
+        let mut partitions: Vec<String> = vec![];
+        if !self.parser.consume_token(&Token::LParen)
+            || self.parser.consume_token(&Token::RParen)
+        {
+            return Ok(partitions);
+        }
+
+        loop {
+            if let Token::Word(_) = self.parser.peek_token() {
+                let identifier = self.parser.parse_identifier()?;
+                partitions.push(identifier.to_string());
+            } else {
+                return self.expected("partition name", self.parser.peek_token());
+            }
+            let comma = self.parser.consume_token(&Token::Comma);
+            if self.parser.consume_token(&Token::RParen) {
+                // allow a trailing comma, even though it's not in standard
+                break;
+            } else if !comma {
+                return self.expected(
+                    "',' or ')' after partition definition",
+                    self.parser.peek_token(),
+                );
+            }
+        }
+        Ok(partitions)
+    }
+
     // This is a copy of the equivalent implementation in sqlparser.
     fn parse_columns(
         &mut self,
@@ -267,6 +302,9 @@ impl<'a> DFParser<'a> {
 
     fn parse_create_external_table(&mut self) -> Result<Statement, ParserError> {
         self.parser.expect_keyword(Keyword::TABLE)?;
+        let if_not_exists =
+            self.parser
+                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
         let table_name = self.parser.parse_object_name()?;
         let (columns, _) = self.parse_columns()?;
         self.parser
@@ -277,6 +315,18 @@ impl<'a> DFParser<'a> {
 
         let has_header = self.parse_csv_has_header();
 
+        let has_delimiter = self.parse_has_delimiter();
+        let delimiter = match has_delimiter {
+            true => self.parse_delimiter()?,
+            false => ',',
+        };
+
+        let table_partition_cols = if self.parse_has_partition() {
+            self.parse_partitions()?
+        } else {
+            vec![]
+        };
+
         self.parser.expect_keyword(Keyword::LOCATION)?;
         let location = self.parser.parse_literal_string()?;
 
@@ -285,7 +335,10 @@ impl<'a> DFParser<'a> {
             columns,
             file_type,
             has_header,
+            delimiter,
             location,
+            table_partition_cols,
+            if_not_exists,
         };
         Ok(Statement::CreateExternalTable(create))
     }
@@ -313,6 +366,25 @@ impl<'a> DFParser<'a> {
         self.consume_token(&Token::make_keyword("WITH"))
             & self.consume_token(&Token::make_keyword("HEADER"))
             & self.consume_token(&Token::make_keyword("ROW"))
+    }
+
+    fn parse_has_delimiter(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("DELIMITER"))
+    }
+
+    fn parse_delimiter(&mut self) -> Result<char, ParserError> {
+        let token = self.parser.parse_literal_string()?;
+        match token.len() {
+            1 => Ok(token.chars().next().unwrap()),
+            _ => Err(ParserError::TokenizerError(
+                "Delimiter must be a single char".to_string(),
+            )),
+        }
+    }
+
+    fn parse_has_partition(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("PARTITIONED"))
+            & self.consume_token(&Token::make_keyword("BY"))
     }
 }
 
@@ -375,7 +447,40 @@ mod tests {
             columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: FileType::CSV,
             has_header: false,
+            delimiter: ',',
             location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case with delimiter
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '|' LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            file_type: FileType::CSV,
+            has_header: false,
+            delimiter: '|',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: partitioned by
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1, p2) LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            file_type: FileType::CSV,
+            has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -390,7 +495,10 @@ mod tests {
                 columns: vec![make_column_def("c1", DataType::Int(display))],
                 file_type: FileType::CSV,
                 has_header: true,
+                delimiter: ',',
                 location: "foo.csv".into(),
+                table_partition_cols: vec![],
+                if_not_exists: false,
             });
             expect_parse_ok(sql, expected)?;
         }
@@ -402,7 +510,10 @@ mod tests {
             columns: vec![],
             file_type: FileType::Parquet,
             has_header: false,
+            delimiter: ',',
             location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -413,7 +524,10 @@ mod tests {
             columns: vec![],
             file_type: FileType::Parquet,
             has_header: false,
+            delimiter: ',',
             location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -424,7 +538,25 @@ mod tests {
             columns: vec![],
             file_type: FileType::Avro,
             has_header: false,
+            delimiter: ',',
             location: "foo.avro".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case: it is ok for avro files not to have columns specified
+        let sql =
+            "CREATE EXTERNAL TABLE IF NOT EXISTS t STORED AS PARQUET LOCATION 'foo.parquet'";
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![],
+            file_type: FileType::Parquet,
+            has_header: false,
+            delimiter: ',',
+            location: "foo.parquet".into(),
+            table_partition_cols: vec![],
+            if_not_exists: true,
         });
         expect_parse_ok(sql, expected)?;
 
@@ -432,6 +564,11 @@ mod tests {
         let sql =
             "CREATE EXTERNAL TABLE t(c1 int) STORED AS UNKNOWN_TYPE LOCATION 'foo.csv'";
         expect_parse_error(sql, "expect one of PARQUET, AVRO, NDJSON, or CSV");
+
+        // Error cases: partition column does not support type
+        let sql =
+            "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV PARTITIONED BY (p1 int) LOCATION 'foo.csv'";
+        expect_parse_error(sql, "sql parser error: Expected ',' or ')' after partition definition, found: int");
 
         Ok(())
     }

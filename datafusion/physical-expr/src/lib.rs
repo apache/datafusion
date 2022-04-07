@@ -18,6 +18,7 @@
 mod aggregate_expr;
 pub mod array_expressions;
 pub mod coercion_rule;
+pub mod conditional_expressions;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod datetime_expressions;

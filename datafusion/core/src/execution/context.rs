@@ -58,8 +58,8 @@ use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
-    CreateCatalogSchema, CreateExternalTable, CreateMemoryTable, DropTable,
-    FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    DropTable, FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -92,7 +92,9 @@ use chrono::{DateTime, Utc};
 use parquet::file::properties::WriterProperties;
 use uuid::Uuid;
 
-use super::options::{AvroReadOptions, CsvReadOptions, NdJsonReadOptions};
+use super::options::{
+    AvroReadOptions, CsvReadOptions, NdJsonReadOptions, ParquetReadOptions,
+};
 
 /// The default catalog name - this impacts what SQL queries use if not specified
 const DEFAULT_CATALOG: &str = "datafusion";
@@ -215,11 +217,17 @@ impl SessionContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref delimiter,
+                ref table_partition_cols,
+                ref if_not_exists,
             }) => {
                 let (file_format, file_extension) = match file_type {
                     FileType::CSV => (
-                        Arc::new(CsvFormat::default().with_has_header(*has_header))
-                            as Arc<dyn FileFormat>,
+                        Arc::new(
+                            CsvFormat::default()
+                                .with_has_header(*has_header)
+                                .with_delimiter(*delimiter as u8),
+                        ) as Arc<dyn FileFormat>,
                         DEFAULT_CSV_EXTENSION,
                     ),
                     FileType::Parquet => (
@@ -235,40 +243,74 @@ impl SessionContext {
                         DEFAULT_JSON_EXTENSION,
                     ),
                 };
-
-                let options = ListingOptions {
-                    format: file_format,
-                    collect_stat: false,
-                    file_extension: file_extension.to_owned(),
-                    target_partitions: self.copied_config().target_partitions,
-                    table_partition_cols: vec![],
-                };
-
-                // TODO make schema in CreateExternalTable optional instead of empty
-                let provided_schema = if schema.fields().is_empty() {
-                    None
-                } else {
-                    Some(Arc::new(schema.as_ref().to_owned().into()))
-                };
-                self.register_listing_table(name, location, options, provided_schema)
-                    .await?;
-                let plan = LogicalPlanBuilder::empty(false).build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                let table = self.table(name.as_str());
+                match (if_not_exists, table) {
+                    (true, Ok(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        // TODO make schema in CreateExternalTable optional instead of empty
+                        let provided_schema = if schema.fields().is_empty() {
+                            None
+                        } else {
+                            Some(Arc::new(schema.as_ref().to_owned().into()))
+                        };
+                        let options = ListingOptions {
+                            format: file_format,
+                            collect_stat: false,
+                            file_extension: file_extension.to_owned(),
+                            target_partitions: self.copied_config().target_partitions,
+                            table_partition_cols: table_partition_cols.clone(),
+                        };
+                        self.register_listing_table(
+                            name,
+                            location,
+                            options,
+                            provided_schema,
+                        )
+                        .await?;
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
             }
 
-            LogicalPlan::CreateMemoryTable(CreateMemoryTable { name, input }) => {
-                let plan = self.optimize(&input)?;
-                let physical = Arc::new(DataFrame::new(self.state.clone(), &plan));
+            LogicalPlan::CreateMemoryTable(CreateMemoryTable {
+                name,
+                input,
+                if_not_exists,
+            }) => {
+                let table = self.table(name.as_str());
 
-                let batches: Vec<_> = physical.collect_partitioned().await?;
-                let table = Arc::new(MemTable::try_new(
-                    Arc::new(plan.schema().as_ref().into()),
-                    batches,
-                )?);
-                self.register_table(name.as_str(), table)?;
+                match (if_not_exists, table) {
+                    (true, Ok(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        let plan = self.optimize(&input)?;
+                        let physical =
+                            Arc::new(DataFrame::new(self.state.clone(), &plan));
 
-                let plan = LogicalPlanBuilder::empty(false).build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                        let batches: Vec<_> = physical.collect_partitioned().await?;
+                        let table = Arc::new(MemTable::try_new(
+                            Arc::new(plan.schema().as_ref().into()),
+                            batches,
+                        )?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
             }
 
             LogicalPlan::DropTable(DropTable {
@@ -292,14 +334,23 @@ impl SessionContext {
             }) => {
                 // sqlparser doesnt accept database / catalog as parameter to CREATE SCHEMA
                 // so for now, we default to default catalog
-                let catalog = self.catalog(DEFAULT_CATALOG).ok_or_else(|| {
+                let tokens: Vec<&str> = schema_name.split('.').collect();
+                let (catalog, schema_name) = match tokens.len() {
+                    1 => Ok((DEFAULT_CATALOG, schema_name.as_str())),
+                    2 => Ok((tokens[0], tokens[1])),
+                    _ => Err(DataFusionError::Execution(format!(
+                        "Unable to parse catalog from {}",
+                        schema_name
+                    ))),
+                }?;
+                let catalog = self.catalog(catalog).ok_or_else(|| {
                     DataFusionError::Execution(format!(
                         "Missing '{}' catalog",
                         DEFAULT_CATALOG
                     ))
                 })?;
 
-                let schema = catalog.schema(&schema_name);
+                let schema = catalog.schema(schema_name);
 
                 match (if_not_exists, schema) {
                     (true, Some(_)) => {
@@ -308,13 +359,40 @@ impl SessionContext {
                     }
                     (true, None) | (false, None) => {
                         let schema = Arc::new(MemorySchemaProvider::new());
-                        catalog.register_schema(&schema_name, schema)?;
+                        catalog.register_schema(schema_name, schema)?;
                         let plan = LogicalPlanBuilder::empty(false).build()?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (false, Some(_)) => Err(DataFusionError::Execution(format!(
                         "Schema '{:?}' already exists",
                         schema_name
+                    ))),
+                }
+            }
+            LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name,
+                if_not_exists,
+                ..
+            }) => {
+                let catalog = self.catalog(catalog_name.as_str());
+
+                match (if_not_exists, catalog) {
+                    (true, Some(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (true, None) | (false, None) => {
+                        let new_catalog = Arc::new(MemoryCatalogProvider::new());
+                        self.state
+                            .write()
+                            .catalog_list
+                            .register_catalog(catalog_name, new_catalog);
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Some(_)) => Err(DataFusionError::Execution(format!(
+                        "Catalog '{:?}' already exists",
+                        catalog_name
                     ))),
                 }
             }
@@ -462,14 +540,23 @@ impl SessionContext {
     }
 
     /// Creates a DataFrame for reading a Parquet data source.
-    pub async fn read_parquet(&self, uri: impl Into<String>) -> Result<Arc<DataFrame>> {
+    pub async fn read_parquet(
+        &self,
+        uri: impl Into<String>,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<Arc<DataFrame>> {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan =
-            LogicalPlanBuilder::scan_parquet(object_store, path, None, target_partitions)
-                .await?
-                .build()?;
+        let logical_plan = LogicalPlanBuilder::scan_parquet(
+            object_store,
+            path,
+            options,
+            None,
+            target_partitions,
+        )
+        .await?
+        .build()?;
         Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
     }
 
@@ -548,20 +635,19 @@ impl SessionContext {
 
     /// Registers a Parquet data source so that it can be referenced from SQL statements
     /// executed against this context.
-    pub async fn register_parquet(&self, name: &str, uri: &str) -> Result<()> {
-        let (target_partitions, enable_pruning) = {
+    pub async fn register_parquet(
+        &self,
+        name: &str,
+        uri: &str,
+        options: ParquetReadOptions<'_>,
+    ) -> Result<()> {
+        let (target_partitions, parquet_pruning) = {
             let conf = self.copied_config();
             (conf.target_partitions, conf.parquet_pruning)
         };
-        let file_format = ParquetFormat::default().with_enable_pruning(enable_pruning);
-
-        let listing_options = ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: true,
-            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
-            target_partitions,
-            table_partition_cols: vec![],
-        };
+        let listing_options = options
+            .parquet_pruning(parquet_pruning)
+            .to_listing_options(target_partitions);
 
         self.register_listing_table(name, uri, listing_options, None)
             .await?;
@@ -3211,6 +3297,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sql_create_catalog() -> Result<()> {
+        // the information schema used to introduce cyclic Arcs
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        // Create catalog
+        ctx.sql("CREATE DATABASE test").await?.collect().await?;
+
+        // Create schema
+        ctx.sql("CREATE SCHEMA test.abc").await?.collect().await?;
+
+        // Add table to schema
+        ctx.sql("CREATE TABLE test.abc.y AS VALUES (1,2,3)")
+            .await?
+            .collect()
+            .await?;
+
+        // Check table exists in schema
+        let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
+
+        assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn normalized_column_identifiers() {
         // create local execution context
         let ctx = SessionContext::new();
@@ -3510,7 +3622,9 @@ mod tests {
 
         async fn call_read_parquet(&self) -> Arc<DataFrame> {
             let ctx = SessionContext::new();
-            ctx.read_parquet("dummy").await.unwrap()
+            ctx.read_parquet("dummy", ParquetReadOptions::default())
+                .await
+                .unwrap()
         }
     }
 }

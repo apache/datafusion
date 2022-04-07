@@ -23,11 +23,15 @@ pub mod jit;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
     use crate::api::{Assembler, GeneratedFunction};
     use crate::ast::{BinaryExpr, Expr, Literal, TypedLit, I64};
     use crate::jit::JIT;
-    use datafusion_common::Result;
-    use datafusion_expr::lit;
+    use arrow::datatypes::DataType;
+    use datafusion_common::{DFField, DFSchema, Result};
+    use datafusion_expr::{col, lit};
 
     #[test]
     fn iterative_fib() -> Result<()> {
@@ -89,13 +93,34 @@ mod tests {
     #[test]
     fn from_datafusion_expression() -> Result<()> {
         let df_expr = lit(1.0f32) + lit(2.0f32);
-        let jit_expr: crate::ast::Expr = df_expr.try_into()?;
+        let schema = Arc::new(DFSchema::empty());
+        let jit_expr: crate::ast::Expr = (df_expr, schema).try_into()?;
 
         assert_eq!(
             jit_expr,
             Expr::Binary(BinaryExpr::Add(
                 Box::new(Expr::Literal(Literal::Typed(TypedLit::Float(1.0)))),
                 Box::new(Expr::Literal(Literal::Typed(TypedLit::Float(2.0))))
+            )),
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn from_datafusion_expression_schema() -> Result<()> {
+        let df_expr = col("a") + lit(1i64);
+        let schema = Arc::new(DFSchema::new_with_metadata(
+            vec![DFField::new(Some("table1"), "a", DataType::Int64, false)],
+            HashMap::new(),
+        )?);
+        let jit_expr: crate::ast::Expr = (df_expr, schema).try_into()?;
+
+        assert_eq!(
+            jit_expr,
+            Expr::Binary(BinaryExpr::Add(
+                Box::new(Expr::Identifier("table1.a".to_string(), I64)),
+                Box::new(Expr::Literal(Literal::Typed(TypedLit::Int(1))))
             )),
         );
 

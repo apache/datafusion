@@ -26,6 +26,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 
 use super::FileFormat;
+use crate::datasource::file_format::DEFAULT_SCHEMA_INFER_MAX_RECORD;
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
@@ -46,7 +47,7 @@ pub struct CsvFormat {
 impl Default for CsvFormat {
     fn default() -> Self {
         Self {
-            schema_infer_max_rec: None,
+            schema_infer_max_rec: Some(DEFAULT_SCHEMA_INFER_MAX_RECORD),
             has_header: true,
             delimiter: b',',
         }
@@ -55,7 +56,7 @@ impl Default for CsvFormat {
 
 impl CsvFormat {
     /// Set a limit in terms of records to scan to infer the schema
-    /// - default to `None` (no limit)
+    /// - default to `DEFAULT_SCHEMA_INFER_MAX_RECORD`
     pub fn with_schema_infer_max_rec(mut self, max_rec: Option<usize>) -> Self {
         self.schema_infer_max_rec = max_rec;
         self

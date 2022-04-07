@@ -84,6 +84,7 @@ cpp/Brewfile.lock.json
 # Rust
 target
 Cargo.lock
+!datafusion-cli/Cargo.lock
 
 rusty-tags.vi
 .history

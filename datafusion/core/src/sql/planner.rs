@@ -29,7 +29,7 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, union_with_alias, Column, CreateCatalogSchema,
+    normalize_col, union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
     DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
     ToDFSchema, ToStringifiedPlan,
@@ -156,6 +156,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 constraints,
                 table_properties,
                 with_options,
+                if_not_exists,
                 ..
             } if columns.is_empty()
                 && constraints.is_empty()
@@ -167,6 +168,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(LogicalPlan::CreateMemoryTable(CreateMemoryTable {
                     name: name.to_string(),
                     input: Arc::new(plan),
+                    if_not_exists,
                 }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(
@@ -178,6 +180,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
             } => Ok(LogicalPlan::CreateCatalogSchema(CreateCatalogSchema {
                 schema_name: schema_name.to_string(),
+                if_not_exists,
+                schema: Arc::new(DFSchema::empty()),
+            })),
+            Statement::CreateDatabase {
+                db_name,
+                if_not_exists,
+                ..
+            } => Ok(LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name: db_name.to_string(),
                 if_not_exists,
                 schema: Arc::new(DFSchema::empty()),
             })),
@@ -307,7 +318,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             columns,
             file_type,
             has_header,
+            delimiter,
             location,
+            table_partition_cols,
+            if_not_exists,
         } = statement;
 
         // semantic checks
@@ -333,6 +347,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             location,
             file_type,
             has_header,
+            delimiter,
+            table_partition_cols,
+            if_not_exists,
         }))
     }
 
@@ -3514,11 +3531,36 @@ mod tests {
     }
 
     #[test]
-    fn union_schemas_should_be_same() {
+    fn union_with_different_column_names() {
         let sql = "SELECT order_id from orders UNION ALL SELECT customer_id FROM orders";
+        let expected = "Union\
+            \n  Projection: #orders.order_id\
+            \n    TableScan: orders projection=None\
+            \n  Projection: #orders.customer_id\
+            \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_values_with_no_alias() {
+        let sql = "SELECT 1, 2 UNION ALL SELECT 3, 4";
+        let expected = "Union\
+            \n  Projection: Int64(1) AS column0, Int64(2) AS column1\
+            \n    EmptyRelation\
+            \n  Projection: Int64(3) AS column0, Int64(4) AS column1\
+            \n    EmptyRelation";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn union_with_incompatible_data_type() {
+        let sql = "SELECT interval '1 year 1 day' UNION ALL SELECT 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"UNION ALL schemas are expected to be the same\")",
+            "Plan(\"Column Int64(1) (type: Int64) is \
+            not compatible wiht column IntervalMonthDayNano\
+            (\\\"950737950189618795196236955648\\\") \
+            (type: Interval(MonthDayNano))\")",
             format!("{:?}", err)
         );
     }

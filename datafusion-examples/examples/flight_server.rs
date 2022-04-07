@@ -98,6 +98,7 @@ impl FlightService for FlightServiceImpl {
                 ctx.register_parquet(
                     "alltypes_plain",
                     &format!("{}/alltypes_plain.parquet", testdata),
+                    ParquetReadOptions::default(),
                 )
                 .await
                 .map_err(to_tonic_err)?;

@@ -310,6 +310,36 @@ impl PartitionColumnProjector {
         }
     }
 
+    // Creates a RecordBatch with values from the partition_values. Used when no non-partition values are read
+    fn project_from_size(
+        &mut self,
+        batch_size: usize,
+        partition_values: &[ScalarValue],
+    ) -> ArrowResult<RecordBatch> {
+        let expected_cols = self.projected_schema.fields().len();
+        if expected_cols != self.projected_partition_indexes.len() {
+            return Err(ArrowError::SchemaError(format!(
+                "Unexepected number of partition values, expected {} but got {}",
+                expected_cols,
+                partition_values.len()
+            )));
+        }
+        //The destination index is not needed. Since there are no non-partition columns it will simply be equivalent to
+        //the index that would be provided by .enumerate()
+        let cols = self
+            .projected_partition_indexes
+            .iter()
+            .map(|(pidx, _)| {
+                create_dict_array(
+                    &mut self.key_buffer_cache,
+                    &partition_values[*pidx],
+                    batch_size,
+                )
+            })
+            .collect();
+        RecordBatch::try_new(Arc::clone(&self.projected_schema), cols)
+    }
+
     // Transform the batch read from the file by inserting the partitioning columns
     // to the right positions as deduced from `projected_schema`
     // - file_batch: batch read from the file, with internal projection applied
@@ -329,7 +359,6 @@ impl PartitionColumnProjector {
                 file_batch.columns().len()
             )));
         }
-
         let mut cols = file_batch.columns().to_vec();
         for &(pidx, sidx) in &self.projected_partition_indexes {
             cols.insert(

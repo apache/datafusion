@@ -24,7 +24,7 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distributions::uniform::SampleUniform;
@@ -196,8 +196,12 @@ fn criterion_benchmark(c: &mut Criterion) {
     let context = SessionContext::new();
 
     let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-    rt.block_on(context.register_parquet("t", file_path.as_str()))
-        .unwrap();
+    rt.block_on(context.register_parquet(
+        "t",
+        file_path.as_str(),
+        ParquetReadOptions::default(),
+    ))
+    .unwrap();
 
     // We read the queries from a file so they can be changed without recompiling the benchmark
     let mut queries_file = File::open("benches/parquet_query_sql.sql").unwrap();

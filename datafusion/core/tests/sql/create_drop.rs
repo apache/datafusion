@@ -126,3 +126,91 @@ async fn create_external_table_with_timestamps() {
     ];
     assert_batches_sorted_eq!(expected, &result);
 }
+
+#[tokio::test]
+#[should_panic(expected = "already exists")]
+async fn sql_create_duplicate_table() {
+    // the information schema used to introduce cyclic Arcs
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    // Create table
+    ctx.sql("CREATE TABLE y AS VALUES (1,2,3)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    // Create table again
+    let result = ctx
+        .sql("CREATE TABLE y AS VALUES (1,2,3)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    assert_eq!(result, Vec::new());
+}
+
+#[tokio::test]
+async fn sql_create_table_if_not_exists() -> Result<()> {
+    // the information schema used to introduce cyclic Arcs
+    let ctx =
+        SessionContext::with_config(SessionConfig::new().with_information_schema(true));
+
+    // Create table
+    ctx.sql("CREATE TABLE y AS VALUES (1,2,3)")
+        .await?
+        .collect()
+        .await?;
+
+    // Create table again
+    let result = ctx
+        .sql("CREATE TABLE IF NOT EXISTS y AS VALUES (1,2,3)")
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(result, Vec::new());
+
+    // Create external table
+    ctx.sql("CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv'")
+        .await?
+        .collect()
+        .await?;
+
+    // Create external table
+    let result = ctx.sql("CREATE EXTERNAL TABLE IF NOT EXISTS aggregate_simple STORED AS CSV WITH HEADER ROW LOCATION 'tests/aggregate_simple.csv'")
+        .await?
+        .collect()
+        .await?;
+
+    assert_eq!(result, Vec::new());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_pipe_delimited_csv_table() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv'";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM aggregate_simple order by c1 LIMIT 1";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+---------+----------------+------+",
+        "| c1      | c2             | c3   |",
+        "+---------+----------------+------+",
+        "| 0.00001 | 0.000000000001 | true |",
+        "+---------+----------------+------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}

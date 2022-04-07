@@ -19,8 +19,7 @@
 
 use crate::datasource::{
     empty::EmptyTable,
-    file_format::parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
-    listing::{ListingOptions, ListingTable, ListingTableConfig},
+    listing::{ListingTable, ListingTableConfig},
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
@@ -256,6 +255,7 @@ impl LogicalPlanBuilder {
     pub async fn scan_parquet(
         object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
+        options: ParquetReadOptions<'_>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
     ) -> Result<Self> {
@@ -263,6 +263,7 @@ impl LogicalPlanBuilder {
         Self::scan_parquet_with_name(
             object_store,
             path.clone(),
+            options,
             projection,
             target_partitions,
             path,
@@ -274,21 +275,12 @@ impl LogicalPlanBuilder {
     pub async fn scan_parquet_with_name(
         object_store: Arc<dyn ObjectStore>,
         path: impl Into<String>,
+        options: ParquetReadOptions<'_>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
         table_name: impl Into<String>,
     ) -> Result<Self> {
-        // TODO remove hard coded enable_pruning
-        let file_format = ParquetFormat::default().with_enable_pruning(true);
-
-        let listing_options = ListingOptions {
-            format: Arc::new(file_format),
-            collect_stat: true,
-            file_extension: DEFAULT_PARQUET_EXTENSION.to_owned(),
-            target_partitions,
-            table_partition_cols: vec![],
-        };
-
+        let listing_options = options.to_listing_options(target_partitions);
         let path: String = path.into();
 
         // with parquet we resolve the schema in all cases
@@ -1021,6 +1013,29 @@ fn validate_unique_names<'a>(
     })
 }
 
+pub fn project_with_column_index_alias(
+    expr: Vec<Expr>,
+    input: Arc<LogicalPlan>,
+    schema: DFSchemaRef,
+    alias: Option<String>,
+) -> Result<LogicalPlan> {
+    let alias_expr = expr
+        .into_iter()
+        .enumerate()
+        .map(|(i, e)| match e {
+            ignore_alias @ Expr::Alias { .. } => ignore_alias,
+            ignore_col @ Expr::Column { .. } => ignore_col,
+            x => x.alias(format!("column{}", i).as_str()),
+        })
+        .collect::<Vec<_>>();
+    Ok(LogicalPlan::Projection(Projection {
+        expr: alias_expr,
+        input,
+        schema,
+        alias,
+    }))
+}
+
 /// Union two logical plans with an optional alias.
 pub fn union_with_alias(
     left_plan: LogicalPlan,
@@ -1033,6 +1048,15 @@ pub fn union_with_alias(
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![x],
         })
+        .map(|p| match p {
+            LogicalPlan::Projection(Projection {
+                expr,
+                input,
+                schema,
+                alias,
+            }) => project_with_column_index_alias(expr, input, schema, alias).unwrap(),
+            x => x,
+        })
         .collect::<Vec<_>>();
     if inputs.is_empty() {
         return Err(DataFusionError::Plan("Empty UNION".to_string()));
@@ -1043,19 +1067,19 @@ pub fn union_with_alias(
         Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
         None => union_schema.strip_qualifiers(),
     });
-    if !inputs.iter().skip(1).all(|input_plan| {
-        // union changes all qualifers in resulting schema, so we only need to
-        // match against arrow schema here, which doesn't include qualifiers
-        union_schema.matches_arrow_schema(&((**input_plan.schema()).clone().into()))
-    }) {
-        return Err(DataFusionError::Plan(
-            "UNION ALL schemas are expected to be the same".to_string(),
-        ));
-    }
+
+    inputs
+        .iter()
+        .skip(1)
+        .try_for_each(|input_plan| -> Result<()> {
+            union_schema.check_arrow_schema_type_compatible(
+                &((**input_plan.schema()).clone().into()),
+            )
+        })?;
 
     Ok(LogicalPlan::Union(Union {
-        schema: union_schema,
         inputs,
+        schema: union_schema,
         alias,
     }))
 }
