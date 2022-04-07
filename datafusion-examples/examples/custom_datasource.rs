@@ -21,7 +21,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::logical_plan::{Expr, LogicalPlanBuilder};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
@@ -219,17 +219,10 @@ impl ExecutionPlan for CustomExec {
     }
 
     fn with_new_children(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(Arc::new(self.clone()))
-        } else {
-            Err(DataFusionError::Internal(format!(
-                "Children cannot be replaced in {:?}",
-                self
-            )))
-        }
+        Ok(self)
     }
 
     async fn execute(

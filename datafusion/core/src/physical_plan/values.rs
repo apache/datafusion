@@ -129,18 +129,13 @@ impl ExecutionPlan for ValuesExec {
     }
 
     fn with_new_children(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            0 => Ok(Arc::new(ValuesExec {
-                schema: self.schema.clone(),
-                data: self.data.clone(),
-            })),
-            _ => Err(DataFusionError::Internal(
-                "ValuesExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(ValuesExec {
+            schema: self.schema.clone(),
+            data: self.data.clone(),
+        }))
     }
 
     async fn execute(

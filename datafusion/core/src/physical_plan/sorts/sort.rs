@@ -716,18 +716,13 @@ impl ExecutionPlan for SortExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(SortExec::try_new(
-                self.expr.clone(),
-                children[0].clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "SortExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(SortExec::try_new(
+            self.expr.clone(),
+            children[0].clone(),
+        )?))
     }
 
     async fn execute(
