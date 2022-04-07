@@ -42,7 +42,10 @@ datafusion = { path = "../../../datafusion/core", version = "7.0.0" }
 datafusion-proto = { path = "../../../datafusion/proto", version = "7.0.0" }
 futures = "0.3"
 hashbrown = "0.12"
+
+libloading = "0.7.3"
 log = "0.4"
+once_cell = "1.9.0"
 
 parking_lot = "0.12"
 parse_arg = "0.1.3"
@@ -53,9 +56,11 @@ sqlparser = "0.16"
 tokio = "1.0"
 tonic = "0.6"
 uuid = { version = "0.8", features = ["v4"] }
+walkdir = "2.3.2"
 
 [dev-dependencies]
 tempfile = "3"
 
 [build-dependencies]
+rustc_version = "0.4.0"
 tonic-build = { version = "0.6" }
