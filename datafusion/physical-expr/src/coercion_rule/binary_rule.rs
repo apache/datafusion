@@ -17,6 +17,7 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
@@ -58,6 +59,8 @@ pub(crate) fn coerce_types(
         | Operator::RegexIMatch
         | Operator::RegexNotMatch
         | Operator::RegexNotIMatch => string_coercion(lhs_type, rhs_type),
+        // "||" operator has its own rules, and always return a string type
+        Operator::StringConcat => string_concat_coercion(lhs_type, rhs_type),
         Operator::IsDistinctFrom | Operator::IsNotDistinctFrom => {
             eq_coercion(lhs_type, rhs_type)
         }
@@ -366,6 +369,34 @@ fn dictionary_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
             dictionary_value_coercion(lhs_type, value_type)
         }
         _ => None,
+    }
+}
+
+/// Coercion rules for string concat.
+/// This is a union of string coercion rules and specified rules:
+/// 1. At lease one side of lhs and rhs should be string type (Utf8 / LargeUtf8)
+/// 2. Data type of the other side should be able to cast to string type
+fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+    string_coercion(lhs_type, rhs_type).or(match (lhs_type, rhs_type) {
+        (Utf8, from_type) | (from_type, Utf8) => {
+            string_concat_internal_coercion(from_type, &Utf8)
+        }
+        (LargeUtf8, from_type) | (from_type, LargeUtf8) => {
+            string_concat_internal_coercion(from_type, &LargeUtf8)
+        }
+        _ => None,
+    })
+}
+
+fn string_concat_internal_coercion(
+    from_type: &DataType,
+    to_type: &DataType,
+) -> Option<DataType> {
+    if can_cast_types(from_type, to_type) {
+        Some(to_type.to_owned())
+    } else {
+        None
     }
 }
 
