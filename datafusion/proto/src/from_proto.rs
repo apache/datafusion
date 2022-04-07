@@ -16,7 +16,13 @@
 // under the License.
 
 use crate::protobuf;
-use datafusion::logical_plan::FunctionRegistry;
+use crate::protobuf::plan_type::PlanTypeEnum::{
+    FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+    OptimizedLogicalPlan, OptimizedPhysicalPlan,
+};
+use crate::protobuf::{OptimizedLogicalPlanType, OptimizedPhysicalPlanType};
+use datafusion::logical_plan::plan::StringifiedPlan;
+use datafusion::logical_plan::{FunctionRegistry, PlanType};
 use datafusion::prelude::bit_length;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
@@ -360,6 +366,37 @@ impl TryFrom<&protobuf::Field> for Field {
         let datatype = field.arrow_type.as_deref().required("arrow_type")?;
 
         Ok(Self::new(field.name.as_str(), datatype, field.nullable))
+    }
+}
+
+impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
+    fn from(stringified_plan: &protobuf::StringifiedPlan) -> Self {
+        Self {
+            plan_type: match stringified_plan
+                .plan_type
+                .as_ref()
+                .unwrap()
+                .plan_type_enum
+                .as_ref()
+                .unwrap()
+            {
+                InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
+                OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
+                    PlanType::OptimizedLogicalPlan {
+                        optimizer_name: optimizer_name.clone(),
+                    }
+                }
+                FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
+                InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
+                OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
+                    PlanType::OptimizedPhysicalPlan {
+                        optimizer_name: optimizer_name.clone(),
+                    }
+                }
+                FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
+            },
+            plan: Arc::new(stringified_plan.plan.clone()),
+        }
     }
 }
 
@@ -721,7 +758,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
 
         Ok(match scalar {
             PrimitiveScalarType::Null => {
-                return Err(proto_error("Untyped null is an invalid scalar value"))
+                return Err(proto_error("Untyped null is an invalid scalar value"));
             }
             PrimitiveScalarType::Bool => Self::Boolean(None),
             PrimitiveScalarType::Uint8 => Self::UInt8(None),
@@ -1450,7 +1487,7 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::Null => {
                         return Err(proto_error(
                             "Untyped scalar null is not a valid scalar value",
-                        ))
+                        ));
                     }
                     PrimitiveScalarType::Decimal128 => {
                         ScalarValue::Decimal128(None, 0, 0)

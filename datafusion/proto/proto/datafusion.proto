@@ -540,3 +540,27 @@ message ArrowType{
 //   }
 //}
 message EmptyMessage{}
+
+message OptimizedLogicalPlanType {
+  string optimizer_name = 1;
+}
+
+message OptimizedPhysicalPlanType {
+  string optimizer_name = 1;
+}
+
+message PlanType {
+  oneof plan_type_enum {
+    EmptyMessage InitialLogicalPlan = 1;
+    OptimizedLogicalPlanType OptimizedLogicalPlan = 2;
+    EmptyMessage FinalLogicalPlan = 3;
+    EmptyMessage InitialPhysicalPlan = 4;
+    OptimizedPhysicalPlanType OptimizedPhysicalPlan = 5;
+    EmptyMessage FinalPhysicalPlan = 6;
+  }
+}
+
+message StringifiedPlan {
+  PlanType plan_type = 1;
+  string plan = 2;
+}

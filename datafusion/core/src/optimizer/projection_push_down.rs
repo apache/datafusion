@@ -126,11 +126,11 @@ fn get_projected_schema(
 
 /// Recursively transverses the logical plan removing expressions and that are not needed.
 fn optimize_plan(
-    optimizer: &ProjectionPushDown,
+    _optimizer: &ProjectionPushDown,
     plan: &LogicalPlan,
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
-    execution_props: &ExecutionProps,
+    _execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
@@ -165,11 +165,11 @@ fn optimize_plan(
                 })?;
 
             let new_input = optimize_plan(
-                optimizer,
+                _optimizer,
                 input,
                 &new_required_columns,
                 true,
-                execution_props,
+                _execution_props,
             )?;
 
             let new_required_columns_optimized = new_input
@@ -211,19 +211,19 @@ fn optimize_plan(
             }
 
             let optimized_left = Arc::new(optimize_plan(
-                optimizer,
+                _optimizer,
                 left,
                 &new_required_columns,
                 true,
-                execution_props,
+                _execution_props,
             )?);
 
             let optimized_right = Arc::new(optimize_plan(
-                optimizer,
+                _optimizer,
                 right,
                 &new_required_columns,
                 true,
-                execution_props,
+                _execution_props,
             )?);
 
             let schema = build_join_schema(
@@ -272,11 +272,11 @@ fn optimize_plan(
             )?;
 
             LogicalPlanBuilder::from(optimize_plan(
-                optimizer,
+                _optimizer,
                 input,
                 &new_required_columns,
                 true,
-                execution_props,
+                _execution_props,
             )?)
             .window(new_window_expr)?
             .build()
@@ -324,11 +324,11 @@ fn optimize_plan(
                 group_expr: group_expr.clone(),
                 aggr_expr: new_aggr_expr,
                 input: Arc::new(optimize_plan(
-                    optimizer,
+                    _optimizer,
                     input,
                     &new_required_columns,
                     true,
-                    execution_props,
+                    _execution_props,
                 )?),
                 schema: DFSchemaRef::new(new_schema),
             }))
@@ -373,11 +373,11 @@ fn optimize_plan(
 
             Ok(LogicalPlan::Analyze(Analyze {
                 input: Arc::new(optimize_plan(
-                    optimizer,
+                    _optimizer,
                     &a.input,
                     &required_columns,
                     false,
-                    execution_props,
+                    _execution_props,
                 )?),
                 verbose: a.verbose,
                 schema: a.schema.clone(),
@@ -409,11 +409,11 @@ fn optimize_plan(
                             new_required_columns.insert(f.qualified_column());
                         });
                     optimize_plan(
-                        optimizer,
+                        _optimizer,
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        execution_props,
+                        _execution_props,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -457,11 +457,11 @@ fn optimize_plan(
                 .iter()
                 .map(|input_plan| {
                     optimize_plan(
-                        optimizer,
+                        _optimizer,
                         input_plan,
                         &new_required_columns,
                         has_projection,
-                        execution_props,
+                        _execution_props,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;

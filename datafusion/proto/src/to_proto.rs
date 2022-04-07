@@ -20,7 +20,16 @@
 //! processes.
 
 use crate::protobuf;
+use crate::protobuf::plan_type::PlanTypeEnum::{
+    FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+    OptimizedLogicalPlan, OptimizedPhysicalPlan,
+};
+use crate::protobuf::{
+    EmptyMessage, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+};
 
+use datafusion::logical_plan::plan::StringifiedPlan;
+use datafusion::logical_plan::PlanType;
 use datafusion::{
     arrow::datatypes::{
         DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
@@ -143,8 +152,6 @@ impl From<&DataType> for protobuf::ArrowType {
 
 impl From<&DataType> for protobuf::arrow_type::ArrowTypeEnum {
     fn from(val: &DataType) -> Self {
-        use protobuf::EmptyMessage;
-
         match val {
             DataType::Null => Self::None(EmptyMessage {}),
             DataType::Boolean => Self::Bool(EmptyMessage {}),
@@ -290,6 +297,42 @@ impl From<&DFSchemaRef> for protobuf::DfSchema {
         protobuf::DfSchema {
             columns,
             metadata: s.metadata().clone(),
+        }
+    }
+}
+
+impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
+    fn from(stringified_plan: &StringifiedPlan) -> Self {
+        Self {
+            plan_type: match stringified_plan.clone().plan_type {
+                PlanType::InitialLogicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(InitialLogicalPlan(EmptyMessage {})),
+                }),
+                PlanType::OptimizedLogicalPlan { optimizer_name } => {
+                    Some(protobuf::PlanType {
+                        plan_type_enum: Some(OptimizedLogicalPlan(
+                            OptimizedLogicalPlanType { optimizer_name },
+                        )),
+                    })
+                }
+                PlanType::FinalLogicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalLogicalPlan(EmptyMessage {})),
+                }),
+                PlanType::InitialPhysicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(InitialPhysicalPlan(EmptyMessage {})),
+                }),
+                PlanType::OptimizedPhysicalPlan { optimizer_name } => {
+                    Some(protobuf::PlanType {
+                        plan_type_enum: Some(OptimizedPhysicalPlan(
+                            OptimizedPhysicalPlanType { optimizer_name },
+                        )),
+                    })
+                }
+                PlanType::FinalPhysicalPlan => Some(protobuf::PlanType {
+                    plan_type_enum: Some(FinalPhysicalPlan(EmptyMessage {})),
+                }),
+            },
+            plan: stringified_plan.plan.to_string(),
         }
     }
 }
