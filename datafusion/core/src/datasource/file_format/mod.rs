@@ -56,7 +56,16 @@ pub trait FileFormat: Send + Sync + fmt::Debug {
 
     /// Infer the statistics for the provided object. The cost and accuracy of the
     /// estimated statistics might vary greatly between file formats.
-    async fn infer_stats(&self, reader: Arc<dyn ObjectReader>) -> Result<Statistics>;
+    ///
+    /// `table_schema` is the (combined) schema of the overall table
+    /// and may be a superset of the schema contained in this file.
+    ///
+    /// TODO: should the file source return statistics for only columns referred to in the table schema?
+    async fn infer_stats(
+        &self,
+        reader: Arc<dyn ObjectReader>,
+        table_schema: SchemaRef,
+    ) -> Result<Statistics>;
 
     /// Take a list of files and convert it to the appropriate executor
     /// according to this file format.

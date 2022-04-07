@@ -359,7 +359,7 @@ macro_rules! get_statistic {
 // Extract the min or max value calling `func` or `bytes_func` on the ParquetStatistics as appropriate
 macro_rules! get_min_max_values {
     ($self:expr, $column:expr, $func:ident, $bytes_func:ident) => {{
-        let (column_index, field) =
+        let (_column_index, field) =
             if let Some((v, f)) = $self.parquet_schema.column_with_name(&$column.name) {
                 (v, f)
             } else {
@@ -372,8 +372,10 @@ macro_rules! get_min_max_values {
         let null_scalar: ScalarValue = data_type.try_into().ok()?;
 
         $self.row_group_metadata
-            .column(column_index)
-            .statistics()
+            .columns()
+            .iter()
+            .find(|c| c.column_descr().name() == &$column.name)
+            .and_then(|c| c.statistics())
             .map(|stats| get_statistic!(stats, $func, $bytes_func))
             .flatten()
             // column either didn't have statistics at all or didn't have min/max values
@@ -385,21 +387,19 @@ macro_rules! get_min_max_values {
 // Extract the null count value on the ParquetStatistics
 macro_rules! get_null_count_values {
     ($self:expr, $column:expr) => {{
-        let column_index =
-            if let Some((v, _)) = $self.parquet_schema.column_with_name(&$column.name) {
-                v
-            } else {
-                // Named column was not present
-                return None;
-            };
-
         let value = ScalarValue::UInt64(
-            $self
+            if let Some(col) = $self
                 .row_group_metadata
-                .column(column_index)
-                .statistics()
-                .map(|s| s.null_count()),
+                .columns()
+                .iter()
+                .find(|c| c.column_descr().name() == &$column.name)
+            {
+                col.statistics().map(|s| s.null_count())
+            } else {
+                Some($self.row_group_metadata.num_rows() as u64)
+            },
         );
+
         Some(value.to_array())
     }};
 }
@@ -657,6 +657,7 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field},
     };
+    use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use parquet::{
         arrow::ArrowWriter,
@@ -677,6 +678,7 @@ mod tests {
         batches: Vec<RecordBatch>,
         projection: Option<Vec<usize>>,
         schema: Option<SchemaRef>,
+        predicate: Option<Expr>,
     ) -> Result<Vec<RecordBatch>> {
         // When vec is dropped, temp files are deleted
         let files: Vec<_> = batches
@@ -728,7 +730,7 @@ mod tests {
                 limit: None,
                 table_partition_cols: vec![],
             },
-            None,
+            predicate,
         );
 
         let session_ctx = SessionContext::new();
@@ -778,7 +780,7 @@ mod tests {
         let batch3 = add_to_batch(&batch1, "c3", c3);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None)
+        let read = round_trip_to_parquet(vec![batch1, batch2, batch3], None, None, None)
             .await
             .unwrap();
         let expected = vec![
@@ -819,7 +821,7 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None)
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, None)
             .await
             .unwrap();
         let expected = vec![
@@ -853,7 +855,7 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], None, None)
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, None)
             .await
             .unwrap();
         let expected = vec![
@@ -866,6 +868,39 @@ mod tests {
             "|     | 10 | 1  |",
             "|     | 20 | 2  |",
             "|     |    |    |",
+            "+-----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_intersection_filter() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+
+        // batch1: c1(string), c3(int8)
+        let batch1 = create_batch(vec![("c1", c1), ("c3", c3.clone())]);
+
+        // batch2: c3(int8), c2(int64)
+        let batch2 = create_batch(vec![("c3", c3), ("c2", c2)]);
+
+        let filter = col("c2").eq(lit(0_i64));
+
+        // read/write them files:
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter))
+            .await
+            .unwrap();
+        let expected = vec![
+            "+-----+----+----+",
+            "| c1  | c3 | c2 |",
+            "+-----+----+----+",
+            "| Foo | 10 |    |",
+            "|     | 20 |    |",
+            "| bar |    |    |",
             "+-----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &read);
@@ -894,9 +929,10 @@ mod tests {
         let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1), ("c4", c4)]);
 
         // read/write them files:
-        let read = round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None)
-            .await
-            .unwrap();
+        let read =
+            round_trip_to_parquet(vec![batch1, batch2], Some(vec![0, 3]), None, None)
+                .await
+                .unwrap();
         let expected = vec![
             "+-----+-----+",
             "| c1  | c4  |",
@@ -908,6 +944,73 @@ mod tests {
             "|     |     |",
             "| bar |     |",
             "+-----+-----+",
+        ];
+        assert_batches_sorted_eq!(expected, &read);
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_filter() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        let c3: ArrayRef = Arc::new(Int8Array::from(vec![Some(10), Some(20), None]));
+
+        // batch1: c1(string), c2(int64), c3(int8)
+        let batch1 = create_batch(vec![
+            ("c1", c1.clone()),
+            ("c2", c2.clone()),
+            ("c3", c3.clone()),
+        ]);
+
+        // batch2: c3(int8), c2(int64), c1(string)
+        let batch2 = create_batch(vec![("c3", c3), ("c2", c2), ("c1", c1)]);
+
+        let filter = col("c3").eq(lit(0_i8));
+
+        // read/write them files:
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter))
+            .await
+            .unwrap();
+
+        // Predicate should prune all row groups
+        assert_eq!(read.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn evolved_schema_disjoint_schema_filter() {
+        let c1: ArrayRef =
+            Arc::new(StringArray::from(vec![Some("Foo"), None, Some("bar")]));
+
+        let c2: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), Some(2), None]));
+
+        // batch1: c1(string)
+        let batch1 = create_batch(vec![("c1", c1.clone())]);
+
+        // batch2: c2(int64)
+        let batch2 = create_batch(vec![("c2", c2)]);
+
+        let filter = col("c2").eq(lit(0_i64));
+
+        // read/write them files:
+        let read = round_trip_to_parquet(vec![batch1, batch2], None, None, Some(filter))
+            .await
+            .unwrap();
+
+        // This does not look correct since the "c2" values in the result do not in fact match the predicate `c2 == 0`
+        // but parquet pruning is not exact. If the min/max values are not defined (which they are not in this case since the it is
+        // a null array, then the pruning predicate (currently) can not be applied.
+        // In a real query where this predicate was pushed down from a filter stage instead of created directly in the `ParquetExec`,
+        // the filter stage would be preserved as a separate execution plan stage so the actual query results would be as expected.
+        let expected = vec![
+            "+-----+----+",
+            "| c1  | c2 |",
+            "+-----+----+",
+            "| Foo |    |",
+            "|     |    |",
+            "| bar |    |",
+            "+-----+----+",
         ];
         assert_batches_sorted_eq!(expected, &read);
     }
@@ -941,9 +1044,13 @@ mod tests {
         ]);
 
         // read/write them files:
-        let read =
-            round_trip_to_parquet(vec![batch1, batch2], None, Some(Arc::new(schema)))
-                .await;
+        let read = round_trip_to_parquet(
+            vec![batch1, batch2],
+            None,
+            Some(Arc::new(schema)),
+            None,
+        )
+        .await;
         assert_contains!(read.unwrap_err().to_string(),
                          "Execution error: Failed to map column projection for field c3. Incompatible data types Float32 and Int8");
     }
