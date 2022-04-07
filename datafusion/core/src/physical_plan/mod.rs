@@ -258,8 +258,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
     fn statistics(&self) -> Statistics;
 }
 
-/// Returns a new plan where all children were replaced by new plans if the provided children
-/// do not share the same point references with the existing children.
+/// Returns a copy of this plan if we change any child according to the pointer comparison.
 /// The size of `children` must be equal to the size of `ExecutionPlan::children()`.
 /// Allow the vtable address comparisons for ExecutionPlan Trait Objects，it is harmless even
 /// in the case of 'false-native'.
