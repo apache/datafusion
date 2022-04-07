@@ -218,7 +218,7 @@ pub trait ExecutionPlan: Debug + Send + Sync {
 
     /// Returns a new plan where all children were replaced by new plans.
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>>;
 

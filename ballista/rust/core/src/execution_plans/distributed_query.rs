@@ -148,7 +148,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(DistributedQueryExec {

@@ -84,10 +84,10 @@ impl ExecutionPlan for NdJsonExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(self.clone()) as Arc<dyn ExecutionPlan>)
+        Ok(self)
     }
 
     async fn execute(

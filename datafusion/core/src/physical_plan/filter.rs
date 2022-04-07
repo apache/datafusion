@@ -119,7 +119,7 @@ impl ExecutionPlan for FilterExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(Arc::new(FilterExec::try_new(
@@ -334,7 +334,7 @@ mod tests {
         let filter: Arc<dyn ExecutionPlan> =
             Arc::new(FilterExec::try_new(predicate, input.clone())?);
 
-        let new_filter = filter.with_new_children(vec![input.clone()])?;
+        let new_filter = filter.clone().with_new_children(vec![input.clone()])?;
         assert!(!Arc::ptr_eq(&filter, &new_filter));
 
         let new_filter2 = with_new_children_if_necessary(filter.clone(), vec![input])?;

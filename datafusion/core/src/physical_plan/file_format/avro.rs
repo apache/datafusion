@@ -88,10 +88,10 @@ impl ExecutionPlan for AvroExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(self.clone()))
+        Ok(self)
     }
 
     #[cfg(not(feature = "avro"))]

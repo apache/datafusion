@@ -161,7 +161,7 @@ impl ExecutionPlan for MockExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
@@ -300,7 +300,7 @@ impl ExecutionPlan for BarrierExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
@@ -401,7 +401,7 @@ impl ExecutionPlan for ErrorExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unimplemented!()
@@ -481,10 +481,10 @@ impl ExecutionPlan for StatisticsExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(self.clone()))
+        Ok(self)
     }
 
     async fn execute(
@@ -576,7 +576,7 @@ impl ExecutionPlan for BlockingExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Internal(format!(

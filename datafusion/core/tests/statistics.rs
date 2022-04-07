@@ -129,10 +129,10 @@ impl ExecutionPlan for StatisticsValidation {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(self.clone()))
+        Ok(self)
     }
 
     async fn execute(
