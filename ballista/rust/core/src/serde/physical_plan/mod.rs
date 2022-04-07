@@ -15,24 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::error::BallistaError;
-use crate::execution_plans::{
-    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
-};
-use crate::serde::physical_plan::from_proto::{
-    parse_physical_expr, parse_protobuf_hash_partitioning,
-};
-use crate::serde::protobuf::physical_expr_node::ExprType;
-use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
-use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
+use std::convert::TryInto;
+use std::sync::Arc;
 
-use crate::serde::protobuf::{PhysicalExtensionNode, PhysicalPlanNode};
-use crate::serde::scheduler::PartitionLocation;
-use crate::serde::{
-    byte_to_string, proto_error, protobuf, str_to_byte, AsExecutionPlan,
-    PhysicalExtensionCodec,
-};
-use crate::{convert_required, into_physical_plan, into_required};
+use prost::bytes::BufMut;
+use prost::Message;
+
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
@@ -45,6 +33,7 @@ use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::cross_join::CrossJoinExec;
 use datafusion::physical_plan::empty::EmptyExec;
+use datafusion::physical_plan::explain::ExplainExec;
 use datafusion::physical_plan::expressions::{Column, PhysicalSortExpr};
 use datafusion::physical_plan::file_format::{
     AvroExec, CsvExec, FileScanConfig, ParquetExec,
@@ -62,10 +51,24 @@ use datafusion::physical_plan::{
     AggregateExpr, ExecutionPlan, Partitioning, PhysicalExpr, WindowExpr,
 };
 use datafusion_proto::from_proto::parse_expr;
-use prost::bytes::BufMut;
-use prost::Message;
-use std::convert::TryInto;
-use std::sync::Arc;
+
+use crate::error::BallistaError;
+use crate::execution_plans::{
+    ShuffleReaderExec, ShuffleWriterExec, UnresolvedShuffleExec,
+};
+use crate::serde::physical_plan::from_proto::{
+    parse_physical_expr, parse_protobuf_hash_partitioning,
+};
+use crate::serde::protobuf::physical_expr_node::ExprType;
+use crate::serde::protobuf::physical_plan_node::PhysicalPlanType;
+use crate::serde::protobuf::repartition_exec_node::PartitionMethod;
+use crate::serde::protobuf::{PhysicalExtensionNode, PhysicalPlanNode};
+use crate::serde::scheduler::PartitionLocation;
+use crate::serde::{
+    byte_to_string, proto_error, protobuf, str_to_byte, AsExecutionPlan,
+    PhysicalExtensionCodec,
+};
+use crate::{convert_required, into_physical_plan, into_required};
 
 pub mod from_proto;
 pub mod to_proto;
@@ -103,6 +106,15 @@ impl AsExecutionPlan for PhysicalPlanNode {
             ))
         })?;
         match plan {
+            PhysicalPlanType::Explain(explain) => Ok(Arc::new(ExplainExec::new(
+                Arc::new(explain.schema.as_ref().unwrap().try_into()?),
+                explain
+                    .stringified_plans
+                    .iter()
+                    .map(|plan| plan.into())
+                    .collect(),
+                explain.verbose,
+            ))),
             PhysicalPlanType::Projection(projection) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
                     projection.input,
@@ -587,7 +599,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
         let plan_clone = plan.clone();
         let plan = plan.as_any();
 
-        if let Some(exec) = plan.downcast_ref::<ProjectionExec>() {
+        if let Some(exec) = plan.downcast_ref::<ExplainExec>() {
+            Ok(protobuf::PhysicalPlanNode {
+                physical_plan_type: Some(PhysicalPlanType::Explain(
+                    protobuf::ExplainExecNode {
+                        schema: Some(exec.schema().as_ref().into()),
+                        stringified_plans: exec
+                            .stringified_plans()
+                            .iter()
+                            .map(|plan| plan.into())
+                            .collect(),
+                        verbose: exec.verbose(),
+                    },
+                )),
+            })
+        } else if let Some(exec) = plan.downcast_ref::<ProjectionExec>() {
             let input = protobuf::PhysicalPlanNode::try_from_physical_plan(
                 exec.input().to_owned(),
                 extension_codec,
@@ -1038,7 +1064,6 @@ mod roundtrip_tests {
     use std::ops::Deref;
     use std::sync::Arc;
 
-    use crate::serde::{AsExecutionPlan, BallistaCodec};
     use datafusion::arrow::array::ArrayRef;
     use datafusion::execution::context::ExecutionProps;
     use datafusion::logical_plan::create_udf;
@@ -1071,10 +1096,12 @@ mod roundtrip_tests {
         scalar::ScalarValue,
     };
 
-    use super::super::super::error::Result;
-    use super::super::protobuf;
     use crate::execution_plans::ShuffleWriterExec;
     use crate::serde::protobuf::{LogicalPlanNode, PhysicalPlanNode};
+    use crate::serde::{AsExecutionPlan, BallistaCodec};
+
+    use super::super::super::error::Result;
+    use super::super::protobuf;
 
     fn roundtrip_test(exec_plan: Arc<dyn ExecutionPlan>) -> Result<()> {
         let ctx = SessionContext::new();
