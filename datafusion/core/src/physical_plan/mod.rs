@@ -566,6 +566,7 @@ pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
+pub mod sort_merge_join;
 pub mod sorts;
 pub mod stream;
 pub mod type_coercion;
