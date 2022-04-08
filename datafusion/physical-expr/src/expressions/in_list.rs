@@ -41,10 +41,10 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 
 /// Size at which to use a Set rather than Vec for `IN` / `NOT IN`
-/// Value chosen to be consistent with Spark
-/// https://github.com/apache/spark/blob/4e95738fdfc334c25f44689ff8c2db5aa7c726f2/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L259-L265
+/// Value chosen by the benchmark at
+/// https://github.com/apache/arrow-datafusion/pull/2156#discussion_r845198369
 /// TODO: add switch codeGen in In_List
-static OPTIMIZER_INSET_THRESHOLD: usize = 10;
+static OPTIMIZER_INSET_THRESHOLD: usize = 30;
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
