@@ -50,6 +50,7 @@ use arrow::compute::kernels::comparison::{
     regexp_is_match_utf8_scalar,
 };
 use arrow::compute::kernels::comparison::{like_utf8, nlike_utf8, regexp_is_match_utf8};
+use arrow::compute::kernels::take::take;
 use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
@@ -430,17 +431,17 @@ fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
         scalar_value => scalar_value.into_array(left.clone().len()),
     };
     let ignore_null_array = ignore_null.as_any().downcast_ref::<StringArray>().unwrap();
-    let result = (0..ignore_null_array.len())
+    let index_array = (0..ignore_null_array.len())
         .into_iter()
         .map(|index| {
             if left.is_null(index) || right.is_null(index) {
                 None
             } else {
-                Some(ignore_null_array.value(index))
+                Some(index as u32)
             }
         })
-        .collect::<StringArray>();
-
+        .collect::<UInt32Array>();
+    let result = take(ignore_null_array, &index_array, None)?;
     Ok(Arc::new(result) as ArrayRef)
 }
 
