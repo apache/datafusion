@@ -84,6 +84,7 @@ use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parqu
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
 use crate::physical_plan::udf::ScalarUDF;
+use crate::physical_plan::udtf::TableUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
 use crate::sql::{
@@ -449,6 +450,20 @@ impl SessionContext {
         self.state
             .write()
             .scalar_functions
+            .insert(f.name.clone(), Arc::new(f));
+    }
+
+    /// Registers a table UDF within this context.
+    ///
+    /// Note in SQL queries, function names are looked up using
+    /// lowercase unless the query uses quotes. For example,
+    ///
+    /// `SELECT MY_FUNC(x)...` will look for a function named `"my_func"`
+    /// `SELECT "my_FUNC"(x)` will look for a function named `"my_FUNC"`
+    pub fn register_udtf(&mut self, f: TableUDF) {
+        self.state
+            .write()
+            .table_functions
             .insert(f.name.clone(), Arc::new(f));
     }
 
@@ -1142,6 +1157,8 @@ pub struct SessionState {
     pub catalog_list: Arc<dyn CatalogList>,
     /// Scalar functions that are registered with the context
     pub scalar_functions: HashMap<String, Arc<ScalarUDF>>,
+    /// Table functions that are registered with the context
+    pub table_functions: HashMap<String, Arc<TableUDF>>,
     /// Aggregate functions registered in the context
     pub aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Session configuration
@@ -1225,6 +1242,7 @@ impl SessionState {
             query_planner: Arc::new(DefaultQueryPlanner {}),
             catalog_list,
             scalar_functions: HashMap::new(),
+            table_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config,
             execution_props: ExecutionProps::new(),
@@ -1383,6 +1401,12 @@ impl ContextProvider for SessionState {
 
     fn get_aggregate_meta(&self, name: &str) -> Option<Arc<AggregateUDF>> {
         self.aggregate_functions.get(name).cloned()
+    }
+
+    fn get_table_function_meta(&self, name: &str) -> Option<Arc<TableUDF>> {
+        self.table_functions
+            .get(&name.to_ascii_lowercase())
+            .cloned()
     }
 
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
@@ -1603,15 +1627,15 @@ mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::functions::make_scalar_function;
+    use crate::physical_plan::functions::{make_scalar_function, make_table_function};
     use crate::test;
     use crate::variable::VarType;
     use crate::{
         assert_batches_eq, assert_batches_sorted_eq,
-        logical_plan::{col, create_udf, sum, Expr},
+        logical_plan::{col, create_udf, create_udtf, sum, Expr},
     };
     use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
-    use arrow::array::ArrayRef;
+    use arrow::array::{ArrayRef, Int64Array, Int64Builder};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
@@ -2112,6 +2136,59 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn user_defined_table_function() -> Result<()> {
+        let myfunc = make_table_function(move |args: &[ArrayRef]| {
+            assert!(args.len() == 2);
+
+            let start_arr = &args[0]
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("cast failed");
+            let start_number = start_arr.into_iter().nth(0).unwrap().unwrap_or(0);
+
+            let end_arr = &args[1]
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("cast failed");
+            let end_number = end_arr.into_iter().nth(0).unwrap().unwrap_or(0) + 1;
+
+            let count: usize = (end_number - start_number).try_into().unwrap();
+            let mut builder = Int64Builder::new(count);
+            for i in start_number..end_number {
+                builder.append_value(i).unwrap();
+            }
+
+            Ok(Arc::new(builder.finish()) as ArrayRef)
+        });
+
+        let mut ctx = SessionContext::new();
+        ctx.register_udtf(create_udtf(
+            "my_func",
+            vec![DataType::Int64, DataType::Int64],
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            myfunc,
+        ));
+
+        let result = plan_and_collect(&ctx, "SELECT my_func(1, 5)").await?;
+
+        let expected = vec![
+            "+----------------------------+",
+            "| my_func(Int64(1),Int64(5)) |",
+            "+----------------------------+",
+            "| 1                          |",
+            "| 2                          |",
+            "| 3                          |",
+            "| 4                          |",
+            "| 5                          |",
+            "+----------------------------+",
+        ];
+        assert_batches_eq!(expected, &result);
+
         Ok(())
     }
 

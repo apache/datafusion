@@ -48,6 +48,7 @@ use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
 use crate::physical_plan::udf;
+use crate::physical_plan::udtf;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
@@ -155,6 +156,9 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             create_function_physical_name(&fun.to_string(), false, args)
         }
         Expr::ScalarUDF { fun, args, .. } => {
+            create_function_physical_name(&fun.name, false, args)
+        }
+        Expr::TableUDF { fun, args, .. } => {
             create_function_physical_name(&fun.name, false, args)
         }
         Expr::WindowFunction { fun, args, .. } => {
@@ -1089,6 +1093,19 @@ pub fn create_physical_expr(
             }
 
             udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
+        }
+        Expr::TableUDF { fun, args } => {
+            let mut physical_args = vec![];
+            for e in args {
+                physical_args.push(create_physical_expr(
+                    e,
+                    input_dfschema,
+                    input_schema,
+                    execution_props,
+                )?);
+            }
+
+            udtf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
         }
         Expr::Between {
             expr,

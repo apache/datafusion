@@ -440,6 +440,10 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("ScalarUDF-");
                 desc.push_str(&fun.name);
             }
+            Expr::TableUDF { fun, .. } => {
+                desc.push_str("TableUDF-");
+                desc.push_str(&fun.name);
+            }
             Expr::WindowFunction {
                 fun, window_frame, ..
             } => {

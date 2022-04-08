@@ -332,6 +332,13 @@ where
                     .map(|arg| clone_with_replacement(arg, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
             }),
+            Expr::TableUDF { fun, args } => Ok(Expr::TableUDF {
+                fun: fun.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| clone_with_replacement(arg, replacement_fn))
+                    .collect::<Result<Vec<Expr>>>()?,
+            }),
             Expr::Negative(nested_expr) => Ok(Expr::Negative(Box::new(
                 clone_with_replacement(&**nested_expr, replacement_fn)?,
             ))),

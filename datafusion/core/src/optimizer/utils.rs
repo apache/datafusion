@@ -81,6 +81,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::Sort { .. }
             | Expr::ScalarFunction { .. }
             | Expr::ScalarUDF { .. }
+            | Expr::TableUDF { .. }
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. }
@@ -321,6 +322,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         | Expr::GetIndexedField { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
         Expr::ScalarFunction { args, .. }
         | Expr::ScalarUDF { args, .. }
+        | Expr::TableUDF { args, .. }
         | Expr::AggregateFunction { args, .. }
         | Expr::AggregateUDF { args, .. } => Ok(args.clone()),
         Expr::WindowFunction {
@@ -403,6 +405,10 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             args: expressions.to_vec(),
         }),
         Expr::ScalarUDF { fun, .. } => Ok(Expr::ScalarUDF {
+            fun: fun.clone(),
+            args: expressions.to_vec(),
+        }),
+        Expr::TableUDF { fun, .. } => Ok(Expr::TableUDF {
             fun: fun.clone(),
             args: expressions.to_vec(),
         }),

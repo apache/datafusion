@@ -36,7 +36,7 @@ use crate::physical_plan::expressions::{
 };
 use crate::{
     error::{DataFusionError, Result},
-    logical_expr::{function, BuiltinScalarFunction, ScalarFunctionImplementation},
+    logical_expr::{function, BuiltinScalarFunction, ScalarFunctionImplementation, TableFunctionImplementation},
     scalar::ScalarValue,
 };
 use arrow::{
@@ -168,6 +168,7 @@ pub fn create_physical_expr(
 }
 
 pub use datafusion_physical_expr::ScalarFunctionExpr;
+pub use datafusion_physical_expr::TableFunctionExpr;
 
 #[cfg(feature = "crypto_expressions")]
 macro_rules! invoke_if_crypto_expressions_feature_flag {
@@ -264,6 +265,22 @@ where
         } else {
             ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)
         }
+    })
+}
+
+/// Create a table function.
+pub fn make_table_function<F>(inner: F) -> TableFunctionImplementation
+where
+    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+{
+    Arc::new(move |args: &[ColumnarValue]| {
+        let args = args
+            .iter()
+            .map(|arg| arg.clone().into_array(1))
+            .collect::<Vec<ArrayRef>>();
+        let result = (inner)(&args).unwrap();
+
+        return Ok(ColumnarValue::Array(result));
     })
 }
 
