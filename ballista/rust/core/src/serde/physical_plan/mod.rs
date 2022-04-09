@@ -372,15 +372,13 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                             },
                                         )?;
 
-                                let input_phy_expr = agg_node.expr.as_ref()
-                                    .map(|e| parse_physical_expr(e.as_ref(), registry))
-                                    .transpose()?
-                                    .ok_or_else(|| proto_error("missing aggregate expression".to_string()))?;
+                                let input_phy_expr: Vec<Arc<dyn PhysicalExpr>> = agg_node.expr.iter()
+                                    .map(|e| parse_physical_expr(e, registry).unwrap()).collect();
 
                                 Ok(create_aggregate_expr(
                                     &aggr_function.into(),
                                     false,
-                                    &[input_phy_expr],
+                                    input_phy_expr.as_slice(),
                                     &physical_schema,
                                     name.to_string(),
                                 )?)

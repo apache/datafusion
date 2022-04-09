@@ -320,7 +320,7 @@ message PhysicalScalarUdfNode {
 
 message PhysicalAggregateExprNode {
   datafusion.AggregateFunction aggr_function = 1;
-  PhysicalExprNode expr = 2;
+  repeated PhysicalExprNode expr = 2;
 }
 
 message PhysicalWindowExprNode {
