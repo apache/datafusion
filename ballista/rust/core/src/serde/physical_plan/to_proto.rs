@@ -142,10 +142,10 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             .collect::<Result<Vec<_>, BallistaError>>()?;
         Ok(protobuf::PhysicalExprNode {
             expr_type: Some(protobuf::physical_expr_node::ExprType::AggregateExpr(
-                Box::new(protobuf::PhysicalAggregateExprNode {
+                protobuf::PhysicalAggregateExprNode {
                     aggr_function,
-                    expr: Some(Box::new(expressions[0].clone())),
-                }),
+                    expr: expressions,
+                },
             )),
         })
     }

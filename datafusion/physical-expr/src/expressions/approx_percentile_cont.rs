@@ -58,7 +58,7 @@ pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool
 pub struct ApproxPercentileCont {
     name: String,
     input_data_type: DataType,
-    expr: Arc<dyn PhysicalExpr>,
+    expr: Vec<Arc<dyn PhysicalExpr>>,
     percentile: f64,
 }
 
@@ -103,7 +103,7 @@ impl ApproxPercentileCont {
             name: name.into(),
             input_data_type,
             // The physical expr to evaluate during accumulation
-            expr: expr[0].clone(),
+            expr,
             percentile,
         })
     }
@@ -181,7 +181,7 @@ impl AggregateExpr for ApproxPercentileCont {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
+        self.expr.clone()
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -314,11 +314,6 @@ impl Accumulator for ApproxPercentileAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        debug_assert_eq!(
-            values.len(),
-            1,
-            "invalid number of values in batch percentile update"
-        );
         let values = &values[0];
         let unsorted_values =
             ApproxPercentileAccumulator::convert_to_ordered_float(values)?;
