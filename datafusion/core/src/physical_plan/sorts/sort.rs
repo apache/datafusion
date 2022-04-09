@@ -426,8 +426,7 @@ impl Iterator for SortedIterator {
         // Combine adjacent indexes from the same batch to make a slice,
         // for more efficient `extend` later.
         let mut last_batch_idx = 0;
-        let mut start_row_idx = 0;
-        let mut len = 0;
+        let mut indices_in_batch = vec![];
 
         let mut slices = vec![];
         for i in 0..current_size {
@@ -435,41 +434,65 @@ impl Iterator for SortedIterator {
             let c_index = self.indices.value(p) as usize;
             let ci = self.composite[c_index];
 
-            if len == 0 {
+            if indices_in_batch.is_empty() {
                 last_batch_idx = ci.batch_idx;
-                start_row_idx = ci.row_idx;
-                len = 1;
+                indices_in_batch.push(ci.row_idx);
             } else if ci.batch_idx == last_batch_idx {
-                len += 1;
-                // since we have pre-sort each of the incoming batches,
-                // so if we witnessed a wrong order of indexes from the same batch,
-                // it must be of the same key with the row pointed by start_row_index.
-                start_row_idx = min(start_row_idx, ci.row_idx);
+                indices_in_batch.push(ci.row_idx);
             } else {
-                slices.push(CompositeSlice {
-                    batch_idx: last_batch_idx,
-                    start_row_idx,
-                    len,
-                });
+                group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
                 last_batch_idx = ci.batch_idx;
-                start_row_idx = ci.row_idx;
-                len = 1;
+                indices_in_batch.push(ci.row_idx);
             }
         }
 
         assert!(
-            len > 0,
+            !indices_in_batch.is_empty(),
             "There should have at least one record in a sort output slice."
         );
-        slices.push(CompositeSlice {
-            batch_idx: last_batch_idx,
-            start_row_idx,
-            len,
-        });
+        group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
 
         self.pos += current_size;
         Some(slices)
     }
+}
+
+/// Group continuous indices into a slice for better `extend` performance
+fn group_indices(
+    batch_idx: u32,
+    positions: &mut Vec<u32>,
+    output: &mut Vec<CompositeSlice>,
+) {
+    positions.sort_unstable();
+    let mut last_pos = 0;
+    let mut run_length = 0;
+    for pos in positions.iter() {
+        if run_length == 0 {
+            last_pos = *pos;
+            run_length = 1;
+        } else if *pos == last_pos + 1 {
+            run_length += 1;
+            last_pos = *pos;
+        } else {
+            output.push(CompositeSlice {
+                batch_idx,
+                start_row_idx: last_pos + 1 - run_length,
+                len: run_length as usize,
+            });
+            last_pos = *pos;
+            run_length = 1;
+        }
+    }
+    assert!(
+        run_length > 0,
+        "There should have at least one record in a sort output slice."
+    );
+    output.push(CompositeSlice {
+        batch_idx,
+        start_row_idx: last_pos + 1 - run_length,
+        len: run_length as usize,
+    });
+    positions.clear()
 }
 
 /// Stream of sorted record batches

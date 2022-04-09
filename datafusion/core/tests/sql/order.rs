@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use fuzz_utils::{batches_to_vec, partitions_to_sorted_vec};
 
 #[tokio::test]
 async fn test_sort_unprojected_col() -> Result<()> {
@@ -196,5 +197,27 @@ async fn sort_empty() -> Result<()> {
     .await
     .unwrap();
     assert_eq!(results.len(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn sort_with_lots_of_repetition_values() -> Result<()> {
+    let ctx = SessionContext::new();
+    let filename = "tests/parquet/repeat_much.snappy.parquet";
+
+    ctx.register_parquet("rep", filename, ParquetReadOptions::default())
+        .await?;
+    let sql = "select a from rep order by a";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let actual = batches_to_vec(&actual);
+
+    let sql1 = "select a from rep";
+    let expected = execute_to_batches(&ctx, sql1).await;
+    let expected = partitions_to_sorted_vec(&[expected]);
+
+    assert_eq!(actual.len(), expected.len());
+    for i in 0..actual.len() {
+        assert_eq!(actual[i], expected[i]);
+    }
     Ok(())
 }
