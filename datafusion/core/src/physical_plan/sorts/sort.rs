@@ -458,14 +458,12 @@ impl Iterator for SortedIterator {
 }
 
 /// Group continuous indices into a slice for better `extend` performance
-#[allow(clippy::stable_sort_primitive)]
 fn group_indices(
     batch_idx: u32,
     positions: &mut Vec<u32>,
     output: &mut Vec<CompositeSlice>,
 ) {
-    // use sort instead of sort_unstable since the input indices is nearly sorted.
-    positions.sort();
+    positions.sort_unstable();
     let mut last_pos = 0;
     let mut run_length = 0;
     for pos in positions.iter() {
