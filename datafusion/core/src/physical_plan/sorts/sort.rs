@@ -440,8 +440,7 @@ impl Iterator for SortedIterator {
             } else if ci.batch_idx == last_batch_idx {
                 indices_in_batch.push(ci.row_idx);
             } else {
-                let indices = indices_in_batch.drain(..).collect::<Vec<_>>();
-                group_indices(last_batch_idx, indices, &mut slices);
+                group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
                 last_batch_idx = ci.batch_idx;
                 indices_in_batch.push(ci.row_idx);
             }
@@ -451,8 +450,7 @@ impl Iterator for SortedIterator {
             !indices_in_batch.is_empty(),
             "There should have at least one record in a sort output slice."
         );
-        let indices = indices_in_batch.drain(..).collect::<Vec<_>>();
-        group_indices(last_batch_idx, indices, &mut slices);
+        group_indices(last_batch_idx, &mut indices_in_batch, &mut slices);
 
         self.pos += current_size;
         Some(slices)
@@ -463,27 +461,27 @@ impl Iterator for SortedIterator {
 #[allow(clippy::stable_sort_primitive)]
 fn group_indices(
     batch_idx: u32,
-    mut positions: Vec<u32>,
+    positions: &mut Vec<u32>,
     output: &mut Vec<CompositeSlice>,
 ) {
-    // use sort instead of sort_unstable since it's likely nearly sorted.
+    // use sort instead of sort_unstable since the input indices is nearly sorted.
     positions.sort();
     let mut last_pos = 0;
     let mut run_length = 0;
-    for pos in positions.into_iter() {
+    for pos in positions.iter() {
         if run_length == 0 {
-            last_pos = pos;
+            last_pos = *pos;
             run_length = 1;
-        } else if pos == last_pos + 1 {
+        } else if *pos == last_pos + 1 {
             run_length += 1;
-            last_pos = pos;
+            last_pos = *pos;
         } else {
             output.push(CompositeSlice {
                 batch_idx,
                 start_row_idx: last_pos + 1 - run_length,
                 len: run_length as usize,
             });
-            last_pos = pos;
+            last_pos = *pos;
             run_length = 1;
         }
     }
@@ -495,7 +493,8 @@ fn group_indices(
         batch_idx,
         start_row_idx: last_pos + 1 - run_length,
         len: run_length as usize,
-    })
+    });
+    positions.clear()
 }
 
 /// Stream of sorted record batches
