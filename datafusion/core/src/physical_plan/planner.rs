@@ -1014,10 +1014,12 @@ pub fn create_physical_expr(
             input_schema,
             data_type.clone(),
         ),
-        Expr::Not(expr) => expressions::not(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
+        Expr::Not(expr) => expressions::not(create_physical_expr(
+            expr,
+            input_dfschema,
             input_schema,
-        ),
+            execution_props,
+        )?),
         Expr::Negative(expr) => expressions::negative(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             input_schema,
@@ -1096,7 +1098,7 @@ pub fn create_physical_expr(
             );
 
             if *negated {
-                expressions::not(binary_expr?, input_schema)
+                expressions::not(binary_expr?)
             } else {
                 binary_expr
             }
@@ -1535,7 +1537,7 @@ mod tests {
             &schema,
             &make_session_state(),
         )?;
-        let expected = expressions::not(expressions::col("a", &schema)?, &schema)?;
+        let expected = expressions::not(expressions::col("a", &schema)?)?;
 
         assert_eq!(format!("{:?}", expr), format!("{:?}", expected));
 

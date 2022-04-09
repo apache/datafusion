@@ -334,6 +334,45 @@ async fn test_string_concat_operator() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_not_expressions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT not(true), not(false)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------+--------------------+",
+        "| NOT Boolean(true) | NOT Boolean(false) |",
+        "+-------------------+--------------------+",
+        "| false             | true               |",
+        "+-------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT null, not(null)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+----------------+",
+        "| Utf8(NULL) | NOT Utf8(NULL) |",
+        "+------------+----------------+",
+        "|            |                |",
+        "+------------+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT NOT('hi')";
+    let result = plan_and_collect(&ctx, sql).await;
+    match result {
+        Ok(_) => panic!("expected error"),
+        Err(e) => {
+            assert_contains!(e.to_string(),
+                             "NOT 'Literal { value: Utf8(\"hi\") }' can't be evaluated because the expression's type is Utf8, not boolean or NULL"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");
