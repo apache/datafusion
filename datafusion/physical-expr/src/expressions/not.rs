@@ -69,8 +69,8 @@ impl PhysicalExpr for NotExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        let arg = self.arg.evaluate(batch)?;
-        match arg {
+        let evaluate_arg = self.arg.evaluate(batch)?;
+        match evaluate_arg {
             ColumnarValue::Array(array) => {
                 let array =
                     array
@@ -86,6 +86,16 @@ impl PhysicalExpr for NotExpr {
                 )))
             }
             ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Boolean(None)));
+                }
+                let value_type = scalar.get_datatype();
+                if value_type != DataType::Boolean {
+                    return Err(DataFusionError::Internal(format!(
+                        "NOT '{:?}' can't be evaluated because the expression's type is {:?}, not boolean or NULL",
+                        self.arg, value_type,
+                    )));
+                }
                 let bool_value: bool = scalar.try_into()?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Boolean(Some(
                     !bool_value,
@@ -96,23 +106,8 @@ impl PhysicalExpr for NotExpr {
 }
 
 /// Creates a unary expression NOT
-///
-/// # Errors
-///
-/// This function errors when the argument's type is not boolean
-pub fn not(
-    arg: Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let data_type = arg.data_type(input_schema)?;
-    if data_type != DataType::Boolean {
-        Err(DataFusionError::Internal(format!(
-            "NOT '{:?}' can't be evaluated because the expression's type is {:?}, not boolean",
-            arg, data_type,
-        )))
-    } else {
-        Ok(Arc::new(NotExpr::new(arg)))
-    }
+pub fn not(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(NotExpr::new(arg)))
 }
 
 #[cfg(test)]
@@ -126,7 +121,7 @@ mod tests {
     fn neg_op() -> Result<()> {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
 
-        let expr = not(col("a", &schema)?, &schema)?;
+        let expr = not(col("a", &schema)?)?;
         assert_eq!(expr.data_type(&schema)?, DataType::Boolean);
         assert!(expr.nullable(&schema)?);
 
@@ -144,14 +139,5 @@ mod tests {
         assert_eq!(result, expected);
 
         Ok(())
-    }
-
-    /// verify that expression errors when the input expression is not a boolean.
-    #[test]
-    fn neg_op_not_null() {
-        let schema = Schema::new(vec![Field::new("a", DataType::Utf8, true)]);
-
-        let expr = not(col("a", &schema).unwrap(), &schema);
-        assert!(expr.is_err());
     }
 }
