@@ -24,7 +24,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, eq_dyn, is_null, not, or, or_kleene};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 type WhenThen = (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>);
@@ -178,6 +178,15 @@ impl CaseExpr {
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
+            let when_value = match when_value {
+                ColumnarValue::Scalar(value) =>
+                    if value.is_null() {
+                        ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)))
+                    } else {
+                        ColumnarValue::Scalar(value)
+                    }
+                _ => when_value
+            };
             let when_value = when_value.into_array(batch.num_rows());
             let when_value = when_value
                 .as_ref()
