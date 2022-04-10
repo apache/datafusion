@@ -18,17 +18,19 @@
 //! Object store that represents the Local File System.
 
 use std::fs::{self, File, Metadata};
-use std::io;
+use std::io::{self, Write};
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{stream, AsyncRead, StreamExt};
+use tokio::io::AsyncWrite;
+use tokio::fs::File as AsyncFile;
 
 use crate::{FileMeta, Result, SizedFile};
 
 use super::{
-    FileMetaStream, ListEntryStream, ObjectReader, ObjectReaderStream, ObjectStore,
+    FileMetaStream, ListEntryStream, ObjectReader, ObjectWriter, ObjectReaderStream, ObjectStore,
 };
 
 pub static LOCAL_SCHEME: &str = "file";
@@ -58,6 +60,10 @@ impl ObjectStore for LocalFileSystem {
 
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>> {
         Ok(Arc::new(LocalFileReader::new(file)?))
+    }
+
+    fn file_writer(&self, file: SizedFile) -> Result<Arc<dyn ObjectWriter>> {
+        Ok(Arc::new(LocalFileWriter::new(file)?))
     }
 }
 
@@ -186,6 +192,29 @@ pub fn local_unpartitioned_file(file: String) -> FileMeta {
             path: file,
         },
         last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
+    }
+}
+
+struct LocalFileWriter {
+    file: SizedFile
+}
+
+impl LocalFileWriter {
+    fn new(file: SizedFile) -> Result<Self> {
+        Ok(Self { file })
+    }
+}
+
+#[async_trait]
+impl ObjectWriter for LocalFileWriter {
+    async fn writer(&self) -> Result<Box<dyn AsyncWrite>> {
+        let file = AsyncFile::open(&self.file.path).await?;
+        Ok(Box::new(file))
+    }
+
+    fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>> {
+        let file = File::open(&self.file.path)?;
+        Ok(Box::new(file))
     }
 }
 

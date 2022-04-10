@@ -20,12 +20,13 @@
 pub mod local;
 
 use std::fmt::Debug;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::{AsyncRead, Stream, StreamExt};
+use tokio::io::AsyncWrite;
 
 use crate::{FileMeta, ListEntry, Result, SizedFile};
 
@@ -67,6 +68,14 @@ pub trait ObjectReader: Send + Sync {
     fn length(&self) -> u64;
 }
 
+/// Object Writer for one file in an object store.
+#[async_trait]
+pub trait ObjectWriter: Send + Sync {
+    async fn writer(&self) -> Result<Box<dyn AsyncWrite>>;
+
+    fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>>;
+}
+
 /// A ObjectStore abstracts access to an underlying file/object storage.
 /// It maps strings (e.g. URLs, filesystem paths, etc) to sources of bytes
 #[async_trait]
@@ -101,4 +110,7 @@ pub trait ObjectStore: Sync + Send + Debug {
 
     /// Get object reader for one file
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
+
+    /// Get object writer for one file
+    fn file_writer(&self, file: SizedFile) -> Result<Arc<dyn ObjectWriter>>;
 }
