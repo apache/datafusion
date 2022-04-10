@@ -106,7 +106,7 @@ async fn start_server(
             ),
         };
 
-    Ok(Server::bind(&addr)
+    Server::bind(&addr)
         .serve(make_service_fn(move |request: &AddrStream| {
             let scheduler_grpc_server =
                 SchedulerGrpcServer::new(scheduler_server.clone());
@@ -145,7 +145,7 @@ async fn start_server(
             ))
         }))
         .await
-        .context("Could not start grpc server")?)
+        .context("Could not start grpc server")
 }
 
 #[tokio::main]

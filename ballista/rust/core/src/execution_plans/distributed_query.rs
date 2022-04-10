@@ -289,7 +289,8 @@ async fn fetch_partition(
         BallistaClient::try_new(metadata.host.as_str(), metadata.port as u16)
             .await
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
-    Ok(ballista_client
+
+    ballista_client
         .fetch_partition(
             &partition_id.job_id,
             partition_id.stage_id as usize,
@@ -297,5 +298,5 @@ async fn fetch_partition(
             &location.path,
         )
         .await
-        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?)
+        .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))
 }

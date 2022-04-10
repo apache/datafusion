@@ -177,8 +177,8 @@ fn create_max_min_accs(
 fn get_col_stats(
     schema: &Schema,
     null_counts: Vec<usize>,
-    max_values: &mut Vec<Option<MaxAccumulator>>,
-    min_values: &mut Vec<Option<MinAccumulator>>,
+    max_values: &mut [Option<MaxAccumulator>],
+    min_values: &mut [Option<MinAccumulator>],
 ) -> Vec<ColumnStatistics> {
     (0..schema.fields().len())
         .map(|i| {
