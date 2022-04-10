@@ -29,7 +29,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::logical_plan::plan::{
-    Aggregate, AliasedRelation, EmptyRelation, Filter, Join, Projection, Sort, Window,
+    Aggregate, SubqueryAlias, EmptyRelation, Filter, Join, Projection, Sort, Window,
 };
 use datafusion::logical_plan::{
     Column, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr, JoinConstraint,
@@ -359,7 +359,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
                     .map_err(|e| e.into())
             }
-            LogicalPlanType::AliasedRelation(aliased_relation) => {
+            LogicalPlanType::SubqueryAlias(aliased_relation) => {
                 let input: LogicalPlan =
                     into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
                 LogicalPlanBuilder::from(input)
@@ -690,15 +690,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
-            LogicalPlan::AliasedRelation(AliasedRelation { input, alias, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
-                    logical_plan_type: Some(LogicalPlanType::AliasedRelation(Box::new(
-                        protobuf::AliasedRelationNode {
+                    logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
+                        protobuf::SubqueryAliasNode {
                             input: Some(Box::new(input)),
                             alias: alias.clone(),
                         },

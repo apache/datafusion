@@ -2479,7 +2479,7 @@ mod tests {
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: #l.a, #l.b, #l.c\
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
-                        \n    AliasedRelation: l\
+                        \n    SubqueryAlias: l\
                         \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
@@ -3446,7 +3446,7 @@ mod tests {
         let expected = "Projection: #person.first_name, #person.id\
         \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
-        \n    AliasedRelation: person2\
+        \n    SubqueryAlias: person2\
         \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
@@ -3460,7 +3460,7 @@ mod tests {
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
         \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
-        \n    AliasedRelation: lineitem2\
+        \n    SubqueryAlias: lineitem2\
         \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
@@ -4062,9 +4062,9 @@ mod tests {
         let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
         let expected = "Projection: #peeps.id, #folks.first_name\
                                     \n  Inner Join: #peeps.id = #folks.id\
-                                    \n    AliasedRelation: peeps\
+                                    \n    SubqueryAlias: peeps\
                                     \n      TableScan: person projection=None\
-                                    \n    AliasedRelation: folks\
+                                    \n    SubqueryAlias: folks\
                                     \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }

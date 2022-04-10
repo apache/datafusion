@@ -87,9 +87,9 @@ pub struct Projection {
     pub alias: Option<String>,
 }
 
-/// Aliased relation
+/// Aliased subquery
 #[derive(Clone)]
-pub struct AliasedRelation {
+pub struct SubqueryAlias {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// The alias for the input relation
@@ -371,7 +371,7 @@ pub enum LogicalPlan {
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation(EmptyRelation),
     /// Aliased relation provides, or changes, the name of a relation.
-    AliasedRelation(AliasedRelation),
+    SubqueryAlias(SubqueryAlias),
     /// Produces the first `n` tuples from its input and discards the rest.
     Limit(Limit),
     /// Creates an external table.
@@ -414,7 +414,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
-            LogicalPlan::AliasedRelation(AliasedRelation { schema, .. }) => schema,
+            LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
             }
@@ -462,7 +462,7 @@ impl LogicalPlan {
                 schemas.insert(0, schema);
                 schemas
             }
-            LogicalPlan::AliasedRelation(AliasedRelation { schema, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => {
                 vec![schema]
             }
             LogicalPlan::Union(Union { schema, .. }) => {
@@ -525,7 +525,7 @@ impl LogicalPlan {
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
-            | LogicalPlan::AliasedRelation(_)
+            | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::CreateExternalTable(_)
             | LogicalPlan::CreateMemoryTable(_)
@@ -553,7 +553,7 @@ impl LogicalPlan {
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
-            LogicalPlan::AliasedRelation(AliasedRelation { input, .. }) => vec![input],
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
             LogicalPlan::Explain(explain) => vec![&explain.plan],
@@ -701,7 +701,7 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
-            LogicalPlan::AliasedRelation(AliasedRelation { input, .. }) => {
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
                 input.accept(visitor)?
             }
             LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. }) => {
@@ -1074,9 +1074,9 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
-                    LogicalPlan::AliasedRelation(AliasedRelation {
+                    LogicalPlan::SubqueryAlias(SubqueryAlias {
                         ref alias, ..
-                    }) => write!(f, "AliasedRelation: {}", alias),
+                    }) => write!(f, "SubqueryAlias: {}", alias),
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
                         ref name,
                         ..

@@ -21,7 +21,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, AliasedRelation, Analyze, Join, Projection, TableScan, Window,
+    Aggregate, SubqueryAlias, Analyze, Join, Projection, TableScan, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -432,7 +432,7 @@ fn optimize_plan(
                 alias: alias.clone(),
             }))
         }
-        LogicalPlan::AliasedRelation(AliasedRelation { input, alias, .. }) => {
+        LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
             match input.as_ref() {
                 LogicalPlan::TableScan(TableScan { table_name, .. }) => {
                     let new_required_columns = new_required_columns
@@ -456,7 +456,7 @@ fn optimize_plan(
                     utils::from_plan(plan, &expr, &new_inputs)
                 }
                 _ => Err(DataFusionError::Plan(
-                    "AliasedRelation should only wrap TableScan".to_string(),
+                    "SubqueryAlias should only wrap TableScan".to_string(),
                 )),
             }
         }

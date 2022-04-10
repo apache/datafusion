@@ -20,7 +20,7 @@
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, AliasedRelation, Analyze, Extension, Filter, Join, Projection, Sort,
+    Aggregate, SubqueryAlias, Analyze, Extension, Filter, Join, Projection, Sort,
     Window,
 };
 
@@ -224,11 +224,11 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::AliasedRelation(AliasedRelation { alias, .. }) => {
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
             let schema = inputs[0].schema().as_ref().clone().into();
             let schema =
                 DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-            Ok(LogicalPlan::AliasedRelation(AliasedRelation {
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
                 alias: alias.clone(),
                 input: Arc::new(inputs[0].clone()),
                 schema,

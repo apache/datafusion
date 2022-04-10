@@ -24,7 +24,7 @@ use super::{
 };
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
-    Aggregate, AliasedRelation, EmptyRelation, Filter, Join, Projection, Sort, TableScan,
+    Aggregate, SubqueryAlias, EmptyRelation, Filter, Join, Projection, Sort, TableScan,
     Window,
 };
 use crate::logical_plan::{
@@ -786,14 +786,14 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::AliasedRelation(AliasedRelation { input, alias, .. }) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                     match input.as_ref() {
                         LogicalPlan::TableScan(scan) => {
                             let mut scan = scan.clone();
                             scan.table_name = alias.clone();
                             self.create_initial_plan(input, session_state).await
                         }
-                        _ => Err(DataFusionError::Plan("AliasedRelation should only wrap TableScan".to_string()))
+                        _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
                     }
                 }
                 LogicalPlan::Limit(Limit { input, n, .. }) => {
