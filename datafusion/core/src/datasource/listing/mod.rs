@@ -32,7 +32,9 @@ pub use table::{ListingOptions, ListingTable, ListingTableConfig};
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
-/// File part identified by [start, end) positions.
+/// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
+/// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
+/// sections of a Parquet file in parallel. 
 #[derive(Debug, Clone)]
 pub struct FileRange {
     /// Range start
