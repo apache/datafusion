@@ -1011,32 +1011,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
     ) -> Result<Vec<Expr>> {
-        let input_schema = plan.schema();
         projection
             .into_iter()
-            .map(|expr| self.sql_select_to_rex(expr, input_schema))
-            .collect::<Result<Vec<Expr>>>()?
-            .into_iter()
-            .map(|expr| {
-                Ok(match expr {
-                    Expr::Wildcard => {
-                        if empty_from {
-                            return Err(DataFusionError::Plan(
-                                "SELECT * with no tables specified is not valid"
-                                    .to_string(),
-                            ));
-                        }
-                        expand_wildcard(input_schema, plan)?
-                    }
-                    Expr::QualifiedWildcard { ref qualifier } => {
-                        expand_qualified_wildcard(qualifier, input_schema, plan)?
-                    }
-                    _ => vec![normalize_col(expr, plan)?],
-                })
-            })
-            .flat_map(|res| match res {
-                Ok(v) => v.into_iter().map(Ok).collect(),
-                Err(e) => vec![Err(e)],
+            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from))
+            .flat_map(|result| match result {
+                Ok(vec) => vec.into_iter().map(Ok).collect(),
+                Err(err) => vec![Err(err)],
             })
             .collect::<Result<Vec<Expr>>>()
     }
@@ -1223,17 +1203,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a relational expression from a select SQL expression
-    fn sql_select_to_rex(&self, sql: SelectItem, schema: &DFSchema) -> Result<Expr> {
+    fn sql_select_to_rex(
+        &self,
+        sql: SelectItem,
+        plan: &LogicalPlan,
+        empty_from: bool,
+    ) -> Result<Vec<Expr>> {
+        let input_schema = plan.schema();
         match sql {
-            SelectItem::UnnamedExpr(expr) => self.sql_to_rex(expr, schema),
-            SelectItem::ExprWithAlias { expr, alias } => Ok(Alias(
-                Box::new(self.sql_to_rex(expr, schema)?),
-                normalize_ident(alias),
-            )),
-            SelectItem::Wildcard => Ok(Expr::Wildcard),
+            SelectItem::UnnamedExpr(expr) => {
+                let expr = self.sql_to_rex(expr, input_schema)?;
+                Ok(vec![normalize_col(expr, plan)?])
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let expr = Alias(
+                    Box::new(self.sql_to_rex(expr, input_schema)?),
+                    normalize_ident(alias),
+                );
+                Ok(vec![normalize_col(expr, plan)?])
+            }
+            SelectItem::Wildcard => {
+                if empty_from {
+                    return Err(DataFusionError::Plan(
+                        "SELECT * with no tables specified is not valid".to_string(),
+                    ));
+                }
+                expand_wildcard(input_schema, plan)
+            }
+
             SelectItem::QualifiedWildcard(ref object_name) => {
                 let qualifier = format!("{}", object_name);
-                Ok(Expr::QualifiedWildcard { qualifier })
+                expand_qualified_wildcard(&qualifier, input_schema, plan)
             }
         }
     }
