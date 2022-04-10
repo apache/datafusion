@@ -17,7 +17,7 @@
 
 //! Stream and channel implementations for window function expressions.
 
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::AbortOnDropSingle;
 use crate::physical_plan::expressions::PhysicalSortExpr;
@@ -140,19 +140,14 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(WindowAggExec::try_new(
-                self.window_expr.clone(),
-                children[0].clone(),
-                self.input_schema.clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "WindowAggExec wrong number of children".to_owned(),
-            )),
-        }
+        Ok(Arc::new(WindowAggExec::try_new(
+            self.window_expr.clone(),
+            children[0].clone(),
+            self.input_schema.clone(),
+        )?))
     }
 
     async fn execute(

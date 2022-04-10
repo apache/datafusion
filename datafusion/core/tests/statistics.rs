@@ -22,7 +22,7 @@ use std::{any::Any, sync::Arc};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::{
     datasource::TableProvider,
-    error::{DataFusionError, Result},
+    error::Result,
     logical_plan::Expr,
     physical_plan::{
         expressions::PhysicalSortExpr, project_schema, ColumnStatistics,
@@ -129,16 +129,10 @@ impl ExecutionPlan for StatisticsValidation {
     }
 
     fn with_new_children(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(Arc::new(self.clone()))
-        } else {
-            Err(DataFusionError::Internal(
-                "Children cannot be replaced in CustomExecutionPlan".to_owned(),
-            ))
-        }
+        Ok(self)
     }
 
     async fn execute(

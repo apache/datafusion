@@ -51,7 +51,8 @@ message LogicalPlanNode {
     LogicalExtensionNode extension = 17;
     CreateCatalogSchemaNode create_catalog_schema = 18;
     UnionNode union = 19;
-    SubqueryAliasNode subquery_alias = 20;
+    CreateCatalogNode create_catalog = 20;
+    SubqueryAliasNode subquery_alias = 21;
   }
 }
 
@@ -149,10 +150,17 @@ message CreateExternalTableNode {
   datafusion.DfSchema schema = 5;
   repeated string table_partition_cols = 6;
   bool if_not_exists = 7;
+  string delimiter = 8;
 }
 
 message CreateCatalogSchemaNode {
   string schema_name = 1;
+  bool if_not_exists = 2;
+  datafusion.DfSchema schema = 3;
+}
+
+message CreateCatalogNode {
+  string catalog_name = 1;
   bool if_not_exists = 2;
   datafusion.DfSchema schema = 3;
 }
@@ -176,7 +184,7 @@ message AnalyzeNode {
   bool verbose = 2;
 }
 
-message ExplainNode{
+message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
 }
@@ -267,6 +275,7 @@ message PhysicalPlanNode {
     AvroScanExecNode avro_scan = 20;
     PhysicalExtensionNode extension = 21;
     UnionExecNode union = 22;
+    ExplainExecNode explain = 23;
   }
 }
 
@@ -304,12 +313,20 @@ message PhysicalExprNode {
 
     // window expressions
     PhysicalWindowExprNode window_expr = 15;
+
+    PhysicalScalarUdfNode scalar_udf = 16;
   }
+}
+
+message PhysicalScalarUdfNode {
+  string name = 1;
+  repeated PhysicalExprNode args = 2;
+  datafusion.ArrowType return_type = 4;
 }
 
 message PhysicalAggregateExprNode {
   datafusion.AggregateFunction aggr_function = 1;
-  PhysicalExprNode expr = 2;
+  repeated PhysicalExprNode expr = 2;
 }
 
 message PhysicalWindowExprNode {
@@ -449,6 +466,12 @@ message HashJoinExecNode {
 
 message UnionExecNode {
   repeated PhysicalPlanNode inputs = 1;
+}
+
+message ExplainExecNode {
+  datafusion.Schema schema = 1;
+  repeated datafusion.StringifiedPlan stringified_plans = 2;
+  bool verbose = 3;
 }
 
 message CrossJoinExecNode {

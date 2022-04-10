@@ -191,3 +191,26 @@ async fn sql_create_table_if_not_exists() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn create_pipe_delimited_csv_table() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "CREATE EXTERNAL TABLE aggregate_simple STORED AS CSV WITH HEADER ROW DELIMITER '|' LOCATION 'tests/aggregate_simple_pipe.csv'";
+    ctx.sql(sql).await.unwrap();
+
+    let sql_all = "SELECT * FROM aggregate_simple order by c1 LIMIT 1";
+    let results_all = execute_to_batches(&ctx, sql_all).await;
+
+    let expected = vec![
+        "+---------+----------------+------+",
+        "| c1      | c2             | c3   |",
+        "+---------+----------------+------+",
+        "| 0.00001 | 0.000000000001 | true |",
+        "+---------+----------------+------+",
+    ];
+
+    assert_batches_eq!(expected, &results_all);
+
+    Ok(())
+}

@@ -96,3 +96,9 @@ name = "executor_cleanup_ttl"
 type = "u64"
 doc = "The number of seconds to retain job directories on each worker 604800 (7 days, 7 * 24 * 3600), In other words, after job done, how long the resulting data is retained"
 default = "604800"
+
+[[param]]
+name = "plugin_dir"
+type = "String"
+doc = "plugin dir"
+default = "std::string::String::from(\"\")"

@@ -29,7 +29,7 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, union_with_alias, Column, CreateCatalogSchema,
+    normalize_col, union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
     DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
     ToDFSchema, ToStringifiedPlan,
@@ -183,6 +183,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 if_not_exists,
                 schema: Arc::new(DFSchema::empty()),
             })),
+            Statement::CreateDatabase {
+                db_name,
+                if_not_exists,
+                ..
+            } => Ok(LogicalPlan::CreateCatalog(CreateCatalog {
+                catalog_name: db_name.to_string(),
+                if_not_exists,
+                schema: Arc::new(DFSchema::empty()),
+            })),
             Statement::Drop {
                 object_type: ObjectType::Table,
                 if_exists,
@@ -309,6 +318,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             columns,
             file_type,
             has_header,
+            delimiter,
             location,
             table_partition_cols,
             if_not_exists,
@@ -337,6 +347,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             location,
             file_type,
             has_header,
+            delimiter,
             table_partition_cols,
             if_not_exists,
         }))
@@ -999,32 +1010,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         projection: Vec<SelectItem>,
         empty_from: bool,
     ) -> Result<Vec<Expr>> {
-        let input_schema = plan.schema();
         projection
             .into_iter()
-            .map(|expr| self.sql_select_to_rex(expr, input_schema))
-            .collect::<Result<Vec<Expr>>>()?
-            .into_iter()
-            .map(|expr| {
-                Ok(match expr {
-                    Expr::Wildcard => {
-                        if empty_from {
-                            return Err(DataFusionError::Plan(
-                                "SELECT * with no tables specified is not valid"
-                                    .to_string(),
-                            ));
-                        }
-                        expand_wildcard(input_schema, plan)?
-                    }
-                    Expr::QualifiedWildcard { ref qualifier } => {
-                        expand_qualified_wildcard(qualifier, input_schema, plan)?
-                    }
-                    _ => vec![normalize_col(expr, plan)?],
-                })
-            })
-            .flat_map(|res| match res {
-                Ok(v) => v.into_iter().map(Ok).collect(),
-                Err(e) => vec![Err(e)],
+            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from))
+            .flat_map(|result| match result {
+                Ok(vec) => vec.into_iter().map(Ok).collect(),
+                Err(err) => vec![Err(err)],
             })
             .collect::<Result<Vec<Expr>>>()
     }
@@ -1211,17 +1202,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Generate a relational expression from a select SQL expression
-    fn sql_select_to_rex(&self, sql: SelectItem, schema: &DFSchema) -> Result<Expr> {
+    fn sql_select_to_rex(
+        &self,
+        sql: SelectItem,
+        plan: &LogicalPlan,
+        empty_from: bool,
+    ) -> Result<Vec<Expr>> {
+        let input_schema = plan.schema();
         match sql {
-            SelectItem::UnnamedExpr(expr) => self.sql_to_rex(expr, schema),
-            SelectItem::ExprWithAlias { expr, alias } => Ok(Alias(
-                Box::new(self.sql_to_rex(expr, schema)?),
-                normalize_ident(alias),
-            )),
-            SelectItem::Wildcard => Ok(Expr::Wildcard),
+            SelectItem::UnnamedExpr(expr) => {
+                let expr = self.sql_to_rex(expr, input_schema)?;
+                Ok(vec![normalize_col(expr, plan)?])
+            }
+            SelectItem::ExprWithAlias { expr, alias } => {
+                let expr = Alias(
+                    Box::new(self.sql_to_rex(expr, input_schema)?),
+                    normalize_ident(alias),
+                );
+                Ok(vec![normalize_col(expr, plan)?])
+            }
+            SelectItem::Wildcard => {
+                if empty_from {
+                    return Err(DataFusionError::Plan(
+                        "SELECT * with no tables specified is not valid".to_string(),
+                    ));
+                }
+                expand_wildcard(input_schema, plan)
+            }
+
             SelectItem::QualifiedWildcard(ref object_name) => {
                 let qualifier = format!("{}", object_name);
-                Ok(Expr::QualifiedWildcard { qualifier })
+                expand_qualified_wildcard(&qualifier, input_schema, plan)
             }
         }
     }
@@ -1316,6 +1327,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             BinaryOperator::PGRegexNotIMatch => Ok(Operator::RegexNotIMatch),
             BinaryOperator::BitwiseAnd => Ok(Operator::BitwiseAnd),
             BinaryOperator::BitwiseOr => Ok(Operator::BitwiseOr),
+            BinaryOperator::StringConcat => Ok(Operator::StringConcat),
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported SQL binary operator {:?}",
                 op

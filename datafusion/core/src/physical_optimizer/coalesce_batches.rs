@@ -19,6 +19,7 @@
 //! in bigger batches to avoid overhead with small batches
 
 use super::optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::with_new_children_if_necessary;
 use crate::{
     error::Result,
     physical_plan::{
@@ -69,7 +70,7 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             // leaf node, children cannot be replaced
             Ok(plan.clone())
         } else {
-            let plan = plan.with_new_children(children)?;
+            let plan = with_new_children_if_necessary(plan, children)?;
             Ok(if wrap_in_coalesce {
                 // TODO we should add specific configuration settings for coalescing batches and
                 // we should do that once https://issues.apache.org/jira/browse/ARROW-11059 is

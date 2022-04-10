@@ -32,10 +32,7 @@ use super::{
     coalesce_partitions::CoalescePartitionsExec, join_utils::check_join_is_valid,
     ColumnStatistics, Statistics,
 };
-use crate::{
-    error::{DataFusionError, Result},
-    scalar::ScalarValue,
-};
+use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
 use std::time::Instant;
 
@@ -120,18 +117,13 @@ impl ExecutionPlan for CrossJoinExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            2 => Ok(Arc::new(CrossJoinExec::try_new(
-                children[0].clone(),
-                children[1].clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "CrossJoinExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(CrossJoinExec::try_new(
+            children[0].clone(),
+            children[1].clone(),
+        )?))
     }
 
     fn output_partitioning(&self) -> Partitioning {

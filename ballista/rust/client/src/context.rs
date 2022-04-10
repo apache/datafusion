@@ -375,6 +375,7 @@ impl BallistaContext {
                 ref location,
                 ref file_type,
                 ref has_header,
+                ref delimiter,
                 ref table_partition_cols,
                 ref if_not_exists,
             }) => {
@@ -389,6 +390,7 @@ impl BallistaContext {
                                 CsvReadOptions::new()
                                     .schema(&schema.as_ref().to_owned().into())
                                     .has_header(*has_header)
+                                    .delimiter(*delimiter as u8)
                                     .table_partition_cols(table_partition_cols.to_vec()),
                             )
                             .await?;
@@ -428,7 +430,6 @@ impl BallistaContext {
                     ))),
                 }
             }
-
             _ => ctx.sql(sql).await,
         }
     }
@@ -685,6 +686,54 @@ mod tests {
         assert_eq!(
             expected2,
             pretty_format_batches(&*res2)
+                .unwrap()
+                .to_string()
+                .trim()
+                .lines()
+                .collect::<Vec<&str>>()
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "standalone")]
+    async fn test_percentile_func() {
+        use crate::context::BallistaContext;
+        use ballista_core::config::{
+            BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
+        };
+        use datafusion::arrow::util::pretty::pretty_format_batches;
+        use datafusion::prelude::ParquetReadOptions;
+        let config = BallistaConfigBuilder::default()
+            .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
+            .build()
+            .unwrap();
+        let context = BallistaContext::standalone(&config, 1).await.unwrap();
+
+        let testdata = datafusion::test_util::parquet_test_data();
+        context
+            .register_parquet(
+                "test",
+                &format!("{}/alltypes_plain.parquet", testdata),
+                ParquetReadOptions::default(),
+            )
+            .await
+            .unwrap();
+        let df = context
+            .sql("select approx_percentile_cont(\"double_col\", 0.5) from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+----------------------------------------------------+",
+            "| APPROXPERCENTILECONT(test.double_col,Float64(0.5)) |",
+            "+----------------------------------------------------+",
+            "| 7.574999999999999                                  |",
+            "+----------------------------------------------------+",
+        ];
+
+        assert_eq!(
+            expected,
+            pretty_format_batches(&*res)
                 .unwrap()
                 .to_string()
                 .trim()

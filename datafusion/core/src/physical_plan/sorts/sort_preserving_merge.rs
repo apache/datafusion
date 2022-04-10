@@ -141,18 +141,13 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(SortPreservingMergeExec::new(
-                self.expr.clone(),
-                children[0].clone(),
-            ))),
-            _ => Err(DataFusionError::Internal(
-                "SortPreservingMergeExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(SortPreservingMergeExec::new(
+            self.expr.clone(),
+            children[0].clone(),
+        )))
     }
 
     async fn execute(

@@ -42,7 +42,7 @@ pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use display::display_schema;
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
-    avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, col,
+    avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
     columnize_expr, combine_filters, concat, concat_expr, concat_ws, concat_ws_expr, cos,
     count, count_distinct, create_udaf, create_udf, date_part, date_trunc, digest, exp,
     exprlist_to_fields, floor, in_list, initcap, left, length, lit, lit_timestamp_nano,
@@ -63,9 +63,9 @@ pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 pub use extension::UserDefinedLogicalNode;
 pub use operators::Operator;
 pub use plan::{
-    CreateCatalogSchema, CreateExternalTable, CreateMemoryTable, CrossJoin, DropTable,
-    EmptyRelation, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    PlanVisitor, Repartition, TableScan, Union, Values,
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+    CrossJoin, DropTable, EmptyRelation, JoinConstraint, JoinType, Limit, LogicalPlan,
+    Partitioning, PlanType, PlanVisitor, Repartition, TableScan, Union, Values,
 };
 pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

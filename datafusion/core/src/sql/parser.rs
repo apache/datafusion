@@ -76,6 +76,8 @@ pub struct CreateExternalTable {
     pub file_type: FileType,
     /// CSV Header row?
     pub has_header: bool,
+    /// User defined delimiter for CSVs
+    pub delimiter: char,
     /// Path to file
     pub location: String,
     /// Partition Columns
@@ -313,6 +315,12 @@ impl<'a> DFParser<'a> {
 
         let has_header = self.parse_csv_has_header();
 
+        let has_delimiter = self.parse_has_delimiter();
+        let delimiter = match has_delimiter {
+            true => self.parse_delimiter()?,
+            false => ',',
+        };
+
         let table_partition_cols = if self.parse_has_partition() {
             self.parse_partitions()?
         } else {
@@ -327,6 +335,7 @@ impl<'a> DFParser<'a> {
             columns,
             file_type,
             has_header,
+            delimiter,
             location,
             table_partition_cols,
             if_not_exists,
@@ -357,6 +366,20 @@ impl<'a> DFParser<'a> {
         self.consume_token(&Token::make_keyword("WITH"))
             & self.consume_token(&Token::make_keyword("HEADER"))
             & self.consume_token(&Token::make_keyword("ROW"))
+    }
+
+    fn parse_has_delimiter(&mut self) -> bool {
+        self.consume_token(&Token::make_keyword("DELIMITER"))
+    }
+
+    fn parse_delimiter(&mut self) -> Result<char, ParserError> {
+        let token = self.parser.parse_literal_string()?;
+        match token.len() {
+            1 => Ok(token.chars().next().unwrap()),
+            _ => Err(ParserError::TokenizerError(
+                "Delimiter must be a single char".to_string(),
+            )),
+        }
     }
 
     fn parse_has_partition(&mut self) -> bool {
@@ -424,6 +447,22 @@ mod tests {
             columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: FileType::CSV,
             has_header: false,
+            delimiter: ',',
+            location: "foo.csv".into(),
+            table_partition_cols: vec![],
+            if_not_exists: false,
+        });
+        expect_parse_ok(sql, expected)?;
+
+        // positive case with delimiter
+        let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV DELIMITER '|' LOCATION 'foo.csv'";
+        let display = None;
+        let expected = Statement::CreateExternalTable(CreateExternalTable {
+            name: "t".into(),
+            columns: vec![make_column_def("c1", DataType::Int(display))],
+            file_type: FileType::CSV,
+            has_header: false,
+            delimiter: '|',
             location: "foo.csv".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -438,6 +477,7 @@ mod tests {
             columns: vec![make_column_def("c1", DataType::Int(display))],
             file_type: FileType::CSV,
             has_header: false,
+            delimiter: ',',
             location: "foo.csv".into(),
             table_partition_cols: vec!["p1".to_string(), "p2".to_string()],
             if_not_exists: false,
@@ -455,6 +495,7 @@ mod tests {
                 columns: vec![make_column_def("c1", DataType::Int(display))],
                 file_type: FileType::CSV,
                 has_header: true,
+                delimiter: ',',
                 location: "foo.csv".into(),
                 table_partition_cols: vec![],
                 if_not_exists: false,
@@ -469,6 +510,7 @@ mod tests {
             columns: vec![],
             file_type: FileType::Parquet,
             has_header: false,
+            delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -482,6 +524,7 @@ mod tests {
             columns: vec![],
             file_type: FileType::Parquet,
             has_header: false,
+            delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -495,6 +538,7 @@ mod tests {
             columns: vec![],
             file_type: FileType::Avro,
             has_header: false,
+            delimiter: ',',
             location: "foo.avro".into(),
             table_partition_cols: vec![],
             if_not_exists: false,
@@ -509,6 +553,7 @@ mod tests {
             columns: vec![],
             file_type: FileType::Parquet,
             has_header: false,
+            delimiter: ',',
             location: "foo.parquet".into(),
             table_partition_cols: vec![],
             if_not_exists: true,

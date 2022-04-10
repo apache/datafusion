@@ -281,6 +281,98 @@ async fn query_scalar_minus_array() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_string_concat_operator() -> Result<()> {
+    let ctx = SessionContext::new();
+    // concat 2 strings
+    let sql = "SELECT 'aa' || 'b'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+",
+        "| Utf8(\"aa\") || Utf8(\"b\") |",
+        "+-------------------------+",
+        "| aab                     |",
+        "+-------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // concat 4 strings as a string concat pipe.
+    let sql = "SELECT 'aa' || 'b' || 'cc' || 'd'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------------------------------+",
+        "| Utf8(\"aa\") || Utf8(\"b\") || Utf8(\"cc\") || Utf8(\"d\") |",
+        "+----------------------------------------------------+",
+        "| aabccd                                             |",
+        "+----------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // concat 2 strings and NULL, output should be NULL
+    let sql = "SELECT 'aa' || NULL || 'd'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+---------------------------------------+",
+        "| Utf8(\"aa\") || Utf8(NULL) || Utf8(\"d\") |",
+        "+---------------------------------------+",
+        "|                                       |",
+        "+---------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // concat 1 strings and 2 numeric
+    let sql = "SELECT 'a' || 42 || 23.3";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------------------------+",
+        "| Utf8(\"a\") || Int64(42) || Float64(23.3) |",
+        "+-----------------------------------------+",
+        "| a4223.3                                 |",
+        "+-----------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_not_expressions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT not(true), not(false)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------+--------------------+",
+        "| NOT Boolean(true) | NOT Boolean(false) |",
+        "+-------------------+--------------------+",
+        "| false             | true               |",
+        "+-------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT null, not(null)";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+----------------+",
+        "| Utf8(NULL) | NOT Utf8(NULL) |",
+        "+------------+----------------+",
+        "|            |                |",
+        "+------------+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT NOT('hi')";
+    let result = plan_and_collect(&ctx, sql).await;
+    match result {
+        Ok(_) => panic!("expected error"),
+        Err(e) => {
+            assert_contains!(e.to_string(),
+                             "NOT 'Literal { value: Utf8(\"hi\") }' can't be evaluated because the expression's type is Utf8, not boolean or NULL"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");

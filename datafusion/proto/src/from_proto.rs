@@ -16,7 +16,13 @@
 // under the License.
 
 use crate::protobuf;
-use datafusion::logical_plan::FunctionRegistry;
+use crate::protobuf::plan_type::PlanTypeEnum::{
+    FinalLogicalPlan, FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan,
+    OptimizedLogicalPlan, OptimizedPhysicalPlan,
+};
+use crate::protobuf::{OptimizedLogicalPlanType, OptimizedPhysicalPlanType};
+use datafusion::logical_plan::plan::StringifiedPlan;
+use datafusion::logical_plan::{FunctionRegistry, PlanType};
 use datafusion::prelude::bit_length;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
@@ -35,8 +41,9 @@ use datafusion::{
         window_functions::BuiltInWindowFunction,
     },
     prelude::{
-        array, btrim, date_part, date_trunc, lower, lpad, ltrim, md5, octet_length,
-        regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim, upper,
+        array, btrim, coalesce, date_part, date_trunc, lower, lpad, ltrim, md5,
+        octet_length, regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim,
+        upper,
     },
     scalar::ScalarValue,
 };
@@ -362,6 +369,37 @@ impl TryFrom<&protobuf::Field> for Field {
     }
 }
 
+impl From<&protobuf::StringifiedPlan> for StringifiedPlan {
+    fn from(stringified_plan: &protobuf::StringifiedPlan) -> Self {
+        Self {
+            plan_type: match stringified_plan
+                .plan_type
+                .as_ref()
+                .unwrap()
+                .plan_type_enum
+                .as_ref()
+                .unwrap()
+            {
+                InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
+                OptimizedLogicalPlan(OptimizedLogicalPlanType { optimizer_name }) => {
+                    PlanType::OptimizedLogicalPlan {
+                        optimizer_name: optimizer_name.clone(),
+                    }
+                }
+                FinalLogicalPlan(_) => PlanType::FinalLogicalPlan,
+                InitialPhysicalPlan(_) => PlanType::InitialPhysicalPlan,
+                OptimizedPhysicalPlan(OptimizedPhysicalPlanType { optimizer_name }) => {
+                    PlanType::OptimizedPhysicalPlan {
+                        optimizer_name: optimizer_name.clone(),
+                    }
+                }
+                FinalPhysicalPlan(_) => PlanType::FinalPhysicalPlan,
+            },
+            plan: Arc::new(stringified_plan.plan.clone()),
+        }
+    }
+}
+
 impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
     fn from(f: &protobuf::ScalarFunction) -> Self {
         use protobuf::ScalarFunction;
@@ -429,6 +467,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Now => Self::Now,
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
+            ScalarFunction::Coalesce => Self::Coalesce,
         }
     }
 }
@@ -719,7 +758,7 @@ impl TryFrom<&protobuf::PrimitiveScalarType> for ScalarValue {
 
         Ok(match scalar {
             PrimitiveScalarType::Null => {
-                return Err(proto_error("Untyped null is an invalid scalar value"))
+                return Err(proto_error("Untyped null is an invalid scalar value"));
             }
             PrimitiveScalarType::Bool => Self::Boolean(None),
             PrimitiveScalarType::Uint8 => Self::UInt8(None),
@@ -1200,6 +1239,12 @@ pub fn parse_expr(
                     parse_expr(&args[1], registry)?,
                     parse_expr(&args[2], registry)?,
                 )),
+                ScalarFunction::Coalesce => Ok(coalesce(
+                    args.to_owned()
+                        .iter()
+                        .map(|expr| parse_expr(expr, registry))
+                        .collect::<Result<Vec<_>, _>>()?,
+                )),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",
                 )),
@@ -1442,7 +1487,7 @@ fn typechecked_scalar_value_conversion(
                     PrimitiveScalarType::Null => {
                         return Err(proto_error(
                             "Untyped scalar null is not a valid scalar value",
-                        ))
+                        ));
                     }
                     PrimitiveScalarType::Decimal128 => {
                         ScalarValue::Decimal128(None, 0, 0)

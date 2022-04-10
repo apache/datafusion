@@ -39,10 +39,10 @@ impl LimitPushDown {
 }
 
 fn limit_push_down(
-    optimizer: &LimitPushDown,
+    _optimizer: &LimitPushDown,
     upper_limit: Option<usize>,
     plan: &LogicalPlan,
-    execution_props: &ExecutionProps,
+    _execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     match (plan, upper_limit) {
         (LogicalPlan::Limit(Limit { n, input }), upper_limit) => {
@@ -51,10 +51,10 @@ fn limit_push_down(
                 n: smallest,
                 // push down limit to plan (minimum of upper limit and current limit)
                 input: Arc::new(limit_push_down(
-                    optimizer,
+                    _optimizer,
                     Some(smallest),
                     input.as_ref(),
-                    execution_props,
+                    _execution_props,
                 )?),
             }))
         }
@@ -91,10 +91,10 @@ fn limit_push_down(
             Ok(LogicalPlan::Projection(Projection {
                 expr: expr.clone(),
                 input: Arc::new(limit_push_down(
-                    optimizer,
+                    _optimizer,
                     upper_limit,
                     input.as_ref(),
-                    execution_props,
+                    _execution_props,
                 )?),
                 schema: schema.clone(),
                 alias: alias.clone(),
@@ -115,10 +115,10 @@ fn limit_push_down(
                     Ok(LogicalPlan::Limit(Limit {
                         n: upper_limit,
                         input: Arc::new(limit_push_down(
-                            optimizer,
+                            _optimizer,
                             Some(upper_limit),
                             x,
-                            execution_props,
+                            _execution_props,
                         )?),
                     }))
                 })
@@ -138,7 +138,7 @@ fn limit_push_down(
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|plan| limit_push_down(optimizer, None, plan, execution_props))
+                .map(|plan| limit_push_down(_optimizer, None, plan, _execution_props))
                 .collect::<Result<Vec<_>>>()?;
 
             utils::from_plan(plan, &expr, &new_inputs)

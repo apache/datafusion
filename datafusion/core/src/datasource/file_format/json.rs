@@ -92,7 +92,11 @@ impl FileFormat for JsonFormat {
         Ok(Arc::new(schema))
     }
 
-    async fn infer_stats(&self, _reader: Arc<dyn ObjectReader>) -> Result<Statistics> {
+    async fn infer_stats(
+        &self,
+        _reader: Arc<dyn ObjectReader>,
+        _table_schema: SchemaRef,
+    ) -> Result<Statistics> {
         Ok(Statistics::default())
     }
 
@@ -219,7 +223,10 @@ mod tests {
             .await
             .expect("Schema inference");
         let statistics = format
-            .infer_stats(local_object_reader(filename.to_owned()))
+            .infer_stats(
+                local_object_reader(filename.to_owned()),
+                file_schema.clone(),
+            )
             .await
             .expect("Stats inference");
         let file_groups = vec![vec![local_unpartitioned_file(filename.to_owned())]];

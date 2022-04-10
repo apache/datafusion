@@ -610,7 +610,7 @@ mod tests {
             .await
             .expect("Schema inference");
         let statistics = format
-            .infer_stats(local_object_reader(filename.clone()))
+            .infer_stats(local_object_reader(filename.clone()), file_schema.clone())
             .await
             .expect("Stats inference");
         let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];

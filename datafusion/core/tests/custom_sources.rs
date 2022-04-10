@@ -25,10 +25,7 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::scalar::ScalarValue;
 use datafusion::{datasource::TableProvider, physical_plan::collect};
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_plan::DisplayFormatType,
-};
+use datafusion::{error::Result, physical_plan::DisplayFormatType};
 
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::logical_plan::{
@@ -120,16 +117,10 @@ impl ExecutionPlan for CustomExecutionPlan {
         vec![]
     }
     fn with_new_children(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        if children.is_empty() {
-            Ok(Arc::new(self.clone()))
-        } else {
-            Err(DataFusionError::Internal(
-                "Children cannot be replaced in CustomExecutionPlan".to_owned(),
-            ))
-        }
+        Ok(self)
     }
     async fn execute(
         &self,

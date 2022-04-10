@@ -56,6 +56,7 @@ use arrow::record_batch::RecordBatch;
 
 use crate::coercion_rule::binary_rule::coerce_types;
 use crate::expressions::try_cast;
+use crate::string_expressions;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -135,260 +136,192 @@ fn is_not_distinct_from_bool(
 // TODO move decimal kernels to to arrow-rs
 // https://github.com/apache/arrow-rs/issues/1200
 
-// TODO use iter added for for decimal array in
-// https://github.com/apache/arrow-rs/issues/1083
+/// Creates an BooleanArray the same size as `left`,
+/// applying `op` to all non-null elements of left
+fn compare_decimal_scalar<F>(
+    left: &DecimalArray,
+    right: i128,
+    op: F,
+) -> Result<BooleanArray>
+where
+    F: Fn(i128, i128) -> bool,
+{
+    Ok(left
+        .iter()
+        .map(|left| left.map(|left| op(left, right)))
+        .collect())
+}
+
+/// Creates an BooleanArray the same size as `left`,
+/// by applying `op` to all non-null elements of left and right
+fn compare_decimal<F>(
+    left: &DecimalArray,
+    right: &DecimalArray,
+    op: F,
+) -> Result<BooleanArray>
+where
+    F: Fn(i128, i128) -> bool,
+{
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| {
+            if let (Some(left), Some(right)) = (left, right) {
+                Some(op(left, right))
+            } else {
+                None
+            }
+        })
+        .collect())
+}
+
 pub(super) fn eq_decimal_scalar(
     left: &DecimalArray,
     right: i128,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) == right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left == right)
 }
 
 pub(super) fn eq_decimal(
     left: &DecimalArray,
     right: &DecimalArray,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) == right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left == right)
 }
 
 fn neq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) != right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left != right)
 }
 
 fn neq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) != right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left != right)
 }
 
 fn lt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) < right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left < right)
 }
 
 fn lt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) < right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left < right)
 }
 
 fn lt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) <= right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left <= right)
 }
 
 fn lt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) <= right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left <= right)
 }
 
 fn gt_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) > right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left > right)
 }
 
 fn gt_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) > right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left > right)
 }
 
 fn gt_eq_decimal_scalar(left: &DecimalArray, right: i128) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) >= right)?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal_scalar(left, right, |left, right| left >= right)
 }
 
 fn gt_eq_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            bool_builder.append_null()?;
-        } else {
-            bool_builder.append_value(left.value(i) >= right.value(i))?;
-        }
-    }
-    Ok(bool_builder.finish())
+    compare_decimal(left, right, |left, right| left >= right)
 }
 
 fn is_distinct_from_decimal(
     left: &DecimalArray,
     right: &DecimalArray,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        match (left.is_null(i), right.is_null(i)) {
-            (true, true) => bool_builder.append_value(false)?,
-            (true, false) | (false, true) => bool_builder.append_value(true)?,
-            (_, _) => bool_builder.append_value(left.value(i) != right.value(i))?,
-        }
-    }
-    Ok(bool_builder.finish())
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| match (left, right) {
+            (None, None) => Some(false),
+            (None, Some(_)) | (Some(_), None) => Some(true),
+            (Some(left), Some(right)) => Some(left != right),
+        })
+        .collect())
 }
 
 fn is_not_distinct_from_decimal(
     left: &DecimalArray,
     right: &DecimalArray,
 ) -> Result<BooleanArray> {
-    let mut bool_builder = BooleanBuilder::new(left.len());
-    for i in 0..left.len() {
-        match (left.is_null(i), right.is_null(i)) {
-            (true, true) => bool_builder.append_value(true)?,
-            (true, false) | (false, true) => bool_builder.append_value(false)?,
-            (_, _) => bool_builder.append_value(left.value(i) == right.value(i))?,
-        }
-    }
-    Ok(bool_builder.finish())
+    Ok(left
+        .iter()
+        .zip(right.iter())
+        .map(|(left, right)| match (left, right) {
+            (None, None) => Some(true),
+            (None, Some(_)) | (Some(_), None) => Some(false),
+            (Some(left), Some(right)) => Some(left == right),
+        })
+        .collect())
+}
+
+/// Creates an DecimalArray the same size as `left`,
+/// by applying `op` to all non-null elements of left and right
+fn arith_decimal<F>(
+    left: &DecimalArray,
+    right: &DecimalArray,
+    op: F,
+) -> Result<DecimalArray>
+where
+    F: Fn(i128, i128) -> Result<i128>,
+{
+    left.iter()
+        .zip(right.iter())
+        .map(|(left, right)| {
+            if let (Some(left), Some(right)) = (left, right) {
+                Some(op(left, right)).transpose()
+            } else {
+                Ok(None)
+            }
+        })
+        .collect()
 }
 
 fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
-        } else {
-            decimal_builder.append_value(left.value(i) + right.value(i))?;
-        }
-    }
-    Ok(decimal_builder.finish())
+    let array = arith_decimal(left, right, |left, right| Ok(left + right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
 }
 
 fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
-        } else {
-            decimal_builder.append_value(left.value(i) - right.value(i))?;
-        }
-    }
-    Ok(decimal_builder.finish())
+    let array = arith_decimal(left, right, |left, right| Ok(left - right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
 }
 
 fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
     let divide = 10_i128.pow(left.scale() as u32);
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
-        } else {
-            decimal_builder.append_value(left.value(i) * right.value(i) / divide)?;
-        }
-    }
-    Ok(decimal_builder.finish())
+    let array = arith_decimal(left, right, |left, right| Ok(left * right / divide))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
 }
 
 fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
     let mul = 10_f64.powi(left.scale() as i32);
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
-        } else if right.value(i) == 0 {
-            return Err(DataFusionError::ArrowError(DivideByZero));
-        } else {
-            let l_value = left.value(i) as f64;
-            let r_value = right.value(i) as f64;
-            let result = ((l_value / r_value) * mul) as i128;
-            decimal_builder.append_value(result)?;
-        }
-    }
-    Ok(decimal_builder.finish())
+    let array = arith_decimal(left, right, |left, right| {
+        let l_value = left as f64;
+        let r_value = right as f64;
+        let result = ((l_value / r_value) * mul) as i128;
+        Ok(result)
+    })?
+    .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
 }
 
 fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
-    let mut decimal_builder =
-        DecimalBuilder::new(left.len(), left.precision(), left.scale());
-    for i in 0..left.len() {
-        if left.is_null(i) || right.is_null(i) {
-            decimal_builder.append_null()?;
-        } else if right.value(i) == 0 {
-            return Err(DataFusionError::ArrowError(DivideByZero));
+    let array = arith_decimal(left, right, |left, right| {
+        if right == 0 {
+            Err(DataFusionError::ArrowError(DivideByZero))
         } else {
-            decimal_builder.append_value(left.value(i) % right.value(i))?;
+            Ok(left % right)
         }
-    }
-    Ok(decimal_builder.finish())
+    })?
+    .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
 }
 
 /// The binary_bitwise_array_op macro only evaluates for integer types
@@ -482,6 +415,33 @@ fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
             Operator::BitwiseOr
         ))),
     }
+}
+
+/// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator.
+/// Besides, any `NULL` exists on lhs or rhs will come out result `NULL`
+/// 1. 'a' || 'b' || 32 = 'ab32'
+/// 2. 'a' || NULL = NULL
+fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
+    let ignore_null = match string_expressions::concat(&[
+        ColumnarValue::Array(left.clone()),
+        ColumnarValue::Array(right.clone()),
+    ])? {
+        ColumnarValue::Array(array_ref) => array_ref,
+        scalar_value => scalar_value.into_array(left.clone().len()),
+    };
+    let ignore_null_array = ignore_null.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = (0..ignore_null_array.len())
+        .into_iter()
+        .map(|index| {
+            if left.is_null(index) || right.is_null(index) {
+                None
+            } else {
+                Some(ignore_null_array.value(index))
+            }
+        })
+        .collect::<StringArray>();
+
+    Ok(Arc::new(result) as ArrayRef)
 }
 
 fn bitwise_and_scalar(
@@ -1073,6 +1033,8 @@ pub fn binary_operator_data_type(
         | Operator::Divide
         | Operator::Multiply
         | Operator::Modulo => Ok(result_type),
+        // string operations return the same values as the common coerced type
+        Operator::StringConcat => Ok(result_type),
     }
 }
 
@@ -1334,6 +1296,7 @@ impl BinaryExpr {
             }
             Operator::BitwiseAnd => bitwise_and(left, right),
             Operator::BitwiseOr => bitwise_or(left, right),
+            Operator::StringConcat => string_concat(left, right),
         }
     }
 }
