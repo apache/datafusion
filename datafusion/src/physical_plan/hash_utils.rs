@@ -42,7 +42,7 @@ fn combine_hashes(l: u64, r: u64) -> u64 {
 fn hash_decimal128<'a>(
     array: &ArrayRef,
     random_state: &RandomState,
-    hashes_buffer: &'a mut Vec<u64>,
+    hashes_buffer: &'a mut [u64],
     mul_col: bool,
 ) {
     let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
@@ -207,7 +207,7 @@ macro_rules! hash_array_float {
 fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     array: &ArrayRef,
     random_state: &RandomState,
-    hashes_buffer: &mut Vec<u64>,
+    hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
     let dict_array = array.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
