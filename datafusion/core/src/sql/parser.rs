@@ -21,7 +21,7 @@
 
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
-    dialect::{keywords::Keyword, Dialect, GenericDialect},
+    dialect::{keywords::Keyword, Dialect, PostgreSqlDialect},
     parser::{Parser, ParserError},
     tokenizer::{Token, Tokenizer},
 };
@@ -105,7 +105,7 @@ pub struct DFParser<'a> {
 impl<'a> DFParser<'a> {
     /// Parse the specified tokens
     pub fn new(sql: &str) -> Result<Self, ParserError> {
-        let dialect = &GenericDialect {};
+        let dialect = &PostgreSqlDialect {};
         DFParser::new_with_dialect(sql, dialect)
     }
 
@@ -124,7 +124,7 @@ impl<'a> DFParser<'a> {
 
     /// Parse a SQL statement and produce a set of statements with dialect
     pub fn parse_sql(sql: &str) -> Result<VecDeque<Statement>, ParserError> {
-        let dialect = &GenericDialect {};
+        let dialect = &PostgreSqlDialect {};
         DFParser::parse_sql_with_dialect(sql, dialect)
     }
 
