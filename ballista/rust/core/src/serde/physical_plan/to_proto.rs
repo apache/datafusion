@@ -125,6 +125,12 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             Ok(AggregateFunction::ApproxPercentileCont.into())
         } else if self
             .as_any()
+            .downcast_ref::<expressions::ApproxPercentileContWithWeight>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxPercentileContWithWeight.into())
+        } else if self
+            .as_any()
             .downcast_ref::<expressions::ApproxMedian>()
             .is_some()
         {
