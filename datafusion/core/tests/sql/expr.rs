@@ -458,6 +458,25 @@ async fn test_crypto_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_array_literals() -> Result<()> {
+    // Named, just another syntax
+    test_expression!("ARRAY[1,2,3,4,5]", "[1, 2, 3, 4, 5]");
+    // Unnamed variant
+    test_expression!("[1,2,3,4,5]", "[1, 2, 3, 4, 5]");
+    test_expression!("[true, false]", "[true, false]");
+    test_expression!("['str1', 'str2']", "[str1, str2]");
+    test_expression!("[[1,2], [3,4]]", "[[1, 2], [3, 4]]");
+
+    // TODO: Not supported in parser, uncomment when it will be available
+    // test_expression!(
+    //     "[]",
+    //     "[]"
+    // );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(
