@@ -23,31 +23,9 @@
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.0.0...7.1.0)
 
-**Breaking changes:**
-
-- Improve object store key with considering host and port in ObjectStoreRegistry [\#1778](https://github.com/apache/arrow-datafusion/issues/1778)
-- Remove Sync from SendableRecordBatchStream [\#1614](https://github.com/apache/arrow-datafusion/issues/1614)
-
-**Implemented enhancements:**
-
-- Support substring with three arguments: \(str, from, for\) for DataFrame API and Ballista [\#2092](https://github.com/apache/arrow-datafusion/issues/2092)
-- Convert `SqlToRel::statement_to_pan` to take ownership rather than references. [\#1469](https://github.com/apache/arrow-datafusion/issues/1469)
-
 **Fixed bugs:**
 
-- Parquet reader thread errors do not make query fail [\#1767](https://github.com/apache/arrow-datafusion/issues/1767)
-- `not()` with NULL literals does not work: can't be evaluated because the expression's type is Utf8, not boolean [\#1191](https://github.com/apache/arrow-datafusion/issues/1191)
-
-**Closed issues:**
-
-- Optimize memory usage pattern to avoid "double memory" behavior [\#2149](https://github.com/apache/arrow-datafusion/issues/2149)
-- Document approx\_percentile\_cont\_with\_weight in users guide [\#2078](https://github.com/apache/arrow-datafusion/issues/2078)
-- Add filters and projections to EXPLAIN PLAN for ParquetExec, CSVExec etc [\#2073](https://github.com/apache/arrow-datafusion/issues/2073)
-- \[follow up\]cleaning up statements.remove\(0\) [\#1986](https://github.com/apache/arrow-datafusion/issues/1986)
-- Formatting error on documentation for Python [\#1873](https://github.com/apache/arrow-datafusion/issues/1873)
-- Remove duplicate tests from `test_const_evaluator_scalar_functions` [\#1727](https://github.com/apache/arrow-datafusion/issues/1727)
--   Address limitations of logical expression rewrite logic [\#116](https://github.com/apache/arrow-datafusion/issues/116)
-
+- By default, use only 1000 rows to infer the schema [\#2159](https://github.com/apache/arrow-datafusion/pull/2159)
 
 ## [7.0.0](https://github.com/apache/arrow-datafusion/tree/7.0.0) (2022-02-14)
 
