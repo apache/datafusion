@@ -19,6 +19,14 @@
 
 # Changelog
 
+## [7.1.0](https://github.com/apache/arrow-datafusion/tree/7.1.0) (2022-04-10)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.0.0...7.1.0)
+
+**Fixed bugs:**
+
+- By default, use only 1000 rows to infer the schema [\#2159](https://github.com/apache/arrow-datafusion/pull/2159)
+
 ## [7.0.0](https://github.com/apache/arrow-datafusion/tree/7.0.0) (2022-02-14)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/6.0.0...7.0.0)
