@@ -34,7 +34,7 @@ pub type PartitionedFileStream =
 
 /// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
 /// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
-/// sections of a Parquet file in parallel. 
+/// sections of a Parquet file in parallel.
 #[derive(Debug, Clone)]
 pub struct FileRange {
     /// Range start
