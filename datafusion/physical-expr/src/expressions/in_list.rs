@@ -18,6 +18,7 @@
 //! InList expression
 
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow::array::GenericStringArray;
@@ -32,12 +33,18 @@ use arrow::{
     record_batch::RecordBatch,
 };
 
-use crate::PhysicalExpr;
+use crate::{expressions, PhysicalExpr};
 use arrow::array::*;
 use arrow::buffer::{Buffer, MutableBuffer};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
+
+/// Size at which to use a Set rather than Vec for `IN` / `NOT IN`
+/// Value chosen by the benchmark at
+/// https://github.com/apache/arrow-datafusion/pull/2156#discussion_r845198369
+/// TODO: add switch codeGen in In_List
+static OPTIMIZER_INSET_THRESHOLD: usize = 30;
 
 macro_rules! compare_op_scalar {
     ($left: expr, $right:expr, $op:expr) => {{
@@ -69,6 +76,23 @@ pub struct InListExpr {
     expr: Arc<dyn PhysicalExpr>,
     list: Vec<Arc<dyn PhysicalExpr>>,
     negated: bool,
+    set: Option<InSet>,
+}
+
+/// InSet
+#[derive(Debug)]
+pub struct InSet {
+    set: HashSet<ScalarValue>,
+}
+
+impl InSet {
+    pub fn new(set: HashSet<ScalarValue>) -> Self {
+        Self { set }
+    }
+
+    pub fn get_set(&self) -> &HashSet<ScalarValue> {
+        &self.set
+    }
 }
 
 macro_rules! make_contains {
@@ -181,6 +205,26 @@ macro_rules! make_contains_primitive {
     }};
 }
 
+macro_rules! set_contains_with_negated {
+    ($ARRAY:expr, $LIST_VALUES:expr, $NEGATED:expr) => {{
+        if $NEGATED {
+            return Ok(ColumnarValue::Array(Arc::new(
+                $ARRAY
+                    .iter()
+                    .map(|x| x.map(|v| !$LIST_VALUES.contains(&v.try_into().unwrap())))
+                    .collect::<BooleanArray>(),
+            )));
+        } else {
+            return Ok(ColumnarValue::Array(Arc::new(
+                $ARRAY
+                    .iter()
+                    .map(|x| x.map(|v| $LIST_VALUES.contains(&v.try_into().unwrap())))
+                    .collect::<BooleanArray>(),
+            )));
+        }
+    }};
+}
+
 // whether each value on the left (can be null) is contained in the non-null list
 fn in_list_primitive<T: ArrowPrimitiveType>(
     array: &PrimitiveArray<T>,
@@ -220,6 +264,42 @@ fn not_in_list_utf8<OffsetSize: StringOffsetSizeTrait>(
     compare_op_scalar!(array, values, |x, v: &[&str]| !v.contains(&x))
 }
 
+//check all filter values of In clause are static.
+//include `CastExpr + Literal` or `Literal`
+fn check_all_static_filter_expr(list: &[Arc<dyn PhysicalExpr>]) -> bool {
+    list.iter().all(|v| {
+        let cast = v.as_any().downcast_ref::<expressions::CastExpr>();
+        if let Some(c) = cast {
+            c.expr()
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+                .is_some()
+        } else {
+            let cast = v.as_any().downcast_ref::<expressions::Literal>();
+            cast.is_some()
+        }
+    })
+}
+
+fn cast_static_filter_to_set(list: &[Arc<dyn PhysicalExpr>]) -> HashSet<ScalarValue> {
+    HashSet::from_iter(list.iter().map(|expr| {
+        if let Some(cast) = expr.as_any().downcast_ref::<expressions::CastExpr>() {
+            cast.expr()
+                .as_any()
+                .downcast_ref::<expressions::Literal>()
+                .unwrap()
+                .value()
+                .clone()
+        } else {
+            expr.as_any()
+                .downcast_ref::<expressions::Literal>()
+                .unwrap()
+                .value()
+                .clone()
+        }
+    }))
+}
+
 impl InListExpr {
     /// Create a new InList expression
     pub fn new(
@@ -227,10 +307,20 @@ impl InListExpr {
         list: Vec<Arc<dyn PhysicalExpr>>,
         negated: bool,
     ) -> Self {
-        Self {
-            expr,
-            list,
-            negated,
+        if list.len() > OPTIMIZER_INSET_THRESHOLD && check_all_static_filter_expr(&list) {
+            Self {
+                expr,
+                set: Some(InSet::new(cast_static_filter_to_set(&list))),
+                list,
+                negated,
+            }
+        } else {
+            Self {
+                expr,
+                list,
+                negated,
+                set: None,
+            }
         }
     }
 
@@ -318,7 +408,13 @@ impl InListExpr {
 impl std::fmt::Display for InListExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         if self.negated {
-            write!(f, "{} NOT IN ({:?})", self.expr, self.list)
+            if self.set.is_some() {
+                write!(f, "{} NOT IN (SET) ({:?})", self.expr, self.list)
+            } else {
+                write!(f, "{} NOT IN ({:?})", self.expr, self.list)
+            }
+        } else if self.set.is_some() {
+            write!(f, "Use {} IN (SET) ({:?})", self.expr, self.list)
         } else {
             write!(f, "{} IN ({:?})", self.expr, self.list)
         }
@@ -342,119 +438,202 @@ impl PhysicalExpr for InListExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
         let value_data_type = value.data_type();
-        let list_values = self
-            .list
-            .iter()
-            .map(|expr| expr.evaluate(batch))
-            .collect::<Result<Vec<_>>>()?;
 
-        let array = match value {
-            ColumnarValue::Array(array) => array,
-            ColumnarValue::Scalar(scalar) => scalar.to_array(),
-        };
+        if let Some(in_set) = &self.set {
+            let array = match value {
+                ColumnarValue::Array(array) => array,
+                ColumnarValue::Scalar(scalar) => scalar.to_array(),
+            };
+            let set = in_set.get_set();
+            match value_data_type {
+                DataType::Boolean => {
+                    let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int8 => {
+                    let array = array.as_any().downcast_ref::<Int8Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int16 => {
+                    let array = array.as_any().downcast_ref::<Int16Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int32 => {
+                    let array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Int64 => {
+                    let array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt8 => {
+                    let array = array.as_any().downcast_ref::<UInt8Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt16 => {
+                    let array = array.as_any().downcast_ref::<UInt16Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt32 => {
+                    let array = array.as_any().downcast_ref::<UInt32Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::UInt64 => {
+                    let array = array.as_any().downcast_ref::<UInt64Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Float32 => {
+                    let array = array.as_any().downcast_ref::<Float32Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Float64 => {
+                    let array = array.as_any().downcast_ref::<Float64Array>().unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::Utf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<GenericStringArray<i32>>()
+                        .unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                DataType::LargeUtf8 => {
+                    let array = array
+                        .as_any()
+                        .downcast_ref::<GenericStringArray<i64>>()
+                        .unwrap();
+                    set_contains_with_negated!(array, set, self.negated)
+                }
+                datatype => {
+                    return Result::Err(DataFusionError::NotImplemented(format!(
+                        "InSet does not support datatype {:?}.",
+                        datatype
+                    )))
+                }
+            };
+        } else {
+            let list_values = self
+                .list
+                .iter()
+                .map(|expr| expr.evaluate(batch))
+                .collect::<Result<Vec<_>>>()?;
 
-        match value_data_type {
-            DataType::Float32 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Float32,
-                    Float32Array
-                )
+            let array = match value {
+                ColumnarValue::Array(array) => array,
+                ColumnarValue::Scalar(scalar) => scalar.to_array(),
+            };
+
+            match value_data_type {
+                DataType::Float32 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Float32,
+                        Float32Array
+                    )
+                }
+                DataType::Float64 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Float64,
+                        Float64Array
+                    )
+                }
+                DataType::Int16 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Int16,
+                        Int16Array
+                    )
+                }
+                DataType::Int32 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Int32,
+                        Int32Array
+                    )
+                }
+                DataType::Int64 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Int64,
+                        Int64Array
+                    )
+                }
+                DataType::Int8 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Int8,
+                        Int8Array
+                    )
+                }
+                DataType::UInt16 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        UInt16,
+                        UInt16Array
+                    )
+                }
+                DataType::UInt32 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        UInt32,
+                        UInt32Array
+                    )
+                }
+                DataType::UInt64 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        UInt64,
+                        UInt64Array
+                    )
+                }
+                DataType::UInt8 => {
+                    make_contains_primitive!(
+                        array,
+                        list_values,
+                        self.negated,
+                        UInt8,
+                        UInt8Array
+                    )
+                }
+                DataType::Boolean => {
+                    make_contains!(
+                        array,
+                        list_values,
+                        self.negated,
+                        Boolean,
+                        BooleanArray
+                    )
+                }
+                DataType::Utf8 => {
+                    self.compare_utf8::<i32>(array, list_values, self.negated)
+                }
+                DataType::LargeUtf8 => {
+                    self.compare_utf8::<i64>(array, list_values, self.negated)
+                }
+                datatype => Result::Err(DataFusionError::NotImplemented(format!(
+                    "InList does not support datatype {:?}.",
+                    datatype
+                ))),
             }
-            DataType::Float64 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Float64,
-                    Float64Array
-                )
-            }
-            DataType::Int16 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Int16,
-                    Int16Array
-                )
-            }
-            DataType::Int32 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Int32,
-                    Int32Array
-                )
-            }
-            DataType::Int64 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Int64,
-                    Int64Array
-                )
-            }
-            DataType::Int8 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    Int8,
-                    Int8Array
-                )
-            }
-            DataType::UInt16 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    UInt16,
-                    UInt16Array
-                )
-            }
-            DataType::UInt32 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    UInt32,
-                    UInt32Array
-                )
-            }
-            DataType::UInt64 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    UInt64,
-                    UInt64Array
-                )
-            }
-            DataType::UInt8 => {
-                make_contains_primitive!(
-                    array,
-                    list_values,
-                    self.negated,
-                    UInt8,
-                    UInt8Array
-                )
-            }
-            DataType::Boolean => {
-                make_contains!(array, list_values, self.negated, Boolean, BooleanArray)
-            }
-            DataType::Utf8 => self.compare_utf8::<i32>(array, list_values, self.negated),
-            DataType::LargeUtf8 => {
-                self.compare_utf8::<i64>(array, list_values, self.negated)
-            }
-            datatype => Result::Err(DataFusionError::NotImplemented(format!(
-                "InList does not support datatype {:?}.",
-                datatype
-            ))),
         }
     }
 }

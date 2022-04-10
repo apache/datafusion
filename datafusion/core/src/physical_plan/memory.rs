@@ -27,13 +27,14 @@ use super::{
     common, project_schema, DisplayFormatType, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use crate::execution::context::TaskContext;
 use async_trait::async_trait;
+use datafusion_common::DataFusionError;
 use futures::Stream;
 
 /// Execution plan for reading in-memory batches of data
@@ -87,7 +88,7 @@ impl ExecutionPlan for MemoryExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Internal(format!(

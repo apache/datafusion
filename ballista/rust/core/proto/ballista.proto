@@ -189,7 +189,7 @@ message AnalyzeNode {
   bool verbose = 2;
 }
 
-message ExplainNode{
+message ExplainNode {
   LogicalPlanNode input = 1;
   bool verbose = 2;
 }
@@ -275,6 +275,7 @@ message PhysicalPlanNode {
     AvroScanExecNode avro_scan = 20;
     PhysicalExtensionNode extension = 21;
     UnionExecNode union = 22;
+    ExplainExecNode explain = 23;
   }
 }
 
@@ -325,7 +326,7 @@ message PhysicalScalarUdfNode {
 
 message PhysicalAggregateExprNode {
   datafusion.AggregateFunction aggr_function = 1;
-  PhysicalExprNode expr = 2;
+  repeated PhysicalExprNode expr = 2;
 }
 
 message PhysicalWindowExprNode {
@@ -465,6 +466,12 @@ message HashJoinExecNode {
 
 message UnionExecNode {
   repeated PhysicalPlanNode inputs = 1;
+}
+
+message ExplainExecNode {
+  datafusion.Schema schema = 1;
+  repeated datafusion.StringifiedPlan stringified_plans = 2;
+  bool verbose = 3;
 }
 
 message CrossJoinExecNode {

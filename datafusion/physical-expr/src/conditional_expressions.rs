@@ -15,11 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use arrow::array::{new_null_array, Array, BooleanArray};
-use arrow::compute;
 use arrow::compute::kernels::zip::zip;
+use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::DataType;
 
 use datafusion_common::{DataFusionError, Result};
@@ -35,36 +33,51 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         )));
     }
 
-    let size = match args[0] {
-        ColumnarValue::Array(ref a) => a.len(),
-        ColumnarValue::Scalar(ref _s) => 1,
-    };
-    let mut res = new_null_array(&args[0].data_type(), size);
+    let return_type = args[0].data_type();
+    let mut return_array = args.iter().filter_map(|x| match x {
+        ColumnarValue::Array(array) => Some(array.len()),
+        _ => None,
+    });
 
-    for column_value in args {
-        for i in 0..size {
-            match column_value {
-                ColumnarValue::Array(array_ref) => {
-                    let curr_null_mask = compute::is_null(res.as_ref())?;
-                    let arr_not_null_mask = compute::is_not_null(array_ref)?;
-                    let bool_mask = compute::and(&curr_null_mask, &arr_not_null_mask)?;
-                    res = zip(&bool_mask, array_ref, &res)?;
+    if let Some(size) = return_array.next() {
+        // start with nulls as default output
+        let mut current_value = new_null_array(&return_type, size);
+        let mut remainder = BooleanArray::from(vec![true; size]);
+
+        for arg in args {
+            match arg {
+                ColumnarValue::Array(ref array) => {
+                    let to_apply = and(&remainder, &is_not_null(array.as_ref())?)?;
+                    current_value = zip(&to_apply, array, current_value.as_ref())?;
+                    remainder = and(&remainder, &is_null(array)?)?;
                 }
-                ColumnarValue::Scalar(scalar) => {
-                    if !scalar.is_null() && res.is_null(i) {
-                        let vec: Vec<bool> =
-                            (0..size).into_iter().map(|j| j == i).collect();
-                        let bool_arr = BooleanArray::from(vec);
-                        res =
-                            zip(&bool_arr, scalar.to_array_of_size(size).as_ref(), &res)?;
+                ColumnarValue::Scalar(value) => {
+                    if value.is_null() {
                         continue;
+                    } else {
+                        let last_value = value.to_array_of_size(size);
+                        current_value =
+                            zip(&remainder, &last_value, current_value.as_ref())?;
+                        break;
                     }
                 }
             }
+            if remainder.iter().all(|x| x == Some(false)) {
+                break;
+            }
         }
+        Ok(ColumnarValue::Array(current_value))
+    } else {
+        let result = args
+            .iter()
+            .filter_map(|x| match x {
+                ColumnarValue::Scalar(s) if !s.is_null() => Some(x.clone()),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| args[0].clone());
+        Ok(result)
     }
-
-    Ok(ColumnarValue::Array(Arc::new(res)))
 }
 
 /// Currently supported types by the coalesce function.

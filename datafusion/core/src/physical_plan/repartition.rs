@@ -152,18 +152,13 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(RepartitionExec::try_new(
-                children[0].clone(),
-                self.partitioning.clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "RepartitionExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(RepartitionExec::try_new(
+            children[0].clone(),
+            self.partitioning.clone(),
+        )?))
     }
 
     fn output_partitioning(&self) -> Partitioning {

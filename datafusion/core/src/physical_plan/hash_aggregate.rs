@@ -28,7 +28,7 @@ use futures::{
     Future,
 };
 
-use crate::error::{DataFusionError, Result};
+use crate::error::Result;
 use crate::physical_plan::hash_utils::create_hashes;
 use crate::physical_plan::{
     Accumulator, AggregateExpr, DisplayFormatType, Distribution, ExecutionPlan,
@@ -261,21 +261,16 @@ impl ExecutionPlan for HashAggregateExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            1 => Ok(Arc::new(HashAggregateExec::try_new(
-                self.mode,
-                self.group_expr.clone(),
-                self.aggr_expr.clone(),
-                children[0].clone(),
-                self.input_schema.clone(),
-            )?)),
-            _ => Err(DataFusionError::Internal(
-                "HashAggregateExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(HashAggregateExec::try_new(
+            self.mode,
+            self.group_expr.clone(),
+            self.aggr_expr.clone(),
+            children[0].clone(),
+            self.input_schema.clone(),
+        )?))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -1027,6 +1022,7 @@ mod tests {
     use crate::{assert_batches_sorted_eq, physical_plan::common};
     use arrow::array::{Float64Array, UInt32Array};
     use arrow::datatypes::DataType;
+    use datafusion_common::DataFusionError;
     use futures::FutureExt;
 
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -1178,7 +1174,7 @@ mod tests {
         }
 
         fn with_new_children(
-            &self,
+            self: Arc<Self>,
             _: Vec<Arc<dyn ExecutionPlan>>,
         ) -> Result<Arc<dyn ExecutionPlan>> {
             Err(DataFusionError::Internal(format!(

@@ -104,18 +104,13 @@ impl ExecutionPlan for EmptyExec {
     }
 
     fn with_new_children(
-        &self,
-        children: Vec<Arc<dyn ExecutionPlan>>,
+        self: Arc<Self>,
+        _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match children.len() {
-            0 => Ok(Arc::new(EmptyExec::new(
-                self.produce_one_row,
-                self.schema.clone(),
-            ))),
-            _ => Err(DataFusionError::Internal(
-                "EmptyExec wrong number of children".to_string(),
-            )),
-        }
+        Ok(Arc::new(EmptyExec::new(
+            self.produce_one_row,
+            self.schema.clone(),
+        )))
     }
 
     async fn execute(
@@ -161,6 +156,7 @@ impl ExecutionPlan for EmptyExec {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::physical_plan::with_new_children_if_necessary;
     use crate::prelude::SessionContext;
     use crate::{physical_plan::common, test_util};
 
@@ -184,18 +180,19 @@ mod tests {
     #[test]
     fn with_new_children() -> Result<()> {
         let schema = test_util::aggr_test_schema();
-        let empty = EmptyExec::new(false, schema.clone());
-        let empty_with_row = EmptyExec::new(true, schema);
+        let empty = Arc::new(EmptyExec::new(false, schema.clone()));
+        let empty_with_row = Arc::new(EmptyExec::new(true, schema));
 
-        let empty2 = empty.with_new_children(vec![])?;
+        let empty2 = with_new_children_if_necessary(empty.clone(), vec![])?;
         assert_eq!(empty.schema(), empty2.schema());
 
-        let empty_with_row_2 = empty_with_row.with_new_children(vec![])?;
+        let empty_with_row_2 =
+            with_new_children_if_necessary(empty_with_row.clone(), vec![])?;
         assert_eq!(empty_with_row.schema(), empty_with_row_2.schema());
 
         let too_many_kids = vec![empty2];
         assert!(
-            empty.with_new_children(too_many_kids).is_err(),
+            with_new_children_if_necessary(empty, too_many_kids).is_err(),
             "expected error when providing list of kids"
         );
         Ok(())

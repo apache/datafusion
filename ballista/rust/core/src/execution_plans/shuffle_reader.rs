@@ -95,7 +95,7 @@ impl ExecutionPlan for ShuffleReaderExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Err(DataFusionError::Plan(

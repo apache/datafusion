@@ -21,7 +21,7 @@ use super::optimizer::PhysicalOptimizerRule;
 use crate::execution::context::SessionConfig;
 
 use crate::error::Result;
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{with_new_children_if_necessary, ExecutionPlan};
 use std::sync::Arc;
 
 /// Convenience rule for writing optimizers: recursively invoke
@@ -42,6 +42,6 @@ pub fn optimize_children(
     if children.is_empty() {
         Ok(Arc::clone(&plan))
     } else {
-        plan.with_new_children(children)
+        with_new_children_if_necessary(plan, children)
     }
 }

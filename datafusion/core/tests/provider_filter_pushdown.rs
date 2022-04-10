@@ -78,7 +78,7 @@ impl ExecutionPlan for CustomPlan {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         unreachable!()

@@ -369,3 +369,20 @@ async fn test_expect_distinct() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn csv_in_set_test() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT count(*) FROM aggregate_test_100 WHERE c7 in ('25','155','204','77','208','67','139','191','26','7','202','113','129','197','249','146','129','220','154','163','220','19','71','243','150','231','196','170','99','255');";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------+",
+        "| COUNT(UInt8(1)) |",
+        "+-----------------+",
+        "| 36              |",
+        "+-----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}

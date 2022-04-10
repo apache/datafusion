@@ -212,6 +212,18 @@ impl SchemaAdapter {
         Self { table_schema }
     }
 
+    /// Map a column index in the table schema to a column index in a particular
+    /// file schema
+    /// Panics if index is not in range for the table schema
+    pub(crate) fn map_column_index(
+        &self,
+        index: usize,
+        file_schema: &Schema,
+    ) -> Option<usize> {
+        let field = self.table_schema.field(index);
+        file_schema.index_of(field.name()).ok()
+    }
+
     /// Map projected column indexes to the file schema. This will fail if the table schema
     /// and the file schema contain a field with the same name and different types.
     pub fn map_projections(
