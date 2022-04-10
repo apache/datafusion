@@ -462,6 +462,9 @@ impl LogicalPlan {
                 schemas.insert(0, schema);
                 schemas
             }
+            LogicalPlan::AliasedRelation(AliasedRelation { schema, .. }) => {
+                vec![schema]
+            }
             LogicalPlan::Union(Union { schema, .. }) => {
                 vec![schema]
             }
@@ -477,7 +480,6 @@ impl LogicalPlan {
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::Sort(Sort { input, .. })
             | LogicalPlan::CreateMemoryTable(CreateMemoryTable { input, .. })
-            | LogicalPlan::AliasedRelation(AliasedRelation { input, .. })
             | LogicalPlan::Filter(Filter { input, .. }) => input.all_schemas(),
             LogicalPlan::DropTable(_) => vec![],
         }

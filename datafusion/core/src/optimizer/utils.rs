@@ -35,6 +35,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::ExpressionVisitor,
 };
+use datafusion_common::DFSchema;
 use std::{collections::HashSet, sync::Arc};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
@@ -223,11 +224,14 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::AliasedRelation(AliasedRelation { alias, schema, .. }) => {
+        LogicalPlan::AliasedRelation(AliasedRelation { alias, .. }) => {
+            let schema = inputs[0].schema().as_ref().clone().into();
+            let schema =
+                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
             Ok(LogicalPlan::AliasedRelation(AliasedRelation {
                 alias: alias.clone(),
                 input: Arc::new(inputs[0].clone()),
-                schema: schema.clone(),
+                schema,
             }))
         }
         LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {

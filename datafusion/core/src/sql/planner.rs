@@ -2479,7 +2479,8 @@ mod tests {
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: #l.a, #l.b, #l.c\
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
-                        \n    TableScan: l projection=None";
+                        \n    AliasedRelation: l\
+                        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -3445,7 +3446,8 @@ mod tests {
         let expected = "Projection: #person.first_name, #person.id\
         \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
-        \n    TableScan: person2 projection=None";
+        \n    AliasedRelation: person2\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -3458,7 +3460,8 @@ mod tests {
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
         \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
-        \n    TableScan: lineitem2 projection=None";
+        \n    AliasedRelation: lineitem2\
+        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
