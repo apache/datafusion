@@ -20,8 +20,7 @@
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, SubqueryAlias, Analyze, Extension, Filter, Join, Projection, Sort,
-    Window,
+    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 
 use crate::logical_plan::{

@@ -1094,9 +1094,9 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
-                    LogicalPlan::SubqueryAlias(SubqueryAlias {
-                        ref alias, ..
-                    }) => write!(f, "SubqueryAlias: {}", alias),
+                    LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
+                        write!(f, "SubqueryAlias: {}", alias)
+                    }
                     LogicalPlan::CreateExternalTable(CreateExternalTable {
                         ref name,
                         ..

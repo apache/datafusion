@@ -24,7 +24,7 @@ use super::{
 };
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
-    Aggregate, SubqueryAlias, EmptyRelation, Filter, Join, Projection, Sort, TableScan,
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
     Window,
 };
 use crate::logical_plan::{

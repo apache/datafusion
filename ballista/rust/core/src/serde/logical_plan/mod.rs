@@ -29,7 +29,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
 use datafusion::logical_plan::plan::{
-    Aggregate, SubqueryAlias, EmptyRelation, Filter, Join, Projection, Sort, Window,
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 use datafusion::logical_plan::{
     Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr,
