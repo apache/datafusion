@@ -34,7 +34,7 @@ clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "7.0.0" }
 dirs = "4.0.0"
 env_logger = "0.9"
+lock_api = "=0.4.6"
 mimalloc = { version = "*", default-features = false }
 rustyline = "9.0"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
-lock_api = "=0.4.6"
