@@ -110,7 +110,7 @@ async fn case_when_else_with_base_expr() -> Result<()> {
 }
 
 #[tokio::test]
-async fn case_when_else_with_null_literal() -> Result<()> {
+async fn case_when_else_with_null_contant() -> Result<()> {
     let ctx = create_case_context()?;
     let sql = "SELECT \
         CASE WHEN c1 = 'a' THEN 1 \
