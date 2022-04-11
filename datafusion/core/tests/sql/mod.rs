@@ -103,6 +103,7 @@ pub mod information_schema;
 mod partitioned_csv;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode;
+pub mod decimal;
 
 fn assert_float_eq<T>(expected: &[Vec<T>], received: &[Vec<String>])
 where
