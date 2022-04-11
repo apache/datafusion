@@ -151,11 +151,11 @@ fn shift_with_default_value(
         create_empty_array(value, array.data_type(), array.len())
     } else {
         let slice_offset = (-offset).clamp(0, value_len) as usize;
-        let length = array.len() - offset.abs() as usize;
+        let length = array.len() - offset.unsigned_abs() as usize;
         let slice = array.slice(slice_offset, length);
 
         // Generate array with remaining `null` items
-        let nulls = offset.abs() as usize;
+        let nulls = offset.unsigned_abs() as usize;
         let default_values = create_empty_array(value, slice.data_type(), nulls)?;
         // Concatenate both arrays, add nulls after if shift > 0 else before
         if offset > 0 {
