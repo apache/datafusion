@@ -17,27 +17,13 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
-#[cfg(feature = "jit")]
 use crate::error::Result;
-#[cfg(feature = "jit")]
-use crate::reg_fn;
-#[cfg(feature = "jit")]
-use crate::row::fn_name;
-use crate::row::{
-    estimate_row_width, fixed_size, get_offsets, schema_null_free, supported,
-};
+use crate::row::layout::{estimate_row_width, get_offsets};
+use crate::row::{fixed_size, row_supported, schema_null_free};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{ceil, round_upto_power_of_2, set_bit_raw, unset_bit_raw};
-#[cfg(feature = "jit")]
-use datafusion_jit::api::CodeBlock;
-#[cfg(feature = "jit")]
-use datafusion_jit::api::{Assembler, GeneratedFunction};
-#[cfg(feature = "jit")]
-use datafusion_jit::ast::Expr;
-#[cfg(feature = "jit")]
-use datafusion_jit::ast::{BOOL, I64, PTR};
 use std::cmp::max;
 use std::sync::Arc;
 
@@ -67,45 +53,6 @@ pub fn write_batch_unchecked(
     offsets
 }
 
-/// Append batch from `row_idx` to `output` buffer start from `offset`
-/// # Panics
-///
-/// This function will panic if the output buffer doesn't have enough space to hold all the rows
-#[cfg(feature = "jit")]
-pub fn write_batch_unchecked_jit(
-    output: &mut [u8],
-    offset: usize,
-    batch: &RecordBatch,
-    row_idx: usize,
-    schema: Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema);
-    let mut current_offset = offset;
-    let mut offsets = vec![];
-    register_write_functions(assembler)?;
-    let gen_func = gen_write_row(&schema, assembler)?;
-    let mut jit = assembler.create_jit();
-    let code_ptr = jit.compile(gen_func)?;
-
-    let code_fn = unsafe {
-        std::mem::transmute::<_, fn(&mut RowWriter, usize, &RecordBatch)>(code_ptr)
-    };
-
-    for cur_row in row_idx..batch.num_rows() {
-        offsets.push(current_offset);
-        code_fn(&mut writer, cur_row, batch);
-        writer.end_padding();
-        let row_width = writer.row_width;
-        output[current_offset..current_offset + row_width]
-            .copy_from_slice(writer.get_row());
-        current_offset += row_width;
-        writer.reset()
-    }
-    Ok(offsets)
-}
-
-#[cfg(feature = "jit")]
 /// bench interpreted version write
 #[inline(never)]
 pub fn bench_write_batch(
@@ -124,35 +71,6 @@ pub fn bench_write_batch(
         }
     }
 
-    Ok(lengths)
-}
-
-#[cfg(feature = "jit")]
-/// bench jit version write
-#[inline(never)]
-pub fn bench_write_batch_jit(
-    batches: &[Vec<RecordBatch>],
-    schema: Arc<Schema>,
-) -> Result<Vec<usize>> {
-    let assembler = Assembler::default();
-    let mut writer = RowWriter::new(&schema);
-    let mut lengths = vec![];
-    register_write_functions(&assembler)?;
-    let gen_func = gen_write_row(&schema, &assembler)?;
-    let mut jit = assembler.create_jit();
-    let code_ptr = jit.compile(gen_func)?;
-    let code_fn = unsafe {
-        std::mem::transmute::<_, fn(&mut RowWriter, usize, &RecordBatch)>(code_ptr)
-    };
-
-    for batch in batches.iter().flatten() {
-        for cur_row in 0..batch.num_rows() {
-            code_fn(&mut writer, cur_row, batch);
-            writer.end_padding();
-            lengths.push(writer.row_width);
-            writer.reset()
-        }
-    }
     Ok(lengths)
 }
 
@@ -183,7 +101,7 @@ pub struct RowWriter {
     /// Total number of fields for each tuple.
     field_count: usize,
     /// Length in bytes for the current tuple, 8-bytes word aligned.
-    row_width: usize,
+    pub(crate) row_width: usize,
     /// The number of bytes used to store null bits for each field.
     null_width: usize,
     /// Length in bytes for `values` part of the current tuple.
@@ -203,12 +121,12 @@ pub struct RowWriter {
 impl RowWriter {
     /// new
     pub fn new(schema: &Arc<Schema>) -> Self {
-        assert!(supported(schema));
+        assert!(row_supported(schema));
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
         let null_width = if null_free { 0 } else { ceil(field_count, 8) };
         let (field_offsets, values_width) = get_offsets(null_width, schema);
-        let mut init_capacity = estimate_row_width(null_width, schema);
+        let mut init_capacity = estimate_row_width(schema);
         if !fixed_size(schema) {
             // double the capacity to avoid repeated resize
             init_capacity *= 2;
@@ -239,7 +157,7 @@ impl RowWriter {
         assert!(idx < self.field_count);
     }
 
-    fn set_null_at(&mut self, idx: usize) {
+    pub(crate) fn set_null_at(&mut self, idx: usize) {
         assert!(
             !self.null_free,
             "Unexpected call to set_null_at on null-free row writer"
@@ -250,7 +168,7 @@ impl RowWriter {
         }
     }
 
-    fn set_non_null_at(&mut self, idx: usize) {
+    pub(crate) fn set_non_null_at(&mut self, idx: usize) {
         assert!(
             !self.null_free,
             "Unexpected call to set_non_null_at on null-free row writer"
@@ -327,7 +245,7 @@ impl RowWriter {
     }
 
     /// End each row at 8-byte word boundary.
-    fn end_padding(&mut self) {
+    pub(crate) fn end_padding(&mut self) {
         let payload_width = self.current_width();
         self.row_width = round_upto_power_of_2(payload_width, 8);
         if self.data.capacity() < self.row_width {
@@ -335,13 +253,14 @@ impl RowWriter {
         }
     }
 
-    fn get_row(&self) -> &[u8] {
+    /// Get raw bytes
+    pub fn get_row(&self) -> &[u8] {
         &self.data[0..self.row_width]
     }
 }
 
 /// Stitch attributes of tuple in `batch` at `row_idx` and returns the tuple width
-fn write_row(
+pub fn write_row(
     row: &mut RowWriter,
     row_idx: usize,
     schema: &Arc<Schema>,
@@ -367,126 +286,10 @@ fn write_row(
     row.row_width
 }
 
-// we could remove this function wrapper once we find a way to call the trait method directly.
-#[cfg(feature = "jit")]
-fn is_null(col: &Arc<dyn Array>, row_idx: usize) -> bool {
-    col.is_null(row_idx)
-}
-
-#[cfg(feature = "jit")]
-fn register_write_functions(asm: &Assembler) -> Result<()> {
-    let reader_param = vec![PTR, I64, PTR];
-    reg_fn!(asm, RecordBatch::column, vec![PTR, I64], Some(PTR));
-    reg_fn!(asm, RowWriter::set_null_at, vec![PTR, I64], None);
-    reg_fn!(asm, RowWriter::set_non_null_at, vec![PTR, I64], None);
-    reg_fn!(asm, is_null, vec![PTR, I64], Some(BOOL));
-    reg_fn!(asm, write_field_bool, reader_param.clone(), None);
-    reg_fn!(asm, write_field_u8, reader_param.clone(), None);
-    reg_fn!(asm, write_field_u16, reader_param.clone(), None);
-    reg_fn!(asm, write_field_u32, reader_param.clone(), None);
-    reg_fn!(asm, write_field_u64, reader_param.clone(), None);
-    reg_fn!(asm, write_field_i8, reader_param.clone(), None);
-    reg_fn!(asm, write_field_i16, reader_param.clone(), None);
-    reg_fn!(asm, write_field_i32, reader_param.clone(), None);
-    reg_fn!(asm, write_field_i64, reader_param.clone(), None);
-    reg_fn!(asm, write_field_f32, reader_param.clone(), None);
-    reg_fn!(asm, write_field_f64, reader_param.clone(), None);
-    reg_fn!(asm, write_field_date32, reader_param.clone(), None);
-    reg_fn!(asm, write_field_date64, reader_param.clone(), None);
-    reg_fn!(asm, write_field_utf8, reader_param.clone(), None);
-    reg_fn!(asm, write_field_binary, reader_param, None);
-    Ok(())
-}
-
-#[cfg(feature = "jit")]
-fn gen_write_row(
-    schema: &Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<GeneratedFunction> {
-    let mut builder = assembler
-        .new_func_builder("write_row")
-        .param("row", PTR)
-        .param("row_idx", I64)
-        .param("batch", PTR);
-    let null_free = schema_null_free(schema);
-    let mut b = builder.enter_block();
-    for (i, f) in schema.fields().iter().enumerate() {
-        let dt = f.data_type();
-        let arr = format!("a{}", i);
-        b.declare_as(
-            &arr,
-            b.call("column", vec![b.id("batch")?, b.lit_i(i as i64)])?,
-        )?;
-        if f.is_nullable() {
-            b.if_block(
-                |c| c.call("is_null", vec![c.id(&arr)?, c.id("row_idx")?]),
-                |t| {
-                    t.call_stmt("set_null_at", vec![t.id("row")?, t.lit_i(i as i64)])?;
-                    Ok(())
-                },
-                |e| {
-                    e.call_stmt(
-                        "set_non_null_at",
-                        vec![e.id("row")?, e.lit_i(i as i64)],
-                    )?;
-                    let params = vec![
-                        e.id("row")?,
-                        e.id(&arr)?,
-                        e.lit_i(i as i64),
-                        e.id("row_idx")?,
-                    ];
-                    write_typed_field_stmt(dt, e, params)?;
-                    Ok(())
-                },
-            )?;
-        } else {
-            if !null_free {
-                b.call_stmt("set_non_null_at", vec![b.id("row")?, b.lit_i(i as i64)])?;
-            }
-            let params = vec![
-                b.id("row")?,
-                b.id(&arr)?,
-                b.lit_i(i as i64),
-                b.id("row_idx")?,
-            ];
-            write_typed_field_stmt(dt, &mut b, params)?;
-        }
-    }
-    Ok(b.build())
-}
-
-#[cfg(feature = "jit")]
-fn write_typed_field_stmt<'a>(
-    dt: &DataType,
-    b: &mut CodeBlock<'a>,
-    params: Vec<Expr>,
-) -> Result<()> {
-    use DataType::*;
-    match dt {
-        Boolean => b.call_stmt("write_field_bool", params)?,
-        UInt8 => b.call_stmt("write_field_u8", params)?,
-        UInt16 => b.call_stmt("write_field_u16", params)?,
-        UInt32 => b.call_stmt("write_field_u32", params)?,
-        UInt64 => b.call_stmt("write_field_u64", params)?,
-        Int8 => b.call_stmt("write_field_i8", params)?,
-        Int16 => b.call_stmt("write_field_i16", params)?,
-        Int32 => b.call_stmt("write_field_i32", params)?,
-        Int64 => b.call_stmt("write_field_i64", params)?,
-        Float32 => b.call_stmt("write_field_f32", params)?,
-        Float64 => b.call_stmt("write_field_f64", params)?,
-        Date32 => b.call_stmt("write_field_date32", params)?,
-        Date64 => b.call_stmt("write_field_date64", params)?,
-        Utf8 => b.call_stmt("write_field_utf8", params)?,
-        Binary => b.call_stmt("write_field_binary", params)?,
-        _ => unimplemented!(),
-    }
-    Ok(())
-}
-
 macro_rules! fn_write_field {
     ($NATIVE: ident, $ARRAY: ident) => {
         paste::item! {
-            fn [<write_field_ $NATIVE>](to: &mut RowWriter, from: &Arc<dyn Array>, col_idx: usize, row_idx: usize) {
+            pub(crate) fn [<write_field_ $NATIVE>](to: &mut RowWriter, from: &Arc<dyn Array>, col_idx: usize, row_idx: usize) {
                 let from = from
                     .as_any()
                     .downcast_ref::<$ARRAY>()
@@ -509,7 +312,7 @@ fn_write_field!(i64, Int64Array);
 fn_write_field!(f32, Float32Array);
 fn_write_field!(f64, Float64Array);
 
-fn write_field_date32(
+pub(crate) fn write_field_date32(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
@@ -519,7 +322,7 @@ fn write_field_date32(
     to.set_date32(col_idx, from.value(row_idx));
 }
 
-fn write_field_date64(
+pub(crate) fn write_field_date64(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
@@ -529,7 +332,7 @@ fn write_field_date64(
     to.set_date64(col_idx, from.value(row_idx));
 }
 
-fn write_field_utf8(
+pub(crate) fn write_field_utf8(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
@@ -545,7 +348,7 @@ fn write_field_utf8(
     to.set_utf8(col_idx, s);
 }
 
-fn write_field_binary(
+pub(crate) fn write_field_binary(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
