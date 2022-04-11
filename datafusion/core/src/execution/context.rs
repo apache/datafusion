@@ -2148,13 +2148,13 @@ mod tests {
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .expect("cast failed");
-            let start_number = start_arr.into_iter().nth(0).unwrap().unwrap_or(0);
+            let start_number = start_arr.into_iter().next().unwrap().unwrap_or(0);
 
             let end_arr = &args[1]
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .expect("cast failed");
-            let end_number = end_arr.into_iter().nth(0).unwrap().unwrap_or(0) + 1;
+            let end_number = end_arr.into_iter().next().unwrap().unwrap_or(0) + 1;
 
             let count: usize = (end_number - start_number).try_into().unwrap();
             let mut builder = Int64Builder::new(count);

@@ -280,7 +280,7 @@ where
             .collect::<Vec<ArrayRef>>();
         let result = (inner)(&args).unwrap();
 
-        return Ok(ColumnarValue::Array(result));
+        Ok(ColumnarValue::Array(result))
     })
 }
 
