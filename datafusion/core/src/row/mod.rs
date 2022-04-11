@@ -47,82 +47,18 @@
 //! 0          1          2                     10              14                     22                     31         32
 //!
 
+use arrow::array::{make_builder, ArrayBuilder};
 use arrow::datatypes::{DataType, Schema};
-use arrow::util::bit_util::{get_bit_raw, round_upto_power_of_2};
-use std::fmt::Write;
+use arrow::error::Result as ArrowResult;
+use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
+#[cfg(feature = "jit")]
+mod jit;
+mod layout;
 pub mod reader;
+mod validity;
 pub mod writer;
-
-const ALL_VALID_MASK: [u8; 8] = [1, 3, 7, 15, 31, 63, 127, 255];
-
-const UTF8_DEFAULT_SIZE: usize = 20;
-const BINARY_DEFAULT_SIZE: usize = 100;
-
-/// Returns if all fields are valid
-pub fn all_valid(data: &[u8], n: usize) -> bool {
-    for item in data.iter().take(n / 8) {
-        if *item != ALL_VALID_MASK[7] {
-            return false;
-        }
-    }
-    if n % 8 == 0 {
-        true
-    } else {
-        data[n / 8] == ALL_VALID_MASK[n % 8 - 1]
-    }
-}
-
-/// Show null bit for each field in a tuple, 1 for valid and 0 for null.
-/// For a tuple with nine total fields, valid at field 0, 6, 7, 8 shows as `[10000011, 1]`.
-pub struct NullBitsFormatter<'a> {
-    null_bits: &'a [u8],
-    field_count: usize,
-}
-
-impl<'a> NullBitsFormatter<'a> {
-    /// new
-    pub fn new(null_bits: &'a [u8], field_count: usize) -> Self {
-        Self {
-            null_bits,
-            field_count,
-        }
-    }
-}
-
-impl<'a> std::fmt::Debug for NullBitsFormatter<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut is_first = true;
-        let data = self.null_bits;
-        for i in 0..self.field_count {
-            if is_first {
-                f.write_char('[')?;
-                is_first = false;
-            } else if i % 8 == 0 {
-                f.write_str(", ")?;
-            }
-            if unsafe { get_bit_raw(data.as_ptr(), i) } {
-                f.write_char('1')?;
-            } else {
-                f.write_char('0')?;
-            }
-        }
-        f.write_char(']')?;
-        Ok(())
-    }
-}
-
-/// Get relative offsets for each field and total width for values
-fn get_offsets(null_width: usize, schema: &Arc<Schema>) -> (Vec<usize>, usize) {
-    let mut offsets = vec![];
-    let mut offset = null_width;
-    for f in schema.fields() {
-        offsets.push(offset);
-        offset += type_width(f.data_type());
-    }
-    (offsets, offset - null_width)
-}
 
 fn supported_type(dt: &DataType) -> bool {
     use DataType::*;
@@ -146,70 +82,23 @@ fn supported_type(dt: &DataType) -> bool {
     )
 }
 
-fn var_length(dt: &DataType) -> bool {
-    use DataType::*;
-    matches!(dt, Utf8 | Binary)
-}
-
-fn type_width(dt: &DataType) -> usize {
-    use DataType::*;
-    if var_length(dt) {
-        return std::mem::size_of::<u64>();
-    }
-    match dt {
-        Boolean | UInt8 | Int8 => 1,
-        UInt16 | Int16 => 2,
-        UInt32 | Int32 | Float32 | Date32 => 4,
-        UInt64 | Int64 | Float64 | Date64 => 8,
-        _ => unreachable!(),
-    }
-}
-
-fn estimate_row_width(null_width: usize, schema: &Arc<Schema>) -> usize {
-    let mut width = null_width;
-    for f in schema.fields() {
-        width += type_width(f.data_type());
-        match f.data_type() {
-            DataType::Utf8 => width += UTF8_DEFAULT_SIZE,
-            DataType::Binary => width += BINARY_DEFAULT_SIZE,
-            _ => {}
-        }
-    }
-    round_upto_power_of_2(width, 8)
-}
-
-fn fixed_size(schema: &Arc<Schema>) -> bool {
-    schema.fields().iter().all(|f| !var_length(f.data_type()))
-}
-
-fn supported(schema: &Arc<Schema>) -> bool {
+/// Tell if we can create raw-bytes based rows since we currently
+/// has limited data type supports in the row format
+pub fn row_supported(schema: &Arc<Schema>) -> bool {
     schema
         .fields()
         .iter()
         .all(|f| supported_type(f.data_type()))
 }
 
-#[cfg(feature = "jit")]
-#[macro_export]
-/// register external functions to the assembler
-macro_rules! reg_fn {
-    ($ASS:ident, $FN: path, $PARAM: expr, $RET: expr) => {
-        $ASS.register_extern_fn(fn_name($FN), $FN as *const u8, $PARAM, $RET)?;
-    };
+fn var_length(dt: &DataType) -> bool {
+    use DataType::*;
+    matches!(dt, Utf8 | Binary)
 }
 
-#[cfg(feature = "jit")]
-fn fn_name<T>(f: T) -> &'static str {
-    fn type_name_of<T>(_: T) -> &'static str {
-        std::any::type_name::<T>()
-    }
-    let name = type_name_of(f);
-
-    // Find and cut the rest of the path
-    match &name.rfind(':') {
-        Some(pos) => &name[pos + 1..name.len()],
-        None => name,
-    }
+/// Tell if the row is of fixed size
+pub fn fixed_size(schema: &Arc<Schema>) -> bool {
+    schema.fields().iter().all(|f| !var_length(f.data_type()))
 }
 
 /// Tell if schema contains no nullable field
@@ -217,110 +106,64 @@ pub fn schema_null_free(schema: &Arc<Schema>) -> bool {
     schema.fields().iter().all(|f| !f.is_nullable())
 }
 
+/// Columnar Batch buffer
+pub struct MutableRecordBatch {
+    arrays: Vec<Box<dyn ArrayBuilder>>,
+    schema: Arc<Schema>,
+}
+
+impl MutableRecordBatch {
+    /// new
+    pub fn new(target_batch_size: usize, schema: Arc<Schema>) -> Self {
+        let arrays = new_arrays(&schema, target_batch_size);
+        Self { arrays, schema }
+    }
+
+    /// Finalize the batch, output and reset this buffer
+    pub fn output(&mut self) -> ArrowResult<RecordBatch> {
+        let result = make_batch(self.schema.clone(), self.arrays.drain(..).collect());
+        result
+    }
+}
+
+fn new_arrays(schema: &Arc<Schema>, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
+    schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let dt = field.data_type();
+            make_builder(dt, batch_size)
+        })
+        .collect::<Vec<_>>()
+}
+
+fn make_batch(
+    schema: Arc<Schema>,
+    mut arrays: Vec<Box<dyn ArrayBuilder>>,
+) -> ArrowResult<RecordBatch> {
+    let columns = arrays.iter_mut().map(|array| array.finish()).collect();
+    RecordBatch::try_new(schema, columns)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::datasource::file_format::parquet::ParquetFormat;
     use crate::datasource::file_format::FileFormat;
-    use crate::datasource::object_store::local::{
-        local_object_reader, local_object_reader_stream, local_unpartitioned_file,
-        LocalFileSystem,
-    };
+    use crate::datasource::listing::local_unpartitioned_file;
     use crate::error::Result;
-    use crate::execution::runtime_env::RuntimeEnv;
     use crate::physical_plan::file_format::FileScanConfig;
     use crate::physical_plan::{collect, ExecutionPlan};
+    use crate::prelude::SessionContext;
     use crate::row::reader::read_as_batch;
-    #[cfg(feature = "jit")]
-    use crate::row::reader::read_as_batch_jit;
     use crate::row::writer::write_batch_unchecked;
-    #[cfg(feature = "jit")]
-    use crate::row::writer::write_batch_unchecked_jit;
     use arrow::record_batch::RecordBatch;
-    use arrow::util::bit_util::{ceil, set_bit_raw, unset_bit_raw};
     use arrow::{array::*, datatypes::*};
-    #[cfg(feature = "jit")]
-    use datafusion_jit::api::Assembler;
-    use rand::Rng;
+    use datafusion_data_access::object_store::local::LocalFileSystem;
+    use datafusion_data_access::object_store::local::{
+        local_object_reader, local_object_reader_stream,
+    };
     use DataType::*;
-
-    fn test_validity(bs: &[bool]) {
-        let n = bs.len();
-        let mut data = vec![0; ceil(n, 8)];
-        for (i, b) in bs.iter().enumerate() {
-            if *b {
-                let data_argument = &mut data;
-                unsafe {
-                    set_bit_raw(data_argument.as_mut_ptr(), i);
-                };
-            } else {
-                let data_argument = &mut data;
-                unsafe {
-                    unset_bit_raw(data_argument.as_mut_ptr(), i);
-                };
-            }
-        }
-        let expected = bs.iter().all(|f| *f);
-        assert_eq!(all_valid(&data, bs.len()), expected);
-    }
-
-    #[test]
-    fn test_all_valid() {
-        let sizes = [4, 8, 12, 16, 19, 23, 32, 44];
-        for i in sizes {
-            {
-                // contains false
-                let input = {
-                    let mut rng = rand::thread_rng();
-                    let mut input: Vec<bool> = vec![false; i];
-                    rng.fill(&mut input[..]);
-                    input
-                };
-                test_validity(&input);
-            }
-
-            {
-                // all true
-                let input = vec![true; i];
-                test_validity(&input);
-            }
-        }
-    }
-
-    #[test]
-    fn test_formatter() -> std::fmt::Result {
-        assert_eq!(
-            format!("{:?}", NullBitsFormatter::new(&[0b11000001], 8)),
-            "[10000011]"
-        );
-        assert_eq!(
-            format!("{:?}", NullBitsFormatter::new(&[0b11000001, 1], 9)),
-            "[10000011, 1]"
-        );
-        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 2)), "[10]");
-        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 3)), "[100]");
-        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 4)), "[1000]");
-        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 5)), "[10000]");
-        assert_eq!(format!("{:?}", NullBitsFormatter::new(&[1], 6)), "[100000]");
-        assert_eq!(
-            format!("{:?}", NullBitsFormatter::new(&[1], 7)),
-            "[1000000]"
-        );
-        assert_eq!(
-            format!("{:?}", NullBitsFormatter::new(&[1], 8)),
-            "[10000000]"
-        );
-        // extra bytes are ignored
-        assert_eq!(
-            format!("{:?}", NullBitsFormatter::new(&[0b11000001, 1, 1, 1], 9)),
-            "[10000011, 1]"
-        );
-        assert_eq!(
-            format!("{:?}", NullBitsFormatter::new(&[0b11000001, 1, 1], 16)),
-            "[10000011, 10000000]"
-        );
-        Ok(())
-    }
 
     macro_rules! fn_test_single_type {
         ($ARRAY: ident, $TYPE: expr, $VEC: expr) => {
@@ -334,23 +177,7 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
-                    assert_eq!(batch, output_batch);
-                    Ok(())
-                }
-
-                #[test]
-                #[allow(non_snake_case)]
-                #[cfg(feature = "jit")]
-                fn [<test_single_ $TYPE _jit>]() -> Result<()> {
-                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
-                    let a = $ARRAY::from($VEC);
-                    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-                    let mut vector = vec![0; 1024];
-                    let assembler = Assembler::default();
-                    let row_offsets =
-                        { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
-                    let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -365,24 +192,7 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let row_offsets =
                         { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
-                    assert_eq!(batch, output_batch);
-                    Ok(())
-                }
-
-                #[test]
-                #[allow(non_snake_case)]
-                #[cfg(feature = "jit")]
-                fn [<test_single_ $TYPE _jit_null_free>]() -> Result<()> {
-                    let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
-                    let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
-                    let a = $ARRAY::from(v);
-                    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-                    let mut vector = vec![0; 1024];
-                    let assembler = Assembler::default();
-                    let row_offsets =
-                        { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
-                    let output_batch = { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -484,33 +294,7 @@ mod tests {
         let mut vector = vec![0; 8192];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
-        assert_eq!(batch, output_batch);
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "jit")]
-    fn test_single_binary_jit() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, true)]));
-        let values: Vec<Option<&[u8]>> =
-            vec![Some(b"one"), Some(b"two"), None, Some(b""), Some(b"three")];
-        let a = BinaryArray::from_opt_vec(values);
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-        let mut vector = vec![0; 8192];
-        let assembler = Assembler::default();
-        let row_offsets = {
-            write_batch_unchecked_jit(
-                &mut vector,
-                0,
-                &batch,
-                0,
-                schema.clone(),
-                &assembler,
-            )?
-        };
-        let output_batch =
-            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -524,51 +308,27 @@ mod tests {
         let mut vector = vec![0; 8192];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
-        assert_eq!(batch, output_batch);
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(feature = "jit")]
-    fn test_single_binary_jit_null_free() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", Binary, false)]));
-        let values: Vec<&[u8]> = vec![b"one", b"two", b"", b"three"];
-        let a = BinaryArray::from_vec(values);
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
-        let mut vector = vec![0; 8192];
-        let assembler = Assembler::default();
-        let row_offsets = {
-            write_batch_unchecked_jit(
-                &mut vector,
-                0,
-                &batch,
-                0,
-                schema.clone(),
-                &assembler,
-            )?
-        };
-        let output_batch =
-            { read_as_batch_jit(&vector, schema, row_offsets, &assembler)? };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_with_parquet() -> Result<()> {
-        let runtime = Arc::new(RuntimeEnv::default());
+        let session_ctx = SessionContext::new();
+        let task_ctx = session_ctx.task_ctx();
         let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
         let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
         let schema = exec.schema().clone();
 
-        let batches = collect(exec, runtime).await?;
+        let batches = collect(exec, task_ctx).await?;
         assert_eq!(1, batches.len());
         let batch = &batches[0];
 
         let mut vector = vec![0; 20480];
         let row_offsets =
             { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, row_offsets)? };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(*batch, output_batch);
 
         Ok(())
@@ -594,7 +354,7 @@ mod tests {
         )]));
         let vector = vec![0; 1024];
         let row_offsets = vec![0];
-        read_as_batch(&vector, schema, row_offsets).unwrap();
+        read_as_batch(&vector, schema, &row_offsets).unwrap();
     }
 
     async fn get_exec(

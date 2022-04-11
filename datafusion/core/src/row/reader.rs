@@ -18,66 +18,28 @@
 //! Accessing row from raw bytes
 
 use crate::error::{DataFusionError, Result};
-#[cfg(feature = "jit")]
-use crate::reg_fn;
-#[cfg(feature = "jit")]
-use crate::row::fn_name;
-use crate::row::{
-    all_valid, get_offsets, schema_null_free, supported, NullBitsFormatter,
-};
+use crate::row::layout::get_offsets;
+use crate::row::validity::{all_valid, NullBitsFormatter};
+use crate::row::{row_supported, schema_null_free, MutableRecordBatch};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{ceil, get_bit_raw};
-#[cfg(feature = "jit")]
-use datafusion_jit::api::Assembler;
-#[cfg(feature = "jit")]
-use datafusion_jit::api::GeneratedFunction;
-#[cfg(feature = "jit")]
-use datafusion_jit::ast::{I64, PTR};
 use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
 pub fn read_as_batch(
     data: &[u8],
     schema: Arc<Schema>,
-    offsets: Vec<usize>,
+    offsets: &[usize],
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema, data);
+    let mut row = RowReader::new(&schema);
 
     for offset in offsets.iter().take(row_num) {
-        row.point_to(*offset);
+        row.point_to(*offset, data);
         read_row(&row, &mut output, &schema);
-    }
-
-    output.output().map_err(DataFusionError::ArrowError)
-}
-
-/// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
-#[cfg(feature = "jit")]
-pub fn read_as_batch_jit(
-    data: &[u8],
-    schema: Arc<Schema>,
-    offsets: Vec<usize>,
-    assembler: &Assembler,
-) -> Result<RecordBatch> {
-    let row_num = offsets.len();
-    let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema, data);
-    register_read_functions(assembler)?;
-    let gen_func = gen_read_row(&schema, assembler)?;
-    let mut jit = assembler.create_jit();
-    let code_ptr = jit.compile(gen_func)?;
-    let code_fn = unsafe {
-        std::mem::transmute::<_, fn(&RowReader, &mut MutableRecordBatch)>(code_ptr)
-    };
-
-    for offset in offsets.iter().take(row_num) {
-        row.point_to(*offset);
-        code_fn(&row, &mut output);
     }
 
     output.output().map_err(DataFusionError::ArrowError)
@@ -156,14 +118,14 @@ impl<'a> std::fmt::Debug for RowReader<'a> {
 
 impl<'a> RowReader<'a> {
     /// new
-    pub fn new(schema: &Arc<Schema>, data: &'a [u8]) -> Self {
-        assert!(supported(schema));
+    pub fn new(schema: &Arc<Schema>) -> Self {
+        assert!(row_supported(schema));
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
         let null_width = if null_free { 0 } else { ceil(field_count, 8) };
         let (field_offsets, _) = get_offsets(null_width, schema);
         Self {
-            data,
+            data: &[],
             base_offset: 0,
             field_count,
             null_width,
@@ -173,8 +135,9 @@ impl<'a> RowReader<'a> {
     }
 
     /// Update this row to point to position `offset` in `base`
-    pub fn point_to(&mut self, offset: usize) {
+    pub fn point_to(&mut self, offset: usize, data: &'a [u8]) {
         self.base_offset = offset;
+        self.data = data;
     }
 
     #[inline]
@@ -244,7 +207,7 @@ impl<'a> RowReader<'a> {
         let len = (offset_size & 0xffff_ffff) as usize;
         let varlena_offset = self.base_offset + offset;
         let bytes = &self.data[varlena_offset..varlena_offset + len];
-        std::str::from_utf8(bytes).unwrap()
+        unsafe { std::str::from_utf8_unchecked(bytes) }
     }
 
     fn get_binary(&self, idx: usize) -> &[u8] {
@@ -293,7 +256,8 @@ impl<'a> RowReader<'a> {
     }
 }
 
-fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
+/// Read the row currently pointed by RowWriter to the output columnar batch buffer
+pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
     if row.null_free || row.all_valid() {
         for ((col_idx, to), field) in batch
             .arrays
@@ -315,118 +279,10 @@ fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema
     }
 }
 
-#[cfg(feature = "jit")]
-fn get_array_mut(
-    batch: &mut MutableRecordBatch,
-    col_idx: usize,
-) -> &mut Box<dyn ArrayBuilder> {
-    let arrays: &mut [Box<dyn ArrayBuilder>] = batch.arrays.as_mut();
-    &mut arrays[col_idx]
-}
-
-#[cfg(feature = "jit")]
-fn register_read_functions(asm: &Assembler) -> Result<()> {
-    let reader_param = vec![PTR, I64, PTR];
-    reg_fn!(asm, get_array_mut, vec![PTR, I64], Some(PTR));
-    reg_fn!(asm, read_field_bool, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u8, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u16, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u32, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u64, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i8, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i16, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i32, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i64, reader_param.clone(), None);
-    reg_fn!(asm, read_field_f32, reader_param.clone(), None);
-    reg_fn!(asm, read_field_f64, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date32, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date64, reader_param.clone(), None);
-    reg_fn!(asm, read_field_utf8, reader_param.clone(), None);
-    reg_fn!(asm, read_field_binary, reader_param.clone(), None);
-    reg_fn!(asm, read_field_bool_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u8_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u16_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u32_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_u64_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i8_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i16_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i32_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_i64_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_f32_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_f64_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date32_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_date64_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_utf8_null_free, reader_param.clone(), None);
-    reg_fn!(asm, read_field_binary_null_free, reader_param, None);
-    Ok(())
-}
-
-#[cfg(feature = "jit")]
-fn gen_read_row(
-    schema: &Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<GeneratedFunction> {
-    use DataType::*;
-    let mut builder = assembler
-        .new_func_builder("read_row")
-        .param("row", PTR)
-        .param("batch", PTR);
-    let mut b = builder.enter_block();
-    for (i, f) in schema.fields().iter().enumerate() {
-        let dt = f.data_type();
-        let arr = format!("a{}", i);
-        b.declare_as(
-            &arr,
-            b.call("get_array_mut", vec![b.id("batch")?, b.lit_i(i as i64)])?,
-        )?;
-        let params = vec![b.id(&arr)?, b.lit_i(i as i64), b.id("row")?];
-        if f.is_nullable() {
-            match dt {
-                Boolean => b.call_stmt("read_field_bool", params)?,
-                UInt8 => b.call_stmt("read_field_u8", params)?,
-                UInt16 => b.call_stmt("read_field_u16", params)?,
-                UInt32 => b.call_stmt("read_field_u32", params)?,
-                UInt64 => b.call_stmt("read_field_u64", params)?,
-                Int8 => b.call_stmt("read_field_i8", params)?,
-                Int16 => b.call_stmt("read_field_i16", params)?,
-                Int32 => b.call_stmt("read_field_i32", params)?,
-                Int64 => b.call_stmt("read_field_i64", params)?,
-                Float32 => b.call_stmt("read_field_f32", params)?,
-                Float64 => b.call_stmt("read_field_f64", params)?,
-                Date32 => b.call_stmt("read_field_date32", params)?,
-                Date64 => b.call_stmt("read_field_date64", params)?,
-                Utf8 => b.call_stmt("read_field_utf8", params)?,
-                Binary => b.call_stmt("read_field_binary", params)?,
-                _ => unimplemented!(),
-            }
-        } else {
-            match dt {
-                Boolean => b.call_stmt("read_field_bool_null_free", params)?,
-                UInt8 => b.call_stmt("read_field_u8_null_free", params)?,
-                UInt16 => b.call_stmt("read_field_u16_null_free", params)?,
-                UInt32 => b.call_stmt("read_field_u32_null_free", params)?,
-                UInt64 => b.call_stmt("read_field_u64_null_free", params)?,
-                Int8 => b.call_stmt("read_field_i8_null_free", params)?,
-                Int16 => b.call_stmt("read_field_i16_null_free", params)?,
-                Int32 => b.call_stmt("read_field_i32_null_free", params)?,
-                Int64 => b.call_stmt("read_field_i64_null_free", params)?,
-                Float32 => b.call_stmt("read_field_f32_null_free", params)?,
-                Float64 => b.call_stmt("read_field_f64_null_free", params)?,
-                Date32 => b.call_stmt("read_field_date32_null_free", params)?,
-                Date64 => b.call_stmt("read_field_date64_null_free", params)?,
-                Utf8 => b.call_stmt("read_field_utf8_null_free", params)?,
-                Binary => b.call_stmt("read_field_binary_null_free", params)?,
-                _ => unimplemented!(),
-            }
-        }
-    }
-    Ok(b.build())
-}
-
 macro_rules! fn_read_field {
     ($NATIVE: ident, $ARRAY: ident) => {
         paste::item! {
-            fn [<read_field_ $NATIVE>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+            pub(crate) fn [<read_field_ $NATIVE>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
@@ -436,7 +292,7 @@ macro_rules! fn_read_field {
                     .unwrap();
             }
 
-            fn [<read_field_ $NATIVE _null_free>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+            pub(crate) fn [<read_field_ $NATIVE _null_free>](to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
                 let to = to
                     .as_any_mut()
                     .downcast_mut::<$ARRAY>()
@@ -464,7 +320,11 @@ fn_read_field!(date32, Date32Builder);
 fn_read_field!(date64, Date64Builder);
 fn_read_field!(utf8, StringBuilder);
 
-fn read_field_binary(to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowReader) {
+pub(crate) fn read_field_binary(
+    to: &mut Box<dyn ArrayBuilder>,
+    col_idx: usize,
+    row: &RowReader,
+) {
     let to = to.as_any_mut().downcast_mut::<BinaryBuilder>().unwrap();
     if row.is_valid_at(col_idx) {
         to.append_value(row.get_binary(col_idx)).unwrap();
@@ -473,7 +333,7 @@ fn read_field_binary(to: &mut Box<dyn ArrayBuilder>, col_idx: usize, row: &RowRe
     }
 }
 
-fn read_field_binary_null_free(
+pub(crate) fn read_field_binary_null_free(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,
@@ -536,40 +396,4 @@ fn read_field_null_free(
         Binary => read_field_binary_null_free(to, col_idx, row),
         _ => unimplemented!(),
     }
-}
-
-struct MutableRecordBatch {
-    arrays: Vec<Box<dyn ArrayBuilder>>,
-    schema: Arc<Schema>,
-}
-
-impl MutableRecordBatch {
-    fn new(target_batch_size: usize, schema: Arc<Schema>) -> Self {
-        let arrays = new_arrays(&schema, target_batch_size);
-        Self { arrays, schema }
-    }
-
-    fn output(&mut self) -> ArrowResult<RecordBatch> {
-        let result = make_batch(self.schema.clone(), self.arrays.drain(..).collect());
-        result
-    }
-}
-
-fn new_arrays(schema: &Arc<Schema>, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
-    schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let dt = field.data_type();
-            make_builder(dt, batch_size)
-        })
-        .collect::<Vec<_>>()
-}
-
-fn make_batch(
-    schema: Arc<Schema>,
-    mut arrays: Vec<Box<dyn ArrayBuilder>>,
-) -> ArrowResult<RecordBatch> {
-    let columns = arrays.iter_mut().map(|array| array.finish()).collect();
-    RecordBatch::try_new(schema, columns)
 }
