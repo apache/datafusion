@@ -53,9 +53,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
 
         let tmp_result = self.evaluate(&tmp_batch)?;
         // All values from the `selection` filter are true.
-        if batch.columns().first().map(|x| x.len())
-            == tmp_batch.columns().first().map(|x| x.len())
-        {
+        if batch.num_rows() == tmp_batch.num_rows() {
             return Ok(tmp_result);
         }
         if let ColumnarValue::Array(a) = tmp_result {
