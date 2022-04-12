@@ -47,9 +47,8 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let tmp_columns = filter_record_batch(batch, &selection);
+        let tmp_batch = filter_record_batch(batch, &selection)?;
 
-        let tmp_batch = RecordBatch::try_new(batch.schema(), tmp_columns)?;
         let tmp_result = self.evaluate(&tmp_batch)?;
         if let ColumnarValue::Array(a) = tmp_result {
             let result = scatter(selection, a.as_ref())?;
