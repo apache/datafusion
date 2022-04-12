@@ -644,16 +644,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         self.schema_provider.get_table_provider(name.try_into()?),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                        (_, Some(provider)) => LogicalPlanBuilder::scan(
-                            // take alias into account to support `JOIN table1 as table2`
-                            alias
-                                .as_ref()
-                                .map(|a| a.name.value.as_str())
-                                .unwrap_or(&table_name),
-                            provider,
-                            None,
-                        )?
-                        .build(),
+                        (_, Some(provider)) => {
+                            let scan =
+                                LogicalPlanBuilder::scan(&table_name, provider, None);
+                            let scan = match alias {
+                                Some(ref name) => scan?.alias(name.name.value.as_str()),
+                                _ => scan,
+                            };
+                            scan?.build()
+                        }
                         (None, None) => Err(DataFusionError::Plan(format!(
                             "Table or CTE with name '{}' not found",
                             name
@@ -2492,7 +2491,8 @@ mod tests {
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: #l.a, #l.b, #l.c\
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
-                        \n    TableScan: l projection=None";
+                        \n    SubqueryAlias: l\
+                        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -3458,7 +3458,8 @@ mod tests {
         let expected = "Projection: #person.first_name, #person.id\
         \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
-        \n    TableScan: person2 projection=None";
+        \n    SubqueryAlias: person2\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -3471,7 +3472,8 @@ mod tests {
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
         \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
-        \n    TableScan: lineitem2 projection=None";
+        \n    SubqueryAlias: lineitem2\
+        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -4064,6 +4066,18 @@ mod tests {
                                     \n        TableScan: person projection=None\
                                     \n        TableScan: orders projection=None\
                                     \n      TableScan: lineitem projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_with_aliases() {
+        let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
+        let expected = "Projection: #peeps.id, #folks.first_name\
+                                    \n  Inner Join: #peeps.id = #folks.id\
+                                    \n    SubqueryAlias: peeps\
+                                    \n      TableScan: person projection=None\
+                                    \n    SubqueryAlias: folks\
+                                    \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
