@@ -52,6 +52,7 @@ message LogicalPlanNode {
     CreateCatalogSchemaNode create_catalog_schema = 18;
     UnionNode union = 19;
     CreateCatalogNode create_catalog = 20;
+    SubqueryAliasNode subquery_alias = 21;
   }
 }
 
@@ -239,6 +240,11 @@ message LimitNode {
 
 message SelectionExecNode {
   datafusion.LogicalExprNode expr = 1;
+}
+
+message SubqueryAliasNode {
+  LogicalPlanNode input = 1;
+  string alias = 2;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

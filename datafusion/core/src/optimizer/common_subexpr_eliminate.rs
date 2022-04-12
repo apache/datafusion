@@ -216,6 +216,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::Values(_)
         | LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Limit(_)
         | LogicalPlan::CreateExternalTable(_)
         | LogicalPlan::Explain { .. }
