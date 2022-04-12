@@ -25,10 +25,8 @@ use datafusion_common::Result;
 use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
 
-use arrow::array::{
-    make_array, Array, ArrayRef, BooleanArray, MutableArrayData, UInt64Array,
-};
-use arrow::compute::{and_kleene, is_not_null, take, SlicesIterator};
+use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
+use arrow::compute::{and_kleene, filter, is_not_null, SlicesIterator};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -51,20 +49,10 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        if selection.iter().all(|b| b == Some(true)) {
-            return self.evaluate(batch);
-        }
-        let mut indices = vec![];
-        for (i, b) in selection.iter().enumerate() {
-            if let Some(true) = b {
-                indices.push(i as u64);
-            }
-        }
-        let indices = UInt64Array::from_iter_values(indices);
         let tmp_columns = batch
             .columns()
             .iter()
-            .map(|c| take(c.as_ref(), &indices, None))
+            .map(|c| filter(c.as_ref(), &selection))
             .collect::<ArrowResult<Vec<Arc<dyn Array>>>>()?;
 
         let tmp_batch = RecordBatch::try_new(batch.schema(), tmp_columns)?;
