@@ -49,17 +49,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let filter_count = selection
-            .values()
-            .count_set_bits_offset(selection.offset(), selection.len());
-
-        if selection.null_count() == 0 && filter_count == selection.len() {
-            return self.evaluate(batch);
-        }
-
         let tmp_batch = filter_record_batch(batch, &selection)?;
 
         let tmp_result = self.evaluate(&tmp_batch)?;
+        // All values from the `selection` filter are true.
+        if batch.columns().first().map(|x| x.len())
+            == tmp_batch.columns().first().map(|x| x.len())
+        {
+            return Ok(tmp_result);
+        }
         if let ColumnarValue::Array(a) = tmp_result {
             let result = scatter(selection, a.as_ref())?;
             Ok(ColumnarValue::Array(result))
