@@ -318,6 +318,9 @@ pub fn with_new_children_if_necessary(
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
 ///              \n        CsvExec: files=[tests/example.csv], has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
+///
+///   let one_line = format!("{}", displayable_plan.one_line());
+///   assert_eq!("ProjectionExec: expr=[a@0 as a]", one_line.trim());
 /// }
 /// ```
 ///
