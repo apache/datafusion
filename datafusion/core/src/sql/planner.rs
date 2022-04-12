@@ -3021,10 +3021,10 @@ mod tests {
         let sql = "SELECT [1, true, null]";
         let err = logical_plan(sql).expect_err("query should have failed");
 
-        // HashSet doesnt guaranty order
+        // HashSet doesn't guarantee order
         assert_contains!(
-            format!("{:?}", err),
-            r#"NotImplemented("Arrays with different types are not supported: "#
+            err.to_string(),
+            r#"Arrays with different types are not supported: "#
         );
     }
 
