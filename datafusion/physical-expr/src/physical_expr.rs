@@ -47,6 +47,13 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
+        let filter_count = selection
+            .values()
+            .count_set_bits_offset(selection.offset(), selection.len());
+        if filter_count == selection.len() {
+            return self.evaluate(batch);
+        }
+
         let tmp_batch = filter_record_batch(batch, &selection)?;
 
         let tmp_result = self.evaluate(&tmp_batch)?;
