@@ -544,6 +544,24 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_group_by_with_table_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .alias("a")?
+            .aggregate(vec![col("c")], vec![max(col("b"))])?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[#a.c]], aggr=[[MAX(#a.b)]]\
+        \n  SubqueryAlias: a\
+        \n    TableScan: test projection=Some([1, 2])";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
     fn aggregate_no_group_by_with_filter() -> Result<()> {
         let table_scan = test_table_scan()?;
 
