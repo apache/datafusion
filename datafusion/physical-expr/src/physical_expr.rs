@@ -25,7 +25,9 @@ use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
-use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
+use arrow::compute::{
+    and_kleene, filter_record_batch, is_not_null, prep_null_mask_filter, SlicesIterator,
+};
 use std::any::Any;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -47,9 +49,15 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let filter_count = selection
+        let filter = match selection.null_count() {
+            0 => BooleanArray::from(selection.data().clone()),
+            _ => prep_null_mask_filter(selection),
+        };
+
+        let filter_count = filter
             .values()
             .count_set_bits_offset(selection.offset(), selection.len());
+
         if filter_count == selection.len() {
             return self.evaluate(batch);
         }
