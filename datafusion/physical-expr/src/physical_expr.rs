@@ -25,9 +25,7 @@ use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
-use arrow::compute::{
-    and_kleene, filter_record_batch, is_not_null, prep_null_mask_filter, SlicesIterator,
-};
+use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 use std::any::Any;
 
 /// Expression that can be evaluated against a RecordBatch
@@ -110,6 +108,8 @@ fn scatter(mask: &BooleanArray, truthy: &dyn Array) -> Result<ArrayRef> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use arrow::array::Int32Array;
     use datafusion_common::Result;
