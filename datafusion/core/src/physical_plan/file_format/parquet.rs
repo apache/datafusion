@@ -538,6 +538,11 @@ fn read_partition(
             ));
         }
         if let Some(range) = &partitioned_file.range {
+            assert!(
+                range.start >= 0 && range.end > 0 && range.end > range.start,
+                "invalid range specified: {:?}",
+                range
+            );
             opt = opt.with_range(range.start, range.end);
         }
 
