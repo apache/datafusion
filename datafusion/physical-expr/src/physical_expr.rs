@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow::datatypes::{DataType, Schema};
-use arrow::error::Result as ArrowResult;
 
 use arrow::record_batch::RecordBatch;
 
@@ -26,9 +25,8 @@ use datafusion_expr::ColumnarValue;
 use std::fmt::{Debug, Display};
 
 use arrow::array::{make_array, Array, ArrayRef, BooleanArray, MutableArrayData};
-use arrow::compute::{and_kleene, filter, is_not_null, SlicesIterator};
+use arrow::compute::{and_kleene, filter_record_batch, is_not_null, SlicesIterator};
 use std::any::Any;
-use std::sync::Arc;
 
 /// Expression that can be evaluated against a RecordBatch
 /// A Physical expression knows its type, nullability and how to evaluate itself.
@@ -49,11 +47,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let tmp_columns = batch
-            .columns()
-            .iter()
-            .map(|c| filter(c.as_ref(), &selection))
-            .collect::<ArrowResult<Vec<Arc<dyn Array>>>>()?;
+        let tmp_columns = filter_record_batch(batch, &selection);
 
         let tmp_batch = RecordBatch::try_new(batch.schema(), tmp_columns)?;
         let tmp_result = self.evaluate(&tmp_batch)?;
