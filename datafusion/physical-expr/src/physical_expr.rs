@@ -49,16 +49,11 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let filter = match selection.null_count() {
-            0 => BooleanArray::from(selection.data().clone()),
-            _ => prep_null_mask_filter(selection),
-        };
-
-        let filter_count = filter
+        let filter_count = selection
             .values()
             .count_set_bits_offset(selection.offset(), selection.len());
 
-        if filter_count == selection.len() {
+        if selection.null_count() == 0 && filter_count == selection.len() {
             return self.evaluate(batch);
         }
 
