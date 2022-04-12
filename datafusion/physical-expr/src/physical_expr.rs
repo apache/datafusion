@@ -47,7 +47,7 @@ pub trait PhysicalExpr: Send + Sync + Display + Debug {
         batch: &RecordBatch,
         selection: &BooleanArray,
     ) -> Result<ColumnarValue> {
-        let tmp_batch = filter_record_batch(batch, &selection)?;
+        let tmp_batch = filter_record_batch(batch, selection)?;
 
         let tmp_result = self.evaluate(&tmp_batch)?;
         // All values from the `selection` filter are true.
