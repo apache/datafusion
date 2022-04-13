@@ -37,6 +37,7 @@ use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use async_trait::async_trait;
+use log::debug;
 
 use crate::execution::context::TaskContext;
 use futures::stream::{Stream, StreamExt};
@@ -133,8 +134,8 @@ impl ExecutionPlan for FilterExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!("Start FilterExec::execute for partition: {}", partition);
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
-
         Ok(Box::pin(FilterExecStream {
             schema: self.input.schema().clone(),
             predicate: self.predicate.clone(),

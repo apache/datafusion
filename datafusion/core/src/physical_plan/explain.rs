@@ -29,6 +29,7 @@ use crate::{
     },
 };
 use arrow::{array::StringBuilder, datatypes::SchemaRef, record_batch::RecordBatch};
+use log::debug;
 
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
@@ -114,6 +115,7 @@ impl ExecutionPlan for ExplainExec {
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!("Start ExplainExec::execute for partition: {}", partition);
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "ExplainExec invalid partition {}",
@@ -155,6 +157,11 @@ impl ExecutionPlan for ExplainExec {
 
         let metrics = ExecutionPlanMetricsSet::new();
         let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
+
+        debug!(
+            "Before returning SizedRecordBatch in ExplainExec::execute for partition: {}",
+            partition
+        );
 
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema.clone(),

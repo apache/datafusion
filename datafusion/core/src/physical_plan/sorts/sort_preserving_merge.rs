@@ -21,6 +21,7 @@ use crate::physical_plan::common::AbortOnDropMany;
 use crate::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MemTrackingMetrics, MetricsSet,
 };
+use log::debug;
 use parking_lot::Mutex;
 use std::any::Any;
 use std::collections::{BinaryHeap, VecDeque};
@@ -155,6 +156,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!(
+            "Start SortPreservingMergeExec::execute for partition: {}",
+            partition
+        );
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "SortPreservingMergeExec invalid partition {}",
@@ -165,6 +170,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
         let tracking_metrics = MemTrackingMetrics::new(&self.metrics, partition);
 
         let input_partitions = self.input.output_partitioning().partition_count();
+        debug!(
+            "Number of input partitions of  SortPreservingMergeExec::execute: {}",
+            input_partitions
+        );
         match input_partitions {
             0 => Err(DataFusionError::Internal(
                 "SortPreservingMergeExec requires at least one input partition"
@@ -188,6 +197,8 @@ impl ExecutionPlan for SortPreservingMergeExec {
                         (receiver, join_handle)
                     })
                     .unzip();
+
+                debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
                 Ok(Box::pin(SortPreservingMergeStream::new_from_receivers(
                     receivers,
@@ -299,6 +310,7 @@ impl SortPreservingMergeStream {
         tracking_metrics: MemTrackingMetrics,
         batch_size: usize,
     ) -> Self {
+        debug!("Start SortPreservingMergeStream::new_from_receivers");
         let stream_count = receivers.len();
         let batches = (0..stream_count)
             .into_iter()
