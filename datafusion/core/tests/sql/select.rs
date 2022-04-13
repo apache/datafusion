@@ -1001,3 +1001,41 @@ async fn query_empty_table() {
     let expected = vec!["++", "++"];
     assert_batches_sorted_eq!(expected, &result);
 }
+
+#[tokio::test]
+async fn case_insensitive_in_sql() -> Result<()> {
+    // Test that field name and table name in sql is case-insensitive
+    let fields = vec![
+        Field::new("Column1", DataType::Utf8, true),
+        Field::new("COLUMN2", DataType::Utf8, true),
+        Field::new("column3", DataType::Utf8, true),
+    ];
+    let schema = Schema::new(fields);
+    let a = StringArray::from(vec!["content1"]);
+    let b = StringArray::from(vec!["content2"]);
+    let c = StringArray::from(vec!["content3"]);
+    let record_batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(a), Arc::new(b), Arc::new(c)],
+    )
+    .unwrap();
+    let table =
+        MemTable::try_new(record_batch.schema(), vec![vec![record_batch]]).unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    // Select with lower and upper case
+    let sql = "SELECT COLumn1,colUMN2,column3 FROM test where TEst.COLUMN1='content1' and column2='content2' and COLumn3='content3'";
+    let actual = execute_to_batches(&ctx, sql).await;
+
+    let expected = vec![
+        "+----------+----------+----------+",
+        "| Column1  | COLUMN2  | column3  |",
+        "+----------+----------+----------+",
+        "| content1 | content2 | content3 |",
+        "+----------+----------+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
