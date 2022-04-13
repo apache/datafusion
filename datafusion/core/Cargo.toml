@@ -119,9 +119,5 @@ name = "physical_plan"
 
 [[bench]]
 harness = false
-name = "parquet_query_sql"
-
-[[bench]]
-harness = false
 name = "jit"
 required-features = ["row", "jit"]
