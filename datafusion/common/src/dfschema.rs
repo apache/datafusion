@@ -324,14 +324,7 @@ impl DFSchema {
             fields: self
                 .fields
                 .into_iter()
-                .map(|f| {
-                    DFField::new(
-                        Some(qualifier),
-                        f.name(),
-                        f.data_type().to_owned(),
-                        f.is_nullable(),
-                    )
-                })
+                .map(|f| DFField::from_qualified(qualifier, f.field))
                 .collect(),
             ..self
         }
