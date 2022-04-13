@@ -110,6 +110,40 @@ async fn case_when_else_with_base_expr() -> Result<()> {
 }
 
 #[tokio::test]
+async fn case_when_else_with_null_contant() -> Result<()> {
+    let ctx = create_case_context()?;
+    let sql = "SELECT \
+        CASE WHEN c1 = 'a' THEN 1 \
+             WHEN NULL THEN 2 \
+             ELSE 999 END \
+        FROM t1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------------------------------------------------------------------------------------+",
+        "| CASE WHEN #t1.c1 = Utf8(\"a\") THEN Int64(1) WHEN Utf8(NULL) THEN Int64(2) ELSE Int64(999) END |",
+        "+----------------------------------------------------------------------------------------------+",
+        "| 1                                                                                            |",
+        "| 999                                                                                          |",
+        "| 999                                                                                          |",
+        "| 999                                                                                          |",
+        "+----------------------------------------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT CASE WHEN NULL THEN 'foo' ELSE 'bar' END";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------------------------------------------+",
+        "| CASE WHEN Utf8(NULL) THEN Utf8(\"foo\") ELSE Utf8(\"bar\") END |",
+        "+------------------------------------------------------------+",
+        "| bar                                                        |",
+        "+------------------------------------------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_not() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Boolean, true)]));
 
