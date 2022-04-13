@@ -179,11 +179,14 @@ impl DFSchema {
                 // field to lookup is qualified.
                 // current field is qualified and not shared between relations, compare both
                 // qualifier and name.
-                (Some(q), Some(field_q)) => q == field_q && field.name() == name,
+                (Some(q), Some(field_q)) => {
+                    q.eq_ignore_ascii_case(field_q)
+                        && field.name().eq_ignore_ascii_case(name)
+                }
                 // field to lookup is qualified but current field is unqualified.
                 (Some(_), None) => false,
                 // field to lookup is unqualified, no need to compare qualifier
-                (None, Some(_)) | (None, None) => field.name() == name,
+                (None, Some(_)) | (None, None) => field.name().eq_ignore_ascii_case(name),
             })
             .map(|(idx, _)| idx);
         match matches.next() {
@@ -227,7 +230,12 @@ impl DFSchema {
     pub fn fields_with_qualified(&self, qualifier: &str) -> Vec<&DFField> {
         self.fields
             .iter()
-            .filter(|field| field.qualifier().map(|q| q.eq(qualifier)).unwrap_or(false))
+            .filter(|field| {
+                field
+                    .qualifier()
+                    .map(|q| q.eq_ignore_ascii_case(qualifier))
+                    .unwrap_or(false)
+            })
             .collect()
     }
 
@@ -235,7 +243,7 @@ impl DFSchema {
     pub fn fields_with_unqualified_name(&self, name: &str) -> Vec<&DFField> {
         self.fields
             .iter()
-            .filter(|field| field.name() == name)
+            .filter(|field| field.name().eq_ignore_ascii_case(name))
             .collect()
     }
 
