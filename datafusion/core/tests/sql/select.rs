@@ -1026,7 +1026,7 @@ async fn case_insensitive_in_sql() -> Result<()> {
     ctx.register_table("test", Arc::new(table))?;
 
     // Select with lower and upper case
-    let sql = "SELECT COLumn1,colUMN2,column3 FROM test where TEst.COLUMN1='content1' and column2='content2' and COLumn3='content3'";
+    let sql = "SELECT COLumn1, colUMN2, column3 FROM test WHERE TEst.COLUMN1='content1' and column2='content2' and COLumn3='content3'";
     let actual = execute_to_batches(&ctx, sql).await;
 
     let expected = vec![
