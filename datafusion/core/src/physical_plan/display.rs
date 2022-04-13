@@ -103,7 +103,7 @@ impl<'a> DisplayableExecutionPlan<'a> {
     }
 
     /// Return a single-line summary of the root of the plan
-    // Example: `ProjectionExec: expr=[a@0 as a]`.
+    /// Example: `ProjectionExec: expr=[a@0 as a]`.
     pub fn one_line(&self) -> impl fmt::Display + 'a {
         struct Wrapper<'a> {
             plan: &'a dyn ExecutionPlan,
