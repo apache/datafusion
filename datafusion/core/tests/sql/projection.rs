@@ -244,7 +244,7 @@ async fn projection_on_memory_scan() -> Result<()> {
     let physical_plan = ctx.create_physical_plan(&optimized_plan).await?;
 
     assert_eq!(1, physical_plan.schema().fields().len());
-    assert_eq!("b", physical_plan.schema().field(0).name().as_str());
+    assert_eq!("b", physical_plan.schema().field(0).name());
 
     let task_ctx = ctx.task_ctx();
     let batches = collect(physical_plan, task_ctx).await?;

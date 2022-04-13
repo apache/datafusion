@@ -2688,11 +2688,8 @@ mod tests {
         let plan = ctx.optimize(&plan)?;
 
         let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
-        assert_eq!(
-            "total_salary",
-            physical_plan.schema().field(1).name().as_str()
-        );
+        assert_eq!("c1", physical_plan.schema().field(0).name());
+        assert_eq!("total_salary", physical_plan.schema().field(1).name());
         Ok(())
     }
 

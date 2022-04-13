@@ -130,7 +130,7 @@ impl DFSchema {
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
-                Some(q) => self.field_with_name(Some(q.as_str()), field.name()).is_ok(),
+                Some(q) => self.field_with_name(Some(q), field.name()).is_ok(),
                 // for unqualifed columns, check as unqualified name
                 None => self.field_with_unqualified_name(field.name()).is_ok(),
             };
@@ -364,11 +364,7 @@ impl From<DFSchema> for Schema {
                 .into_iter()
                 .map(|f| {
                     if f.qualifier().is_some() {
-                        Field::new(
-                            f.name().as_str(),
-                            f.data_type().to_owned(),
-                            f.is_nullable(),
-                        )
+                        Field::new(f.name(), f.data_type().to_owned(), f.is_nullable())
                     } else {
                         f.field
                     }

@@ -781,7 +781,7 @@ pub fn make_timestamps() -> RecordBatch {
     let arr_millis = TimestampMillisecondArray::from_opt_vec(ts_millis, None);
     let arr_secs = TimestampSecondArray::from_opt_vec(ts_secs, None);
 
-    let names = names.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    let names = names.iter().collect::<Vec<&str>>();
     let arr_names = StringArray::from(names);
 
     let schema = Schema::new(vec![

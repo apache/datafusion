@@ -1076,7 +1076,7 @@ pub fn union_with_alias(
 
     let union_schema = (**inputs[0].schema()).clone();
     let union_schema = Arc::new(match alias {
-        Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
+        Some(ref alias) => union_schema.replace_qualifier(alias),
         None => union_schema.strip_qualifiers(),
     });
 
@@ -1126,7 +1126,7 @@ pub fn project_with_alias(
         plan.schema().metadata().clone(),
     )?;
     let schema = match alias {
-        Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
+        Some(ref alias) => input_schema.replace_qualifier(alias),
         None => input_schema,
     };
     Ok(LogicalPlan::Projection(Projection {

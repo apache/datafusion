@@ -105,7 +105,7 @@ fn generate_string_dictionary(
     Arc::new(DictionaryArray::<Int32Type>::from_iter((0..len).map(
         |_| {
             rng.gen_bool(valid_percent)
-                .then(|| strings[rng.gen_range(0..cardinality)].as_str())
+                .then(|| strings[rng.gen_range(0..cardinality)])
         },
     )))
 }
