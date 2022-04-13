@@ -20,7 +20,7 @@
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Window,
+    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 
 use crate::logical_plan::{
@@ -34,6 +34,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::ExpressionVisitor,
 };
+use datafusion_common::DFSchema;
 use std::{collections::HashSet, sync::Arc};
 
 const CASE_EXPR_MARKER: &str = "__DATAFUSION_CASE_EXPR__";
@@ -221,6 +222,16 @@ pub fn from_plan(
             let left = inputs[0].clone();
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        }
+        LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
+            let schema = inputs[0].schema().as_ref().clone().into();
+            let schema =
+                DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                alias: alias.clone(),
+                input: Arc::new(inputs[0].clone()),
+                schema,
+            }))
         }
         LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
             n: *n,

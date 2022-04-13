@@ -21,7 +21,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, TableScan, Window,
+    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -432,6 +432,34 @@ fn optimize_plan(
                 alias: alias.clone(),
             }))
         }
+        LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+            match input.as_ref() {
+                LogicalPlan::TableScan(TableScan { table_name, .. }) => {
+                    let new_required_columns = new_required_columns
+                        .iter()
+                        .map(|c| match &c.relation {
+                            Some(q) if q == alias => Column {
+                                relation: Some(table_name.clone()),
+                                name: c.name.clone(),
+                            },
+                            _ => c.clone(),
+                        })
+                        .collect();
+                    let new_inputs = vec![optimize_plan(
+                        _optimizer,
+                        input,
+                        &new_required_columns,
+                        has_projection,
+                        _execution_props,
+                    )?];
+                    let expr = vec![];
+                    utils::from_plan(plan, &expr, &new_inputs)
+                }
+                _ => Err(DataFusionError::Plan(
+                    "SubqueryAlias should only wrap TableScan".to_string(),
+                )),
+            }
+        }
         // all other nodes: Add any additional columns used by
         // expressions in this node to the list of required columns
         LogicalPlan::Limit(_)
@@ -509,6 +537,24 @@ mod tests {
 
         let expected = "Aggregate: groupBy=[[#test.c]], aggr=[[MAX(#test.b)]]\
         \n  TableScan: test projection=Some([1, 2])";
+
+        assert_optimized_plan_eq(&plan, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_with_table_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .alias("a")?
+            .aggregate(vec![col("c")], vec![max(col("b"))])?
+            .build()?;
+
+        let expected = "Aggregate: groupBy=[[#a.c]], aggr=[[MAX(#a.b)]]\
+        \n  SubqueryAlias: a\
+        \n    TableScan: test projection=Some([1, 2])";
 
         assert_optimized_plan_eq(&plan, expected);
 

@@ -49,6 +49,7 @@ use crate::{
 };
 use arrow::datatypes::*;
 use hashbrown::HashMap;
+
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
@@ -644,16 +645,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         self.schema_provider.get_table_provider(name.try_into()?),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                        (_, Some(provider)) => LogicalPlanBuilder::scan(
-                            // take alias into account to support `JOIN table1 as table2`
-                            alias
-                                .as_ref()
-                                .map(|a| a.name.value.as_str())
-                                .unwrap_or(&table_name),
-                            provider,
-                            None,
-                        )?
-                        .build(),
+                        (_, Some(provider)) => {
+                            let scan =
+                                LogicalPlanBuilder::scan(&table_name, provider, None);
+                            let scan = match alias {
+                                Some(ref name) => scan?.alias(name.name.value.as_str()),
+                                _ => scan,
+                            };
+                            scan?.build()
+                        }
                         (None, None) => Err(DataFusionError::Plan(format!(
                             "Table or CTE with name '{}' not found",
                             name
@@ -1438,6 +1438,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 fractional_seconds_precision,
             ),
 
+            SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
+
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
                     // TODO: figure out if ScalarVariables should be insensitive.
@@ -2118,6 +2120,51 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .get_table_provider(tables_reference)
             .is_some()
     }
+
+    fn sql_array_literal(
+        &self,
+        elements: Vec<SQLExpr>,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        let mut values = Vec::with_capacity(elements.len());
+
+        for element in elements {
+            let value = self.sql_expr_to_logical_expr(element, schema)?;
+            match value {
+                Expr::Literal(scalar) => {
+                    values.push(scalar);
+                }
+                _ => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Arrays with elements other than literal are not supported: {}",
+                        value
+                    )));
+                }
+            }
+        }
+
+        let data_types: HashSet<DataType> =
+            values.iter().map(|e| e.get_datatype()).collect();
+
+        if data_types.is_empty() {
+            Ok(Expr::Literal(ScalarValue::List(
+                None,
+                Box::new(DataType::Utf8),
+            )))
+        } else if data_types.len() > 1 {
+            Err(DataFusionError::NotImplemented(format!(
+                "Arrays with different types are not supported: {:?}",
+                data_types,
+            )))
+        } else {
+            let data_type = values[0].get_datatype();
+
+            Ok(Expr::Literal(ScalarValue::List(
+                Some(Box::new(values)),
+                Box::new(data_type),
+            )))
+        }
+    }
 }
 
 /// Remove join expressions from a filter expression
@@ -2261,7 +2308,7 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 mod tests {
     use crate::datasource::empty::EmptyTable;
     use crate::physical_plan::functions::Volatility;
-    use crate::{logical_plan::create_udf, sql::parser::DFParser};
+    use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
     use datafusion_expr::ScalarFunctionImplementation;
 
     use super::*;
@@ -2492,7 +2539,8 @@ mod tests {
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: #l.a, #l.b, #l.c\
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
-                        \n    TableScan: l projection=None";
+                        \n    SubqueryAlias: l\
+                        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -2964,6 +3012,28 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             r#"NotImplemented("Interval field value out of range: \"100000000000000000 day\"")"#,
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn select_array_no_common_type() {
+        let sql = "SELECT [1, true, null]";
+        let err = logical_plan(sql).expect_err("query should have failed");
+
+        // HashSet doesn't guarantee order
+        assert_contains!(
+            err.to_string(),
+            r#"Arrays with different types are not supported: "#
+        );
+    }
+
+    #[test]
+    fn select_array_non_literal_type() {
+        let sql = "SELECT [now()]";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            r#"NotImplemented("Arrays with elements other than literal are not supported: now()")"#,
             format!("{:?}", err)
         );
     }
@@ -3458,7 +3528,8 @@ mod tests {
         let expected = "Projection: #person.first_name, #person.id\
         \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
-        \n    TableScan: person2 projection=None";
+        \n    SubqueryAlias: person2\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -3471,7 +3542,8 @@ mod tests {
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
         \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
-        \n    TableScan: lineitem2 projection=None";
+        \n    SubqueryAlias: lineitem2\
+        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -4064,6 +4136,18 @@ mod tests {
                                     \n        TableScan: person projection=None\
                                     \n        TableScan: orders projection=None\
                                     \n      TableScan: lineitem projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn join_with_aliases() {
+        let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
+        let expected = "Projection: #peeps.id, #folks.first_name\
+                                    \n  Inner Join: #peeps.id = #folks.id\
+                                    \n    SubqueryAlias: peeps\
+                                    \n      TableScan: person projection=None\
+                                    \n    SubqueryAlias: folks\
+                                    \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 

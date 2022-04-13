@@ -124,28 +124,33 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             .get_from_prefix(&get_stage_prefix(&self.namespace))
             .await?;
 
-        let mut stages = self.stages.write();
-        for (key, entry) in entries {
-            let (job_id, stage_id) = extract_stage_id_from_stage_key(&key).unwrap();
-            let session_id = self
-                .get_session_from_job(&job_id)
-                .expect("session id does not exist for job");
-            let session_ctx = self
-                .session_context_registry
-                .lookup_session(&session_id)
-                .await
-                .expect("SessionContext does not exist in SessionContextRegistry.");
-            let value = U::try_decode(&entry)?;
-            let runtime = session_ctx.runtime_env();
-            let plan = value.try_into_physical_plan(
-                session_ctx.deref(),
-                runtime.deref(),
-                self.codec.physical_extension_codec(),
-            )?;
+        let mut tmp_stages: HashMap<StageKey, Arc<dyn ExecutionPlan>> = HashMap::new();
+        {
+            for (key, entry) in entries {
+                let (job_id, stage_id) = extract_stage_id_from_stage_key(&key).unwrap();
+                let session_id = self
+                    .get_session_from_job(&job_id)
+                    .expect("session id does not exist for job");
+                let session_ctx = self
+                    .session_context_registry
+                    .lookup_session(&session_id)
+                    .await
+                    .expect("SessionContext does not exist in SessionContextRegistry.");
+                let value = U::try_decode(&entry)?;
+                let runtime = session_ctx.runtime_env();
+                let plan = value.try_into_physical_plan(
+                    session_ctx.deref(),
+                    runtime.deref(),
+                    self.codec.physical_extension_codec(),
+                )?;
 
-            stages.insert((job_id, stage_id), plan);
+                tmp_stages.insert((job_id, stage_id), plan);
+            }
         }
-
+        let mut stages = self.stages.write();
+        for tmp_stage in tmp_stages {
+            stages.insert(tmp_stage.0, tmp_stage.1);
+        }
         Ok(())
     }
 

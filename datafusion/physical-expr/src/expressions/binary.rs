@@ -56,7 +56,6 @@ use arrow::record_batch::RecordBatch;
 
 use crate::coercion_rule::binary_rule::coerce_types;
 use crate::expressions::try_cast;
-use crate::string_expressions;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
@@ -417,30 +416,25 @@ fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-/// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator.
-/// Besides, any `NULL` exists on lhs or rhs will come out result `NULL`
+/// Concat lhs and rhs String Array, any `NULL` exists on lhs or rhs will come out result `NULL`
 /// 1. 'a' || 'b' || 32 = 'ab32'
 /// 2. 'a' || NULL = NULL
 fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
-    let ignore_null = match string_expressions::concat(&[
-        ColumnarValue::Array(left.clone()),
-        ColumnarValue::Array(right.clone()),
-    ])? {
-        ColumnarValue::Array(array_ref) => array_ref,
-        scalar_value => scalar_value.into_array(left.clone().len()),
-    };
-    let ignore_null_array = ignore_null.as_any().downcast_ref::<StringArray>().unwrap();
-    let result = (0..ignore_null_array.len())
+    let left_array = left.as_any().downcast_ref::<StringArray>().unwrap();
+    let right_array = right.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = (0..left.len())
         .into_iter()
-        .map(|index| {
-            if left.is_null(index) || right.is_null(index) {
+        .map(|i| {
+            if left.is_null(i) || right.is_null(i) {
                 None
             } else {
-                Some(ignore_null_array.value(index))
+                let mut owned_string: String = "".to_owned();
+                owned_string.push_str(left_array.value(i));
+                owned_string.push_str(right_array.value(i));
+                Some(owned_string)
             }
         })
         .collect::<StringArray>();
-
     Ok(Arc::new(result) as ArrayRef)
 }
 

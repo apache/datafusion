@@ -101,6 +101,33 @@ impl<'a> DisplayableExecutionPlan<'a> {
             show_metrics: self.show_metrics,
         }
     }
+
+    /// Return a single-line summary of the root of the plan
+    /// Example: `ProjectionExec: expr=[a@0 as a]`.
+    pub fn one_line(&self) -> impl fmt::Display + 'a {
+        struct Wrapper<'a> {
+            plan: &'a dyn ExecutionPlan,
+            show_metrics: ShowMetrics,
+        }
+
+        impl<'a> fmt::Display for Wrapper<'a> {
+            fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                let mut visitor = IndentVisitor {
+                    f,
+                    t: DisplayFormatType::Default,
+                    indent: 0,
+                    show_metrics: self.show_metrics,
+                };
+                visitor.pre_visit(self.plan)?;
+                Ok(())
+            }
+        }
+
+        Wrapper {
+            plan: self.inner,
+            show_metrics: self.show_metrics,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

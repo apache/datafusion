@@ -26,7 +26,7 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    TableScan, ToStringifiedPlan, Union, Window,
+    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
@@ -515,6 +515,18 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
+        })))
+    }
+
+    /// Apply an alias
+    pub fn alias(&self, alias: &str) -> Result<Self> {
+        let schema: Schema = self.schema().as_ref().clone().into();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+        Ok(Self::from(LogicalPlan::SubqueryAlias(SubqueryAlias {
+            input: Arc::new(self.plan.clone()),
+            alias: alias.to_string(),
+            schema,
         })))
     }
 

@@ -178,6 +178,13 @@ impl CaseExpr {
             let when_value = self.when_then_expr[i]
                 .0
                 .evaluate_selection(batch, &remainder)?;
+            // Treat 'NULL' as false value
+            let when_value = match when_value {
+                ColumnarValue::Scalar(value) if value.is_null() => {
+                    continue;
+                }
+                _ => when_value,
+            };
             let when_value = when_value.into_array(batch.num_rows());
             let when_value = when_value
                 .as_ref()
