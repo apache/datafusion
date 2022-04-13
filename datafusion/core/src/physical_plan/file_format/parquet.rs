@@ -337,7 +337,7 @@ impl ParquetExecStream {
                 file_metrics,
             ));
         }
-        if let Some(range) = &partitioned_file.range {
+        if let Some(range) = &file.range {
             assert!(
                 range.start >= 0 && range.end > 0 && range.end > range.start,
                 "invalid range specified: {:?}",
