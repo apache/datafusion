@@ -280,14 +280,45 @@ where
         .collect()
 }
 
+fn arith_decimal_scalar<F>(
+    left: &DecimalArray,
+    right: i128,
+    op: F,
+) -> Result<DecimalArray>
+where
+    F: Fn(i128, i128) -> Result<i128>,
+{
+    left.iter()
+        .map(|left| {
+            if let Some(left) = left {
+                Some(op(left, right)).transpose()
+            } else {
+                Ok(None)
+            }
+        })
+        .collect()
+}
+
 fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let array = arith_decimal(left, right, |left, right| Ok(left + right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
+fn add_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left + right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
 fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let array = arith_decimal(left, right, |left, right| Ok(left - right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn subtract_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left - right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
@@ -299,9 +330,29 @@ fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<Decimal
     Ok(array)
 }
 
+fn multiply_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let divide = 10_i128.pow(left.scale() as u32);
+    let array =
+        arith_decimal_scalar(left, right, |left, right| Ok(left * right / divide))?
+            .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
 fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal(left, right, |left, right| {
+        let l_value = left as f64;
+        let r_value = right as f64;
+        let result = ((l_value / r_value) * mul) as i128;
+        Ok(result)
+    })?
+    .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn divide_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let mul = 10_f64.powi(left.scale() as i32);
+    let array = arith_decimal_scalar(left, right, |left, right| {
         let l_value = left as f64;
         let r_value = right as f64;
         let result = ((l_value / r_value) * mul) as i128;
@@ -320,6 +371,15 @@ fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalA
         }
     })?
     .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn modulus_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    if right == 0 {
+        return Err(DataFusionError::ArrowError(DivideByZero));
+    }
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left % right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -778,6 +838,7 @@ macro_rules! binary_primitive_array_op {
 macro_rules! binary_primitive_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
