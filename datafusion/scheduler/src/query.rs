@@ -30,7 +30,7 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use crate::pipeline::{
     execution::ExecutionPipeline, repartition::RepartitionPipeline, Pipeline,
 };
-use crate::ArrowResult;
+use crate::{ArrowResult, Spawner};
 
 /// Identifies the [`Pipeline`] within the [`Query`] to route output to
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,7 +59,14 @@ pub struct RoutablePipeline {
 /// necessary to route output from one stage to the next
 #[derive(Debug)]
 pub struct Query {
+    /// Spawner for this query
+    spawner: Spawner,
+
+    /// List of pipelines that belong to this query, pipelines are addressed
+    /// based on their index within this list
     pipelines: Vec<RoutablePipeline>,
+
+    /// The output stream for this query's execution
     output: mpsc::UnboundedSender<ArrowResult<RecordBatch>>,
 }
 
@@ -76,8 +83,9 @@ impl Query {
     pub fn new(
         plan: Arc<dyn ExecutionPlan>,
         task_context: Arc<TaskContext>,
+        spawner: Spawner,
     ) -> Result<(Query, mpsc::UnboundedReceiver<ArrowResult<RecordBatch>>)> {
-        QueryBuilder::new(plan, task_context).build()
+        QueryBuilder::new(plan, task_context).build(spawner)
     }
 
     /// Returns a list of this queries [`QueryPipeline`]
@@ -94,6 +102,11 @@ impl Query {
     /// Sends `output` to this query's output stream
     pub fn send_query_output(&self, output: ArrowResult<RecordBatch>) {
         let _ = self.output.unbounded_send(output);
+    }
+
+    /// Returns the [`Spawner`] associated with this [`Query`]
+    pub fn spawner(&self) -> &Spawner {
+        &self.spawner
     }
 }
 
@@ -300,6 +313,7 @@ impl QueryBuilder {
     ///
     fn build(
         mut self,
+        spawner: Spawner,
     ) -> Result<(Query, mpsc::UnboundedReceiver<ArrowResult<RecordBatch>>)> {
         // We do a depth-first scan of the operator tree, extracting a list of [`QueryNode`]
         while let Some((plan, parent)) = self.to_visit.pop() {
@@ -313,6 +327,7 @@ impl QueryBuilder {
         let (sender, receiver) = mpsc::unbounded();
         Ok((
             Query {
+                spawner,
                 pipelines: self.in_progress,
                 output: sender,
             },

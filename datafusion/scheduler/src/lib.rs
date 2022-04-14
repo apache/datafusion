@@ -90,8 +90,8 @@ impl Scheduler {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> Result<BoxStream<'static, ArrowResult<RecordBatch>>> {
-        let (query, receiver) = Query::new(plan, context)?;
-        spawn_query(self.spawner(), Arc::new(query));
+        let (query, receiver) = Query::new(plan, context, self.spawner())?;
+        spawn_query(Arc::new(query));
         Ok(receiver.boxed())
     }
 
@@ -102,13 +102,22 @@ impl Scheduler {
     }
 }
 
+/// Returns `true` if the current thread is a worker thread
+fn is_worker() -> bool {
+    rayon::current_thread_index().is_some()
+}
+
 /// Spawn a [`Task`] onto the local workers thread pool
 fn spawn_local(task: Task) {
+    // Verify is a worker thread to avoid creating a global pool
+    assert!(is_worker(), "must be called from a worker");
     rayon::spawn(|| task.do_work())
 }
 
 /// Spawn a [`Task`] onto the local workers thread pool with fifo ordering
 fn spawn_local_fifo(task: Task) {
+    // Verify is a worker thread to avoid creating a global pool
+    assert!(is_worker(), "must be called from a worker");
     rayon::spawn_fifo(|| task.do_work())
 }
 

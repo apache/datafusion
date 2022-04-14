@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{spawn_local, spawn_local_fifo, Query, Spawner};
+use crate::{is_worker, spawn_local, spawn_local_fifo, Query};
 use futures::task::ArcWake;
 use log::{debug, trace};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,8 +23,10 @@ use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
 /// Spawns a query using the provided [`Spawner`]
-pub fn spawn_query(spawner: Spawner, query: Arc<Query>) {
+pub fn spawn_query(query: Arc<Query>) {
     debug!("Spawning query: {:#?}", query);
+
+    let spawner = query.spawner();
 
     for (pipeline_idx, query_pipeline) in query.pipelines().iter().enumerate() {
         for partition in 0..query_pipeline.pipeline.output_partitions() {
@@ -36,7 +38,7 @@ pub fn spawn_query(spawner: Spawner, query: Arc<Query>) {
                     pipeline: pipeline_idx,
                     partition,
                 }),
-            })
+            });
         }
     }
 }
@@ -71,6 +73,7 @@ impl std::fmt::Debug for Task {
 impl Task {
     /// Call [`Pipeline::poll_partition`] attempting to make progress on query execution
     pub fn do_work(self) {
+        assert!(is_worker(), "Task::do_work called outside of worker pool");
         if self.query.is_cancelled() {
             return;
         }
@@ -198,12 +201,19 @@ impl ArcWake for TaskWaker {
         }
 
         if let Some(query) = self.query.upgrade() {
-            let item = Task {
+            let task = Task {
                 query,
                 waker: self.clone(),
             };
-            trace!("Wakeup {:?}", item);
-            spawn_local(item)
+
+            trace!("Wakeup {:?}", task);
+
+            // If called from a worker, spawn to the current worker's
+            // local queue, otherwise reschedule on any worker
+            match crate::is_worker() {
+                true => spawn_local(task),
+                false => task.query.spawner().clone().spawn(task),
+            }
         } else {
             trace!("Dropped wakeup");
         }
