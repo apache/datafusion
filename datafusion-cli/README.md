@@ -65,17 +65,21 @@ DataFusion CLI v4.0.0-SNAPSHOT
 1 row in set. Query took 0.017 seconds.
 ```
 
+## DataFusion-Cli
+
+Build the `datafusion-cli` without the feature of ballista.
+
+```bash
+cd arrow-datafusion/datafusion-cli
+cargo build
+```
+
 ## Ballista
 If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
 
 ```bash
+cd arrow-datafusion/datafusion-cli
 cargo build --features ballista
-```
-
-or
-
-```bash
-cargo build -p datafusion-cli --features ballista
 ```
 
 The DataFusion CLI can connect to a Ballista scheduler for query execution.
