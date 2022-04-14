@@ -29,6 +29,7 @@ use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning, Stati
 use arrow::record_batch::RecordBatch;
 use arrow::{array::Array, error::Result as ArrowResult};
 use arrow::{compute::take, datatypes::SchemaRef};
+use log::debug;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use super::common::{AbortOnDropMany, AbortOnDropSingle};
@@ -174,6 +175,10 @@ impl ExecutionPlan for RepartitionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!(
+            "Start RepartitionExec::execute for partition: {}",
+            partition
+        );
         // lock mutexes
         let mut state = self.state.lock().await;
 
@@ -230,6 +235,11 @@ impl ExecutionPlan for RepartitionExec {
 
             state.abort_helper = Arc::new(AbortOnDropMany(join_handles))
         }
+
+        debug!(
+            "Before returning stream in RepartitionExec::execute for partition: {}",
+            partition
+        );
 
         // now return stream for the specified *output* partition which will
         // read from the channel
