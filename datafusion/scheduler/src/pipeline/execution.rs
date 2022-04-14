@@ -8,7 +8,6 @@ use std::task::{Context, Poll, Waker};
 use arrow::error::ArrowError;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
-use log::trace;
 use parking_lot::Mutex;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -146,7 +145,6 @@ impl Pipeline for ExecutionPipeline {
     }
 
     fn close(&self, child: usize, partition: usize) {
-        trace!("Closing child: {}, partition: {}", child, partition);
         let mut partition = self.inputs[child][partition].lock();
         assert!(!partition.is_closed);
 

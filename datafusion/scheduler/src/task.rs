@@ -1,6 +1,7 @@
-use crate::{spawn_local, Query, Spawner};
+use crate::{spawn_local, spawn_local_fifo, Query, Spawner};
 use futures::task::ArcWake;
 use log::{debug, trace};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
@@ -14,6 +15,7 @@ pub fn spawn_query(spawner: Spawner, query: Arc<Query>) {
                 query: query.clone(),
                 waker: Arc::new(TaskWaker {
                     query: Arc::downgrade(&query),
+                    wake_count: AtomicUsize::new(1),
                     pipeline: pipeline_idx,
                     partition,
                 }),
@@ -39,9 +41,12 @@ pub struct Task {
 
 impl std::fmt::Debug for Task {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let output = self.query.pipelines()[self.waker.pipeline].output;
+
         f.debug_struct("Task")
             .field("pipeline", &self.waker.pipeline)
             .field("partition", &self.waker.partition)
+            .field("output", &output)
             .finish()
     }
 }
@@ -52,6 +57,13 @@ impl Task {
         if self.query.is_cancelled() {
             return;
         }
+
+        // Capture the wake count prior to calling [`Pipeline::poll_partition`]
+        // this allows us to detect concurrent wake ups and handle them correctly
+        //
+        // We aren't using the wake count to synchronise other memory, and so can
+        // use relaxed memory ordering
+        let wake_count = self.waker.wake_count.load(Ordering::Relaxed);
 
         let node = self.waker.pipeline;
         let partition = self.waker.partition;
@@ -64,21 +76,10 @@ impl Task {
         match routable.pipeline.poll_partition(&mut cx, partition) {
             Poll::Ready(Some(Ok(batch))) => {
                 trace!("Poll {:?}: Ok: {}", self, batch.num_rows());
-
-                // Reschedule this pipeline again
-                //
-                // Tasks are scheduled in a LIFO fashion, so spawn this before
-                // routing the batch, as routing may trigger a wakeup, and allow
-                // us to process the batch immediately
-                spawn_local(Self {
-                    query: self.query.clone(),
-                    waker: self.waker.clone(),
-                });
-
                 match routable.output {
                     Some(link) => {
                         trace!(
-                            "Published batch to node {:?} partition {}",
+                            "Publishing batch to pipeline {:?} partition {}",
                             link,
                             partition
                         );
@@ -87,15 +88,26 @@ impl Task {
                             .push(batch, link.child, partition)
                     }
                     None => {
-                        trace!("Published batch to output");
+                        trace!("Publishing batch to output");
                         self.query.send_query_output(Ok(batch))
                     }
                 }
+
+                // Reschedule this pipeline again
+                //
+                // We want to prioritise running tasks triggered by the most recent
+                // batch, so reschedule with FIFO ordering
+                //
+                // Note: We must schedule after we have routed the batch, otherwise
+                // we introduce a potential ordering race where the newly scheduled
+                // task runs before this task finishes routing the output
+                spawn_local_fifo(self);
             }
             Poll::Ready(Some(Err(e))) => {
                 trace!("Poll {:?}: Error: {:?}", self, e);
                 self.query.send_query_output(Err(e));
                 if let Some(link) = routable.output {
+                    trace!("Closing pipeline: {:?}, partition: {}", link, partition);
                     pipelines[link.pipeline]
                         .pipeline
                         .close(link.child, partition)
@@ -104,12 +116,31 @@ impl Task {
             Poll::Ready(None) => {
                 trace!("Poll {:?}: None", self);
                 if let Some(link) = routable.output {
+                    trace!("Closing pipeline: {:?}, partition: {}", link, partition);
                     pipelines[link.pipeline]
                         .pipeline
                         .close(link.child, partition)
                 }
             }
-            Poll::Pending => trace!("Poll {:?}: Pending", self),
+            Poll::Pending => {
+                trace!("Poll {:?}: Pending", self);
+                // Attempt to reset the wake count with the value obtained prior
+                // to calling [`Pipeline::poll_partition`].
+                //
+                // If this fails it indicates a wakeup was received whilst executing
+                // [`Pipeline::poll_partition`] and we should reschedule the task
+                let reset = self.waker.wake_count.compare_exchange(
+                    wake_count,
+                    0,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+
+                if reset.is_err() {
+                    trace!("Wakeup triggered whilst polling: {:?}", self);
+                    spawn_local(self);
+                }
+            }
         }
     }
 }
@@ -118,6 +149,22 @@ struct TaskWaker {
     /// Store a weak reference to the query to avoid reference cycles if this
     /// [`Waker`] is stored within a [`Pipeline`] owned by the [`Query`]
     query: Weak<Query>,
+
+    /// A counter that stores the number of times this has been awoken
+    ///
+    /// A value > 0, implies the task is either in the ready queue or
+    /// currently being executed
+    ///
+    /// `TaskWaker::wake` always increments the `wake_count`, however, it only
+    /// re-enqueues the [`Task`] if the value prior to increment was 0
+    ///
+    /// This ensures that a given [`Task`] is not enqueued multiple times
+    ///
+    /// We store an integer, as opposed to a boolean, so that wake ups that
+    /// occur during [`Pipeline::poll_partition`] can be detected and handled
+    /// after it has finished executing
+    ///
+    wake_count: AtomicUsize,
 
     /// The index of the pipeline within `query` to poll
     pipeline: usize,
@@ -128,6 +175,11 @@ struct TaskWaker {
 
 impl ArcWake for TaskWaker {
     fn wake(self: Arc<Self>) {
+        if self.wake_count.fetch_add(1, Ordering::Relaxed) != 0 {
+            trace!("Ignoring duplicate wakeup");
+            return;
+        }
+
         if let Some(query) = self.query.upgrade() {
             let item = Task {
                 query,

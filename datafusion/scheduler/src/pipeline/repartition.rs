@@ -44,15 +44,22 @@ impl RepartitionPipeline {
     }
 }
 
-// TODO: Explore per-partition state for better cache locality
-#[derive(Debug)]
 struct RepartitionState {
-    // TODO: Split this into an enum based on output type
     next_idx: usize,
     hash_buffer: Vec<u64>,
     partition_closed: Vec<bool>,
     input_closed: bool,
     output_buffers: Vec<OutputBuffer>,
+}
+
+impl std::fmt::Debug for RepartitionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RepartitionState")
+            .field("next_idx", &self.next_idx)
+            .field("partition_closed", &self.partition_closed)
+            .field("input_closed", &self.input_closed)
+            .finish()
+    }
 }
 
 impl RepartitionState {
@@ -124,7 +131,11 @@ impl Pipeline for RepartitionPipeline {
         assert_eq!(child, 0);
 
         let mut state = self.state.lock();
-        assert!(!state.partition_closed[partition]);
+        assert!(
+            !state.partition_closed[partition],
+            "attempt to push to closed partition {} of RepartitionPipeline(partitioning: {:?}, state: {:?})",
+            partition, self.output, state
+        );
 
         match &self.output {
             Partitioning::RoundRobinBatch(_) => {
@@ -144,7 +155,12 @@ impl Pipeline for RepartitionPipeline {
         assert_eq!(child, 0);
 
         let mut state = self.state.lock();
-        assert!(!state.partition_closed[partition]);
+        assert!(
+            !state.partition_closed[partition],
+            "attempt to close already closed partition {} of RepartitionPipeline(partitioning: {:?}, state: {:?})",
+            partition, self.output, state
+        );
+
         state.partition_closed[partition] = true;
 
         // If all input streams exhausted, wake outputs

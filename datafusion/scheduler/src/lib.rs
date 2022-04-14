@@ -107,6 +107,11 @@ fn spawn_local(task: Task) {
     rayon::spawn(|| task.do_work())
 }
 
+/// Spawn a [`Task`] onto the local workers thread pool with fifo ordering
+fn spawn_local_fifo(task: Task) {
+    rayon::spawn_fifo(|| task.do_work())
+}
+
 #[derive(Debug, Clone)]
 pub struct Spawner {
     pool: Arc<ThreadPool>,
@@ -125,6 +130,7 @@ mod tests {
     use std::ops::Range;
 
     use futures::TryStreamExt;
+    use log::info;
     use rand::distributions::uniform::SampleUniform;
     use rand::{thread_rng, Rng};
 
@@ -175,7 +181,7 @@ mod tests {
     fn make_batches() -> Vec<Vec<RecordBatch>> {
         let mut rng = thread_rng();
 
-        let batches_per_partition = 3;
+        let batches_per_partition = 20;
         let rows_per_batch = 100;
         let num_partitions = 2;
 
@@ -200,11 +206,17 @@ mod tests {
         Arc::new(MemTable::try_new(schema, make_batches()).unwrap())
     }
 
+    fn init_logging() {
+        let _ = env_logger::builder().is_test(true).try_init();
+    }
+
     #[tokio::test]
     async fn test_simple() {
-        let scheduler = Scheduler::new(2);
+        init_logging();
 
-        let config = SessionConfig::new().with_target_partitions(2);
+        let scheduler = Scheduler::new(4);
+
+        let config = SessionConfig::new().with_target_partitions(4);
         let context = SessionContext::with_config(config);
 
         context.register_table("table1", make_provider()).unwrap();
@@ -218,7 +230,8 @@ mod tests {
             "select id from table1 union all select id from table2 order by id",
             "select id from table1 union all select id from table2 where a > 100 order by id",
             "select id, b from (select id, b from table1 union all select id, b from table2 where a > 100 order by id) as t where b > 10 order by id, b",
-            "select id, MIN(b), MAX(b), AVG(b) from table1 group by id order by id"
+            "select id, MIN(b), MAX(b), AVG(b) from table1 group by id order by id",
+            "select count(*) from table1 where table1.a > 4",
         ];
 
         for sql in queries {
@@ -228,7 +241,7 @@ mod tests {
 
             let plan = query.create_physical_plan().await.unwrap();
 
-            println!("Plan: {}", displayable(plan.as_ref()).indent());
+            info!("Plan: {}", displayable(plan.as_ref()).indent());
 
             let stream = scheduler.schedule(plan, task).unwrap();
             let scheduled: Vec<_> = stream.try_collect().await.unwrap();
@@ -238,7 +251,7 @@ mod tests {
             let total_scheduled = scheduled.iter().map(|x| x.num_rows()).sum::<usize>();
             assert_eq!(total_expected, total_scheduled);
 
-            println!("Query \"{}\" produced {} rows", sql, total_expected);
+            info!("Query \"{}\" produced {} rows", sql, total_expected);
 
             let expected = pretty_format_batches(&expected).unwrap().to_string();
             let scheduled = pretty_format_batches(&scheduled).unwrap().to_string();
