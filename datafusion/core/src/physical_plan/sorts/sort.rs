@@ -753,7 +753,7 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start SortExec::execute for partition: {}", partition);
+        debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         if !self.preserve_partitioning {
             if 0 != partition {
                 return Err(DataFusionError::Internal(format!(
@@ -788,7 +788,7 @@ impl ExecutionPlan for SortExec {
         )
         .await;
 
-        debug!("End SortExec::execute for partition: {}", partition);
+        debug!("End SortExec::execute for partition {}", partition);
         result
     }
 
@@ -878,7 +878,12 @@ async fn do_sort(
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
-    debug!("Start do_sort for partition: {}", partition_id);
+    debug!(
+        "Start do_sort for partition {} of context session_id {} and task_id {:?}",
+        partition_id,
+        context.session_id(),
+        context.task_id()
+    );
     let schema = input.schema();
     let tracking_metrics =
         metrics_set.new_intermediate_tracking(partition_id, context.runtime_env());
@@ -896,7 +901,12 @@ async fn do_sort(
         sorter.insert_batch(batch, &tracking_metrics).await?;
     }
     let result = sorter.sort().await;
-    debug!("End do_sort for partition: {}", partition_id);
+    debug!(
+        "End do_sort for partition {} of context session_id {} and task_id {:?}",
+        partition_id,
+        context.session_id(),
+        context.task_id()
+    );
     result
 }
 

@@ -113,9 +113,9 @@ impl ExecutionPlan for ExplainExec {
     async fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start ExplainExec::execute for partition: {}", partition);
+        debug!("Start ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
                 "ExplainExec invalid partition {}",
@@ -159,9 +159,7 @@ impl ExecutionPlan for ExplainExec {
         let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
 
         debug!(
-            "Before returning SizedRecordBatch in ExplainExec::execute for partition: {}",
-            partition
-        );
+            "Before returning SizedRecordBatch in ExplainExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
 
         Ok(Box::pin(SizedRecordBatchStream::new(
             self.schema.clone(),
