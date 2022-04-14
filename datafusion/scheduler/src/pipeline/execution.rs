@@ -28,7 +28,14 @@ use crate::BoxStream;
 /// An [`ExecutionPipeline`] wraps a portion of an [`ExecutionPlan`] and
 /// converts it to the push-based [`Pipeline`] interface
 ///
-/// This is hopefully a temporary hack, pending reworking the [`ExecutionPlan`] trait
+/// Internally [`ExecutionPipeline`] is still pull-based which limits its parallelism
+/// to that of its output partitioning, however, it provides full compatibility with
+/// [`ExecutionPlan`] allowing full interoperability with the existing ecosystem
+///
+/// Longer term we will likely want to introduce new traits that differentiate between
+/// stateless operators like filters, and stateful aggregations, and are better aligned
+/// with a push-based execution model. This in turn will allow for [`Pipeline`] implementations
+/// that are able to introduce parallelism beyond that expressed in their partitioning
 pub struct ExecutionPipeline {
     proxied: Arc<dyn ExecutionPlan>,
     inputs: Vec<Vec<Arc<Mutex<InputPartition>>>>,
