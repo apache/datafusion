@@ -524,7 +524,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     keys.into_iter().unzip();
 
                 // return the logical plan representing the join
-                if filter.is_empty() {
+                if left_keys.is_empty() {
+                    // When we don't have join keys, use cross join
+                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
+
+                    let join_filter_init = filter.remove(0);
+                    join.filter(
+                        filter
+                            .into_iter()
+                            .fold(join_filter_init, |acc, e| acc.and(e)),
+                    )?
+                    .build()
+                } else if filter.is_empty() {
                     let join = LogicalPlanBuilder::from(left).join(
                         &right,
                         join_type,

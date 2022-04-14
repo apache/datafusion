@@ -294,6 +294,24 @@ async fn left_join_not_null_filter_on_join_column() -> Result<()> {
 }
 
 #[tokio::test]
+async fn self_join_non_equijoin() -> Result<()> {
+    let ctx = create_join_context_with_nulls()?;
+    let sql =
+        "SELECT x.t1_id, y.t1_id FROM t1 x JOIN t1 y ON x.t1_id = 11 AND y.t1_id = 44";
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t1_id |",
+        "+-------+-------+",
+        "| 11    | 44    |",
+        "+-------+-------+",
+    ];
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn right_join_null_filter() -> Result<()> {
     let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t2_id";
