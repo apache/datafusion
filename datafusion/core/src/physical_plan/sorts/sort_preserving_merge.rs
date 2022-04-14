@@ -181,7 +181,9 @@ impl ExecutionPlan for SortPreservingMergeExec {
             )),
             1 => {
                 // bypass if there is only one partition to merge (no metrics in this case either)
-                self.input.execute(0, context).await
+                let result = self.input.execute(0, context).await;
+                debug!("Done getting stream for SortPreservingMergeExec::execute with 1 input");
+                result
             }
             _ => {
                 let (receivers, join_handles) = (0..input_partitions)
@@ -200,14 +202,18 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
-                Ok(Box::pin(SortPreservingMergeStream::new_from_receivers(
+                let result = Box::pin(SortPreservingMergeStream::new_from_receivers(
                     receivers,
                     AbortOnDropMany(join_handles),
                     self.schema(),
                     &self.expr,
                     tracking_metrics,
                     context.session_config().batch_size,
-                )))
+                ));
+
+                debug!("Got stream result from SortPreservingMergeStream::new_from_receivers");
+
+                Ok(result)
             }
         }
     }
