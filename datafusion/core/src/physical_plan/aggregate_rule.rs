@@ -65,8 +65,7 @@ mod tests {
         ];
         let input_types = vec![
             vec![DataType::Int32],
-            // support the decimal data type for min/max agg
-            // vec![DataType::Decimal(10, 2)],
+            vec![DataType::Decimal(10, 2)],
             vec![DataType::Utf8],
         ];
         for fun in funs {

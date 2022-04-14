@@ -433,37 +433,6 @@ async fn select_distinct_from_utf8() {
 }
 
 #[tokio::test]
-async fn csv_query_with_decimal_by_sql() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_simple_aggregate_csv_with_decimal_by_sql(&ctx).await;
-    let sql = "SELECT c1 from aggregate_simple";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+",
-        "| c1       |",
-        "+----------+",
-        "| 0.000010 |",
-        "| 0.000020 |",
-        "| 0.000020 |",
-        "| 0.000030 |",
-        "| 0.000030 |",
-        "| 0.000030 |",
-        "| 0.000040 |",
-        "| 0.000040 |",
-        "| 0.000040 |",
-        "| 0.000040 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn use_between_expression_in_select_query() -> Result<()> {
     let ctx = SessionContext::new();
 

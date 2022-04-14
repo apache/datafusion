@@ -98,6 +98,7 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
+pub mod decimal;
 mod explain;
 pub mod information_schema;
 mod partitioned_csv;
@@ -597,17 +598,19 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     result
 }
 
-async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &SessionContext) {
+async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
     let df = ctx
         .sql(
-            "CREATE EXTERNAL TABLE aggregate_simple (
+            "CREATE EXTERNAL TABLE decimal_simple (
             c1  DECIMAL(10,6) NOT NULL,
             c2  DOUBLE NOT NULL,
-            c3  BOOLEAN NOT NULL
+            c3  BIGINT NOT NULL,
+            c4  BOOLEAN NOT NULL,
+            c5  DECIMAL(12,7) NOT NULL
             )
             STORED AS CSV
             WITH HEADER ROW
-            LOCATION 'tests/aggregate_simple.csv'",
+            LOCATION 'tests/decimal_data.csv'",
         )
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");
