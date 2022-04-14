@@ -25,6 +25,7 @@ use std::{any::Any, sync::Arc};
 
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
 use futures::StreamExt;
+use log::debug;
 
 use super::{
     expressions::PhysicalSortExpr,
@@ -111,6 +112,7 @@ impl ExecutionPlan for UnionExec {
         mut partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!("Start UnionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         // record the tiny amount of work done in this function so
         // elapsed_compute is reported as non zero
@@ -122,11 +124,14 @@ impl ExecutionPlan for UnionExec {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, context.clone()).await?;
+                debug!("Found a Union partition to execute");
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
             } else {
                 partition -= input.output_partitioning().partition_count();
             }
         }
+
+        debug!("Error in Union: Partition {} not found", partition);
 
         Err(crate::error::DataFusionError::Execution(format!(
             "Partition {} not found in Union",
