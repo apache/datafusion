@@ -64,6 +64,17 @@ impl Task {
         match routable.pipeline.poll_partition(&mut cx, partition) {
             Poll::Ready(Some(Ok(batch))) => {
                 trace!("Poll {:?}: Ok: {}", self, batch.num_rows());
+
+                // Reschedule this pipeline again
+                //
+                // Tasks are scheduled in a LIFO fashion, so spawn this before
+                // routing the batch, as routing may trigger a wakeup, and allow
+                // us to process the batch immediately
+                spawn_local(Self {
+                    query: self.query.clone(),
+                    waker: self.waker.clone(),
+                });
+
                 match routable.output {
                     Some(link) => {
                         trace!(
@@ -80,12 +91,6 @@ impl Task {
                         self.query.send_query_output(Ok(batch))
                     }
                 }
-
-                // Reschedule this task for the next batch
-                spawn_local(Self {
-                    query: self.query,
-                    waker: self.waker.clone(),
-                });
             }
             Poll::Ready(Some(Err(e))) => {
                 trace!("Poll {:?}: Error: {:?}", self, e);

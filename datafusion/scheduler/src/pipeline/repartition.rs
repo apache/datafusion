@@ -9,8 +9,8 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::{Partitioning, PhysicalExpr};
 
-use crate::ArrowResult;
 use crate::pipeline::Pipeline;
+use crate::ArrowResult;
 
 /// A [`Pipeline`] that can repartition its input
 #[derive(Debug)]
