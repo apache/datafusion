@@ -74,6 +74,10 @@ async fn decimal_by_sql() -> Result<()> {
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "SELECT c1 from decimal_simple";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+",
         "| c1       |",
@@ -105,6 +109,10 @@ async fn decimal_by_filter() -> Result<()> {
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "select c1 from decimal_simple where c1 > 0.000030";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+",
         "| c1       |",
@@ -124,6 +132,14 @@ async fn decimal_by_filter() -> Result<()> {
 
     let sql = "select * from decimal_simple where c1 > c5";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
+    assert_eq!(
+        &DataType::Decimal(12, 7),
+        actual[0].schema().field(4).data_type()
+    );
     let expected = vec![
         "+----------+----------------+----+-------+-----------+",
         "| c1       | c2             | c3 | c4    | c5        |",
@@ -190,6 +206,8 @@ async fn decimal_agg_function() -> Result<()> {
     assert_batches_eq!(expected, &actual);
 
     // avg
+    // inferred precision is original precision + 4
+    // inferred scale is original scale + 4
     let sql = "select avg(c1) from decimal_simple";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_eq!(
@@ -213,7 +231,7 @@ async fn decimal_logic_op() -> Result<()> {
     let ctx = SessionContext::new();
     register_decimal_csv_table_by_sql(&ctx).await;
     // logic operation: eq
-    let sql = "select * from decimal_simple where c1=0.00002";
+    let sql = "select * from decimal_simple where c1=CAST(0.00002 as Decimal(10,8))";
     let actual = execute_to_batches(&ctx, sql).await;
     assert_eq!(
         &DataType::Decimal(10, 6),
@@ -253,8 +271,12 @@ async fn decimal_logic_op() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     // logic operation: lt
-    let sql = "select * from decimal_simple where c1 < 0.00002";
+    let sql = "select * from decimal_simple where 0.00002 > c1";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+----+------+-----------+",
         "| c1       | c2             | c3 | c4   | c5        |",
@@ -267,6 +289,10 @@ async fn decimal_logic_op() -> Result<()> {
     // logic operation: lteq
     let sql = "select * from decimal_simple where c1 <= 0.00002";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+----+-------+-----------+",
         "| c1       | c2             | c3 | c4    | c5        |",
@@ -281,6 +307,10 @@ async fn decimal_logic_op() -> Result<()> {
     // logic operation: gt
     let sql = "select * from decimal_simple where c1 > 0.00002";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+-----+-------+-----------+",
         "| c1       | c2             | c3  | c4    | c5        |",
@@ -304,6 +334,10 @@ async fn decimal_logic_op() -> Result<()> {
     // logic operation: gteq
     let sql = "select * from decimal_simple where c1 >= 0.00002";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+-----+-------+-----------+",
         "| c1       | c2             | c3  | c4    | c5        |",
@@ -335,6 +369,10 @@ async fn decimal_sort() -> Result<()> {
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "select * from decimal_simple where c1 >= 0.00004 order by c1";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+-----+-------+-----------+",
         "| c1       | c2             | c3  | c4    | c5        |",
@@ -354,6 +392,10 @@ async fn decimal_sort() -> Result<()> {
 
     let sql = "select * from decimal_simple where c1 >= 0.00004 order by c1 desc";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+-----+-------+-----------+",
         "| c1       | c2             | c3  | c4    | c5        |",
@@ -373,6 +415,10 @@ async fn decimal_sort() -> Result<()> {
 
     let sql = "select * from decimal_simple where c1 < 0.00003 order by c1 desc,c4";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(0).data_type()
+    );
     let expected = vec![
         "+----------+----------------+----+-------+-----------+",
         "| c1       | c2             | c3 | c4    | c5        |",
@@ -393,6 +439,10 @@ async fn decimal_group_function() -> Result<()> {
     register_decimal_csv_table_by_sql(&ctx).await;
     let sql = "select count(*),c1 from decimal_simple group by c1 order by c1";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(1).data_type()
+    );
     let expected = vec![
         "+-----------------+----------+",
         "| COUNT(UInt8(1)) | c1       |",
@@ -408,6 +458,10 @@ async fn decimal_group_function() -> Result<()> {
 
     let sql = "select count(*),c1,c4 from decimal_simple group by c1,c4 order by c1,c4";
     let actual = execute_to_batches(&ctx, sql).await;
+    assert_eq!(
+        &DataType::Decimal(10, 6),
+        actual[0].schema().field(1).data_type()
+    );
     let expected = vec![
         "+-----------------+----------+-------+",
         "| COUNT(UInt8(1)) | c1       | c4    |",
