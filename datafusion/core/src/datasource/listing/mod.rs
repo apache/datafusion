@@ -32,7 +32,19 @@ pub use table::{ListingOptions, ListingTable, ListingTableConfig};
 pub type PartitionedFileStream =
     Pin<Box<dyn Stream<Item = Result<PartitionedFile>> + Send + Sync + 'static>>;
 
+/// Only scan a subset of Row Groups from the Parquet file whose data "midpoint"
+/// lies within the [start, end) byte offsets. This option can be used to scan non-overlapping
+/// sections of a Parquet file in parallel.
 #[derive(Debug, Clone)]
+pub struct FileRange {
+    /// Range start
+    pub start: i64,
+    /// Range end
+    pub end: i64,
+}
+
+#[derive(Debug, Clone)]
+/// A single file or part of a file that should be read, along with its schema, statistics
 /// A single file that should be read, along with its schema, statistics
 /// and partition column values that need to be appended to each row.
 pub struct PartitionedFile {
@@ -40,7 +52,8 @@ pub struct PartitionedFile {
     pub file_meta: FileMeta,
     /// Values of partition columns to be appended to each row
     pub partition_values: Vec<ScalarValue>,
-    // We may include row group range here for a more fine-grained parallel execution
+    /// An optional file range for a more fine-grained parallel execution
+    pub range: Option<FileRange>,
 }
 
 impl PartitionedFile {
@@ -52,6 +65,19 @@ impl PartitionedFile {
                 last_modified: None,
             },
             partition_values: vec![],
+            range: None,
+        }
+    }
+
+    /// Create a file range without metadata or partition
+    pub fn new_with_range(path: String, size: u64, start: i64, end: i64) -> Self {
+        Self {
+            file_meta: FileMeta {
+                sized_file: SizedFile { path, size },
+                last_modified: None,
+            },
+            partition_values: vec![],
+            range: Some(FileRange { start, end }),
         }
     }
 }
@@ -67,5 +93,6 @@ pub fn local_unpartitioned_file(file: String) -> PartitionedFile {
     PartitionedFile {
         file_meta: local::local_unpartitioned_file(file),
         partition_values: vec![],
+        range: None,
     }
 }

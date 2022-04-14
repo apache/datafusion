@@ -174,6 +174,7 @@ pub async fn pruned_partition_list(
                     Ok(PartitionedFile {
                         partition_values: vec![],
                         file_meta: f?,
+                        range: None,
                     })
                 }),
         ));
@@ -217,6 +218,7 @@ pub async fn pruned_partition_list(
                             Ok(PartitionedFile {
                                 partition_values,
                                 file_meta,
+                                range: None,
                             })
                         })
                     }
@@ -358,6 +360,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
                         ScalarValue::try_from_array(batch.column(col), row).unwrap()
                     })
                     .collect(),
+                range: None,
             })
         })
         .collect()
