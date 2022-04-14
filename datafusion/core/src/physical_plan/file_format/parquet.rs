@@ -226,25 +226,26 @@ impl ExecutionPlan for ParquetExec {
         };
 
         // Use spawn_blocking only if running from a tokio context (#2201)
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                let (response_tx, response_rx) = tokio::sync::mpsc::channel(2);
-                let schema = stream.schema();
-                let join_handle = handle.spawn_blocking(move || {
-                    for result in stream {
-                        if response_tx.blocking_send(result).is_err() {
-                            break;
-                        }
-                    }
-                });
-                Ok(RecordBatchReceiverStream::create(
-                    &schema,
-                    response_rx,
-                    join_handle,
-                ))
-            }
-            Err(_) => Ok(Box::pin(stream)),
-        }
+        // match tokio::runtime::Handle::try_current() {
+        //     Ok(handle) => {
+        //         let (response_tx, response_rx) = tokio::sync::mpsc::channel(2);
+        //         let schema = stream.schema();
+        //         let join_handle = handle.spawn_blocking(move || {
+        //             for result in stream {
+        //                 if response_tx.blocking_send(result).is_err() {
+        //                     break;
+        //                 }
+        //             }
+        //         });
+        //         Ok(RecordBatchReceiverStream::create(
+        //             &schema,
+        //             response_rx,
+        //             join_handle,
+        //         ))
+        //     }
+        //     Err(_) => Ok(Box::pin(stream)),
+        // }
+        Ok(Box::pin(stream))
     }
 
     fn fmt_as(
