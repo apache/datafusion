@@ -18,7 +18,7 @@
 use std::sync::Arc;
 
 use futures::stream::{BoxStream, StreamExt};
-use log::debug;
+use log::{debug, error};
 
 use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::arrow::record_batch::RecordBatch;
@@ -34,6 +34,44 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 mod pipeline;
 mod query;
 mod task;
+
+/// Builder for a [`Scheduler`]
+#[derive(Debug)]
+pub struct SchedulerBuilder {
+    inner: ThreadPoolBuilder,
+}
+
+impl SchedulerBuilder {
+    /// Create a new [`SchedulerConfig`] with the provided number of threads
+    pub fn new(num_threads: usize) -> Self {
+        let builder = ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .panic_handler(|p| error!("{}", format_worker_panic(p)))
+            .thread_name(|idx| format!("df-worker-{}", idx));
+
+        Self { inner: builder }
+    }
+
+    /// Registers a custom panic handler
+    ///
+    /// Used by tests
+    #[allow(dead_code)]
+    fn panic_handler<H>(self, panic_handler: H) -> Self
+    where
+        H: Fn(Box<dyn std::any::Any + Send>) + Send + Sync + 'static,
+    {
+        Self {
+            inner: self.inner.panic_handler(panic_handler),
+        }
+    }
+
+    /// Build a new [`Scheduler`]
+    fn build(self) -> Scheduler {
+        Scheduler {
+            pool: Arc::new(self.inner.build().unwrap()),
+        }
+    }
+}
 
 /// A [`Scheduler`] maintains a pool of dedicated worker threads on which
 /// query execution can be scheduled. This is based on the idea of [Morsel-Driven Parallelism]
@@ -72,15 +110,7 @@ pub struct Scheduler {
 impl Scheduler {
     /// Create a new [`Scheduler`] with `num_threads` new threads in a dedicated thread pool
     pub fn new(num_threads: usize) -> Self {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .thread_name(|idx| format!("df-worker-{}", idx))
-            .build()
-            .unwrap();
-
-        Self {
-            pool: Arc::new(pool),
-        }
+        SchedulerBuilder::new(num_threads).build()
     }
 
     /// Schedule the provided [`ExecutionPlan`] on this [`Scheduler`].
@@ -101,6 +131,25 @@ impl Scheduler {
             pool: self.pool.clone(),
         }
     }
+}
+
+/// Formats a panic message for a worker
+fn format_worker_panic(panic: Box<dyn std::any::Any + Send>) -> String {
+    let maybe_idx = rayon::current_thread_index();
+    let worker: &dyn std::fmt::Display = match &maybe_idx {
+        Some(idx) => idx,
+        None => &"UNKNOWN",
+    };
+
+    let message = if let Some(msg) = panic.downcast_ref::<&str>() {
+        *msg
+    } else if let Some(msg) = panic.downcast_ref::<String>() {
+        msg.as_str()
+    } else {
+        "UNKNOWN"
+    };
+
+    format!("worker {} panicked with: {}", worker, message)
 }
 
 /// Returns `true` if the current thread is a worker thread
@@ -151,10 +200,13 @@ impl Spawner {
 #[cfg(test)]
 mod tests {
     use arrow::util::pretty::pretty_format_batches;
+    use crossbeam_utils::sync::WaitGroup;
     use std::ops::Range;
+    use std::panic::panic_any;
 
     use futures::TryStreamExt;
     use log::info;
+    use parking_lot::Mutex;
     use rand::distributions::uniform::SampleUniform;
     use rand::{thread_rng, Rng};
 
@@ -286,5 +338,49 @@ mod tests {
                 expected, scheduled
             );
         }
+    }
+
+    /// Combines a function with a [`WaitGroup`]
+    fn wait_fn(wait: &WaitGroup, f: impl FnOnce()) -> impl FnOnce() {
+        let captured = wait.clone();
+        move || {
+            f();
+            std::mem::drop(captured);
+        }
+    }
+
+    #[test]
+    fn test_panic() {
+        init_logging();
+
+        let do_test = |scheduler: Scheduler| {
+            let wait = WaitGroup::new();
+            scheduler.pool.spawn(wait_fn(&wait, || panic!("test")));
+            scheduler.pool.spawn(wait_fn(&wait, || panic!("{}", 1)));
+            scheduler.pool.spawn(wait_fn(&wait, || panic_any(21)));
+
+            wait.wait();
+        };
+
+        // The default panic handler should log panics and not abort the process
+        do_test(Scheduler::new(1));
+
+        // Override panic handler and capture panics to test formatting
+        let buffer = Arc::new(Mutex::new(vec![]));
+        let captured = buffer.clone();
+        let scheduler = SchedulerBuilder::new(1)
+            .panic_handler(move |panic| captured.lock().push(format_worker_panic(panic)))
+            .build();
+
+        do_test(scheduler);
+
+        // Sort as order not guaranteed
+        let mut buffer = buffer.lock();
+        buffer.sort_unstable();
+
+        assert_eq!(buffer.len(), 3);
+        assert_eq!(buffer[0], "worker 0 panicked with: 1");
+        assert_eq!(buffer[1], "worker 0 panicked with: UNKNOWN");
+        assert_eq!(buffer[2], "worker 0 panicked with: test");
     }
 }

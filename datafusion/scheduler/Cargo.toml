@@ -46,6 +46,7 @@ rayon = "1.5"
 
 [dev-dependencies]
 criterion = "0.3"
+crossbeam-utils = "0.8"
 env_logger = "0.9.0"
 parquet = "11.0"
 rand = "0.8"
