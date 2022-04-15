@@ -364,6 +364,10 @@ async fn decimal_logic_op() -> Result<()> {
 }
 
 #[tokio::test]
+async fn decimal_arithmetic_op() -> Result<()> {
+    Ok(())
+}
+#[tokio::test]
 async fn decimal_sort() -> Result<()> {
     let ctx = SessionContext::new();
     register_decimal_csv_table_by_sql(&ctx).await;

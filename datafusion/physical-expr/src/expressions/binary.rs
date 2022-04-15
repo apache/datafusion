@@ -3022,13 +3022,24 @@ mod tests {
         let expect =
             create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3)?;
         assert_eq!(expect, result);
+        let result = add_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3)?;
+        assert_eq!(expect, result);
         // subtract
         let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
+        let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3)?;
+        assert_eq!(expect, result);
         // multiply
         let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
+        assert_eq!(expect, result);
+        let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
@@ -3045,9 +3056,19 @@ mod tests {
             3,
         )?;
         assert_eq!(expect, result);
+        let result = divide_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(
+            &[Some(123456700), None, Some(123456700), Some(123456700)],
+            25,
+            3,
+        )?;
+        assert_eq!(expect, result);
         // modulus
         let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3)?;
+        assert_eq!(expect, result);
+        let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(7), Some(7)], 25, 3)?;
         assert_eq!(expect, result);
 
         Ok(())
