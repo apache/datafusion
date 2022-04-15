@@ -31,6 +31,7 @@ pub enum ColumnarValue {
     Array(ArrayRef),
     /// A single value
     Scalar(ScalarValue),
+    // Table(Vec<ColumnarValue>),
 }
 
 impl ColumnarValue {
@@ -38,6 +39,14 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.get_datatype(),
+            // ColumnarValue::Table(value) => {
+            //     let val = value.get(0);
+            //     if val.is_some() {
+            //         return val.unwrap().data_type();
+            //     } else {
+            //         return DataType::Null;
+            //     }
+            // }
         }
     }
 
@@ -46,6 +55,7 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array) => array,
             ColumnarValue::Scalar(scalar) => scalar.to_array_of_size(num_rows),
+            // ColumnarValue::Table(..)  => panic!("ColumnarValue::Table.into_array not implemented"),
         }
     }
 }

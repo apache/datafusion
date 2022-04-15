@@ -41,7 +41,7 @@ pub type ScalarFunctionImplementation =
 
 /// Table function
 pub type TableFunctionImplementation =
-    Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
+    Arc<dyn Fn(&[ColumnarValue]) -> Result<Vec<ColumnarValue>> + Send + Sync>;
 
 /// A function's return type
 pub type ReturnTypeFunction =

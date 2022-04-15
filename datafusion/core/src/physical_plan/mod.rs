@@ -568,6 +568,7 @@ pub mod repartition;
 pub mod sort_merge_join;
 pub mod sorts;
 pub mod stream;
+pub mod table_fun;
 pub mod type_coercion;
 pub mod udaf;
 pub mod udf;

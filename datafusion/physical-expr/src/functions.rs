@@ -32,7 +32,7 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 pub use datafusion_expr::NullColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
@@ -200,6 +200,27 @@ impl TableFunctionExpr {
     pub fn return_type(&self) -> &DataType {
         &self.return_type
     }
+
+    pub fn evaluate_table(&self, batch: &RecordBatch) -> Result<Vec<ColumnarValue>> {
+        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
+        // indicating the batch size (as a convention)
+        let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
+            (0, Ok(table_fun)) if table_fun.supports_zero_argument() => {
+                vec![NullColumnarValue::from(batch)]
+            }
+            _ => self
+                .args
+                .iter()
+                .map(|e| e.evaluate(batch))
+                .collect::<Result<Vec<_>>>()?,
+        };
+
+        // evaluate the function
+        let fun = self.fun.as_ref();
+        let res = (fun)(&inputs);
+
+        res
+    }
 }
 
 impl fmt::Display for TableFunctionExpr {
@@ -232,21 +253,8 @@ impl PhysicalExpr for TableFunctionExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-        // evaluate the arguments, if there are no arguments we'll instead pass in a null array
-        // indicating the batch size (as a convention)
-        let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {
-            (0, Ok(table_fun)) if table_fun.supports_zero_argument() => {
-                vec![NullColumnarValue::from(batch)]
-            }
-            _ => self
-                .args
-                .iter()
-                .map(|e| e.evaluate(batch))
-                .collect::<Result<Vec<_>>>()?,
-        };
-
-        // evaluate the function
-        let fun = self.fun.as_ref();
-        (fun)(&inputs)
+        Err(DataFusionError::NotImplemented(
+            "Use evaluate_table for table funs".to_string(),
+        ))
     }
 }

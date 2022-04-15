@@ -271,16 +271,76 @@ where
 /// Create a table function.
 pub fn make_table_function<F>(inner: F) -> TableFunctionImplementation
 where
-    F: Fn(&[ArrayRef]) -> Result<ArrayRef> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<Vec<ArrayRef>> + Sync + Send + 'static,
 {
-    Arc::new(move |args: &[ColumnarValue]| {
-        let args = args
-            .iter()
-            .map(|arg| arg.clone().into_array(1))
-            .collect::<Vec<ArrayRef>>();
-        let result = (inner)(&args).unwrap();
+    // Arc::new(move |args: &[ColumnarValue]| {
+    //     let args = args
+    //         .iter()
+    //         .map(|arg| arg.clone().into_array(1))
+    //         .collect::<Vec<ArrayRef>>();
+    //     let result = (inner)(&args).unwrap();
 
-        Ok(ColumnarValue::Array(result))
+    //     Ok(ColumnarValue::Array(result))
+    // })
+    Arc::new(move |args: &[ColumnarValue]| {
+        // first, identify if any of the arguments is an Array. If yes, store its `len`,
+        // as any scalar will need to be converted to an array of len `len`.
+        let len = args
+            .iter()
+            .fold(Option::<usize>::None, |acc, arg| match arg {
+                ColumnarValue::Scalar(_) => acc,
+                ColumnarValue::Array(a) => Some(a.len()),
+            });
+
+        // to array
+        let args = if let Some(len) = len {
+            args.iter()
+                .map(|arg| arg.clone().into_array(len))
+                .collect::<Vec<ArrayRef>>()
+        } else {
+            args.iter()
+                .map(|arg| arg.clone().into_array(1))
+                .collect::<Vec<ArrayRef>>()
+        };
+
+        let result = (inner)(&args);
+
+        let to_return = result
+            .unwrap()
+            .iter()
+            .map(|r| {
+                // if len.is_some() {
+                ColumnarValue::Array(r.clone())
+                // } else {
+                //     ColumnarValue::Scalar(ScalarValue::try_from_array(r, 0).unwrap())
+                // }
+            })
+            .collect::<Vec<ColumnarValue>>();
+
+        Ok(to_return)
+
+        // maybe back to scalar
+        // if len.is_some() {
+
+        //     // let mut vec = Vec::new();
+        //     // let k = result.map(|vec| vec).iter().map(|r| ColumnarValue::Array(r));
+        //     // // result.try_for_each(|r| {
+        //     // //     vec.push(r);
+        //     // // })
+        //     // // vec.push(result.map({
+
+        //     // // }
+        //     // //     ColumnarValue::Array).unwrap());
+
+        //     // let e = k.unwrap();
+
+        //     // Ok(vec)
+        // } else {
+
+        //     // vec.push(ScalarValue::try_from_array(&result?, 0).map(ColumnarValue::Scalar)?);
+
+        //     Ok(vec)
+        // }
     })
 }
 

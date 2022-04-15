@@ -26,14 +26,17 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use crate::error::Result;
+use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::array::{ArrayRef, Int64Array, PrimitiveBuilder};
+use arrow::datatypes::{Field, Int64Type, Schema, SchemaRef, DataType, ArrowPrimitiveType};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use log::debug;
+use datafusion_common::ScalarValue;
+use datafusion_expr::ColumnarValue;
+use datafusion_physical_expr::TableFunctionExpr;
 
 use super::expressions::{Column, PhysicalSortExpr};
 use super::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
@@ -45,7 +48,10 @@ use futures::stream::StreamExt;
 
 /// Execution plan for a projection
 #[derive(Debug)]
-pub struct ProjectionExec {
+pub struct TableFunExec {
+    //
+    // schema
+    // input
     /// The projection expressions stored as tuples of (expression, output column name)
     expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
     /// The schema once the projection has been applied to the input
@@ -56,7 +62,9 @@ pub struct ProjectionExec {
     metrics: ExecutionPlanMetricsSet,
 }
 
-impl ProjectionExec {
+// select asd, my_func(1, asd) from table
+
+impl TableFunExec {
     /// Create a projection on an input
     pub fn try_new(
         expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
@@ -107,7 +115,7 @@ impl ProjectionExec {
 }
 
 #[async_trait]
-impl ExecutionPlan for ProjectionExec {
+impl ExecutionPlan for TableFunExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -141,13 +149,18 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn with_new_children(
-        self: Arc<Self>,
+        &self,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(Arc::new(ProjectionExec::try_new(
-            self.expr.clone(),
-            children[0].clone(),
-        )?))
+        match children.len() {
+            1 => Ok(Arc::new(TableFunExec::try_new(
+                self.expr.clone(),
+                children[0].clone(),
+            )?)),
+            _ => Err(DataFusionError::Internal(
+                "TableFunExec wrong number of children".to_string(),
+            )),
+        }
     }
 
     async fn execute(
@@ -155,8 +168,7 @@ impl ExecutionPlan for ProjectionExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        debug!("Start ProjectionExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
-        Ok(Box::pin(ProjectionStream {
+        Ok(Box::pin(TableFunStream {
             schema: self.schema.clone(),
             expr: self.expr.iter().map(|x| x.0.clone()).collect(),
             input: self.input.execute(partition, context).await?,
@@ -184,7 +196,7 @@ impl ExecutionPlan for ProjectionExec {
                     })
                     .collect();
 
-                write!(f, "ProjectionExec: expr=[{}]", expr.join(", "))
+                write!(f, "TableFunExec: expr=[{}]", expr.join(", "))
             }
         }
     }
@@ -194,7 +206,7 @@ impl ExecutionPlan for ProjectionExec {
     }
 
     fn statistics(&self) -> Statistics {
-        stats_projection(
+        stats_table_fun(
             self.input.statistics(),
             self.expr.iter().map(|(e, _)| Arc::clone(e)),
         )
@@ -219,7 +231,7 @@ fn get_field_metadata(
         .and_then(|f| f.metadata().as_ref().cloned())
 }
 
-fn stats_projection(
+fn stats_table_fun(
     stats: Statistics,
     exprs: impl Iterator<Item = Arc<dyn PhysicalExpr>>,
 ) -> Statistics {
@@ -246,7 +258,8 @@ fn stats_projection(
     }
 }
 
-impl ProjectionStream {
+impl TableFunStream {
+    // TODO: metrcis
     fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // records time on drop
 
@@ -256,27 +269,107 @@ impl ProjectionStream {
 
         println!("{}", formatted);
 
-        let _timer = self.baseline_metrics.elapsed_compute().timer();
-        let arrays = self
+        let arrays: Vec<(Vec<ColumnarValue>, bool)> = self
             .expr
             .iter()
-            .map(|expr| expr.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
+            .map(|expr| {
+                let t_expr = expr.as_any().clone().downcast_ref::<TableFunctionExpr>();
+                if t_expr.is_some() {
+                    // let qwe = t_expr.unwrap().evaluate_table(batch).unwrap();
+                    (t_expr.unwrap().evaluate_table(batch).unwrap(), true)
+                } else {
+                    let mut vec = Vec::new();
+                    vec.push(expr.evaluate(batch).unwrap());
 
-        RecordBatch::try_new(self.schema.clone(), arrays)
+                    (vec, false)
+                }
+            })
+            .collect();
+
+
+
+        // TODO: builder types
+        let mut columns: Vec<PrimitiveBuilder<_>> = arrays
+            .iter()
+            .map(|_| PrimitiveBuilder::<Int64Type>::new(1))
+            .collect();
+
+        let batches_count = arrays.iter().map(|(a, _)| a.len()).max().unwrap_or(0);
+        for (i_column, (arr, if_fun)) in arrays.iter().enumerate() {
+            for i in 0..=batches_count - 1 {
+                let rows_count: usize = arrays
+                    .iter()
+                    .map(|(a, is_fun)| {
+                        if *is_fun {
+                            let a = if a.len() > i { &a[i] } else { &a[a.len() - 1] };
+                            if let ColumnarValue::Array(arr) = &a {
+                                // if let ColumnarValue::Array(arr) = &a[i] {
+                                return arr.len();
+                            }
+                        }
+
+                        1
+                    })
+                    .max()
+                    .unwrap_or(0);
+
+                let batch = if *if_fun {
+                    if arr.len() > i {
+                        &arr[i]
+                    } else {
+                        &arr[arr.len() - 1]
+                    }
+                } else {
+                    &arr[0]
+                };
+
+                for i_row in 0..=rows_count - 1 {
+                    let index = if *if_fun { i_row } else { i };
+                    if let ColumnarValue::Array(arr) = batch {
+                        let arr = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+                        if arr.len() > index {
+                            columns[i_column].append_value(arr.values()[index])?;
+                        } else {
+                            columns[i_column].append_null()?;
+                        }
+                    } else if let ColumnarValue::Scalar(val) = batch {
+                        if let ScalarValue::Int64(val) = val {
+                            if index == 0 && val.is_some() {
+                                columns[i_column].append_value(val.unwrap())?;
+                            } else {
+                                columns[i_column].append_null()?;
+                            }
+                        } else {
+                            columns[i_column].append_null()?;
+                        }
+                    } else {
+                        columns[i_column].append_null()?;
+                    }
+                }
+            }
+        }
+
+        // let arrays = kek.map(|r| r.map(|v| v.into_array(batch.num_rows())))
+        // .collect::<Result<Vec<_>>>()?;
+
+        let columns: Vec<ArrayRef> = columns
+            .iter_mut()
+            .map(|c| Arc::new(c.finish()) as ArrayRef)
+            .collect::<_>();
+
+        RecordBatch::try_new(self.schema.clone(), columns)
     }
 }
 
-/// Projection iterator
-struct ProjectionStream {
+/// TableFun iterator
+struct TableFunStream {
     schema: SchemaRef,
     expr: Vec<Arc<dyn PhysicalExpr>>,
     input: SendableRecordBatchStream,
     baseline_metrics: BaselineMetrics,
 }
 
-impl Stream for ProjectionStream {
+impl Stream for TableFunStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -297,137 +390,9 @@ impl Stream for ProjectionStream {
     }
 }
 
-impl RecordBatchStream for ProjectionStream {
+impl RecordBatchStream for TableFunStream {
     /// Get the schema
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::datafusion_data_access::object_store::local::LocalFileSystem;
-    use crate::physical_plan::expressions::{self, col};
-    use crate::physical_plan::file_format::{CsvExec, FileScanConfig};
-    use crate::prelude::SessionContext;
-    use crate::scalar::ScalarValue;
-    use crate::test::{self};
-    use crate::test_util;
-    use futures::future;
-
-    #[tokio::test]
-    async fn project_first_column() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let schema = test_util::aggr_test_schema();
-
-        let partitions = 4;
-        let (_, files) =
-            test::create_partitioned_csv("aggregate_test_100.csv", partitions)?;
-
-        let csv = CsvExec::new(
-            FileScanConfig {
-                object_store: Arc::new(LocalFileSystem {}),
-                file_schema: Arc::clone(&schema),
-                file_groups: files,
-                statistics: Statistics::default(),
-                projection: None,
-                limit: None,
-                table_partition_cols: vec![],
-            },
-            true,
-            b',',
-        );
-
-        // pick column c1 and name it column c1 in the output schema
-        let projection = ProjectionExec::try_new(
-            vec![(col("c1", &schema)?, "c1".to_string())],
-            Arc::new(csv),
-        )?;
-
-        let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().clone().unwrap().clone();
-        let data: &str = &col_metadata["testing"];
-        assert_eq!(data, "test");
-
-        let mut partition_count = 0;
-        let mut row_count = 0;
-        for partition in 0..projection.output_partitioning().partition_count() {
-            partition_count += 1;
-            let stream = projection.execute(partition, task_ctx.clone()).await?;
-
-            row_count += stream
-                .map(|batch| {
-                    let batch = batch.unwrap();
-                    assert_eq!(1, batch.num_columns());
-                    batch.num_rows()
-                })
-                .fold(0, |acc, x| future::ready(acc + x))
-                .await;
-        }
-        assert_eq!(partitions, partition_count);
-        assert_eq!(100, row_count);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_stats_projection_columns_only() {
-        let source = Statistics {
-            is_exact: true,
-            num_rows: Some(5),
-            total_byte_size: Some(23),
-            column_statistics: Some(vec![
-                ColumnStatistics {
-                    distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(0),
-                },
-                ColumnStatistics {
-                    distinct_count: Some(1),
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
-                    null_count: Some(3),
-                },
-                ColumnStatistics {
-                    distinct_count: None,
-                    max_value: Some(ScalarValue::Float32(Some(1.1))),
-                    min_value: Some(ScalarValue::Float32(Some(0.1))),
-                    null_count: None,
-                },
-            ]),
-        };
-
-        let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(expressions::Column::new("col1", 1)),
-            Arc::new(expressions::Column::new("col0", 0)),
-        ];
-
-        let result = stats_projection(source, exprs.into_iter());
-
-        let expected = Statistics {
-            is_exact: true,
-            num_rows: Some(5),
-            total_byte_size: None,
-            column_statistics: Some(vec![
-                ColumnStatistics {
-                    distinct_count: Some(1),
-                    max_value: Some(ScalarValue::Utf8(Some(String::from("x")))),
-                    min_value: Some(ScalarValue::Utf8(Some(String::from("a")))),
-                    null_count: Some(3),
-                },
-                ColumnStatistics {
-                    distinct_count: Some(5),
-                    max_value: Some(ScalarValue::Int64(Some(21))),
-                    min_value: Some(ScalarValue::Int64(Some(-4))),
-                    null_count: Some(0),
-                },
-            ]),
-        };
-
-        assert_eq!(result, expected);
     }
 }
