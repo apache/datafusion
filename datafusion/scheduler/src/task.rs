@@ -80,10 +80,7 @@ impl Task {
 
         // Capture the wake count prior to calling [`Pipeline::poll_partition`]
         // this allows us to detect concurrent wake ups and handle them correctly
-        //
-        // We aren't using the wake count to synchronise other memory, and so can
-        // use relaxed memory ordering
-        let wake_count = self.waker.wake_count.load(Ordering::Relaxed);
+        let wake_count = self.waker.wake_count.load(Ordering::SeqCst);
 
         let node = self.waker.pipeline;
         let partition = self.waker.partition;
@@ -152,8 +149,8 @@ impl Task {
                 let reset = self.waker.wake_count.compare_exchange(
                     wake_count,
                     0,
-                    Ordering::Relaxed,
-                    Ordering::Relaxed,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
                 );
 
                 if reset.is_err() {
@@ -195,7 +192,7 @@ struct TaskWaker {
 
 impl ArcWake for TaskWaker {
     fn wake(self: Arc<Self>) {
-        if self.wake_count.fetch_add(1, Ordering::Relaxed) != 0 {
+        if self.wake_count.fetch_add(1, Ordering::SeqCst) != 0 {
             trace!("Ignoring duplicate wakeup");
             return;
         }
