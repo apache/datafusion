@@ -178,15 +178,19 @@ fn get_comparison_common_decimal_type(
         }
     };
     match (decimal_type, &other_decimal_type) {
-        (d1 @ DataType::Decimal(_, _), d2 @ DataType::Decimal(_, _)) =>
-            get_wider_decimal_type(d1, d2),
+        (d1 @ DataType::Decimal(_, _), d2 @ DataType::Decimal(_, _)) => {
+            get_wider_decimal_type(d1, d2)
+        }
         _ => None,
     }
 }
 
 // Find the winder type when both types are decimal.
 // The result decimal type is (max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)).
-fn get_wider_decimal_type(lhs_decimal_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+fn get_wider_decimal_type(
+    lhs_decimal_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
     match (lhs_decimal_type, rhs_type) {
         (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
             // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
@@ -194,7 +198,7 @@ fn get_wider_decimal_type(lhs_decimal_type: &DataType, rhs_type: &DataType) -> O
             let range = (p1 - s1).max(p2 - s2);
             Some(create_decimal_type(range + s, s))
         }
-        (_, _) => None
+        (_, _) => None,
     }
 }
 
@@ -344,11 +348,11 @@ pub fn is_signed_numeric(dt: &DataType) -> bool {
 pub fn is_numeric(dt: &DataType) -> bool {
     is_signed_numeric(dt)
         || match dt {
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            true
+            DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
+                true
+            }
+            _ => false,
         }
-        _ => false,
-    }
 }
 
 /// Coercion rules for dictionary values (aka the type of the  dictionary itself)
