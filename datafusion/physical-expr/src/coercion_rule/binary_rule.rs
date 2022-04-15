@@ -185,7 +185,7 @@ fn get_comparison_common_decimal_type(
     }
 }
 
-// Find the winder type when both types are decimal.
+// Find the winder decimal type when both types are decimal.
 // The result decimal type is (max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)).
 fn get_wider_decimal_type(
     lhs_decimal_type: &DataType,
