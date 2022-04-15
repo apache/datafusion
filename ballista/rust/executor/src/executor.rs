@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::metrics::ExecutorMetricsCollector;
 use ballista_core::error::BallistaError;
 use ballista_core::execution_plans::ShuffleWriterExec;
 use ballista_core::serde::protobuf;
@@ -27,7 +28,7 @@ use ballista_core::serde::protobuf::ExecutorRegistration;
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
+
 use datafusion::physical_plan::udaf::AggregateUDF;
 use datafusion::physical_plan::udf::ScalarUDF;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
@@ -48,6 +49,9 @@ pub struct Executor {
 
     /// Runtime environment for Executor
     pub runtime: Arc<RuntimeEnv>,
+
+    /// Collector for runtime execution metrics
+    pub metrics_collector: Arc<dyn ExecutorMetricsCollector>,
 }
 
 impl Executor {
@@ -56,6 +60,7 @@ impl Executor {
         metadata: ExecutorRegistration,
         work_dir: &str,
         runtime: Arc<RuntimeEnv>,
+        metrics_collector: Arc<dyn ExecutorMetricsCollector>,
     ) -> Self {
         Self {
             metadata,
@@ -64,6 +69,7 @@ impl Executor {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             runtime,
+            metrics_collector,
         }
     }
 }
@@ -101,13 +107,8 @@ impl Executor {
 
         let partitions = exec.execute_shuffle_write(part, task_ctx).await?;
 
-        println!(
-            "=== [{}/{}/{}] Physical plan with metrics ===\n{}\n",
-            job_id,
-            stage_id,
-            part,
-            DisplayableExecutionPlan::with_metrics(&exec).indent()
-        );
+        self.metrics_collector
+            .record_stage(&job_id, stage_id, part, exec);
 
         Ok(partitions)
     }
