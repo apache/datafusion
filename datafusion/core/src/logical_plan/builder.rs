@@ -1075,25 +1075,48 @@ pub fn union_with_alias(
     }
 
     let union_schema = (**inputs[0].schema()).clone();
-    let union_schema = Arc::new(match alias {
-        Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
-        None => union_schema.strip_qualifiers(),
-    });
 
-    inputs
-        .iter()
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
+    match alias {
+        Some(ref alias) => {
+            let union_schema_copy = union_schema.clone();
+            let union_schema = union_schema.strip_qualifiers();
+            let alias_schema = union_schema_copy.replace_qualifier(alias.as_str());
 
-    Ok(LogicalPlan::Union(Union {
-        inputs,
-        schema: union_schema,
-        alias,
-    }))
+            inputs
+                .iter()
+                .skip(1)
+                .try_for_each(|input_plan| -> Result<()> {
+                    union_schema.check_arrow_schema_type_compatible(
+                        &((**input_plan.schema()).clone().into()),
+                    )
+                })?;
+
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input: Arc::new(LogicalPlan::Union(Union {
+                    inputs,
+                    schema: Arc::new(union_schema),
+                })),
+                alias: alias.to_string(),
+                schema: Arc::new(alias_schema),
+            }))
+        }
+        None => {
+            let union_schema = union_schema.strip_qualifiers();
+            inputs
+                .iter()
+                .skip(1)
+                .try_for_each(|input_plan| -> Result<()> {
+                    union_schema.check_arrow_schema_type_compatible(
+                        &((**input_plan.schema()).clone().into()),
+                    )
+                })?;
+
+            Ok(LogicalPlan::Union(Union {
+                inputs,
+                schema: Arc::new(union_schema),
+            }))
+        }
+    }
 }
 
 /// Project with optional alias

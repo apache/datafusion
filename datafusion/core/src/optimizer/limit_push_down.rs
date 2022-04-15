@@ -20,7 +20,7 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::Projection;
+use crate::logical_plan::plan::{Projection, SubqueryAlias};
 use crate::logical_plan::{Limit, TableScan};
 use crate::logical_plan::{LogicalPlan, Union};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -100,14 +100,7 @@ fn limit_push_down(
                 alias: alias.clone(),
             }))
         }
-        (
-            LogicalPlan::Union(Union {
-                inputs,
-                alias,
-                schema,
-            }),
-            Some(upper_limit),
-        ) => {
+        (LogicalPlan::Union(Union { inputs, schema }), Some(upper_limit)) => {
             // Push down limit through UNION
             let new_inputs = inputs
                 .iter()
@@ -125,8 +118,27 @@ fn limit_push_down(
                 .collect::<Result<_>>()?;
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
-                alias: alias.clone(),
                 schema: schema.clone(),
+            }))
+        }
+        (
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input,
+                alias,
+                schema,
+            }),
+            upper_limit,
+        ) => {
+            // Push down limit directly (projection doesn't change number of rows)
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input: Arc::new(limit_push_down(
+                    _optimizer,
+                    upper_limit,
+                    input.as_ref(),
+                    _execution_props,
+                )?),
+                schema: schema.clone(),
+                alias: alias.clone(),
             }))
         }
         // For other nodes we can't push down the limit

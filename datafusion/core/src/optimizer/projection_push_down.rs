@@ -383,11 +383,7 @@ fn optimize_plan(
                 schema: a.schema.clone(),
             }))
         }
-        LogicalPlan::Union(Union {
-            inputs,
-            schema,
-            alias,
-        }) => {
+        LogicalPlan::Union(Union { inputs, schema }) => {
             // UNION inputs will reference the same column with different identifiers, so we need
             // to populate new_required_columns by unqualified column name based on required fields
             // from the resulting UNION output
@@ -429,7 +425,6 @@ fn optimize_plan(
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
                 schema: Arc::new(new_schema),
-                alias: alias.clone(),
             }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
@@ -452,6 +447,33 @@ fn optimize_plan(
                         has_projection,
                         _execution_props,
                     )?];
+                    let expr = vec![];
+                    utils::from_plan(plan, &expr, &new_inputs)
+                }
+                LogicalPlan::Union(Union { inputs, .. }) => {
+                    // let new_required_columns = new_required_columns
+                    //     .iter()
+                    //     .map(|c| match &c.relation {
+                    //         Some(q) if q == alias => Column {
+                    //             relation: Some(table_name.clone()),
+                    //             name: c.name.clone(),
+                    //         },
+                    //         _ => c.clone(),
+                    //     })
+                    //     .collect();
+
+                    let new_inputs = inputs
+                        .iter()
+                        .map(|input_plan| {
+                            optimize_plan(
+                                _optimizer,
+                                input_plan,
+                                &new_required_columns,
+                                has_projection,
+                                _execution_props,
+                            )
+                        })
+                        .collect::<Result<Vec<_>>>()?;
                     let expr = vec![];
                     utils::from_plan(plan, &expr, &new_inputs)
                 }

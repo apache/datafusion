@@ -16,7 +16,9 @@
 
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
+use crate::logical_plan::plan::{
+    Aggregate, Filter, Join, Projection, SubqueryAlias, Union,
+};
 use crate::logical_plan::{
     and, col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
 };
@@ -393,11 +395,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // sort is filter-commutable
             push_down(&state, plan)
         }
-        LogicalPlan::Union(Union {
-            inputs: _,
-            schema,
-            alias: _,
-        }) => {
+        LogicalPlan::Union(Union { inputs: _, schema }) => {
             // union changing all qualifiers while building logical plan so we need
             // to rewrite filters to push unqualified columns to inputs
             let projection = schema
@@ -542,6 +540,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 }),
             )
         }
+        LogicalPlan::SubqueryAlias(SubqueryAlias { .. }) => push_down(&state, plan),
         _ => {
             // all other plans are _not_ filter-commutable
             let used_columns = plan
@@ -935,11 +934,12 @@ mod tests {
 
         // filter appears below Union without relation qualifier
         let expected = "\
-            Union\
-            \n  Filter: #a = Int64(1)\
-            \n    TableScan: test projection=None\
-            \n  Filter: #a = Int64(1)\
-            \n    TableScan: test projection=None";
+            SubqueryAlias: t\
+            \n  Union\
+            \n    Filter: #t.a = Int64(1)\
+            \n      TableScan: test projection=None\
+            \n    Filter: #t.a = Int64(1)\
+            \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
