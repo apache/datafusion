@@ -4033,6 +4033,10 @@ mod tests {
             name: TableReference,
         ) -> Option<Arc<dyn TableProvider>> {
             let schema = match name.table() {
+                "test" => Some(Schema::new(vec![
+                    Field::new("t_date32", DataType::Date32, false),
+                    Field::new("t_date64", DataType::Date64, false),
+                ])),
                 "person" => Some(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
                     Field::new("first_name", DataType::Utf8, false),
@@ -4157,5 +4161,26 @@ mod tests {
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
         let result = logical_plan(sql).err().unwrap();
         assert_eq!(expected, format!("{}", result));
+    }
+
+    #[test]
+    fn date_plus_interval_in_projection() {
+        let sql = "select t_date32 + interval '5 days' FROM test";
+        let expected = "Projection: #test.t_date32 + IntervalDayTime(\"21474836480\")\
+                            \n  TableScan: test projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn date_plus_interval_in_filter() {
+        let sql = "select t_date64 FROM test \
+                    WHERE t_date64 \
+                    BETWEEN cast('1999-12-31' as date) \
+                        AND cast('1999-12-31' as date) + interval '30 days'";
+        let expected =
+            "Projection: #test.t_date64\
+            \n  Filter: #test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalDayTime(\"128849018880\")\
+            \n    TableScan: test projection=None";
+        quick_test(sql, expected);
     }
 }
