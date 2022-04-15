@@ -451,17 +451,6 @@ fn optimize_plan(
                     utils::from_plan(plan, &expr, &new_inputs)
                 }
                 LogicalPlan::Union(Union { inputs, .. }) => {
-                    // let new_required_columns = new_required_columns
-                    //     .iter()
-                    //     .map(|c| match &c.relation {
-                    //         Some(q) if q == alias => Column {
-                    //             relation: Some(table_name.clone()),
-                    //             name: c.name.clone(),
-                    //         },
-                    //         _ => c.clone(),
-                    //     })
-                    //     .collect();
-
                     let new_inputs = inputs
                         .iter()
                         .map(|input_plan| {

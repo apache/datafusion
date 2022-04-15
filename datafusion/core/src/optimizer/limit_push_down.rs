@@ -129,7 +129,7 @@ fn limit_push_down(
             }),
             upper_limit,
         ) => {
-            // Push down limit directly (projection doesn't change number of rows)
+            // Push down limit directly
             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
                 input: Arc::new(limit_push_down(
                     _optimizer,

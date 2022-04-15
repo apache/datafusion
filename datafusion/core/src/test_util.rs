@@ -43,6 +43,7 @@ macro_rules! assert_batches_eq {
             .to_string();
 
         let actual_lines: Vec<&str> = formatted.trim().lines().collect();
+
         assert_eq!(
             expected_lines, actual_lines,
             "\n\nexpected:\n\n{:#?}\nactual:\n\n{:#?}\n\n",
