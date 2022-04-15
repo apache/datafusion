@@ -42,6 +42,7 @@ use ballista_core::serde::BallistaCodec;
 use ballista_core::{print_version, BALLISTA_VERSION};
 use ballista_executor::executor::Executor;
 use ballista_executor::flight_service::BallistaFlightService;
+use ballista_executor::metrics::LoggingMetricsCollector;
 use config::prelude::*;
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 
@@ -118,7 +119,14 @@ async fn main() -> Result<()> {
         BallistaError::Internal("Failed to init Executor RuntimeEnv".to_owned())
     })?);
 
-    let executor = Arc::new(Executor::new(executor_meta, &work_dir, runtime));
+    let metrics_collector = Arc::new(LoggingMetricsCollector::default());
+
+    let executor = Arc::new(Executor::new(
+        executor_meta,
+        &work_dir,
+        runtime,
+        metrics_collector,
+    ));
 
     let scheduler = SchedulerGrpcClient::connect(scheduler_url)
         .await
