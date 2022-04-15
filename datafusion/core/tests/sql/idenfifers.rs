@@ -1,4 +1,9 @@
-use datafusion::{assert_batches_sorted_eq, prelude::*};
+use std::sync::Arc;
+
+use arrow::{array::StringArray, record_batch::RecordBatch};
+use datafusion::{
+    assert_batches_sorted_eq, assert_contains, datasource::MemTable, prelude::*,
+};
 
 use crate::sql::plan_and_collect;
 
@@ -166,4 +171,56 @@ async fn normalized_column_identifiers() {
         "+---+---+",
     ];
     assert_batches_sorted_eq!(expected, &result);
+}
+
+#[tokio::test]
+async fn case_insensitive_in_sql_errors() {
+    let record_batch = RecordBatch::try_from_iter(vec![
+        // The proper way to refer to this column is "Column1" -- it
+        // should not be possible to use `column1` or `COLUMN1` or
+        // other variants
+        (
+            "Column1",
+            Arc::new(StringArray::from(vec!["content1"])) as _,
+        ),
+    ])
+    .unwrap();
+
+    let table =
+        MemTable::try_new(record_batch.schema(), vec![vec![record_batch]]).unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table)).unwrap();
+
+    // None of these tests shoud pass
+    let actual = ctx
+        .sql("SELECT COLumn1 from test")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_contains!(actual, "Invalid identifier '#column1'");
+
+    let actual = ctx
+        .sql("SELECT Column1 from test")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_contains!(actual, "Invalid identifier '#column1'");
+
+    let actual = ctx
+        .sql("SELECT column1 from test")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_contains!(actual, "Invalid identifier '#column1'");
+
+    let actual = ctx
+        .sql(r#"SELECT "column1" from test"#)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_contains!(actual, "Invalid identifier '#column1'");
+
+    // This should pass (note the quotes)
+    ctx.sql(r#"SELECT "Column1" from test"#).await.unwrap();
 }
