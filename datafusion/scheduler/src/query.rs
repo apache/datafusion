@@ -88,7 +88,7 @@ impl Query {
         QueryBuilder::new(plan, task_context).build(spawner)
     }
 
-    /// Returns a list of this queries [`QueryPipeline`]
+    /// Returns a list of this queries [`RoutablePipeline`]
     pub fn pipelines(&self) -> &[RoutablePipeline] {
         &self.pipelines
     }
@@ -111,8 +111,8 @@ impl Query {
 }
 
 /// When converting [`ExecutionPlan`] to [`Pipeline`] we may wish to group
-/// together multiple [`ExecutionPlan`], [`ExecGroup`] stores this state
-struct ExecGroup {
+/// together multiple operators, [`OperatorGroup`] stores this state
+struct OperatorGroup {
     /// Where to route the output of the eventual [`Pipeline`]
     output: Option<OutputLink>,
 
@@ -130,6 +130,7 @@ struct ExecGroup {
 /// a node is visited only after its parent has been.
 struct QueryBuilder {
     task_context: Arc<TaskContext>,
+
     /// The current list of completed pipelines
     in_progress: Vec<RoutablePipeline>,
 
@@ -137,9 +138,9 @@ struct QueryBuilder {
     /// where they should route their output
     to_visit: Vec<(Arc<dyn ExecutionPlan>, Option<OutputLink>)>,
 
-    /// Stores one or more [`ExecutionPlan`] to combine together into
-    /// a single [`ExecutionPipeline`]
-    exec_buffer: Option<ExecGroup>,
+    /// Stores one or more operators to combine
+    /// together into a single [`ExecutionPipeline`]
+    execution_operators: Option<OperatorGroup>,
 }
 
 impl QueryBuilder {
@@ -148,14 +149,14 @@ impl QueryBuilder {
             in_progress: vec![],
             to_visit: vec![(plan, None)],
             task_context,
-            exec_buffer: None,
+            execution_operators: None,
         }
     }
 
-    /// Flush the current group of [`ExecutionPlan`] stored in `exec_buffer`
+    /// Flush the current group of operators stored in `execution_operators`
     /// into a single [`ExecutionPipeline]
     fn flush_exec(&mut self) -> Result<usize> {
-        let group = self.exec_buffer.take().unwrap();
+        let group = self.execution_operators.take().unwrap();
         let node_idx = self.in_progress.len();
         self.in_progress.push(RoutablePipeline {
             pipeline: Box::new(ExecutionPipeline::new(
@@ -176,17 +177,17 @@ impl QueryBuilder {
     ) -> Result<()> {
         let children = plan.children();
 
-        // Add the node to the current group of execution plan to be combined
+        // Add the operator to the current group of operators to be combined
         // into a single [`ExecutionPipeline`].
         //
         // TODO: More sophisticated policy, just because we can combine them doesn't mean we should
-        match self.exec_buffer.as_mut() {
+        match self.execution_operators.as_mut() {
             Some(buffer) => {
                 assert_eq!(parent, buffer.output, "QueryBuilder out of sync");
                 buffer.depth += 1;
             }
             None => {
-                self.exec_buffer = Some(ExecGroup {
+                self.execution_operators = Some(OperatorGroup {
                     output: parent,
                     root: plan,
                     depth: 0,
@@ -196,7 +197,7 @@ impl QueryBuilder {
 
         match children.len() {
             1 => {
-                // Enqueue the children with the parent of the `ExecGroup`
+                // Enqueue the children with the parent of the `OperatorGroup`
                 self.to_visit
                     .push((children.into_iter().next().unwrap(), parent))
             }
@@ -240,7 +241,7 @@ impl QueryBuilder {
         self.enqueue_children(children, node_idx)
     }
 
-    /// Push a new [`RepartitionPipeline`] first flushing any buffered [`ExecGroup`]
+    /// Push a new [`RepartitionPipeline`] first flushing any buffered [`OperatorGroup`]
     fn push_repartition(
         &mut self,
         input: Partitioning,
@@ -248,7 +249,7 @@ impl QueryBuilder {
         parent: Option<OutputLink>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<()> {
-        let parent = match &self.exec_buffer {
+        let parent = match &self.execution_operators {
             Some(buffer) => {
                 assert_eq!(buffer.output, parent, "QueryBuilder out of sync");
                 Some(OutputLink {
@@ -270,8 +271,8 @@ impl QueryBuilder {
         Ok(())
     }
 
-    /// Visit an [`ExecutionPlan`] node and add it to the [`Query`] being built
-    fn visit_node(
+    /// Visit an [`ExecutionPlan`] operator and add it to the [`Query`] being built
+    fn visit_operator(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
         parent: Option<OutputLink>,
@@ -299,11 +300,11 @@ impl QueryBuilder {
 
     /// Build a [`Query`] from the [`ExecutionPlan`] provided to [`QueryBuilder::new`]
     ///
-    /// This will group all [`ExecutionPlan`] possible into a single [`ExecutionPipeline`], only
+    /// This will group all operators possible into a single [`ExecutionPipeline`], only
     /// creating new pipelines when:
     ///
-    /// - encountering an [`ExecutionPlan`] with multiple children
-    /// - encountering a repartitioning [`ExecutionPlan`]
+    /// - encountering an operator with multiple children
+    /// - encountering a repartitioning operator
     ///
     /// This latter case is because currently the repartitioning operators in DataFusion are
     /// coupled with the non-scheduler-based parallelism story
@@ -317,10 +318,10 @@ impl QueryBuilder {
     ) -> Result<(Query, mpsc::UnboundedReceiver<ArrowResult<RecordBatch>>)> {
         // We do a depth-first scan of the operator tree, extracting a list of [`QueryNode`]
         while let Some((plan, parent)) = self.to_visit.pop() {
-            self.visit_node(plan, parent)?;
+            self.visit_operator(plan, parent)?;
         }
 
-        if self.exec_buffer.is_some() {
+        if self.execution_operators.is_some() {
             self.flush_exec()?;
         }
 

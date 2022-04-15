@@ -37,7 +37,8 @@ mod task;
 
 /// A [`Scheduler`] maintains a pool of dedicated worker threads on which
 /// query execution can be scheduled. This is based on the idea of [Morsel-Driven Parallelism]
-/// which decouples execution parallelism from the parallelism expressed in the physical plan
+/// and is designed to decouple the execution parallelism from the parallelism expressed in
+/// the physical plan as partitions.
 ///
 /// # Implementation
 ///
@@ -69,7 +70,7 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    /// Create a new [`Scheduler`] with `num_threads` threads in its thread pool
+    /// Create a new [`Scheduler`] with `num_threads` new threads in a dedicated thread pool
     pub fn new(num_threads: usize) -> Self {
         let pool = ThreadPoolBuilder::new()
             .num_threads(num_threads)
@@ -108,6 +109,13 @@ fn is_worker() -> bool {
 }
 
 /// Spawn a [`Task`] onto the local workers thread pool
+///
+/// There is no guaranteed order of execution, as workers may steal at any time. However,
+/// `spawn_local` will append to the front of the current worker's queue, workers pop tasks from
+/// the front of their queue, and steal tasks from the back of other workers queues
+///
+/// The effect is that tasks spawned using `spawn_local` will typically be prioritised in
+/// a LIFO order, however, this should not be relied upon
 fn spawn_local(task: Task) {
     // Verify is a worker thread to avoid creating a global pool
     assert!(is_worker(), "must be called from a worker");
@@ -115,6 +123,13 @@ fn spawn_local(task: Task) {
 }
 
 /// Spawn a [`Task`] onto the local workers thread pool with fifo ordering
+///
+/// There is no guaranteed order of execution, as workers may steal at any time. However,
+/// `spawn_local_fifo` will append to the back of the current worker's queue, workers pop tasks
+/// from the front of their queue, and steal tasks from the back of other workers queues
+///
+/// The effect is that tasks spawned using `spawn_local_fifo` will typically be prioritised
+/// in a FIFO order, however, this should not be relied upon
 fn spawn_local_fifo(task: Task) {
     // Verify is a worker thread to avoid creating a global pool
     assert!(is_worker(), "must be called from a worker");

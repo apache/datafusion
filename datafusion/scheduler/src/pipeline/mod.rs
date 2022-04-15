@@ -32,6 +32,43 @@ pub mod repartition;
 /// a child index, and a partition index, whereas output partitions are only
 /// identified by a partition index.
 ///
+/// This is not intended as an eventual replacement for the physical plan representation
+/// within DataFusion, [`ExecutionPlan`], but rather a generic interface that
+/// parts of the physical plan are "compiled" into by the scheduler.
+///
+/// # Push vs Pull Execution
+///
+/// Whilst the interface exposed to the scheduler is push-based, in which member functions
+/// computation is performed is intentionally left as an implementation detail of the [`Pipeline`]
+///
+/// This allows flexibility to support the following different patterns, and potentially more:
+///
+/// An eager, push-based pipeline, that processes a batch synchronously in [`Pipeline::push`]
+/// and immediately wakes the corresponding output partition.
+///
+/// A parallel, push-based pipeline, that enqueues the processing of a batch to the rayon
+/// thread pool in [`Pipeline::push`], and wakes the corresponding output partition when
+/// the job completes. Order and non-order preserving variants are possible
+///
+/// A merge pipeline which combines data from one or more input partitions into one or
+/// more output partitions. [`Pipeline::push`] adds data to an input buffer, and wakes
+/// any output partitions that may now be able to make progress. This may be none none
+/// if the operator is waiting on data from a different input partition
+///
+/// An aggregation pipeline which combines data from one or more input partitions into
+/// a single output partition. [`Pipeline::push`] would eagerly update the computed
+/// aggregates, and the final [`Pipeline::close`] trigger flushing these to the output
+///
+/// A partition-aware aggregation pipeline, which functions similarly to the above, but
+/// computes aggregations per input partition, before combining these prior to flush.
+///
+/// An async input pipeline, which has no inputs, and wakes the output partition
+/// whenever new data is available
+///
+/// A JIT compiled sequence of synchronous operators, that perform multiple operations
+/// from the physical plan as a single [`Pipeline`]. Parallelized implementations
+/// are also possible
+///
 pub trait Pipeline: Send + Sync + std::fmt::Debug {
     /// Push a [`RecordBatch`] to the given input partition
     fn push(&self, input: RecordBatch, child: usize, partition: usize);
