@@ -48,6 +48,15 @@ pub(crate) fn coerce_types(
         }
         // "like" operators operate on strings and always return a boolean
         Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
+        // date +/- interval returns date
+        Operator::Plus | Operator::Minus
+            if (*lhs_type == DataType::Date32 || *lhs_type == DataType::Date64) =>
+        {
+            match rhs_type {
+                DataType::Interval(_) => Some(lhs_type.clone()),
+                _ => None,
+            }
+        }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
         Operator::Plus
