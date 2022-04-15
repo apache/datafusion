@@ -42,9 +42,12 @@ use crate::{
 };
 use log::{debug, trace};
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
 use std::string::String;
 use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+};
 
 use arrow::datatypes::{DataType, SchemaRef};
 
@@ -1146,6 +1149,15 @@ pub struct SessionState {
     pub execution_props: ExecutionProps,
     /// Runtime environment
     pub runtime_env: Arc<RuntimeEnv>,
+}
+
+impl Debug for SessionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionState")
+            .field("session_id", &self.session_id)
+            // TODO should we print out more?
+            .finish()
+    }
 }
 
 /// Default session builder using the provided configuration
