@@ -152,7 +152,7 @@ fn comparison_binary_numeric_coercion(
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
         // support decimal data type for comparison operation
-        (Decimal(p1, s1), Decimal(p2, s2)) => Some(Decimal(*p1.max(p2), *s1.max(s2))),
+        (d1 @ Decimal(_, _), d2 @ Decimal(_, _)) => get_wider_decimal_type(d1, d2),
         (Decimal(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
         (_, Decimal(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
@@ -187,12 +187,28 @@ fn get_comparison_common_decimal_type(
         }
     };
     match (decimal_type, &other_decimal_type) {
-        (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
-            let new_precision = p1.max(p2);
-            let new_scale = s1.max(s2);
-            Some(DataType::Decimal(*new_precision, *new_scale))
+        (d1 @ DataType::Decimal(_, _), d2 @ DataType::Decimal(_, _)) => {
+            get_wider_decimal_type(d1, d2)
         }
         _ => None,
+    }
+}
+
+// Returns a `DataType::Decimal` that can store any value from either
+// `lhs_decimal_type` and `rhs_decimal_type`
+// The result decimal type is (max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)).
+fn get_wider_decimal_type(
+    lhs_decimal_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    match (lhs_decimal_type, rhs_type) {
+        (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (p1 - s1).max(p2 - s2);
+            Some(create_decimal_type(range + s, s))
+        }
+        (_, _) => None,
     }
 }
 
@@ -540,7 +556,6 @@ mod tests {
     use datafusion_expr::Operator;
 
     #[test]
-
     fn test_coercion_error() -> Result<()> {
         let result_type =
             coerce_types(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
@@ -566,15 +581,17 @@ mod tests {
             DataType::Float32,
             DataType::Float64,
             DataType::Decimal(38, 10),
+            DataType::Decimal(20, 8),
         ];
         let result_types = [
             DataType::Decimal(20, 3),
             DataType::Decimal(20, 3),
             DataType::Decimal(20, 3),
-            DataType::Decimal(20, 3),
-            DataType::Decimal(20, 7),
-            DataType::Decimal(30, 15),
+            DataType::Decimal(23, 3),
+            DataType::Decimal(24, 7),
+            DataType::Decimal(32, 15),
             DataType::Decimal(38, 10),
+            DataType::Decimal(25, 8),
         ];
         let comparison_op_types = [
             Operator::NotEq,
