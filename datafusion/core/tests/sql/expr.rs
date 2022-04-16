@@ -407,6 +407,45 @@ async fn test_not_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_negative_expressions() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT -(2+1), -(1.0*5.0), -1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+-----------------------------+-----------+",
+        "| (- Int64(2) + Int64(1)) | (- Float64(1) * Float64(5)) | Int64(-1) |",
+        "+-------------------------+-----------------------------+-----------+",
+        "| -3                      | -5                          | -1        |",
+        "+-------------------------+-----------------------------+-----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT null, -null";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------+----------------+",
+        "| Utf8(NULL) | (- Utf8(NULL)) |",
+        "+------------+----------------+",
+        "|            |                |",
+        "+------------+----------------+",
+    ];
+
+    let sql = "SELECT -'hi'";
+    let result = plan_and_collect(&ctx, sql).await;
+    match result {
+        Ok(_) => panic!("expected error"),
+        Err(e) => {
+            assert_contains!(e.to_string(),
+                             "(- 'Literal { value: Utf8(\"hi\") }') can't be evaluated because the expression's type is Utf8, not signed numeric or NULL"
+            );
+        }
+    }
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_boolean_expressions() -> Result<()> {
     test_expression!("true", "true");
     test_expression!("false", "false");

@@ -1031,10 +1031,12 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::Negative(expr) => expressions::negative(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
+        Expr::Negative(expr) => expressions::negative(create_physical_expr(
+            expr,
+            input_dfschema,
             input_schema,
-        ),
+            execution_props,
+        )?),
         Expr::IsNull(expr) => expressions::is_null(create_physical_expr(
             expr,
             input_dfschema,

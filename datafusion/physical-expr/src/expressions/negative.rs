@@ -30,7 +30,7 @@ use arrow::{
 
 use crate::coercion_rule::binary_rule::is_signed_numeric;
 use crate::PhysicalExpr;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::ColumnarValue;
 
 /// Invoke a compute kernel on array(s)
@@ -104,6 +104,18 @@ impl PhysicalExpr for NegativeExpr {
                 result.map(|a| ColumnarValue::Array(a))
             }
             ColumnarValue::Scalar(scalar) => {
+                if scalar.is_null() {
+                    return Ok(ColumnarValue::Scalar(ScalarValue::Int32(None)));
+                }
+                let value_type = scalar.get_datatype();
+                if !is_signed_numeric(&value_type) {
+                    return Err(DataFusionError::Internal(
+                        format!(
+                            "(- '{:?}') can't be evaluated because the expression's type is {:?}, not signed numeric or NULL",
+                            self.arg, value_type,
+                        ),
+                    ));
+                }
                 Ok(ColumnarValue::Scalar(scalar.arithmetic_negate()))
             }
         }
@@ -111,23 +123,6 @@ impl PhysicalExpr for NegativeExpr {
 }
 
 /// Creates a unary expression NEGATIVE
-///
-/// # Errors
-///
-/// This function errors when the argument's type is not signed numeric
-pub fn negative(
-    arg: Arc<dyn PhysicalExpr>,
-    input_schema: &Schema,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let data_type = arg.data_type(input_schema)?;
-    if !is_signed_numeric(&data_type) {
-        Err(DataFusionError::Internal(
-            format!(
-                "(- '{:?}') can't be evaluated because the expression's type is {:?}, not signed numeric",
-                arg, data_type,
-            ),
-        ))
-    } else {
-        Ok(Arc::new(NegativeExpr::new(arg)))
-    }
+pub fn negative(arg: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
+    Ok(Arc::new(NegativeExpr::new(arg)))
 }
