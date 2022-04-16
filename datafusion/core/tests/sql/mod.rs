@@ -100,6 +100,7 @@ pub mod window;
 
 pub mod decimal;
 mod explain;
+mod idenfifers;
 pub mod information_schema;
 mod partitioned_csv;
 #[cfg(feature = "unicode_expressions")]
