@@ -22,7 +22,7 @@ use crate::physical_plan::{
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
-use datafusion_physical_expr::field_util::get_indexed_field;
+use datafusion_expr::field_util::get_indexed_field;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {

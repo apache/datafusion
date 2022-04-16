@@ -18,8 +18,7 @@
 //! Utility functions for complex field access
 
 use arrow::datatypes::{DataType, Field};
-use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, ScalarValue};
 
 /// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
 /// # Error
