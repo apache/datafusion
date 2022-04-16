@@ -20,6 +20,7 @@
 use std::fs::{self, File, Metadata};
 use std::io::{self, Write};
 use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -212,9 +213,9 @@ impl LocalFileWriter {
 
 #[async_trait]
 impl ObjectWriter for LocalFileWriter {
-    async fn writer(&self) -> Result<Box<dyn AsyncWrite>> {
+    async fn writer(&self) -> Result<Pin<Box<dyn AsyncWrite>>> {
         let file = AsyncFile::open(&self.path).await?;
-        Ok(Box::new(file))
+        Ok(Box::pin(file))
     }
 
     fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>> {

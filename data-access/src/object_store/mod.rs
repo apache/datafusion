@@ -71,7 +71,7 @@ pub trait ObjectReader: Send + Sync {
 /// Object Writer for one file in an object store.
 #[async_trait]
 pub trait ObjectWriter: Send + Sync {
-    async fn writer(&self) -> Result<Box<dyn AsyncWrite>>;
+    async fn writer(&self) -> Result<Pin<Box<dyn AsyncWrite>>>;
 
     fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>>;
 }
