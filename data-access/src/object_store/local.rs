@@ -35,6 +35,14 @@ use super::{
 
 pub static LOCAL_SCHEME: &str = "file";
 
+fn path_without_scheme(full_path: &str) -> &str {
+    if let Some((_scheme, path)) = full_path.split_once("://") {
+        path
+    } else {
+        full_path
+    }
+}
+
 #[derive(Debug)]
 /// Local File System as Object Store.
 pub struct LocalFileSystem;
@@ -42,11 +50,7 @@ pub struct LocalFileSystem;
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
     async fn list_file(&self, prefix: &str) -> Result<FileMetaStream> {
-        let prefix = if let Some((_scheme, path)) = prefix.split_once("://") {
-            path
-        } else {
-            prefix
-        };
+        let prefix = path_without_scheme(prefix);
         list_all(prefix.to_owned()).await
     }
 
@@ -62,8 +66,9 @@ impl ObjectStore for LocalFileSystem {
         Ok(Arc::new(LocalFileReader::new(file)?))
     }
 
-    fn file_writer(&self, file: SizedFile) -> Result<Arc<dyn ObjectWriter>> {
-        Ok(Arc::new(LocalFileWriter::new(file)?))
+    fn file_writer(&self, path: String) -> Result<Arc<dyn ObjectWriter>> {
+        let path = path_without_scheme(&path).to_string();
+        Ok(Arc::new(LocalFileWriter::new(path)?))
     }
 }
 
@@ -196,24 +201,24 @@ pub fn local_unpartitioned_file(file: String) -> FileMeta {
 }
 
 struct LocalFileWriter {
-    file: SizedFile
+    path: String
 }
 
 impl LocalFileWriter {
-    fn new(file: SizedFile) -> Result<Self> {
-        Ok(Self { file })
+    fn new(path: String) -> Result<Self> {
+        Ok(Self { path })
     }
 }
 
 #[async_trait]
 impl ObjectWriter for LocalFileWriter {
     async fn writer(&self) -> Result<Box<dyn AsyncWrite>> {
-        let file = AsyncFile::open(&self.file.path).await?;
+        let file = AsyncFile::open(&self.path).await?;
         Ok(Box::new(file))
     }
 
     fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>> {
-        let file = File::open(&self.file.path)?;
+        let file = File::open(&self.path)?;
         Ok(Box::new(file))
     }
 }

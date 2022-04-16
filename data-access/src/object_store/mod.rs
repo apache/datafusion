@@ -112,5 +112,5 @@ pub trait ObjectStore: Sync + Send + Debug {
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 
     /// Get object writer for one file
-    fn file_writer(&self, file: SizedFile) -> Result<Arc<dyn ObjectWriter>>;
+    fn file_writer(&self, path: String) -> Result<Arc<dyn ObjectWriter>>;
 }
