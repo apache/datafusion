@@ -30,8 +30,13 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-use arrow::array::{ArrayRef, Int64Array, PrimitiveBuilder};
-use arrow::datatypes::{Field, Int64Type, Schema, SchemaRef, DataType, ArrowPrimitiveType};
+use arrow::array::{
+    make_builder, ArrayBuilder, ArrayRef, Int64Array, PrimitiveArray, PrimitiveBuilder,
+    StringBuilder, BooleanBuilder, BinaryBuilder, StructBuilder, DecimalBuilder, FixedSizeBinaryBuilder, LargeBinaryBuilder, LargeStringBuilder, StringArray, LargeStringArray, BooleanArray, BinaryArray, LargeBinaryArray, DecimalArray, StructArray,
+};
+use arrow::datatypes::{
+    self, ArrowPrimitiveType, DataType, Field, Int32Type, Int64Type, Schema, SchemaRef,
+};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::ScalarValue;
@@ -90,10 +95,6 @@ impl TableFunExec {
             fields?,
             input_schema.metadata().clone(),
         ));
-
-        for f in schema.fields().iter() {
-            println!("{}", f.name());
-        }
 
         Ok(Self {
             expr,
@@ -259,15 +260,14 @@ fn stats_table_fun(
 }
 
 impl TableFunStream {
-    // TODO: metrcis
-    fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
+    fn batch(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // records time on drop
 
-        let formatted = arrow::util::pretty::pretty_format_batches(&[batch.clone()])
-            .unwrap()
-            .to_string();
+        // let formatted = arrow::util::pretty::pretty_format_batches(&[batch.clone()])
+        //     .unwrap()
+        //     .to_string();
 
-        println!("{}", formatted);
+        // println!("{}", formatted);
 
         let arrays: Vec<(Vec<ColumnarValue>, bool)> = self
             .expr
@@ -286,12 +286,15 @@ impl TableFunStream {
             })
             .collect();
 
-
-
         // TODO: builder types
-        let mut columns: Vec<PrimitiveBuilder<_>> = arrays
+        // !!!!!!!!!!!!!!!!!!!!
+        // let mut columns: Vec<PrimitiveBuilder<_>> = arrays
+        let mut columns: Vec<Box<dyn ArrayBuilder>> = arrays
             .iter()
-            .map(|_| PrimitiveBuilder::<Int64Type>::new(1))
+            .map(|(v, _)| {
+                make_builder(&v.first().unwrap().data_type(), 1)
+                // PrimitiveBuilder::<Int64Type>::new(1)
+            })
             .collect();
 
         let batches_count = arrays.iter().map(|(a, _)| a.len()).max().unwrap_or(0);
@@ -323,27 +326,47 @@ impl TableFunStream {
                     &arr[0]
                 };
 
+                // TODO: ColumnarValue::Scalar
                 for i_row in 0..=rows_count - 1 {
                     let index = if *if_fun { i_row } else { i };
+
+                    let mut builder = columns[i_column].as_any_mut();
+                        
                     if let ColumnarValue::Array(arr) = batch {
-                        let arr = arr.as_any().downcast_ref::<Int64Array>().unwrap();
+                        // !!!!!!!!!!!!!!!!!!!!
+                        // let arr =
+                        //     arr.as_any().downcast_ref::<PrimitiveArray<Int64Type>>().unwrap();
                         if arr.len() > index {
-                            columns[i_column].append_value(arr.values()[index])?;
+                            // builder.append_value(arr.values()[index])?;
+
+                            append_value_from_array(arr, index, builder);
+                            // append_null(builder);
+                            // columns[i_column].append_value(arr.values()[index])?;
                         } else {
-                            columns[i_column].append_null()?;
+                            append_null(builder);
+
+                            // builder.append_null()?;
+                            // columns[i_column].append_null()?;
                         }
-                    } else if let ColumnarValue::Scalar(val) = batch {
-                        if let ScalarValue::Int64(val) = val {
-                            if index == 0 && val.is_some() {
-                                columns[i_column].append_value(val.unwrap())?;
-                            } else {
-                                columns[i_column].append_null()?;
-                            }
-                        } else {
-                            columns[i_column].append_null()?;
-                        }
+                    // } else if let ColumnarValue::Scalar(val) = batch {
+                    //     // !!!!!!!!!!!!!!!!!!!!
+                    //     if let ScalarValue::Int64(val) = val {
+                    //         if index == 0 && val.is_some() {
+                    //             builder.append_value(val.unwrap())?;
+                    //             // columns[i_column].append_value(val.unwrap())?;
+                    //         } else {
+                    //             builder.append_null()?;
+                    //             // columns[i_column].append_null()?;
+                    //         }
+                    //     } else {
+                    //         builder.append_null()?;
+                    //         // columns[i_column].append_null()?;
+                    //     }
                     } else {
-                        columns[i_column].append_null()?;
+                        append_null(builder);
+
+                        // builder.append_null()?;
+                        // columns[i_column].append_null()?;
                     }
                 }
             }
@@ -359,6 +382,444 @@ impl TableFunStream {
 
         RecordBatch::try_new(self.schema.clone(), columns)
     }
+}
+
+
+fn append_null(to: &mut dyn Any) {
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int64Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int8Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int16Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int32Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt8Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt16Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt32Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt64Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float16Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float32Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float64Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampSecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to
+        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMillisecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to
+        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMicrosecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampNanosecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Date32Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Date64Type>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time32SecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::Time32MillisecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64MicrosecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64NanosecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalYearMonthType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalDayTimeType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to
+        .downcast_mut::<PrimitiveBuilder<datatypes::IntervalMonthDayNanoType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationSecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMillisecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMicrosecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationNanosecondType>>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<BooleanBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<BinaryBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<LargeBinaryBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<StringBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<LargeStringBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<FixedSizeBinaryBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<DecimalBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<StructBuilder>();
+    if arr.is_some() {
+        arr.unwrap().append_null().unwrap();
+        return;
+    }
+    
+    panic!("MutableArrayBuilder - try to use unsupported type")
+}
+
+fn append_value_from_array(array: &ArrayRef, index: usize, to: &mut dyn Any) {
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int64Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<Int64Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int8Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Int8Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int16Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Int16Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int32Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Int32Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt8Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt8Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt16Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt16Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt32Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt32Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt64Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt64Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float16Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Float16Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float32Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Float32Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float64Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Float64Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampSecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampSecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to
+        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMillisecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampMillisecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to
+        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMicrosecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampMicrosecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampNanosecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampNanosecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Date32Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Date32Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Date64Type>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Date64Type>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time32SecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time32SecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::Time32MillisecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time32MillisecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64MicrosecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time64MicrosecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64NanosecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time64NanosecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalYearMonthType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::IntervalYearMonthType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalDayTimeType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::IntervalDayTimeType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to
+        .downcast_mut::<PrimitiveBuilder<datatypes::IntervalMonthDayNanoType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::IntervalMonthDayNanoType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationSecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationSecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMillisecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationMillisecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMicrosecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationMicrosecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr =
+        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationNanosecondType>>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationNanosecondType>>().unwrap();
+        arr.unwrap().append_value(array.values()[index]).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<BooleanBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<BooleanArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<BinaryBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<LargeBinaryBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<LargeBinaryArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<StringBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<StringArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<LargeStringBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<FixedSizeBinaryBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<BinaryArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+    let arr = to.downcast_mut::<DecimalBuilder>();
+    if arr.is_some() {
+        let array = array.as_any().downcast_ref::<DecimalArray>().unwrap();
+        arr.unwrap().append_value(array.value(index)).unwrap();
+        return;
+    }
+
+    // TODO: Support Struct
+
+    // let arr = to.downcast_mut::<StructBuilder>();
+    // if arr.is_some() {
+    //     let array = array.as_any().downcast_ref::<StructArray>().unwrap();
+    //     arr.unwrap().append_value(array.value(index)).unwrap();
+    //     return;
+    // }
+    
+    panic!("MutableArrayBuilder - try to use unsupported type")
 }
 
 /// TableFun iterator
@@ -377,7 +838,7 @@ impl Stream for TableFunStream {
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         let poll = self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => Some(self.batch_project(&batch)),
+            Some(Ok(batch)) => Some(self.batch(&batch)),
             other => other,
         });
 

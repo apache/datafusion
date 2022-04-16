@@ -638,13 +638,13 @@ impl DefaultPhysicalPlanner {
                         .collect::<Result<Vec<_>>>()?;
 
 
-                    let mut include_table_fun = false;
-                    for (expr, name) in physical_exprs.iter() {
-                        if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
-                            include_table_fun = true;
-                            break;
-                        }
-                    };
+                    // let mut include_table_fun = false;
+                    // for (expr, name) in physical_exprs.iter() {
+                    //     if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
+                    //         include_table_fun = true;
+                    //         break;
+                    //     }
+                    // };
 
                     // if include_table_fun {
                     //     Ok(Arc::new(TableFunExec::try_new(
@@ -691,7 +691,7 @@ impl DefaultPhysicalPlanner {
                         Ok(Arc::new(ProjectionExec::try_new(
                             projection_exprs,
                             input_exec,
-                        )?) )
+                        )?))
                     } else {
                         Ok(Arc::new(TableFunExec::try_new(
                             table_fun_exprs,

@@ -2184,15 +2184,22 @@ mod tests {
 
         let dual_schema = Arc::new(Schema::new(vec![
             Field::new("asd", DataType::Int64, false),
-            Field::new("qwe", DataType::Int64, false),
+            Field::new("qwe", DataType::Utf8, false),
         ]));
+
+
+        let mut kek1: Vec<i64> = vec![];
+        let mut kek2: Vec<String> = vec![];
+        for i in 1..=1000 {
+            kek1.push(i);
+            kek2.push("kek".to_string());
+        }
+
         let batch = RecordBatch::try_new(
             dual_schema.clone(),
             vec![
-                // Arc::new(array::Int64Array::from_slice(&[12, 123, 1234])),
-                // Arc::new(array::Int64Array::from_slice(&[23, 234, 2345])),
-                Arc::new(array::Int64Array::from_slice(&[1, 2])),
-                Arc::new(array::Int64Array::from_slice(&[2, 4])),
+                Arc::new(array::Int64Array::from_slice(&kek1)),
+                Arc::new(array::StringArray::from_slice(&kek2)),
             ],
         )
         .unwrap();
@@ -2203,15 +2210,16 @@ mod tests {
 
         let result = plan_and_collect(
             &ctx,
-            "SELECT asd, my_func(1, asd), my_func(1, 5) FROM my_table",
+            // "SELECT my_func(asd, 1000000) FROM my_table",
+            "SELECT asd, qwe, my_func(1, asd), my_func(1, 5) FROM my_table",
         )
         .await?;
 
-        let formatted = arrow::util::pretty::pretty_format_batches(&result)
-            .unwrap()
-            .to_string();
+        // let formatted = arrow::util::pretty::pretty_format_batches(&result)
+        //     .unwrap()
+        //     .to_string();
 
-        println!("{}", formatted);
+        // println!("{}", formatted);
 
         let expected = vec![
             "+----------------------------+",

@@ -21,7 +21,7 @@ use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
 use crate::logical_plan::{
     col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning, ToStringifiedPlan,
+    Partitioning,
 };
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
@@ -352,7 +352,6 @@ impl DataFrame {
     pub async fn collect(&self) -> Result<Vec<RecordBatch>> {
         let plan = self.create_physical_plan().await?;
         let task_ctx = Arc::new(TaskContext::from(&self.session_state.read().clone()));
-
         collect(plan, task_ctx).await
     }
 

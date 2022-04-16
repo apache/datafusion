@@ -249,13 +249,6 @@ fn stats_projection(
 impl ProjectionStream {
     fn batch_project(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // records time on drop
-
-        let formatted = arrow::util::pretty::pretty_format_batches(&[batch.clone()])
-            .unwrap()
-            .to_string();
-
-        println!("{}", formatted);
-
         let _timer = self.baseline_metrics.elapsed_compute().timer();
         let arrays = self
             .expr
