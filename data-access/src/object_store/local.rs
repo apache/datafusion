@@ -32,17 +32,10 @@ use crate::{FileMeta, Result, SizedFile};
 
 use super::{
     FileMetaStream, ListEntryStream, ObjectReader, ObjectWriter, ObjectReaderStream, ObjectStore,
+    path_without_scheme
 };
 
 pub static LOCAL_SCHEME: &str = "file";
-
-fn path_without_scheme(full_path: &str) -> &str {
-    if let Some((_scheme, path)) = full_path.split_once("://") {
-        path
-    } else {
-        full_path
-    }
-}
 
 #[derive(Debug)]
 /// Local File System as Object Store.

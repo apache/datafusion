@@ -114,3 +114,20 @@ pub trait ObjectStore: Sync + Send + Debug {
     /// Get object writer for one file
     fn file_writer(&self, path: String) -> Result<Arc<dyn ObjectWriter>>;
 }
+
+// TODO: Document below when we do and do not expect a scheme
+/// Return path without scheme
+/// 
+/// # Examples
+/// 
+/// ```
+/// let path = "file://path/to/object";
+/// assert_eq(path_without_scheme(path), "path/to/object");
+/// ```
+pub fn path_without_scheme(full_path: &str) -> &str {
+    if let Some((_scheme, path)) = full_path.split_once("://") {
+        path
+    } else {
+        full_path
+    }
+}
