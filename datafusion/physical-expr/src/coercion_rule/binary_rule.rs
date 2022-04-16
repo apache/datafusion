@@ -185,7 +185,7 @@ fn get_comparison_common_decimal_type(
     }
 }
 
-// Returns a `DataType::Decimal` that can store any value from either 
+// Returns a `DataType::Decimal` that can store any value from either
 // `lhs_decimal_type` and `rhs_decimal_type`
 // The result decimal type is (max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)).
 fn get_wider_decimal_type(
