@@ -16,25 +16,25 @@
 // under the License.
 
 mod accumulator;
-pub mod aggregate_function; // TODO only make some members public ?
+pub mod aggregate_function;
 pub mod array_expressions;
-pub mod binary_rule; // TODO only make some members public ?
+pub mod binary_rule;
 mod built_in_function;
 mod columnar_value;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
 pub mod field_util;
-pub mod function; // TODO only make some members public ?
+pub mod function;
 mod literal;
 mod nullif;
 mod operator;
 mod signature;
-pub mod type_coercion; // TODO only make some members public ?
+pub mod type_coercion;
 mod udaf;
 mod udf;
 pub mod window_frame;
-pub mod window_function; // TODO only make some members public ?
+pub mod window_function;
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;

@@ -157,7 +157,7 @@ pub fn return_type(
 }
 
 /// Returns the datatype of the built-in window function
-pub(super) fn return_type_for_built_in(
+fn return_type_for_built_in(
     fun: &BuiltInWindowFunction,
     input_expr_types: &[DataType],
 ) -> Result<DataType> {
