@@ -594,10 +594,10 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Operator;
     use arrow::datatypes::DataType;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
-    use crate::Operator;
 
     #[test]
     fn test_coercion_error() -> Result<()> {
