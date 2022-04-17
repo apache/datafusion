@@ -19,7 +19,7 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Filter, Projection, Window, TableUDFs};
+use crate::logical_plan::plan::{Filter, Projection, TableUDFs, Window};
 use crate::logical_plan::{
     col,
     plan::{Aggregate, Sort},
@@ -110,7 +110,6 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 alias: alias.clone(),
             }))
         }
-        // TODO: !!!!!!!!!!!
         LogicalPlan::TableUDFs(TableUDFs {
             expr,
             input,

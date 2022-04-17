@@ -597,20 +597,6 @@ impl DefaultPhysicalPlanner {
                     let physical_exprs = expr
                         .iter()
                         .map(|e| {
-                            // For projections, SQL planner and logical plan builder may convert user
-                            // provided expressions into logical Column expressions if their results
-                            // are already provided from the input plans. Because we work with
-                            // qualified columns in logical plane, derived columns involve operators or
-                            // functions will contain qualifers as well. This will result in logical
-                            // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
-                            //
-                            // If we run these logical columns through physical_name function, we will
-                            // get physical names with column qualifiers, which violates DataFusion's
-                            // field name semantics. To account for this, we need to derive the
-                            // physical name from physical input instead.
-                            //
-                            // This depends on the invariant that logical schema field index MUST match
-                            // with physical schema field index.
                             let physical_name = if let Expr::Column(col) = e {
                                 match input_schema.index_of_column(col) {
                                     Ok(idx) => {
@@ -689,72 +675,10 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                        Ok(Arc::new(ProjectionExec::try_new(
-                            physical_exprs,
-                            input_exec,
-                        )?))
-
-
-                    // let mut include_table_fun = false;
-                    // for (expr, name) in physical_exprs.iter() {
-                    //     if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
-                    //         include_table_fun = true;
-                    //         break;
-                    //     }
-                    // };
-
-                    // if include_table_fun {
-                    //     Ok(Arc::new(TableFunExec::try_new(
-                    //                 physical_exprs,
-                    //                 input_exec,
-                    //             )?))
-                    // } else {
-                    //     Ok(Arc::new(ProjectionExec::try_new(
-                    //         physical_exprs,
-                    //         input_exec,
-                    //     )?) )
-                    // }
-
-                    // let mut table_fun_exprs: Vec<_> = Vec::new();
-                    // let mut projection_exprs: Vec<_> = Vec::new();
-
-                    // fn create_column(col_name: String, index: usize) -> Arc<dyn PhysicalExpr> {
-                    //     Arc::new(Column::new(&col_name, index))
-                    // }
-
-                    // let mut have_table_exprs = false;
-                    // for (i, (expr, name)) in physical_exprs.iter().enumerate() {
-                    //     if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
-                    //         have_table_exprs = true;
-                    //         table_fun_exprs.push((expr.clone(), name.clone()));
-                    //         let col_name = name.clone();
-                    //         projection_exprs.push((create_column(col_name, i), name.clone()));
-                    //     } else {
-                    //         projection_exprs.push((expr.clone(), name.clone()));
-                    //         table_fun_exprs.push((expr.clone(), name.clone()));
-                    //     }
-                    // }
-
-                    // if have_table_exprs {
-                    //     let input_exec = if table_fun_exprs.len() > 0 {
-                    //         Arc::new(TableFunExec::try_new(
-                    //             table_fun_exprs,
-                    //             input_exec,
-                    //         )?)
-                    //     } else {
-                    //         input_exec
-                    //     };
-
-                    //     Ok(Arc::new(ProjectionExec::try_new(
-                    //         projection_exprs,
-                    //         input_exec,
-                    //     )?))
-                    // } else {
-                    //     Ok(Arc::new(TableFunExec::try_new(
-                    //         table_fun_exprs,
-                    //         input_exec,
-                    //     )?))
-                    // }
+                    Ok(Arc::new(ProjectionExec::try_new(
+                        physical_exprs,
+                        input_exec,
+                    )?))
                 }
                 LogicalPlan::Filter(Filter {
                     input, predicate, ..
@@ -1586,7 +1510,7 @@ impl DefaultPhysicalPlanner {
 
         let mut new_plan = plan;
         for optimizer in optimizers {
-            // new_plan = optimizer.optimize(new_plan, &session_state.config)?;
+            new_plan = optimizer.optimize(new_plan, &session_state.config)?;
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
         debug!(

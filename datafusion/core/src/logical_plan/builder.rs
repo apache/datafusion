@@ -26,7 +26,7 @@ use crate::error::{DataFusionError, Result};
 use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
+    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window, TableUDFs,
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
@@ -45,7 +45,7 @@ use std::{
 
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType, };
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, provider_as_source,
+    columnize_expr, normalize_col, normalize_cols, provider_as_source, flat_exprs,
     rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
     Partitioning, Repartition, Values,
 };
@@ -1199,22 +1199,17 @@ pub(crate) fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-pub(crate) fn table_udfs(
-    plan: LogicalPlan,
-    expr: Vec<Expr>,
-) -> Result<LogicalPlan> {
+pub(crate) fn table_udfs(plan: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
+    let expr = flat_exprs(expr.clone(), plan.schema().clone().as_ref().to_owned());
     let input_schema = plan.schema();
     let mut udtf_expr = vec![];
     for e in expr {
         let e = e.into();
         match e {
-            Expr::Wildcard => {
-                udtf_expr.extend(expand_wildcard(input_schema, &plan)?)
-            }
+            Expr::Wildcard => udtf_expr.extend(expand_wildcard(input_schema, &plan)?),
             Expr::QualifiedWildcard { ref qualifier } => udtf_expr
                 .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
-            _ => udtf_expr
-                .push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
+            _ => udtf_expr.push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
         }
     }
     validate_unique_names("TableUDFs", udtf_expr.iter(), input_schema)?;
@@ -1222,10 +1217,6 @@ pub(crate) fn table_udfs(
         exprlist_to_fields(&udtf_expr, input_schema)?,
         plan.schema().metadata().clone(),
     )?;
-    // let schema = match alias {
-    //     Some(ref alias) => input_schema.replace_qualifier(alias.as_str()),
-    //     None => input_schema,
-    // };
     Ok(LogicalPlan::TableUDFs(TableUDFs {
         expr: udtf_expr,
         input: Arc::new(plan.clone()),

@@ -29,7 +29,7 @@ pub use crate::logical_expr::{
         FileType, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
         Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort,
         StringifiedPlan, Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union,
-        UserDefinedLogicalNode, Values, Window,
+        UserDefinedLogicalNode, Values, Window, TableUDFs,
     },
     TableProviderFilterPushDown, TableSource,
 };

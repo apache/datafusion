@@ -32,7 +32,7 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 pub use datafusion_expr::NullColumnarValue;
 use datafusion_expr::ScalarFunctionImplementation;
@@ -252,7 +252,7 @@ impl PhysicalExpr for TableFunctionExpr {
         Ok(true)
     }
 
-    fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+    fn evaluate(&self, _batch: &RecordBatch) -> Result<ColumnarValue> {
         Err(DataFusionError::NotImplemented(
             "Use evaluate_table for table funs".to_string(),
         ))

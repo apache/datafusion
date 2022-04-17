@@ -1626,6 +1626,7 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
+    use crate::from_slice::FromSlice;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::{make_scalar_function, make_table_function};
     use crate::test;
@@ -1635,7 +1636,7 @@ mod tests {
         logical_plan::{col, create_udf, create_udtf, sum, Expr},
     };
     use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
-    use arrow::array::{ArrayRef, Int64Array, Int64Builder};
+    use arrow::array::{ArrayRef, Int64Array, Int64Builder, self};
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
@@ -1953,7 +1954,7 @@ mod tests {
         let ctx = SessionContext::with_config(
             SessionConfig::new().create_default_catalog_and_schema(false),
         );
-
+        
         assert!(matches!(
             ctx.register_table("test", test::table_with_sequence(1, 1)?),
             Err(DataFusionError::Plan(_))
@@ -2187,7 +2188,6 @@ mod tests {
             Field::new("qwe", DataType::Utf8, false),
         ]));
 
-
         let mut kek1: Vec<i64> = vec![];
         let mut kek2: Vec<String> = vec![];
         for i in 1..=1000 {
@@ -2210,10 +2210,9 @@ mod tests {
 
         let result = plan_and_collect(
             &ctx,
-            "SELECT asd, 1 + my_func(1, asd) + 5 + 1 kek FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-            // "SELECT my_func(1, asd) x FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-
-
+            // "SELECT asd, 1 + my_func(1, asd) + 5 + 1 kek, my_func(1, 2) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            // "select my_func(1, 5) pos(n)",
+            "SELECT asd, my_func(1, asd) x FROM (select 1 asd, 3 qwe) x",
             // "SELECT my_func(asd, 1000000) FROM my_table",
             // "SELECT asd, qwe, my_func(1, asd), my_func(1, 5) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
             // "SELECT asd, my_func(asd, 1000000) + 5 FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",

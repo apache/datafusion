@@ -15,10 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Defines the projection execution plan. A projection determines which columns or expressions
-//! are returned from a query. The SQL statement `SELECT a, b, a+b FROM t1` is an example
-//! of a projection on table `t1` where the expressions `a`, `b`, and `a+b` are the
-//! projection expressions. `SELECT` without `FROM` will only evaluate expressions.
+//! TableFun (UDTFs) Physical Node
 
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -31,15 +28,14 @@ use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
 use arrow::array::{
-    make_builder, ArrayBuilder, ArrayRef, Int64Array, PrimitiveArray, PrimitiveBuilder,
-    StringBuilder, BooleanBuilder, BinaryBuilder, StructBuilder, DecimalBuilder, FixedSizeBinaryBuilder, LargeBinaryBuilder, LargeStringBuilder, StringArray, LargeStringArray, BooleanArray, BinaryArray, LargeBinaryArray, DecimalArray, StructArray,
+    make_builder, ArrayBuilder, ArrayRef, BinaryArray, BinaryBuilder, BooleanArray,
+    BooleanBuilder, DecimalArray, DecimalBuilder, FixedSizeBinaryBuilder,
+    LargeBinaryArray, LargeBinaryBuilder, LargeStringArray, LargeStringBuilder,
+    PrimitiveArray, PrimitiveBuilder, StringArray, StringBuilder, StructBuilder,
 };
-use arrow::datatypes::{
-    self, ArrowPrimitiveType, DataType, Field, Int32Type, Int64Type, Schema, SchemaRef,
-};
+use arrow::datatypes::{self, Field, Int64Type, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::ScalarValue;
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::TableFunctionExpr;
 
@@ -51,15 +47,15 @@ use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::stream::StreamExt;
 
-/// Execution plan for a projection
+/// Execution plan for a table_fun
 #[derive(Debug)]
 pub struct TableFunExec {
     //
     // schema
     // input
-    /// The projection expressions stored as tuples of (expression, output column name)
+    /// The expressions stored as tuples of (expression, output column name)
     expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
-    /// The schema once the projection has been applied to the input
+    /// The schema once the node has been applied to the input
     schema: SchemaRef,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
@@ -67,10 +63,8 @@ pub struct TableFunExec {
     metrics: ExecutionPlanMetricsSet,
 }
 
-// select asd, my_func(1, asd) from table
-
 impl TableFunExec {
-    /// Create a projection on an input
+    /// Create a TableFun
     pub fn try_new(
         expr: Vec<(Arc<dyn PhysicalExpr>, String)>,
         input: Arc<dyn ExecutionPlan>,
@@ -104,7 +98,7 @@ impl TableFunExec {
         })
     }
 
-    /// The projection expressions stored as tuples of (expression, output column name)
+    /// The expressions stored as tuples of (expression, output column name)
     pub fn expr(&self) -> &[(Arc<dyn PhysicalExpr>, String)] {
         &self.expr
     }
@@ -150,7 +144,7 @@ impl ExecutionPlan for TableFunExec {
     }
 
     fn with_new_children(
-        &self,
+        self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match children.len() {
@@ -261,21 +255,14 @@ fn stats_table_fun(
 
 impl TableFunStream {
     fn batch(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
-        // records time on drop
-
-        // let formatted = arrow::util::pretty::pretty_format_batches(&[batch.clone()])
-        //     .unwrap()
-        //     .to_string();
-
-        // println!("{}", formatted);
-
+        // Table UDFs return Vec<ColumnarValue> otherwise Column always is ColumnarValue
+        // We wrap Column result to Vec (to have the same structure with udtfs results)
         let arrays: Vec<(Vec<ColumnarValue>, bool)> = self
             .expr
             .iter()
             .map(|expr| {
                 let t_expr = expr.as_any().clone().downcast_ref::<TableFunctionExpr>();
                 if t_expr.is_some() {
-                    // let qwe = t_expr.unwrap().evaluate_table(batch).unwrap();
                     (t_expr.unwrap().evaluate_table(batch).unwrap(), true)
                 } else {
                     let mut vec = Vec::new();
@@ -286,27 +273,32 @@ impl TableFunStream {
             })
             .collect();
 
-        // TODO: builder types
-        // !!!!!!!!!!!!!!!!!!!!
-        // let mut columns: Vec<PrimitiveBuilder<_>> = arrays
+        // We are going to map udtf results with simple columns
+        // Create ArrayBuilder for each column
         let mut columns: Vec<Box<dyn ArrayBuilder>> = arrays
             .iter()
-            .map(|(v, _)| {
-                make_builder(&v.first().unwrap().data_type(), 1)
-                // PrimitiveBuilder::<Int64Type>::new(1)
-            })
+            .map(|(v, _)| make_builder(&v.first().unwrap().data_type(), 1))
             .collect();
 
+        // Get maximum count of batches per column (scalar value in case with column and array in case with udtf)
+        // Iterate batches
         let batches_count = arrays.iter().map(|(a, _)| a.len()).max().unwrap_or(0);
         for (i_column, (arr, if_fun)) in arrays.iter().enumerate() {
             for i in 0..=batches_count - 1 {
+                // Get the maximum number of rows in current batch
+                // It always 1 for columns
                 let rows_count: usize = arrays
                     .iter()
                     .map(|(a, is_fun)| {
                         if *is_fun {
+                            // In some cases it can be different count of batches
+                            //
+                            // Example: SELECT my_func(1, col), my_fun(1, 5) from my_table
+                            //
+                            // In example abowe my_func(1, col) return number of bathes equal to count of col.
+                            // Otherwise my_fun(1, 5) returns only one batch (because of static parameters)
                             let a = if a.len() > i { &a[i] } else { &a[a.len() - 1] };
                             if let ColumnarValue::Array(arr) = &a {
-                                // if let ColumnarValue::Array(arr) = &a[i] {
                                 return arr.len();
                             }
                         }
@@ -316,6 +308,7 @@ impl TableFunStream {
                     .max()
                     .unwrap_or(0);
 
+                // The same situation as in rows_count calculation
                 let batch = if *if_fun {
                     if arr.len() > i {
                         &arr[i]
@@ -326,54 +319,33 @@ impl TableFunStream {
                     &arr[0]
                 };
 
-                // TODO: ColumnarValue::Scalar
+                // Now we fill up the current column with data from the current batch
+                // For column - copy scalar value
+                // For UDTF - ARR[Index] or NULL
+
+                // Example: SELECT asd, generate_series(1,asd), generate_series(1,2) FROM (select 1 asd UNION ALL select 2 asd) x;
+                // Result:
+                // 1  1   1
+                // 1 NULL 2
+                // 2  1   1
+                // 2  2   2
                 for i_row in 0..=rows_count - 1 {
                     let index = if *if_fun { i_row } else { i };
 
-                    let mut builder = columns[i_column].as_any_mut();
-                        
-                    if let ColumnarValue::Array(arr) = batch {
-                        // !!!!!!!!!!!!!!!!!!!!
-                        // let arr =
-                        //     arr.as_any().downcast_ref::<PrimitiveArray<Int64Type>>().unwrap();
-                        if arr.len() > index {
-                            // builder.append_value(arr.values()[index])?;
+                    let builder = columns[i_column].as_any_mut();
 
+                    if let ColumnarValue::Array(arr) = batch {
+                        if arr.len() > index {
                             append_value_from_array(arr, index, builder);
-                            // append_null(builder);
-                            // columns[i_column].append_value(arr.values()[index])?;
                         } else {
                             append_null(builder);
-
-                            // builder.append_null()?;
-                            // columns[i_column].append_null()?;
                         }
-                    // } else if let ColumnarValue::Scalar(val) = batch {
-                    //     // !!!!!!!!!!!!!!!!!!!!
-                    //     if let ScalarValue::Int64(val) = val {
-                    //         if index == 0 && val.is_some() {
-                    //             builder.append_value(val.unwrap())?;
-                    //             // columns[i_column].append_value(val.unwrap())?;
-                    //         } else {
-                    //             builder.append_null()?;
-                    //             // columns[i_column].append_null()?;
-                    //         }
-                    //     } else {
-                    //         builder.append_null()?;
-                    //         // columns[i_column].append_null()?;
-                    //     }
                     } else {
                         append_null(builder);
-
-                        // builder.append_null()?;
-                        // columns[i_column].append_null()?;
                     }
                 }
             }
         }
-
-        // let arrays = kek.map(|r| r.map(|v| v.into_array(batch.num_rows())))
-        // .collect::<Result<Vec<_>>>()?;
 
         let columns: Vec<ArrayRef> = columns
             .iter_mut()
@@ -384,6 +356,41 @@ impl TableFunStream {
     }
 }
 
+/// TableFun iterator
+struct TableFunStream {
+    schema: SchemaRef,
+    expr: Vec<Arc<dyn PhysicalExpr>>,
+    input: SendableRecordBatchStream,
+    baseline_metrics: BaselineMetrics,
+}
+
+impl Stream for TableFunStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let poll = self.input.poll_next_unpin(cx).map(|x| match x {
+            Some(Ok(batch)) => Some(self.batch(&batch)),
+            other => other,
+        });
+
+        self.baseline_metrics.record_poll(poll)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // same number of record batches
+        self.input.size_hint()
+    }
+}
+
+impl RecordBatchStream for TableFunStream {
+    /// Get the schema
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
 
 fn append_null(to: &mut dyn Any) {
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int64Type>>();
@@ -441,26 +448,22 @@ fn append_null(to: &mut dyn Any) {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampSecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampSecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr = to
-        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMillisecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampMillisecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr = to
-        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMicrosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampMicrosecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampNanosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampNanosecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
@@ -480,62 +483,52 @@ fn append_null(to: &mut dyn Any) {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::Time32MillisecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time32MillisecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64MicrosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time64MicrosecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64NanosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time64NanosecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalYearMonthType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalYearMonthType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalDayTimeType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalDayTimeType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr = to
-        .downcast_mut::<PrimitiveBuilder<datatypes::IntervalMonthDayNanoType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalMonthDayNanoType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationSecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationSecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMillisecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMillisecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMicrosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMicrosecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationNanosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationNanosecondType>>();
     if arr.is_some() {
         arr.unwrap().append_null().unwrap();
         return;
@@ -580,190 +573,260 @@ fn append_null(to: &mut dyn Any) {
         arr.unwrap().append_null().unwrap();
         return;
     }
-    
+
     panic!("MutableArrayBuilder - try to use unsupported type")
 }
 
 fn append_value_from_array(array: &ArrayRef, index: usize, to: &mut dyn Any) {
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int64Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<Int64Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<Int64Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int8Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Int8Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Int8Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int16Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Int16Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Int16Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Int32Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Int32Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Int32Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt8Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt8Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::UInt8Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt16Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt16Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::UInt16Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt32Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt32Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::UInt32Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::UInt64Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::UInt64Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::UInt64Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float16Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Float16Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Float16Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float32Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Float32Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Float32Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Float64Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Float64Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Float64Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampSecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampSecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampSecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::TimestampSecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr = to
-        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMillisecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampMillisecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampMillisecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::TimestampMillisecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr = to
-        .downcast_mut::<PrimitiveBuilder<datatypes::TimestampMicrosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampMicrosecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampMicrosecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::TimestampMicrosecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampNanosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::TimestampNanosecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::TimestampNanosecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::TimestampNanosecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Date32Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Date32Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Date32Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Date64Type>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Date64Type>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Date64Type>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
     let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time32SecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time32SecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Time32SecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::Time32MillisecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time32MillisecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time32MillisecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Time32MillisecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64MicrosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time64MicrosecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time64MicrosecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Time64MicrosecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::Time64NanosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::Time64NanosecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::Time64NanosecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::Time64NanosecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalYearMonthType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalYearMonthType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::IntervalYearMonthType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::IntervalYearMonthType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalDayTimeType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalDayTimeType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::IntervalDayTimeType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::IntervalDayTimeType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr = to
-        .downcast_mut::<PrimitiveBuilder<datatypes::IntervalMonthDayNanoType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::IntervalMonthDayNanoType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::IntervalMonthDayNanoType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::IntervalMonthDayNanoType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationSecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationSecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationSecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::DurationSecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMillisecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMillisecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationMillisecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::DurationMillisecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMicrosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationMicrosecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationMicrosecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::DurationMicrosecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
-    let arr =
-        to.downcast_mut::<PrimitiveBuilder<datatypes::DurationNanosecondType>>();
+    let arr = to.downcast_mut::<PrimitiveBuilder<datatypes::DurationNanosecondType>>();
     if arr.is_some() {
-        let array = array.as_any().downcast_ref::<PrimitiveArray<datatypes::DurationNanosecondType>>().unwrap();
+        let array = array
+            .as_any()
+            .downcast_ref::<PrimitiveArray<datatypes::DurationNanosecondType>>()
+            .unwrap();
         arr.unwrap().append_value(array.values()[index]).unwrap();
         return;
     }
@@ -811,49 +874,12 @@ fn append_value_from_array(array: &ArrayRef, index: usize, to: &mut dyn Any) {
     }
 
     // TODO: Support Struct
-
     // let arr = to.downcast_mut::<StructBuilder>();
     // if arr.is_some() {
     //     let array = array.as_any().downcast_ref::<StructArray>().unwrap();
-    //     arr.unwrap().append_value(array.value(index)).unwrap();
+    //     arr.unwrap().append(array.value(index), true).unwrap();
     //     return;
     // }
-    
+
     panic!("MutableArrayBuilder - try to use unsupported type")
-}
-
-/// TableFun iterator
-struct TableFunStream {
-    schema: SchemaRef,
-    expr: Vec<Arc<dyn PhysicalExpr>>,
-    input: SendableRecordBatchStream,
-    baseline_metrics: BaselineMetrics,
-}
-
-impl Stream for TableFunStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let poll = self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => Some(self.batch(&batch)),
-            other => other,
-        });
-
-        self.baseline_metrics.record_poll(poll)
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        // same number of record batches
-        self.input.size_hint()
-    }
-}
-
-impl RecordBatchStream for TableFunStream {
-    /// Get the schema
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
 }
