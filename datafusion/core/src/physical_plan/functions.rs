@@ -29,16 +29,17 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
-use super::{
-    type_coercion::{coerce, data_types},
-    ColumnarValue, PhysicalExpr,
-};
+use super::{type_coercion::coerce, ColumnarValue, PhysicalExpr};
 use crate::execution::context::ExecutionProps;
 use crate::physical_plan::expressions::{
     cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
 };
 use crate::{
     error::{DataFusionError, Result},
+    logical_expr::{
+        type_coercion::data_types, BuiltinScalarFunction, ScalarFunctionImplementation,
+        Signature, TypeSignature,
+    },
     scalar::ScalarValue,
 };
 use arrow::{
@@ -47,8 +48,6 @@ use arrow::{
     datatypes::TimeUnit,
     datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
 };
-use datafusion_expr::ScalarFunctionImplementation;
-pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
 use datafusion_physical_expr::array_expressions;
 use datafusion_physical_expr::conditional_expressions;
 use datafusion_physical_expr::datetime_expressions;

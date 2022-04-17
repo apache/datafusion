@@ -225,8 +225,9 @@ pub mod variable;
 pub use arrow;
 pub use parquet;
 
-// re-export object store dependencies
+// re-export DataFusion crates
 pub use datafusion_data_access;
+pub use datafusion_expr as logical_expr;
 
 #[cfg(feature = "row")]
 pub mod row;

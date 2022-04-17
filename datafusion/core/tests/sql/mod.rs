@@ -34,7 +34,6 @@ use datafusion::from_slice::FromSlice;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::logical_plan::TableScan;
-use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -46,6 +45,7 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_expr::Volatility;
 
 /// A macro to assert that some particular line contains two substrings
 ///
