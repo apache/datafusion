@@ -105,6 +105,7 @@ impl ExecutionPlan for NdJsonExec {
         let fun = move |file, _remaining: &Option<usize>| {
             // TODO: make DecoderOptions implement Clone so we can
             // clone here rather than recreating the options each time
+            // https://github.com/apache/arrow-rs/issues/1580
             let options = DecoderOptions::new().with_batch_size(batch_size);
 
             let options = if let Some(proj) = proj.clone() {
