@@ -153,8 +153,9 @@ pub trait ObjectStore: Sync + Send + Debug {
 /// # Examples
 ///
 /// ```
+/// use datafusion_data_access::object_store::path_without_scheme;
 /// let path = "file://path/to/object";
-/// assert_eq(path_without_scheme(path), "path/to/object");
+/// assert_eq!(path_without_scheme(path), "path/to/object");
 /// ```
 pub fn path_without_scheme(full_path: &str) -> &str {
     if let Some((_scheme, path)) = full_path.split_once("://") {

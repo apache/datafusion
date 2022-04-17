@@ -19,6 +19,7 @@
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -116,7 +117,56 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn copy(&self, source: &str, dest: &str) -> Result<()> {
-        tokio::fs::copy(source, dest).await?;
+        let source_path = PathBuf::from(source);
+        let dest_path = PathBuf::from(dest);
+
+        if !source_path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "Source path not found",
+            ));
+        }
+
+        if dest_path.exists() && dest_path.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "Cannot overwrite an existing directory.",
+            ));
+        }
+
+        if source_path.is_file() {
+            tokio::fs::copy(source, dest).await?;
+            return Ok(());
+        }
+
+        self.create_dir(dest_path.clone().to_str().unwrap(), true)
+            .await?;
+
+        let mut stack = Vec::new();
+        stack.push(source_path.clone());
+
+        let source_root = PathBuf::from(source_path);
+        let dest_root = PathBuf::from(dest_path);
+
+        while let Some(working_path) = stack.pop() {
+            let mut entries = tokio::fs::read_dir(working_path.clone()).await?;
+
+            let working_dest =
+                dest_root.join(working_path.strip_prefix(&source_root).unwrap());
+            self.create_dir(working_dest.to_str().unwrap(), true)
+                .await?;
+
+            while let Some(entry) = entries.next_entry().await? {
+                if entry.path().is_file() {
+                    let entry_dest =
+                        dest_root.join(entry.path().strip_prefix(&source_root).unwrap());
+                    tokio::fs::copy(entry.path(), entry_dest.clone()).await?;
+                } else {
+                    stack.push(entry.path());
+                }
+            }
+        }
+
         Ok(())
     }
 }
