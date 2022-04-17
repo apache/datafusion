@@ -17,11 +17,12 @@
 
 use super::Expr;
 use crate::physical_plan::{
-    aggregates, expressions::binary_operator_data_type, functions, window_functions,
+    expressions::binary_operator_data_type, functions, window_functions,
 };
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
+use datafusion_expr::aggregate_function;
 use datafusion_physical_expr::field_util::get_indexed_field;
 
 /// trait to allow expr to typable with respect to a schema
@@ -90,7 +91,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                aggregates::return_type(fun, &data_types)
+                aggregate_function::return_type(fun, &data_types)
             }
             Expr::AggregateUDF { fun, args, .. } => {
                 let data_types = args

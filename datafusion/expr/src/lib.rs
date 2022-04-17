@@ -16,7 +16,7 @@
 // under the License.
 
 mod accumulator;
-mod aggregate_function;
+pub mod aggregate_function; // TODO only make some members public
 mod built_in_function;
 mod columnar_value;
 pub mod expr;
@@ -28,7 +28,7 @@ mod signature;
 mod udaf;
 mod udf;
 mod window_frame;
-mod window_function;
+pub mod window_function; // TODO only make some members public
 
 pub use accumulator::Accumulator;
 pub use aggregate_function::AggregateFunction;

@@ -22,8 +22,9 @@
 
 use crate::error::Result;
 use crate::physical_plan::functions::{TypeSignature, Volatility};
-use crate::physical_plan::{aggregates, functions::Signature, type_coercion::data_types};
+use crate::physical_plan::{functions::Signature, type_coercion::data_types};
 use arrow::datatypes::DataType;
+use datafusion_expr::aggregate_function;
 pub use datafusion_expr::{BuiltInWindowFunction, WindowFunction};
 
 /// Returns the datatype of the window function
@@ -33,7 +34,7 @@ pub fn return_type(
 ) -> Result<DataType> {
     match fun {
         WindowFunction::AggregateFunction(fun) => {
-            aggregates::return_type(fun, input_expr_types)
+            aggregate_function::return_type(fun, input_expr_types)
         }
         WindowFunction::BuiltInWindowFunction(fun) => {
             return_type_for_built_in(fun, input_expr_types)
@@ -71,7 +72,7 @@ pub(super) fn return_type_for_built_in(
 /// the signatures supported by the function `fun`.
 pub fn signature(fun: &WindowFunction) -> Signature {
     match fun {
-        WindowFunction::AggregateFunction(fun) => aggregates::signature(fun),
+        WindowFunction::AggregateFunction(fun) => aggregate_function::signature(fun),
         WindowFunction::BuiltInWindowFunction(fun) => signature_for_built_in(fun),
     }
 }
