@@ -21,6 +21,7 @@ mod built_in_function;
 mod columnar_value;
 pub mod expr;
 pub mod expr_fn;
+pub mod field_util;
 mod function;
 mod literal;
 mod operator;
