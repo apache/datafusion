@@ -116,6 +116,7 @@ fn comparison_eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     comparison_binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| string_coercion(lhs_type, rhs_type))
 }
 
 fn comparison_order_coercion(
