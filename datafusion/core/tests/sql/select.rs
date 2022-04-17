@@ -980,6 +980,20 @@ async fn query_with_filter_string_type_coercion() {
         "+--------------+",
     ];
     assert_batches_eq!(expected, &actual);
+
+    let sql = "select * from t where large_string != '1'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| large_string |",
+        "+--------------+",
+        "| 2            |",
+        "| 3            |",
+        "| 4            |",
+        "| 5            |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]
