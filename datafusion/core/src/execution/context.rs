@@ -2210,16 +2210,22 @@ mod tests {
 
         let result = plan_and_collect(
             &ctx,
+            "SELECT asd, 1 + my_func(1, asd) + 5 + 1 kek FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            // "SELECT my_func(1, asd) x FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+
+
             // "SELECT my_func(asd, 1000000) FROM my_table",
-            "SELECT asd, qwe, my_func(1, asd), my_func(1, 5) FROM my_table",
+            // "SELECT asd, qwe, my_func(1, asd), my_func(1, 5) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            // "SELECT asd, my_func(asd, 1000000) + 5 FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            // "SELECT my_func(1, my_func(1, asd)) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
         )
         .await?;
 
-        // let formatted = arrow::util::pretty::pretty_format_batches(&result)
-        //     .unwrap()
-        //     .to_string();
+        let formatted = arrow::util::pretty::pretty_format_batches(&result)
+            .unwrap()
+            .to_string();
 
-        // println!("{}", formatted);
+        println!("{}", formatted);
 
         let expected = vec![
             "+----------------------------+",

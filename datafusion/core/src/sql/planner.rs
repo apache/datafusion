@@ -69,7 +69,7 @@ use super::{
         resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
 };
-use crate::logical_plan::builder::project_with_alias;
+use crate::logical_plan::builder::{project_with_alias, table_udfs};
 use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
@@ -897,6 +897,116 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
+    fn extract_udtf(&self, exprs: Vec<Expr>) -> Vec<Expr> {
+        let mut udtfs = Vec::new();
+        for expr in exprs.iter() {
+            if let Expr::TableUDF { .. } = expr {
+                udtfs.push(expr.clone());
+            }
+            if let Expr::BinaryExpr { left, right, .. } = expr {
+                let b_exprs: Vec<Expr> = [*left.clone(), *right.clone()].to_vec();
+                udtfs.extend(self.extract_udtf(b_exprs).iter().map(|e| e.clone()));
+            }
+            if let Expr::Alias(a_expr, ..) = expr {
+                udtfs.extend(
+                    self.extract_udtf([a_expr.as_ref().clone()].to_vec())
+                        .iter()
+                        .map(|e| e.clone()),
+                );
+            }
+        }
+
+        udtfs
+    }
+
+    fn rewrite_exprs_udtf_node(
+        &self,
+        exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+    ) -> Vec<Expr> {
+        let mut rewrote_exprs = Vec::new();
+        for expr in exprs.iter() {
+            if let Expr::Alias(a_expr, ..) = expr {
+                rewrote_exprs.extend(
+                    self.rewrite_exprs_udtf_node(
+                        [a_expr.as_ref().clone()].to_vec(),
+                        schema.clone(),
+                    )
+                    .iter()
+                    .map(|e| e.clone()),
+                );
+            } else if let Expr::BinaryExpr { left, right, .. } = expr {
+                let b_exprs: Vec<Expr> = [*left.clone(), *right.clone()].to_vec();
+                rewrote_exprs.extend(
+                    self.rewrite_exprs_udtf_node(b_exprs, schema.clone())
+                        .iter()
+                        .map(|e| e.clone()),
+                );
+            } else {
+                rewrote_exprs.push(expr.clone());
+            }
+        }
+
+        let mut unique_exprs: Vec<Expr> = Vec::new();
+        let mut unique_names: Vec<String> = Vec::new();
+        for e in rewrote_exprs.iter() {
+            let name = e.name(&schema).unwrap();
+            if !unique_names.contains(&name) {
+                unique_exprs.push(e.clone());
+                unique_names.push(name.clone());
+            } else {
+                println!("");
+            }
+        }
+
+        unique_exprs
+    }
+
+    // TODO: Binary
+    fn replace_udtf_to_columns(
+        &self,
+        exprs: Vec<Expr>,
+        schema: DFSchemaRef,
+    ) -> Vec<Expr> {
+        let mut rewrote_exprs = Vec::new();
+        for expr in exprs.iter() {
+            if let Expr::TableUDF { .. } = expr {
+                let column = datafusion_expr::Expr::Column(Column {
+                    relation: None,
+                    name: expr.name(&schema).unwrap(),
+                });
+                rewrote_exprs.push(column);
+            } else if let Expr::BinaryExpr { left, op, right } = expr {
+                let left: Expr = self.replace_udtf_to_columns(
+                    [left.as_ref().clone()].to_vec(),
+                    schema.clone(),
+                )[0]
+                .clone();
+                let right: Expr = self.replace_udtf_to_columns(
+                    [right.as_ref().clone()].to_vec(),
+                    schema.clone(),
+                )[0]
+                .clone();
+                rewrote_exprs.push(Expr::BinaryExpr {
+                    left: Box::new(left),
+                    op: *op,
+                    right: Box::new(right),
+                });
+            } else if let Expr::Alias(a_expr, name) = expr {
+                let a_expr: Expr = self.replace_udtf_to_columns(
+                    [a_expr.as_ref().clone()].to_vec(),
+                    schema.clone(),
+                )[0]
+                .clone();
+                rewrote_exprs.push(Expr::Alias(Box::new(a_expr), name.clone()));
+            } else {
+                rewrote_exprs.push(expr.clone());
+            }
+        }
+
+        rewrote_exprs
+    }
+
     /// Generate a logic plan from an SQL select
     fn select_to_plan(
         &self,
@@ -910,7 +1020,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
 
         // process `where` clause
-        let plan = self.plan_selection(select.selection, plans, outer_query_schema)?;
+        let mut plan = self.plan_selection(select.selection, plans, outer_query_schema)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
@@ -920,8 +1030,67 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             outer_query_schema,
         )?;
 
+
+        //     let mut have_table_exprs = false;
+        //     for (i, (expr, name)) in physical_exprs.iter().enumerate() {
+        //         if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
+        //             have_table_exprs = true;
+        //             table_fun_exprs.push((expr.clone(), name.clone()));
+        //             let col_name = name.clone();
+        //             projection_exprs.push((create_column(col_name, i), name.clone()));
+        //         } else {
+        //             projection_exprs.push((expr.clone(), name.clone()));
+        //             table_fun_exprs.push((expr.clone(), name.clone()));
+        //         }
+        //     }
+
+        //     if have_table_exprs {
+        //         let input_exec =
+        //             Arc::new(TableFunExec::try_new(
+        //                 table_fun_exprs,
+        //                 input_exec,
+        //             )?)
+        //
+        //         Ok(Arc::new(ProjectionExec::try_new(
+        //             projection_exprs,
+        //             input_exec,
+        //         )?))
+        //     } else {
+        //         Ok(Arc::new(TableFunExec::try_new(
+        //             table_fun_exprs,
+        //             input_exec,
+        //         )?))
+        //     }
+        // }
+
+        // TODO: only bool
+        // let udtfs = self.extract_udtf(select_exprs.clone());
+        // if udtfs.len() > 0 {
+        //     let udtf_node_expr = self.rewrite_exprs_udtf_node(select_exprs.clone(), plan.schema().clone());
+        //     plan = table_udfs(plan, udtf_node_expr).unwrap();
+        //     select_exprs = self.replace_udtf_to_columns(select_exprs, plan.schema().clone());
+        // }
+
+        /* let t_exprs = extract_exprs_recursively(from: exprs, type: UDTF);
+        if t_exprs.len() > 0 {
+            with_exprs = t_exprs.map(column)
+
+            replace_udtf_to_
+
+            flat_binary(binary)
+
+            from_expr =
+            plan = table_functions_plan(plan replace_exprs(exprs.clone(), from_expr, t_exprs))
+            exprs = replace_exprs(exprs, t_exprs, with_exprs)
+        }
+        */
+
         // having and group by clause may reference aliases defined in select projection
         let projected_plan = self.project(plan.clone(), select_exprs.clone())?;
+
+        let qwe = plan.schema();
+        let qwe2 = projected_plan.schema();
+
         let mut combined_schema = (**projected_plan.schema()).clone();
         combined_schema.merge(plan.schema());
 

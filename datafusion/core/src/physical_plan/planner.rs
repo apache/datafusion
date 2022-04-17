@@ -26,7 +26,7 @@ use super::{
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
     source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, Window,
+    SubqueryAlias, TableScan, Window, TableUDFs,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
@@ -590,6 +590,58 @@ impl DefaultPhysicalPlanner {
                         physical_input_schema.clone(),
                     )?) )
                 }
+                LogicalPlan::TableUDFs(TableUDFs { input, expr, .. }) => {
+                    let input_exec = self.create_initial_plan(input, session_state).await?;
+                    let input_schema = input.as_ref().schema();
+
+                    let physical_exprs = expr
+                        .iter()
+                        .map(|e| {
+                            // For projections, SQL planner and logical plan builder may convert user
+                            // provided expressions into logical Column expressions if their results
+                            // are already provided from the input plans. Because we work with
+                            // qualified columns in logical plane, derived columns involve operators or
+                            // functions will contain qualifers as well. This will result in logical
+                            // columns with names like `SUM(t1.c1)`, `t1.c1 + t1.c2`, etc.
+                            //
+                            // If we run these logical columns through physical_name function, we will
+                            // get physical names with column qualifiers, which violates DataFusion's
+                            // field name semantics. To account for this, we need to derive the
+                            // physical name from physical input instead.
+                            //
+                            // This depends on the invariant that logical schema field index MUST match
+                            // with physical schema field index.
+                            let physical_name = if let Expr::Column(col) = e {
+                                match input_schema.index_of_column(col) {
+                                    Ok(idx) => {
+                                        // index physical field using logical field index
+                                        Ok(input_exec.schema().field(idx).name().to_string())
+                                    }
+                                    // logical column is not a derived column, safe to pass along to
+                                    // physical_name
+                                    Err(_) => physical_name(e),
+                                }
+                            } else {
+                                physical_name(e)
+                            };
+
+                            tuple_err((
+                                self.create_physical_expr(
+                                    e,
+                                    input_schema,
+                                    &input_exec.schema(),
+                                    session_state,
+                                ),
+                                physical_name,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+
+                        Ok(Arc::new(TableFunExec::try_new(
+                            physical_exprs,
+                            input_exec,
+                        )?))
+                }
                 LogicalPlan::Projection(Projection { input, expr, .. }) => {
                     let input_exec = self.create_initial_plan(input, session_state).await?;
                     let input_schema = input.as_ref().schema();
@@ -637,6 +689,11 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
+                        Ok(Arc::new(ProjectionExec::try_new(
+                            physical_exprs,
+                            input_exec,
+                        )?))
+
 
                     // let mut include_table_fun = false;
                     // for (expr, name) in physical_exprs.iter() {
@@ -658,46 +715,46 @@ impl DefaultPhysicalPlanner {
                     //     )?) )
                     // }
 
-                    let mut table_fun_exprs: Vec<_> = Vec::new();
-                    let mut projection_exprs: Vec<_> = Vec::new();
+                    // let mut table_fun_exprs: Vec<_> = Vec::new();
+                    // let mut projection_exprs: Vec<_> = Vec::new();
 
-                    fn create_column(col_name: String, index: usize) -> Arc<dyn PhysicalExpr> {
-                        Arc::new(Column::new(&col_name, index))
-                    }
+                    // fn create_column(col_name: String, index: usize) -> Arc<dyn PhysicalExpr> {
+                    //     Arc::new(Column::new(&col_name, index))
+                    // }
 
-                    let mut have_table_exprs = false;
-                    for (i, (expr, name)) in physical_exprs.iter().enumerate() {
-                        if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
-                            have_table_exprs = true;
-                            table_fun_exprs.push((expr.clone(), name.clone()));
-                            let col_name = name.clone();
-                            projection_exprs.push((create_column(col_name, i), name.clone()));
-                        } else {
-                            projection_exprs.push((expr.clone(), name.clone()));
-                            table_fun_exprs.push((expr.clone(), name.clone()));
-                        }
-                    }
+                    // let mut have_table_exprs = false;
+                    // for (i, (expr, name)) in physical_exprs.iter().enumerate() {
+                    //     if expr.as_any().clone().downcast_ref::<TableFunctionExpr>().is_some() {
+                    //         have_table_exprs = true;
+                    //         table_fun_exprs.push((expr.clone(), name.clone()));
+                    //         let col_name = name.clone();
+                    //         projection_exprs.push((create_column(col_name, i), name.clone()));
+                    //     } else {
+                    //         projection_exprs.push((expr.clone(), name.clone()));
+                    //         table_fun_exprs.push((expr.clone(), name.clone()));
+                    //     }
+                    // }
 
-                    if have_table_exprs {
-                        let input_exec = if table_fun_exprs.len() > 0 {
-                            Arc::new(TableFunExec::try_new(
-                                table_fun_exprs,
-                                input_exec,
-                            )?)
-                        } else {
-                            input_exec
-                        };
+                    // if have_table_exprs {
+                    //     let input_exec = if table_fun_exprs.len() > 0 {
+                    //         Arc::new(TableFunExec::try_new(
+                    //             table_fun_exprs,
+                    //             input_exec,
+                    //         )?)
+                    //     } else {
+                    //         input_exec
+                    //     };
 
-                        Ok(Arc::new(ProjectionExec::try_new(
-                            projection_exprs,
-                            input_exec,
-                        )?))
-                    } else {
-                        Ok(Arc::new(TableFunExec::try_new(
-                            table_fun_exprs,
-                            input_exec,
-                        )?))
-                    }
+                    //     Ok(Arc::new(ProjectionExec::try_new(
+                    //         projection_exprs,
+                    //         input_exec,
+                    //     )?))
+                    // } else {
+                    //     Ok(Arc::new(TableFunExec::try_new(
+                    //         table_fun_exprs,
+                    //         input_exec,
+                    //     )?))
+                    // }
                 }
                 LogicalPlan::Filter(Filter {
                     input, predicate, ..

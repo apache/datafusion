@@ -21,7 +21,7 @@ use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use datafusion_expr::logical_plan::{
     Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Subquery,
-    SubqueryAlias, Window,
+    SubqueryAlias, Window, TableUDFs,
 };
 
 use crate::logical_plan::{
@@ -155,6 +155,13 @@ pub fn from_plan(
                 input: Arc::new(inputs[0].clone()),
                 schema: schema.clone(),
                 alias: alias.clone(),
+            }))
+        }
+        LogicalPlan::TableUDFs(TableUDFs { schema, .. }) => {
+            Ok(LogicalPlan::TableUDFs(TableUDFs {
+                expr: expr.to_vec(),
+                input: Arc::new(inputs[0].clone()),
+                schema: schema.clone(),
             }))
         }
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {

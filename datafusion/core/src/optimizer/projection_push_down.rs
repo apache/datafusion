@@ -21,7 +21,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window,
+    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window, TableUDFs,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -193,6 +193,67 @@ fn optimize_plan(
                         new_fields, metadata,
                     )?),
                     alias: alias.clone(),
+                }))
+            }
+        }
+        // TODO: !!!!!!!!!!!!!!
+        LogicalPlan::TableUDFs(TableUDFs {
+            input,
+            expr,
+            schema,
+        }) => {
+            // projection:
+            // * remove any expression that is not required
+            // * construct the new set of required columns
+
+            let mut new_expr = Vec::new();
+            let mut new_fields = Vec::new();
+
+            // Gather all columns needed for expressions in this Projection
+            schema
+                .fields()
+                .iter()
+                .enumerate()
+                .try_for_each(|(i, field)| {
+                    if required_columns.contains(&field.qualified_column()) {
+                        new_expr.push(expr[i].clone());
+                        new_fields.push(field.clone());
+
+                        // gather the new set of required columns
+                        utils::expr_to_columns(&expr[i], &mut new_required_columns)
+                    } else {
+                        Ok(())
+                    }
+                })?;
+
+            let new_input = optimize_plan(
+                optimizer,
+                input,
+                &new_required_columns,
+                true,
+                execution_props,
+            )?;
+
+            let new_required_columns_optimized = new_input
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| f.qualified_column())
+                .collect::<HashSet<Column>>();
+
+            if new_fields.is_empty()
+                || (has_projection && &new_required_columns_optimized == required_columns)
+            {
+                // no need for an expression at all
+                Ok(new_input)
+            } else {
+                let metadata = new_input.schema().metadata().clone();
+                Ok(LogicalPlan::TableUDFs(TableUDFs {
+                    expr: new_expr,
+                    input: Arc::new(new_input),
+                    schema: DFSchemaRef::new(DFSchema::new_with_metadata(
+                        new_fields, metadata,
+                    )?),
                 }))
             }
         }
