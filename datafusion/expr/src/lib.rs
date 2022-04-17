@@ -17,12 +17,16 @@
 
 mod accumulator;
 pub mod aggregate_function; // TODO only make some members public ?
+pub mod array_expressions;
+pub mod binary_rule; // TODO only make some members public ?
 mod built_in_function;
 mod columnar_value;
+pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
-mod function;
+pub mod function; // TODO only make some members public ?
 mod literal;
+mod nullif;
 mod operator;
 mod signature;
 pub mod type_coercion; // TODO only make some members public ?
@@ -42,6 +46,7 @@ pub use function::{
     StateTypeFunction,
 };
 pub use literal::{lit, lit_timestamp_nano, Literal, TimestampLiteral};
+pub use nullif::SUPPORTED_NULLIF_TYPES;
 pub use operator::Operator;
 pub use signature::{Signature, TypeSignature, Volatility};
 pub use udaf::AggregateUDF;

@@ -16,11 +16,11 @@
 // under the License.
 
 use super::Expr;
-use crate::physical_plan::{expressions::binary_operator_data_type, functions};
+use crate::logical_expr::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
-use datafusion_expr::{aggregate_function, window_function};
+use datafusion_expr::binary_rule::binary_operator_data_type;
 use datafusion_physical_expr::field_util::get_indexed_field;
 
 /// trait to allow expr to typable with respect to a schema
@@ -75,7 +75,7 @@ impl ExprSchemable for Expr {
                     .iter()
                     .map(|e| e.get_type(schema))
                     .collect::<Result<Vec<_>>>()?;
-                functions::return_type(fun, &data_types)
+                function::return_type(fun, &data_types)
             }
             Expr::WindowFunction { fun, args, .. } => {
                 let data_types = args

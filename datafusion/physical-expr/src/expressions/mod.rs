@@ -64,7 +64,7 @@ pub use approx_percentile_cont::ApproxPercentileCont;
 pub use approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use array_agg::ArrayAgg;
 pub use average::{Avg, AvgAccumulator};
-pub use binary::{binary, binary_operator_data_type, BinaryExpr};
+pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
@@ -87,7 +87,7 @@ pub use min_max::{MaxAccumulator, MinAccumulator};
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nth_value::NthValue;
-pub use nullif::{nullif_func, SUPPORTED_NULLIF_TYPES};
+pub use nullif::nullif_func;
 pub use rank::{dense_rank, percent_rank, rank};
 pub use row_number::RowNumber;
 pub use stats::StatsType;
