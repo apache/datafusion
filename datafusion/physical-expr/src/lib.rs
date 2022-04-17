@@ -23,7 +23,6 @@ pub mod conditional_expressions;
 pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod expressions;
-pub mod field_util;
 mod functions;
 mod hyperloglog;
 pub mod math_expressions;

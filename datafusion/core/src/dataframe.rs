@@ -68,6 +68,7 @@ use std::any::Any;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct DataFrame {
     session_state: Arc<RwLock<SessionState>>,
     plan: LogicalPlan,

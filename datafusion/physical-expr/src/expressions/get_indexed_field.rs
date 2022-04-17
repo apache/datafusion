@@ -17,7 +17,7 @@
 
 //! get field of a `ListArray`
 
-use crate::{field_util::get_indexed_field as get_data_type_field, PhysicalExpr};
+use crate::PhysicalExpr;
 use arrow::array::Array;
 use arrow::array::{ListArray, StructArray};
 use arrow::compute::concat;
@@ -28,7 +28,9 @@ use arrow::{
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::ColumnarValue;
+use datafusion_expr::{
+    field_util::get_indexed_field as get_data_type_field, ColumnarValue,
+};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};

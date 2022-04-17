@@ -24,6 +24,7 @@ mod columnar_value;
 pub mod conditional_expressions;
 pub mod expr;
 pub mod expr_fn;
+pub mod field_util;
 pub mod function; // TODO only make some members public ?
 mod literal;
 mod nullif;
