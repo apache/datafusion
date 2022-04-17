@@ -112,14 +112,46 @@ pub trait ObjectStore: Sync + Send + Debug {
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 
     /// Get object writer for one file
-    fn file_writer(&self, path: String) -> Result<Arc<dyn ObjectWriter>>;
+    fn file_writer(&self, path: &str) -> Result<Arc<dyn ObjectWriter>>;
+
+    /// Create directory, recursively if requested
+    ///
+    /// If directory already exists, will return Ok
+    async fn create_dir(&self, path: &str, recursive: bool) -> Result<()>;
+
+    /// Delete directory and its contents, recursively
+    async fn remove_dir_all(&self, path: &str) -> Result<()>;
+
+    /// Delete directory contents recursively
+    ///
+    /// Unlike [delete_dir], will not delete directory itself
+    async fn remove_dir_contents(&self, path: &str) -> Result<()>;
+
+    /// Delete a file
+    ///
+    /// If file does not exist, will return error kind [std::io::ErrorKind::NotFound]
+    /// If attempted on a directory, will return error kind [std::io::ErrorKind::InvalidInput]
+    async fn remove_file(&self, path: &str) -> Result<()>;
+
+    /// Rename a file or directory
+    ///
+    /// If dest exists, source will replace it unless dest is a non-empty directory,
+    /// in which case an [std::io::ErrorKind::AlreadyExists] or
+    /// [std::io::ErrorKind::DirectoryNotEmpty] error will be returned
+    async fn rename(&self, source: &str, dest: &str) -> Result<()>;
+
+    /// Copy a file or directory
+    ///
+    /// If the destination exists and is a directory, an error is returned.
+    /// Otherwise, it is replaced.
+    async fn copy(&self, source: &str, dest: &str) -> Result<()>;
 }
 
 // TODO: Document below when we do and do not expect a scheme
 /// Return path without scheme
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// let path = "file://path/to/object";
 /// assert_eq(path_without_scheme(path), "path/to/object");
