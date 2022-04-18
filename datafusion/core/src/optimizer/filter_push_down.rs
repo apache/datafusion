@@ -24,6 +24,7 @@ use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::{error::Result, logical_plan::Operator};
+use datafusion_common::DataFusionError;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -520,46 +521,49 @@ fn optimize(
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
-            let source = execution_props
-                .table_providers
-                .get(table_provider_name)
-                .expect("table provider found"); // TODO error handling
+            match execution_props.table_providers.get(table_provider_name) {
+                Some(source) => {
+                    for (filter_expr, cols) in &state.filters {
+                        let (preserve_filter_node, add_to_provider) =
+                            match source.supports_filter_pushdown(filter_expr)? {
+                                TableProviderFilterPushDown::Unsupported => (true, false),
+                                TableProviderFilterPushDown::Inexact => (true, true),
+                                TableProviderFilterPushDown::Exact => (false, true),
+                            };
 
-            for (filter_expr, cols) in &state.filters {
-                let (preserve_filter_node, add_to_provider) =
-                    match source.supports_filter_pushdown(filter_expr)? {
-                        TableProviderFilterPushDown::Unsupported => (true, false),
-                        TableProviderFilterPushDown::Inexact => (true, true),
-                        TableProviderFilterPushDown::Exact => (false, true),
-                    };
+                        if preserve_filter_node {
+                            used_columns.extend(cols.clone());
+                        }
 
-                if preserve_filter_node {
-                    used_columns.extend(cols.clone());
-                }
-
-                if add_to_provider {
-                    // Don't add expression again if it's already present in
-                    // pushed down filters.
-                    if new_filters.contains(filter_expr) {
-                        continue;
+                        if add_to_provider {
+                            // Don't add expression again if it's already present in
+                            // pushed down filters.
+                            if new_filters.contains(filter_expr) {
+                                continue;
+                            }
+                            new_filters.push(filter_expr.clone());
+                        }
                     }
-                    new_filters.push(filter_expr.clone());
-                }
-            }
 
-            issue_filters(
-                state,
-                execution_props,
-                used_columns,
-                &LogicalPlan::TableScan(TableScan {
-                    table_provider_name: table_provider_name.clone(),
-                    projection: projection.clone(),
-                    projected_schema: projected_schema.clone(),
-                    table_name: table_name.clone(),
-                    filters: new_filters,
-                    limit: *limit,
-                }),
-            )
+                    issue_filters(
+                        state,
+                        execution_props,
+                        used_columns,
+                        &LogicalPlan::TableScan(TableScan {
+                            table_provider_name: table_provider_name.clone(),
+                            projection: projection.clone(),
+                            projected_schema: projected_schema.clone(),
+                            table_name: table_name.clone(),
+                            filters: new_filters,
+                            limit: *limit,
+                        }),
+                    )
+                }
+                _ => Err(DataFusionError::Plan(format!(
+                    "No table provider named {}",
+                    table_provider_name
+                ))),
+            }
         }
         _ => {
             // all other plans are _not_ filter-commutable

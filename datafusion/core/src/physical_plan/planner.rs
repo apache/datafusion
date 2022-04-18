@@ -339,13 +339,17 @@ impl DefaultPhysicalPlanner {
                     limit,
                     ..
                 }) => {
-                    let source = session_state.execution_props.table_providers.get(table_provider_name).expect("table provider found"); // TODO error handling
-                    // Remove all qualifiers from the scan as the provider
-                    // doesn't know (nor should care) how the relation was
-                    // referred to in the query
-                    let filters = unnormalize_cols(filters.iter().cloned());
-                    let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(projection, &unaliased, *limit).await
+                    match session_state.execution_props.table_providers.get(table_provider_name) {
+                        Some(source) => {
+                            // Remove all qualifiers from the scan as the provider
+                            // doesn't know (nor should care) how the relation was
+                            // referred to in the query
+                            let filters = unnormalize_cols(filters.iter().cloned());
+                            let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
+                            source.scan(projection, &unaliased, *limit).await
+                        }
+                        _ => Err(DataFusionError::Plan(format!("No table provider named {}", table_provider_name)))
+                    }
                 }
                 LogicalPlan::Values(Values {
                     values,
