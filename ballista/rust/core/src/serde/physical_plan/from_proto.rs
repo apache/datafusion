@@ -36,7 +36,7 @@ use datafusion::logical_plan::FunctionRegistry;
 
 use datafusion::physical_plan::file_format::FileScanConfig;
 
-use datafusion::physical_plan::window_functions::WindowFunction;
+use datafusion::logical_expr::window_function::WindowFunction;
 
 use datafusion::physical_plan::{
     expressions::{

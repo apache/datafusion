@@ -648,12 +648,14 @@ mod tests {
 
     use super::*;
     use crate::execution::options::CsvReadOptions;
-    use crate::physical_plan::{window_functions, ColumnarValue};
+    use crate::physical_plan::ColumnarValue;
     use crate::{assert_batches_sorted_eq, execution::context::SessionContext};
     use crate::{logical_plan::*, test_util};
     use arrow::datatypes::DataType;
-    use datafusion_expr::ScalarFunctionImplementation;
     use datafusion_expr::Volatility;
+    use datafusion_expr::{
+        BuiltInWindowFunction, ScalarFunctionImplementation, WindowFunction,
+    };
 
     #[tokio::test]
     async fn select_columns() -> Result<()> {
@@ -693,9 +695,7 @@ mod tests {
         // build plan using Table API
         let t = test_table().await?;
         let first_row = Expr::WindowFunction {
-            fun: window_functions::WindowFunction::BuiltInWindowFunction(
-                window_functions::BuiltInWindowFunction::FirstValue,
-            ),
+            fun: WindowFunction::BuiltInWindowFunction(BuiltInWindowFunction::FirstValue),
             args: vec![col("aggregate_test_100.c1")],
             partition_by: vec![col("aggregate_test_100.c2")],
             order_by: vec![],

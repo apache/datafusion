@@ -34,15 +34,12 @@ use datafusion::{
     arrow::datatypes::{
         DataType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit, UnionMode,
     },
+    logical_expr::{BuiltInWindowFunction, BuiltinScalarFunction, WindowFunction},
     logical_plan::{
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchemaRef, Expr,
     },
-    physical_plan::{
-        aggregates::AggregateFunction,
-        functions::BuiltinScalarFunction,
-        window_functions::{BuiltInWindowFunction, WindowFunction},
-    },
+    physical_plan::aggregates::AggregateFunction,
     scalar::ScalarValue,
 };
 
