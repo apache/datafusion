@@ -642,7 +642,6 @@ mod tests {
             BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
         };
         use datafusion::arrow::util::pretty::pretty_format_batches;
-        use datafusion::assert_batches_eq;
         let config = BallistaConfigBuilder::default()
             .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
             .build()
@@ -696,13 +695,15 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "standalone")]
-    async fn test_percentile_func() {
+    async fn test_aggregate_func() {
         use crate::context::BallistaContext;
         use ballista_core::config::{
             BallistaConfigBuilder, BALLISTA_WITH_INFORMATION_SCHEMA,
         };
+        use datafusion::arrow;
         use datafusion::arrow::util::pretty::pretty_format_batches;
         use datafusion::prelude::ParquetReadOptions;
+
         let config = BallistaConfigBuilder::default()
             .set(BALLISTA_WITH_INFORMATION_SCHEMA, "true")
             .build()
@@ -718,6 +719,199 @@ mod tests {
             )
             .await
             .unwrap();
+
+        let df = context.sql("select min(\"id\") from test").await.unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------+",
+            "| MIN(test.id) |",
+            "+--------------+",
+            "| 0            |",
+            "+--------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context.sql("select max(\"id\") from test").await.unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------+",
+            "| MAX(test.id) |",
+            "+--------------+",
+            "| 7            |",
+            "+--------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context.sql("select SUM(\"id\") from test").await.unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------+",
+            "| SUM(test.id) |",
+            "+--------------+",
+            "| 28           |",
+            "+--------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context.sql("select AVG(\"id\") from test").await.unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------+",
+            "| AVG(test.id) |",
+            "+--------------+",
+            "| 3.5          |",
+            "+--------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context.sql("select COUNT(\"id\") from test").await.unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+----------------+",
+            "| COUNT(test.id) |",
+            "+----------------+",
+            "| 8              |",
+            "+----------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select approx_distinct(\"id\") from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+-------------------------+",
+            "| APPROXDISTINCT(test.id) |",
+            "+-------------------------+",
+            "| 8                       |",
+            "+-------------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select ARRAY_AGG(\"id\") from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------------------+",
+            "| ARRAYAGG(test.id)        |",
+            "+--------------------------+",
+            "| [4, 5, 6, 7, 2, 3, 0, 1] |",
+            "+--------------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context.sql("select VAR(\"id\") from test").await.unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+-------------------+",
+            "| VARIANCE(test.id) |",
+            "+-------------------+",
+            "| 6.000000000000001 |",
+            "+-------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select VAR_POP(\"id\") from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+----------------------+",
+            "| VARIANCEPOP(test.id) |",
+            "+----------------------+",
+            "| 5.250000000000001    |",
+            "+----------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select VAR_SAMP(\"id\") from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+-------------------+",
+            "| VARIANCE(test.id) |",
+            "+-------------------+",
+            "| 6.000000000000001 |",
+            "+-------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select STDDEV(\"id\") from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------------+",
+            "| STDDEV(test.id)    |",
+            "+--------------------+",
+            "| 2.4494897427831783 |",
+            "+--------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select STDDEV_SAMP(\"id\") from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------------+",
+            "| STDDEV(test.id)    |",
+            "+--------------------+",
+            "| 2.4494897427831783 |",
+            "+--------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select COVAR(id, tinyint_col) from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+--------------------------------------+",
+            "| COVARIANCE(test.id,test.tinyint_col) |",
+            "+--------------------------------------+",
+            "| 0.28571428571428586                  |",
+            "+--------------------------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select CORR(id, tinyint_col) from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+---------------------------------------+",
+            "| CORRELATION(test.id,test.tinyint_col) |",
+            "+---------------------------------------+",
+            "| 0.21821789023599245                   |",
+            "+---------------------------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
+        let df = context
+            .sql("select approx_percentile_cont_with_weight(\"id\", 2, 0.5) from test")
+            .await
+            .unwrap();
+        let res = df.collect().await.unwrap();
+        let expected = vec![
+            "+---------------------------------------------------------------+",
+            "| APPROXPERCENTILECONTWITHWEIGHT(test.id,Int64(2),Float64(0.5)) |",
+            "+---------------------------------------------------------------+",
+            "| 1                                                             |",
+            "+---------------------------------------------------------------+",
+        ];
+        assert_result_eq(expected, &*res);
+
         let df = context
             .sql("select approx_percentile_cont(\"double_col\", 0.5) from test")
             .await
@@ -731,14 +925,21 @@ mod tests {
             "+----------------------------------------------------+",
         ];
 
-        assert_eq!(
-            expected,
-            pretty_format_batches(&*res)
-                .unwrap()
-                .to_string()
-                .trim()
-                .lines()
-                .collect::<Vec<&str>>()
-        );
+        assert_result_eq(expected, &*res);
+
+        fn assert_result_eq(
+            expected: Vec<&str>,
+            results: &[arrow::record_batch::RecordBatch],
+        ) {
+            assert_eq!(
+                expected,
+                pretty_format_batches(results)
+                    .unwrap()
+                    .to_string()
+                    .trim()
+                    .lines()
+                    .collect::<Vec<&str>>()
+            );
+        }
     }
 }

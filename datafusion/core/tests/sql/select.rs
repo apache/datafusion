@@ -959,6 +959,44 @@ async fn parallel_query_with_filter() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_with_filter_string_type_coercion() {
+    let large_string_array = LargeStringArray::from(vec!["1", "2", "3", "4", "5"]);
+    let schema =
+        Schema::new(vec![Field::new("large_string", DataType::LargeUtf8, false)]);
+    let batch =
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(large_string_array)])
+            .unwrap();
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+    let sql = "select * from t where large_string = '1'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| large_string |",
+        "+--------------+",
+        "| 1            |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select * from t where large_string != '1'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| large_string |",
+        "+--------------+",
+        "| 2            |",
+        "| 3            |",
+        "| 4            |",
+        "| 5            |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn query_empty_table() {
     let ctx = SessionContext::new();
     let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
