@@ -37,3 +37,8 @@ exclude = ["datafusion-cli"]
 [profile.release]
 codegen-units = 1
 lto = true
+
+
+
+[patch.crates-io]
+arrow = { git = "https://github.com/alamb/arrow-rs.git", branch="alamb/test_null_cast" }
