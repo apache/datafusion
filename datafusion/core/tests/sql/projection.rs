@@ -141,18 +141,22 @@ async fn projection_on_table_scan() -> Result<()> {
     let ctx = partitioned_csv::create_ctx(&tmp_dir, partition_count).await?;
 
     let table = ctx.table("test")?;
-    let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
-        .project(vec![col("c2")])?
-        .build()?;
+    let builder =
+        LogicalPlanBuilder::from(table.to_logical_plan()).project(vec![col("c2")])?;
+    let logical_plan = builder.build()?;
 
     let optimized_plan = ctx.optimize(&logical_plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
-                source,
+                table_provider_name,
                 projected_schema,
                 ..
             }) => {
+                let source = builder
+                    .table_providers
+                    .get(table_provider_name)
+                    .expect("table provider found");
                 assert_eq!(source.schema().fields().len(), 3);
                 assert_eq!(projected_schema.fields().len(), 1);
             }
@@ -212,9 +216,9 @@ async fn projection_on_memory_scan() -> Result<()> {
         ],
     )?]];
 
-    let plan = LogicalPlanBuilder::scan_memory(partitions, schema, None)?
-        .project(vec![col("b")])?
-        .build()?;
+    let builder = LogicalPlanBuilder::scan_memory(partitions, schema, None)?
+        .project(vec![col("b")])?;
+    let plan = builder.build()?;
     assert_fields_eq(&plan, vec!["b"]);
 
     let ctx = SessionContext::new();
@@ -222,10 +226,14 @@ async fn projection_on_memory_scan() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
-                source,
+                table_provider_name,
                 projected_schema,
                 ..
             }) => {
+                let source = builder
+                    .table_providers
+                    .get(table_provider_name)
+                    .expect("table provider found");
                 assert_eq!(source.schema().fields().len(), 3);
                 assert_eq!(projected_schema.fields().len(), 1);
             }

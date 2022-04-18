@@ -269,8 +269,12 @@ impl BallistaContext {
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
         match self.read_csv(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan(TableScan { source, .. }) => {
-                self.register_table(name, source)
+            LogicalPlan::TableScan(TableScan {
+                table_provider_name,
+                ..
+            }) => {
+                todo!("ballista context")
+                //self.register_table(name, source)
             }
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
@@ -283,8 +287,12 @@ impl BallistaContext {
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
         match self.read_parquet(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan(TableScan { source, .. }) => {
-                self.register_table(name, source)
+            LogicalPlan::TableScan(TableScan {
+                table_provider_name,
+                ..
+            }) => {
+                todo!("ballista context")
+                // self.register_table(name, source)
             }
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }
@@ -297,8 +305,12 @@ impl BallistaContext {
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
         match self.read_avro(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan(TableScan { source, .. }) => {
-                self.register_table(name, source)
+            LogicalPlan::TableScan(TableScan {
+                table_provider_name,
+                ..
+            }) => {
+                todo!("ballista context")
+                // self.register_table(name, source)
             }
             _ => Err(DataFusionError::Internal("Expected tables scan".to_owned())),
         }

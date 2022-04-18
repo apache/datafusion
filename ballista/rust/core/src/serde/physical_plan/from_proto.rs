@@ -165,7 +165,7 @@ pub(crate) fn parse_physical_expr(
                 .collect::<Result<Vec<_>, _>>()?;
 
             // TODO Do not create new the ExecutionProps
-            let execution_props = ExecutionProps::new();
+            let execution_props = ExecutionProps::default();
 
             let fun_expr = functions::create_physical_fun(
                 &(&scalar_function).into(),

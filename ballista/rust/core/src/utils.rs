@@ -38,7 +38,7 @@ use datafusion::arrow::{
 };
 use datafusion::error::DataFusionError;
 use datafusion::execution::context::{
-    QueryPlanner, SessionConfig, SessionContext, SessionState,
+    ExecutionProps, QueryPlanner, SessionConfig, SessionContext, SessionState,
 };
 use datafusion::logical_plan::LogicalPlan;
 

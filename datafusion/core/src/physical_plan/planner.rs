@@ -333,12 +333,13 @@ impl DefaultPhysicalPlanner {
         async move {
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
                 LogicalPlan::TableScan (TableScan {
-                    source,
+                    table_provider_name,
                     projection,
                     filters,
                     limit,
                     ..
                 }) => {
+                    let source = session_state.execution_props.table_providers.get(table_provider_name).expect("table provider found"); // TODO error handling
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query

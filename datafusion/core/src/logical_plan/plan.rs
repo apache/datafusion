@@ -130,8 +130,8 @@ pub struct Window {
 pub struct TableScan {
     /// The name of the table
     pub table_name: String,
-    /// The source of the table
-    pub source: Arc<dyn TableProvider>,
+    /// The name of the table provider
+    pub table_provider_name: String,
     /// Optional column indices to use as a projection
     pub projection: Option<Vec<usize>>,
     /// The schema description of the output
@@ -950,7 +950,7 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::TableScan(TableScan {
-                        ref source,
+                        ref table_provider_name,
                         ref table_name,
                         ref projection,
                         ref filters,
@@ -963,41 +963,43 @@ impl LogicalPlan {
                             table_name, projection
                         )?;
 
-                        if !filters.is_empty() {
-                            let mut full_filter = vec![];
-                            let mut partial_filter = vec![];
-                            let mut unsupported_filters = vec![];
-
-                            filters.iter().for_each(|x| {
-                                if let Ok(t) = source.supports_filter_pushdown(x) {
-                                    match t {
-                                        TableProviderFilterPushDown::Exact => {
-                                            full_filter.push(x)
-                                        }
-                                        TableProviderFilterPushDown::Inexact => {
-                                            partial_filter.push(x)
-                                        }
-                                        TableProviderFilterPushDown::Unsupported => {
-                                            unsupported_filters.push(x)
-                                        }
-                                    }
-                                }
-                            });
-
-                            if !full_filter.is_empty() {
-                                write!(f, ", full_filters={:?}", full_filter)?;
-                            };
-                            if !partial_filter.is_empty() {
-                                write!(f, ", partial_filters={:?}", partial_filter)?;
-                            }
-                            if !unsupported_filters.is_empty() {
-                                write!(
-                                    f,
-                                    ", unsupported_filters={:?}",
-                                    unsupported_filters
-                                )?;
-                            }
-                        }
+                        // if !filters.is_empty() {
+                        //     let mut full_filter: Vec<Expr> = vec![];
+                        //     let mut partial_filter: Vec<Expr> = vec![];
+                        //     let mut unsupported_filters: Vec<Expr> = vec![];
+                        //
+                        //     filters.iter().for_each(|x| {
+                        //         // TODO need access to table provider map to do this, or we
+                        //         // need to copy more info into TableScan struct
+                        //         // if let Ok(t) = source.supports_filter_pushdown(x) {
+                        //         //     match t {
+                        //         //         TableProviderFilterPushDown::Exact => {
+                        //         //             full_filter.push(x)
+                        //         //         }
+                        //         //         TableProviderFilterPushDown::Inexact => {
+                        //         //             partial_filter.push(x)
+                        //         //         }
+                        //         //         TableProviderFilterPushDown::Unsupported => {
+                        //         //             unsupported_filters.push(x)
+                        //         //         }
+                        //         //     }
+                        //         // }
+                        //     });
+                        //
+                        //     if !full_filter.is_empty() {
+                        //         write!(f, ", full_filters={:?}", full_filter)?;
+                        //     };
+                        //     if !partial_filter.is_empty() {
+                        //         write!(f, ", partial_filters={:?}", partial_filter)?;
+                        //     }
+                        //     if !unsupported_filters.is_empty() {
+                        //         write!(
+                        //             f,
+                        //             ", unsupported_filters={:?}",
+                        //             unsupported_filters
+                        //         )?;
+                        //     }
+                        // }
 
                         if let Some(n) = limit {
                             write!(f, ", limit={}", n)?;

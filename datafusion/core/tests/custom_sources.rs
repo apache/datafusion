@@ -203,19 +203,24 @@ impl TableProvider for CustomTableProvider {
 async fn custom_source_dataframe() -> Result<()> {
     let ctx = SessionContext::new();
 
-    let table = ctx.read_table(Arc::new(CustomTableProvider))?;
-    let logical_plan = LogicalPlanBuilder::from(table.to_logical_plan())
-        .project(vec![col("c2")])?
-        .build()?;
+    let provider = Arc::new(CustomTableProvider);
+    let table = ctx.read_table(provider.clone())?;
+    let builder =
+        LogicalPlanBuilder::from(table.to_logical_plan()).project(vec![col("c2")])?;
+    let logical_plan = builder.build()?;
 
     let optimized_plan = ctx.optimize(&logical_plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
-                source,
+                table_provider_name,
                 projected_schema,
                 ..
             }) => {
+                let source = builder
+                    .table_providers
+                    .get(table_provider_name)
+                    .expect("table provider found");
                 assert_eq!(source.schema().fields().len(), 2);
                 assert_eq!(projected_schema.fields().len(), 1);
             }

@@ -42,7 +42,7 @@ fn limit_push_down(
     _optimizer: &LimitPushDown,
     upper_limit: Option<usize>,
     plan: &LogicalPlan,
-    _execution_props: &ExecutionProps,
+    execution_props: &ExecutionProps,
 ) -> Result<LogicalPlan> {
     match (plan, upper_limit) {
         (LogicalPlan::Limit(Limit { n, input }), upper_limit) => {
@@ -54,14 +54,14 @@ fn limit_push_down(
                     _optimizer,
                     Some(smallest),
                     input.as_ref(),
-                    _execution_props,
+                    execution_props,
                 )?),
             }))
         }
         (
             LogicalPlan::TableScan(TableScan {
                 table_name,
-                source,
+                table_provider_name,
                 projection,
                 filters,
                 limit,
@@ -70,7 +70,7 @@ fn limit_push_down(
             Some(upper_limit),
         ) => Ok(LogicalPlan::TableScan(TableScan {
             table_name: table_name.clone(),
-            source: source.clone(),
+            table_provider_name: table_provider_name.clone(),
             projection: projection.clone(),
             filters: filters.clone(),
             limit: limit
@@ -94,7 +94,7 @@ fn limit_push_down(
                     _optimizer,
                     upper_limit,
                     input.as_ref(),
-                    _execution_props,
+                    execution_props,
                 )?),
                 schema: schema.clone(),
                 alias: alias.clone(),
@@ -118,7 +118,7 @@ fn limit_push_down(
                             _optimizer,
                             Some(upper_limit),
                             x,
-                            _execution_props,
+                            execution_props,
                         )?),
                     }))
                 })
@@ -138,7 +138,7 @@ fn limit_push_down(
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|plan| limit_push_down(_optimizer, None, plan, _execution_props))
+                .map(|plan| limit_push_down(_optimizer, None, plan, execution_props))
                 .collect::<Result<Vec<_>>>()?;
 
             utils::from_plan(plan, &expr, &new_inputs)
@@ -171,7 +171,7 @@ mod test {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &ExecutionProps::default())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

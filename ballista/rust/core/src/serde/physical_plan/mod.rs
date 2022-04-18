@@ -1334,7 +1334,7 @@ mod roundtrip_tests {
 
         let input = Arc::new(EmptyExec::new(false, schema.clone()));
 
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
 
         let fun_expr = functions::create_physical_fun(
             &BuiltinScalarFunction::Abs,

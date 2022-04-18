@@ -505,85 +505,87 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,
-                source,
+                table_provider_name,
                 filters,
                 projection,
                 ..
             }) => {
-                let schema = source.schema();
-                let source = source.as_any();
+                todo!("ballista serde")
 
-                let projection = match projection {
-                    None => None,
-                    Some(columns) => {
-                        let column_names = columns
-                            .iter()
-                            .map(|i| schema.field(*i).name().to_owned())
-                            .collect();
-                        Some(protobuf::ProjectionColumns {
-                            columns: column_names,
-                        })
-                    }
-                };
-                let schema: datafusion_proto::protobuf::Schema = schema.as_ref().into();
-
-                let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> = filters
-                    .iter()
-                    .map(|filter| filter.try_into())
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                    let any = listing_table.options().format.as_any();
-                    let file_format_type = if let Some(parquet) =
-                        any.downcast_ref::<ParquetFormat>()
-                    {
-                        FileFormatType::Parquet(protobuf::ParquetFormat {
-                            enable_pruning: parquet.enable_pruning(),
-                        })
-                    } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                        FileFormatType::Csv(protobuf::CsvFormat {
-                            delimiter: byte_to_string(csv.delimiter())?,
-                            has_header: csv.has_header(),
-                        })
-                    } else if any.is::<AvroFormat>() {
-                        FileFormatType::Avro(protobuf::AvroFormat {})
-                    } else {
-                        return Err(proto_error(format!(
-                            "Error converting file format, {:?} is invalid as a datafusion foramt.",
-                            listing_table.options().format
-                        )));
-                    };
-                    Ok(protobuf::LogicalPlanNode {
-                        logical_plan_type: Some(LogicalPlanType::ListingScan(
-                            protobuf::ListingTableScanNode {
-                                file_format_type: Some(file_format_type),
-                                table_name: table_name.to_owned(),
-                                collect_stat: listing_table.options().collect_stat,
-                                file_extension: listing_table
-                                    .options()
-                                    .file_extension
-                                    .clone(),
-                                table_partition_cols: listing_table
-                                    .options()
-                                    .table_partition_cols
-                                    .clone(),
-                                path: listing_table.table_path().to_owned(),
-                                schema: Some(schema),
-                                projection,
-                                filters,
-                                target_partitions: listing_table
-                                    .options()
-                                    .target_partitions
-                                    as u32,
-                            },
-                        )),
-                    })
-                } else {
-                    Err(BallistaError::General(format!(
-                        "logical plan to_proto unsupported table provider {:?}",
-                        source
-                    )))
-                }
+                // let schema = source.schema();
+                // let source = source.as_any();
+                //
+                // let projection = match projection {
+                //     None => None,
+                //     Some(columns) => {
+                //         let column_names = columns
+                //             .iter()
+                //             .map(|i| schema.field(*i).name().to_owned())
+                //             .collect();
+                //         Some(protobuf::ProjectionColumns {
+                //             columns: column_names,
+                //         })
+                //     }
+                // };
+                // let schema: datafusion_proto::protobuf::Schema = schema.as_ref().into();
+                //
+                // let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> = filters
+                //     .iter()
+                //     .map(|filter| filter.try_into())
+                //     .collect::<Result<Vec<_>, _>>()?;
+                //
+                // if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
+                //     let any = listing_table.options().format.as_any();
+                //     let file_format_type = if let Some(parquet) =
+                //         any.downcast_ref::<ParquetFormat>()
+                //     {
+                //         FileFormatType::Parquet(protobuf::ParquetFormat {
+                //             enable_pruning: parquet.enable_pruning(),
+                //         })
+                //     } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                //         FileFormatType::Csv(protobuf::CsvFormat {
+                //             delimiter: byte_to_string(csv.delimiter())?,
+                //             has_header: csv.has_header(),
+                //         })
+                //     } else if any.is::<AvroFormat>() {
+                //         FileFormatType::Avro(protobuf::AvroFormat {})
+                //     } else {
+                //         return Err(proto_error(format!(
+                //             "Error converting file format, {:?} is invalid as a datafusion foramt.",
+                //             listing_table.options().format
+                //         )));
+                //     };
+                //     Ok(protobuf::LogicalPlanNode {
+                //         logical_plan_type: Some(LogicalPlanType::ListingScan(
+                //             protobuf::ListingTableScanNode {
+                //                 file_format_type: Some(file_format_type),
+                //                 table_name: table_name.to_owned(),
+                //                 collect_stat: listing_table.options().collect_stat,
+                //                 file_extension: listing_table
+                //                     .options()
+                //                     .file_extension
+                //                     .clone(),
+                //                 table_partition_cols: listing_table
+                //                     .options()
+                //                     .table_partition_cols
+                //                     .clone(),
+                //                 path: listing_table.table_path().to_owned(),
+                //                 schema: Some(schema),
+                //                 projection,
+                //                 filters,
+                //                 target_partitions: listing_table
+                //                     .options()
+                //                     .target_partitions
+                //                     as u32,
+                //             },
+                //         )),
+                //     })
+                // } else {
+                //     Err(BallistaError::General(format!(
+                //         "logical plan to_proto unsupported table provider {:?}",
+                //         source
+                //     )))
+                // }
             }
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
@@ -1433,19 +1435,20 @@ mod roundtrip_tests {
 
         assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
 
-        let round_trip_store = match round_trip {
-            LogicalPlan::TableScan(scan) => {
-                match scan.source.as_ref().as_any().downcast_ref::<ListingTable>() {
-                    Some(listing_table) => {
-                        format!("{:?}", listing_table.object_store())
-                    }
-                    _ => panic!("expected a ListingTable"),
-                }
-            }
-            _ => panic!("expected a TableScan"),
-        };
-
-        assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
+        todo!("ballista serde");
+        // let round_trip_store = match round_trip {
+        //     LogicalPlan::TableScan(scan) => {
+        //         match scan.source.as_ref().as_any().downcast_ref::<ListingTable>() {
+        //             Some(listing_table) => {
+        //                 format!("{:?}", listing_table.object_store())
+        //             }
+        //             _ => panic!("expected a ListingTable"),
+        //         }
+        //     }
+        //     _ => panic!("expected a TableScan"),
+        // };
+        //
+        // assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
 
         Ok(())
     }

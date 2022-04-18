@@ -1076,20 +1076,22 @@ pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
     /// providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
+    pub table_providers: HashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl Default for ExecutionProps {
     fn default() -> Self {
-        Self::new()
+        Self::new(HashMap::new())
     }
 }
 
 impl ExecutionProps {
     /// Creates a new execution props
-    pub fn new() -> Self {
+    pub fn new(table_providers: HashMap<String, Arc<dyn TableProvider>>) -> Self {
         ExecutionProps {
             query_execution_start_time: chrono::Utc::now(),
             var_providers: None,
+            table_providers,
         }
     }
 
@@ -1226,7 +1228,7 @@ impl SessionState {
             scalar_functions: HashMap::new(),
             aggregate_functions: HashMap::new(),
             config,
-            execution_props: ExecutionProps::new(),
+            execution_props: ExecutionProps::default(),
             runtime_env: runtime,
         }
     }

@@ -1196,7 +1196,7 @@ mod tests {
         ($FUNC:ident, $ARGS:expr, $EXPECTED:expr, $EXPECTED_TYPE:ty, $DATA_TYPE: ident, $ARRAY_TYPE:ident) => {
             // used to provide type annotation
             let expected: Result<Option<$EXPECTED_TYPE>> = $EXPECTED;
-            let execution_props = ExecutionProps::new();
+            let execution_props = ExecutionProps::default();
 
             // any type works here: we evaluate against a literal of `value`
             let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
@@ -3431,7 +3431,7 @@ mod tests {
 
     #[test]
     fn test_empty_arguments_error() -> Result<()> {
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         // pick some arbitrary functions to test
@@ -3474,7 +3474,7 @@ mod tests {
 
     #[test]
     fn test_empty_arguments() -> Result<()> {
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
 
         let funs = [BuiltinScalarFunction::Now, BuiltinScalarFunction::Random];
@@ -3497,7 +3497,7 @@ mod tests {
             Field::new("b", value2.data_type().clone(), false),
         ]);
         let columns: Vec<ArrayRef> = vec![value1, value2];
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
 
         let expr = create_physical_expr(
             &BuiltinScalarFunction::Array,
@@ -3560,7 +3560,7 @@ mod tests {
     fn test_regexp_match() -> Result<()> {
         use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
 
         let col_value: ArrayRef = Arc::new(StringArray::from_slice(&["aaa-555"]));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));
@@ -3599,7 +3599,7 @@ mod tests {
     fn test_regexp_match_all_literals() -> Result<()> {
         use arrow::array::ListArray;
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
 
         let col_value = lit(ScalarValue::Utf8(Some("aaa-555".to_string())));
         let pattern = lit(ScalarValue::Utf8(Some(r".*-(\d*)".to_string())));

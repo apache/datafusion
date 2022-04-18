@@ -93,13 +93,20 @@ pub const UNNAMED_TABLE: &str = "?table?";
 /// # }
 /// ```
 pub struct LogicalPlanBuilder {
+    /// The plan that is being built
     plan: LogicalPlan,
+    /// Map of table_provider_name to TableProvider. TableScan structs refer to
+    /// table providers by name
+    pub table_providers: HashMap<String, Arc<dyn TableProvider>>,
 }
 
 impl LogicalPlanBuilder {
     /// Create a builder from an existing plan
     pub fn from(plan: LogicalPlan) -> Self {
-        Self { plan }
+        Self {
+            plan,
+            table_providers: HashMap::new(),
+        }
     }
 
     /// Return the output schema of the plan build so far
@@ -447,15 +454,23 @@ impl LogicalPlanBuilder {
                 DFSchema::try_from_qualified_schema(&table_name, &schema)
             })?;
 
+        // TODO generate unique name instead of using table name (which can appear
+        // more than once in the same query)
+        let table_provider_name = format!("_provider_{}", table_name);
+
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
-            source: provider,
+            table_provider_name: table_provider_name.clone(),
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
             limit: None,
         });
-        Ok(Self::from(table_scan))
+        let mut builder = Self::from(table_scan);
+        builder
+            .table_providers
+            .insert(table_provider_name.to_owned(), provider);
+        Ok(builder)
     }
     /// Wrap a plan in a window
     pub(crate) fn window_plan(

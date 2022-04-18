@@ -84,11 +84,15 @@ fn get_predicates<'a>(
 }
 
 /// Optimizes the plan
-fn push_down(state: &State, plan: &LogicalPlan) -> Result<LogicalPlan> {
+fn push_down(
+    state: &State,
+    plan: &LogicalPlan,
+    execution_props: &ExecutionProps,
+) -> Result<LogicalPlan> {
     let new_inputs = plan
         .inputs()
         .iter()
-        .map(|input| optimize(input, state.clone()))
+        .map(|input| optimize(input, state.clone(), execution_props))
         .collect::<Result<Vec<_>>>()?;
 
     let expr = plan.expressions();
@@ -140,6 +144,7 @@ fn keep_filters(
 /// in `state` depend on the columns `used_columns`.
 fn issue_filters(
     mut state: State,
+    execution_props: &ExecutionProps,
     used_columns: HashSet<Column>,
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
@@ -147,7 +152,7 @@ fn issue_filters(
 
     if predicates.is_empty() {
         // all filters can be pushed down => optimize inputs and return new plan
-        return push_down(&state, plan);
+        return push_down(&state, plan, execution_props);
     }
 
     let plan = add_filter(plan.clone(), &predicates);
@@ -155,7 +160,7 @@ fn issue_filters(
     state.filters = remove_filters(&state.filters, &predicate_columns);
 
     // continue optimization over all input nodes by cloning the current state (i.e. each node is independent)
-    push_down(&state, &plan)
+    push_down(&state, &plan, execution_props)
 }
 
 /// converts "A AND B AND C" => [A, B, C]
@@ -254,6 +259,7 @@ fn get_pushable_join_predicates<'a>(
 
 fn optimize_join(
     mut state: State,
+    execution_props: &ExecutionProps,
     plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
@@ -275,11 +281,11 @@ fn optimize_join(
 
     let mut left_state = state.clone();
     left_state.filters = keep_filters(&left_state.filters, &to_left);
-    let left = optimize(left, left_state)?;
+    let left = optimize(left, left_state, execution_props)?;
 
     let mut right_state = state.clone();
     right_state.filters = keep_filters(&right_state.filters, &to_right);
-    let right = optimize(right, right_state)?;
+    let right = optimize(right, right_state, execution_props)?;
 
     // create a new Join with the new `left` and `right`
     let expr = plan.expressions();
@@ -296,13 +302,17 @@ fn optimize_join(
     }
 }
 
-fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
+fn optimize(
+    plan: &LogicalPlan,
+    mut state: State,
+    execution_props: &ExecutionProps,
+) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Explain { .. } => {
             // push the optimization to the plan of this explain
-            push_down(&state, plan)
+            push_down(&state, plan, execution_props)
         }
-        LogicalPlan::Analyze { .. } => push_down(&state, plan),
+        LogicalPlan::Analyze { .. } => push_down(&state, plan, execution_props),
         LogicalPlan::Filter(Filter { input, predicate }) => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
@@ -328,9 +338,12 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             // As those contain only literals, they could be optimized using constant folding
             // and removal of WHERE TRUE / WHERE FALSE
             if !no_col_predicates.is_empty() {
-                Ok(add_filter(optimize(input, state)?, &no_col_predicates))
+                Ok(add_filter(
+                    optimize(input, state, execution_props)?,
+                    &no_col_predicates,
+                ))
             } else {
-                optimize(input, state)
+                optimize(input, state, execution_props)
             }
         }
         LogicalPlan::Projection(Projection {
@@ -366,7 +379,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
             }
 
             // optimize inner
-            let new_input = optimize(input, state)?;
+            let new_input = optimize(input, state, execution_props)?;
 
             utils::from_plan(plan, expr, &[new_input])
         }
@@ -387,11 +400,11 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 
-            issue_filters(state, used_columns, plan)
+            issue_filters(state, execution_props, used_columns, plan)
         }
         LogicalPlan::Sort { .. } => {
             // sort is filter-commutable
-            push_down(&state, plan)
+            push_down(&state, plan, execution_props)
         }
         LogicalPlan::Union(Union {
             inputs: _,
@@ -416,7 +429,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 }
             }
 
-            push_down(&state, plan)
+            push_down(&state, plan, execution_props)
         }
         LogicalPlan::Limit(Limit { input, .. }) => {
             // limit is _not_ filter-commutable => collect all columns from its input
@@ -426,10 +439,10 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .iter()
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<_>>();
-            issue_filters(state, used_columns, plan)
+            issue_filters(state, execution_props, used_columns, plan)
         }
         LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-            optimize_join(state, plan, left, right)
+            optimize_join(state, execution_props, plan, left, right)
         }
         LogicalPlan::Join(Join {
             left,
@@ -494,10 +507,10 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                     .collect::<Result<Vec<_>>>()?;
                 state.filters.extend(join_side_filters);
             }
-            optimize_join(state, plan, left, right)
+            optimize_join(state, execution_props, plan, left, right)
         }
         LogicalPlan::TableScan(TableScan {
-            source,
+            table_provider_name,
             projected_schema,
             filters,
             projection,
@@ -506,6 +519,11 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
+
+            let source = execution_props
+                .table_providers
+                .get(table_provider_name)
+                .expect("table provider found"); // TODO error handling
 
             for (filter_expr, cols) in &state.filters {
                 let (preserve_filter_node, add_to_provider) =
@@ -531,9 +549,10 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
 
             issue_filters(
                 state,
+                execution_props,
                 used_columns,
                 &LogicalPlan::TableScan(TableScan {
-                    source: source.clone(),
+                    table_provider_name: table_provider_name.clone(),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
@@ -550,7 +569,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 .iter()
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<_>>();
-            issue_filters(state, used_columns, plan)
+            issue_filters(state, execution_props, used_columns, plan)
         }
     }
 }
@@ -560,8 +579,12 @@ impl OptimizerRule for FilterPushDown {
         "filter_push_down"
     }
 
-    fn optimize(&self, plan: &LogicalPlan, _: &ExecutionProps) -> Result<LogicalPlan> {
-        optimize(plan, State::default())
+    fn optimize(
+        &self,
+        plan: &LogicalPlan,
+        execution_props: &ExecutionProps,
+    ) -> Result<LogicalPlan> {
+        optimize(plan, State::default(), execution_props)
     }
 }
 
@@ -605,7 +628,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        rule.optimize(plan, &ExecutionProps::new())
+        rule.optimize(plan, &ExecutionProps::new(HashMap::new()))
             .expect("failed to optimize plan")
     }
 
@@ -1412,18 +1435,22 @@ mod tests {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
+            table_provider_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
             )?),
             projection: None,
-            source: Arc::new(test_provider),
             limit: None,
         });
 
-        LogicalPlanBuilder::from(table_scan)
-            .filter(col("a").eq(lit(1i64)))?
-            .build()
+        let mut builder =
+            LogicalPlanBuilder::from(table_scan).filter(col("a").eq(lit(1i64)))?;
+
+        builder
+            .table_providers
+            .insert("test".to_string(), Arc::new(test_provider));
+        builder.build()
     }
 
     #[test]
@@ -1485,19 +1512,24 @@ mod tests {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
+            table_provider_name: "test".to_string(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
-            source: Arc::new(test_provider),
             limit: None,
         });
 
-        let plan = LogicalPlanBuilder::from(table_scan)
+        let mut builder = LogicalPlanBuilder::from(table_scan)
             .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-            .project(vec![col("a"), col("b")])?
-            .build()?;
+            .project(vec![col("a"), col("b")])?;
+
+        builder
+            .table_providers
+            .insert("test".to_string(), Arc::new(test_provider));
+
+        let plan = builder.build()?;
 
         let expected ="Projection: #a, #b\
             \n  Filter: #a = Int64(10) AND #b > Int64(11)\

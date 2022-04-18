@@ -134,7 +134,7 @@ impl PruningPredicate {
         let stat_dfschema = DFSchema::try_from(stat_schema.clone())?;
 
         // TODO allow these properties to be passed in
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
         let predicate_expr = create_physical_expr(
             &logical_predicate_expr,
             &stat_dfschema,

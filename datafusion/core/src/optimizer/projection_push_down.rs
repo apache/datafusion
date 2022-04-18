@@ -337,26 +337,34 @@ fn optimize_plan(
         // * remove un-used columns from the scan projection
         LogicalPlan::TableScan(TableScan {
             table_name,
-            source,
+            table_provider_name,
             filters,
             limit,
             ..
         }) => {
-            let (projection, projected_schema) = get_projected_schema(
-                Some(table_name),
-                &source.schema(),
-                required_columns,
-                has_projection,
-            )?;
-            // return the table scan with projection
-            Ok(LogicalPlan::TableScan(TableScan {
-                table_name: table_name.clone(),
-                source: source.clone(),
-                projection: Some(projection),
-                projected_schema,
-                filters: filters.clone(),
-                limit: *limit,
-            }))
+            match _execution_props.table_providers.get(table_provider_name) {
+                Some(source) => {
+                    let (projection, projected_schema) = get_projected_schema(
+                        Some(table_name),
+                        &source.schema(),
+                        required_columns,
+                        has_projection,
+                    )?;
+                    // return the table scan with projection
+                    Ok(LogicalPlan::TableScan(TableScan {
+                        table_name: table_name.clone(),
+                        table_provider_name: table_provider_name.clone(),
+                        projection: Some(projection),
+                        projected_schema,
+                        filters: filters.clone(),
+                        limit: *limit,
+                    }))
+                }
+                _ => Err(DataFusionError::Execution(format!(
+                    "Could not resolve table provider named {}",
+                    table_provider_name
+                ))),
+            }
         }
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(
             "Unsupported logical plan: Explain must be root of the plan".to_string(),
@@ -981,6 +989,6 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = ProjectionPushDown::new();
-        rule.optimize(plan, &ExecutionProps::new())
+        rule.optimize(plan, &ExecutionProps::default())
     }
 }

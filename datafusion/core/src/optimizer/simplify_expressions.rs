@@ -257,7 +257,7 @@ impl SimplifyExpressions {
 /// # use datafusion::optimizer::simplify_expressions::ConstEvaluator;
 /// # use datafusion::execution::context::ExecutionProps;
 ///
-/// let execution_props = ExecutionProps::new();
+/// let execution_props = ExecutionProps::default();
 /// let mut const_evaluator = ConstEvaluator::new(&execution_props);
 ///
 /// // (1 + 2) + a
@@ -1176,6 +1176,7 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
+            table_providers: HashMap::new(),
         };
 
         let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1201,7 +1202,7 @@ mod tests {
 
     fn simplify(expr: Expr) -> Expr {
         let schema = expr_test_schema();
-        let execution_props = ExecutionProps::new();
+        let execution_props = ExecutionProps::default();
         let info = SimplifyContext::new(vec![&schema], &execution_props);
         expr.simplify(&info).unwrap()
     }
@@ -1512,7 +1513,7 @@ mod tests {
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::new())
+            .optimize(plan, &ExecutionProps::default())
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1734,6 +1735,7 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
+            table_providers: HashMap::new(),
         };
 
         let err = rule
@@ -1751,6 +1753,7 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
+            table_providers: HashMap::new(),
         };
 
         let optimized_plan = rule

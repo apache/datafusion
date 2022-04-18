@@ -59,7 +59,7 @@ impl From<DFSchema> for MyInfo {
     fn from(schema: DFSchema) -> Self {
         Self {
             schema,
-            execution_props: ExecutionProps::new(),
+            execution_props: ExecutionProps::default(),
         }
     }
 }
