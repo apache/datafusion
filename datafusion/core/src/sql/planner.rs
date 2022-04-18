@@ -638,7 +638,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Table {
                 ref name, alias, ..
             } => {
-                let table_name = name.to_string();
+                // Trim quoted table name: "db_name" -> db_name
+                let table_name = name.to_string().trim_matches('\"').to_string();
                 let cte = ctes.get(&table_name);
                 (
                     match (

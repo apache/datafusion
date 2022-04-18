@@ -997,6 +997,45 @@ async fn query_with_filter_string_type_coercion() {
 }
 
 #[tokio::test]
+async fn query_from_quoted_table() {
+    let id_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    let schema = Schema::new(vec![Field::new("id_field", DataType::Int32, false)]);
+    let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(id_array)]).unwrap();
+
+    let ctx = SessionContext::new();
+    let db1 = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+    ctx.register_table("t1", Arc::new(db1)).unwrap();
+
+    // query from quoted table
+    let sql = "select * from \"t1\" where \"t1\".\"id_field\" > 1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------+",
+        "| id_field |",
+        "+----------+",
+        "| 2        |",
+        "| 3        |",
+        "| 4        |",
+        "| 5        |",
+        "+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // the following SQLs should come out same results
+    let sql = "select * from t1 where t1.id_field > 1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select * from \"t1\" where t1.id_field > 1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select * from \"t1\" where \"t1\".id_field > 1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+}
+
+#[tokio::test]
 async fn query_empty_table() {
     let ctx = SessionContext::new();
     let empty_table = Arc::new(EmptyTable::new(Arc::new(Schema::empty())));
