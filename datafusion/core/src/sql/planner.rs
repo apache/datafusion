@@ -1758,15 +1758,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         window_functions::WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
+                            let (aggregate_fun, args) = self.aggregate_fn_to_expr(
+                                aggregate_fun,
+                                function,
+                                schema,
+                            )?;
+
                             return Ok(Expr::WindowFunction {
                                 fun: window_functions::WindowFunction::AggregateFunction(
-                                    aggregate_fun.clone(),
-                                ),
-                                args: self.aggregate_fn_to_expr(
                                     aggregate_fun,
-                                    function,
-                                    schema,
-                                )?,
+                                ),
+                                args,
                                 partition_by,
                                 order_by,
                                 window_frame,
@@ -1791,7 +1793,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // next, aggregate built-ins
                 if let Ok(fun) = aggregates::AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
-                    let args = self.aggregate_fn_to_expr(fun.clone(), function, schema)?;
+                    let (fun, args) = self.aggregate_fn_to_expr(fun, function, schema)?;
                     return Ok(Expr::AggregateFunction {
                         fun,
                         distinct,
@@ -1843,9 +1845,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         fun: aggregates::AggregateFunction,
         function: sqlparser::ast::Function,
         schema: &DFSchema,
-    ) -> Result<Vec<Expr>> {
-        if fun == aggregates::AggregateFunction::Count {
-            function
+    ) -> Result<(aggregates::AggregateFunction, Vec<Expr>)> {
+        let args = match fun {
+            aggregates::AggregateFunction::Count => function
                 .args
                 .into_iter()
                 .map(|a| match a {
@@ -1855,10 +1857,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(lit(1_u8)),
                     _ => self.sql_fn_arg_to_logical_expr(a, schema),
                 })
-                .collect::<Result<Vec<Expr>>>()
-        } else {
-            self.function_args_to_expr(function.args, schema)
-        }
+                .collect::<Result<Vec<Expr>>>()?,
+            aggregates::AggregateFunction::ApproxMedian => function
+                .args
+                .into_iter()
+                .map(|a| self.sql_fn_arg_to_logical_expr(a, schema))
+                .chain(iter::once(Ok(lit(0.5_f64))))
+                .collect::<Result<Vec<Expr>>>()?,
+            _ => self.function_args_to_expr(function.args, schema)?,
+        };
+
+        let fun = match fun {
+            aggregates::AggregateFunction::ApproxMedian => {
+                aggregates::AggregateFunction::ApproxPercentileCont
+            }
+            _ => fun,
+        };
+
+        Ok((fun, args))
     }
 
     fn sql_interval_to_literal(
@@ -3242,6 +3258,15 @@ mod tests {
     }
 
     #[test]
+    fn select_approx_median() {
+        let sql = "SELECT approx_median(age) FROM person";
+        let expected = "Projection: #APPROXPERCENTILECONT(person.age,Float64(0.5))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#person.age, Float64(0.5))]]\
+                        \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn select_scalar_func() {
         let sql = "SELECT sqrt(age) FROM person";
         let expected = "Projection: sqrt(#person.age)\
@@ -3994,6 +4019,17 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn approx_median_window() {
+        let sql =
+            "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
+        let expected = "\
+        Projection: #orders.order_id, #APPROXPERCENTILECONT(orders.qty,Float64(0.5)) PARTITION BY [#orders.order_id]\
+        \n  WindowAggr: windowExpr=[[APPROXPERCENTILECONT(#orders.qty, Float64(0.5)) PARTITION BY [#orders.order_id]]]\
+        \n    TableScan: orders projection=None";
         quick_test(sql, expected);
     }
 
