@@ -21,7 +21,7 @@ use datafusion::{
         datatypes::DataType,
         record_batch::RecordBatch,
     },
-    physical_plan::functions::Volatility,
+    logical_expr::Volatility,
 };
 
 use datafusion::from_slice::FromSlice;

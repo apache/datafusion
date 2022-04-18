@@ -26,65 +26,15 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use super::aggregate_rule::{coerce_exprs, coerce_types};
-use super::{
-    functions::{Signature, TypeSignature, Volatility},
-    AggregateExpr, PhysicalExpr,
-};
+use super::aggregate_rule::coerce_exprs;
+use super::{AggregateExpr, PhysicalExpr};
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::expressions;
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::Schema;
+use datafusion_expr::aggregate_function;
+use datafusion_expr::aggregate_function::return_type;
 pub use datafusion_expr::AggregateFunction;
-use expressions::{
-    avg_return_type, correlation_return_type, covariance_return_type, stddev_return_type,
-    sum_return_type, variance_return_type,
-};
 use std::sync::Arc;
-
-/// Returns the datatype of the aggregate function.
-/// This is used to get the returned data type for aggregate expr.
-pub fn return_type(
-    fun: &AggregateFunction,
-    input_expr_types: &[DataType],
-) -> Result<DataType> {
-    // Note that this function *must* return the same type that the respective physical expression returns
-    // or the execution panics.
-
-    let coerced_data_types = coerce_types(fun, input_expr_types, &signature(fun))?;
-
-    match fun {
-        // TODO If the datafusion is compatible with PostgreSQL, the returned data type should be INT64.
-        AggregateFunction::Count | AggregateFunction::ApproxDistinct => {
-            Ok(DataType::UInt64)
-        }
-        AggregateFunction::Max | AggregateFunction::Min => {
-            // For min and max agg function, the returned type is same as input type.
-            // The coerced_data_types is same with input_types.
-            Ok(coerced_data_types[0].clone())
-        }
-        AggregateFunction::Sum => sum_return_type(&coerced_data_types[0]),
-        AggregateFunction::Variance => variance_return_type(&coerced_data_types[0]),
-        AggregateFunction::VariancePop => variance_return_type(&coerced_data_types[0]),
-        AggregateFunction::Covariance => covariance_return_type(&coerced_data_types[0]),
-        AggregateFunction::CovariancePop => {
-            covariance_return_type(&coerced_data_types[0])
-        }
-        AggregateFunction::Correlation => correlation_return_type(&coerced_data_types[0]),
-        AggregateFunction::Stddev => stddev_return_type(&coerced_data_types[0]),
-        AggregateFunction::StddevPop => stddev_return_type(&coerced_data_types[0]),
-        AggregateFunction::Avg => avg_return_type(&coerced_data_types[0]),
-        AggregateFunction::ArrayAgg => Ok(DataType::List(Box::new(Field::new(
-            "item",
-            coerced_data_types[0].clone(),
-            true,
-        )))),
-        AggregateFunction::ApproxPercentileCont => Ok(coerced_data_types[0].clone()),
-        AggregateFunction::ApproxPercentileContWithWeight => {
-            Ok(coerced_data_types[0].clone())
-        }
-        AggregateFunction::ApproxMedian => Ok(coerced_data_types[0].clone()),
-    }
-}
 
 /// Create a physical aggregation expression.
 /// This function errors when `input_phy_exprs`' can't be coerced to a valid argument type of the aggregation function.
@@ -97,8 +47,12 @@ pub fn create_aggregate_expr(
 ) -> Result<Arc<dyn AggregateExpr>> {
     let name = name.into();
     // get the coerced phy exprs if some expr need to be wrapped with the try cast.
-    let coerced_phy_exprs =
-        coerce_exprs(fun, input_phy_exprs, input_schema, &signature(fun))?;
+    let coerced_phy_exprs = coerce_exprs(
+        fun,
+        input_phy_exprs,
+        input_schema,
+        &aggregate_function::signature(fun),
+    )?;
     if coerced_phy_exprs.is_empty() {
         return Err(DataFusionError::Plan(format!(
             "Invalid or wrong number of arguments passed to aggregate: '{}'",
@@ -300,83 +254,6 @@ pub fn create_aggregate_expr(
     })
 }
 
-static STRINGS: &[DataType] = &[DataType::Utf8, DataType::LargeUtf8];
-
-static NUMERICS: &[DataType] = &[
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Float32,
-    DataType::Float64,
-];
-
-static TIMESTAMPS: &[DataType] = &[
-    DataType::Timestamp(TimeUnit::Second, None),
-    DataType::Timestamp(TimeUnit::Millisecond, None),
-    DataType::Timestamp(TimeUnit::Microsecond, None),
-    DataType::Timestamp(TimeUnit::Nanosecond, None),
-];
-
-static DATES: &[DataType] = &[DataType::Date32, DataType::Date64];
-
-/// the signatures supported by the function `fun`.
-pub(super) fn signature(fun: &AggregateFunction) -> Signature {
-    // note: the physical expression must accept the type returned by this function or the execution panics.
-    match fun {
-        AggregateFunction::Count
-        | AggregateFunction::ApproxDistinct
-        | AggregateFunction::ArrayAgg => Signature::any(1, Volatility::Immutable),
-        AggregateFunction::Min | AggregateFunction::Max => {
-            let valid = STRINGS
-                .iter()
-                .chain(NUMERICS.iter())
-                .chain(TIMESTAMPS.iter())
-                .chain(DATES.iter())
-                .cloned()
-                .collect::<Vec<_>>();
-            Signature::uniform(1, valid, Volatility::Immutable)
-        }
-        AggregateFunction::Avg
-        | AggregateFunction::Sum
-        | AggregateFunction::Variance
-        | AggregateFunction::VariancePop
-        | AggregateFunction::Stddev
-        | AggregateFunction::StddevPop
-        | AggregateFunction::ApproxMedian => {
-            Signature::uniform(1, NUMERICS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::Covariance | AggregateFunction::CovariancePop => {
-            Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::Correlation => {
-            Signature::uniform(2, NUMERICS.to_vec(), Volatility::Immutable)
-        }
-        AggregateFunction::ApproxPercentileCont => Signature::one_of(
-            // Accept any numeric value paired with a float64 percentile
-            NUMERICS
-                .iter()
-                .map(|t| TypeSignature::Exact(vec![t.clone(), DataType::Float64]))
-                .collect(),
-            Volatility::Immutable,
-        ),
-        AggregateFunction::ApproxPercentileContWithWeight => Signature::one_of(
-            // Accept any numeric value paired with a float64 percentile
-            NUMERICS
-                .iter()
-                .map(|t| {
-                    TypeSignature::Exact(vec![t.clone(), t.clone(), DataType::Float64])
-                })
-                .collect(),
-            Volatility::Immutable,
-        ),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,6 +263,8 @@ mod tests {
         Variance,
     };
     use crate::{error::Result, scalar::ScalarValue};
+    use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::aggregate_function::NUMERICS;
 
     #[test]
     fn test_count_arragg_approx_expr() -> Result<()> {

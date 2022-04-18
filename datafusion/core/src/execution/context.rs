@@ -1603,7 +1603,7 @@ mod tests {
     use crate::execution::context::QueryPlanner;
     use crate::from_slice::FromSlice;
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::functions::{make_scalar_function, Volatility};
+    use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::variable::VarType;
     use crate::{
@@ -1622,6 +1622,7 @@ mod tests {
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
+    use datafusion_expr::Volatility;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
