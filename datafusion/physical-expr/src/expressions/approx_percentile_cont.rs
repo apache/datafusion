@@ -35,24 +35,6 @@ use datafusion_expr::Accumulator;
 use ordered_float::OrderedFloat;
 use std::{any::Any, iter, sync::Arc};
 
-/// Return `true` if `arg_type` is of a [`DataType`] that the
-/// [`ApproxPercentileCont`] aggregation can operate on.
-pub fn is_approx_percentile_cont_supported_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-    )
-}
-
 /// APPROX_PERCENTILE_CONT aggregate expression
 #[derive(Debug)]
 pub struct ApproxPercentileCont {

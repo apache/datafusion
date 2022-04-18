@@ -573,5 +573,4 @@ pub mod udaf;
 pub mod udf;
 pub mod union;
 pub mod values;
-pub mod window_functions;
 pub mod windows;

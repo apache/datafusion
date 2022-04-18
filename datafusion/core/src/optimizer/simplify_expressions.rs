@@ -26,13 +26,13 @@ use crate::logical_plan::{
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use crate::physical_plan::functions::Volatility;
 use crate::physical_plan::planner::create_physical_expr;
 use crate::scalar::ScalarValue;
 use crate::{error::Result, logical_plan::Operator};
 use arrow::array::new_null_array;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_expr::Volatility;
 
 /// Provides simplification information based on schema and properties
 pub(crate) struct SimplifyContext<'a, 'b> {
@@ -735,6 +735,7 @@ mod tests {
 
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
+    use datafusion_expr::BuiltinScalarFunction;
 
     use super::*;
     use crate::assert_contains;
@@ -742,7 +743,7 @@ mod tests {
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
         Expr, LogicalPlanBuilder,
     };
-    use crate::physical_plan::functions::{make_scalar_function, BuiltinScalarFunction};
+    use crate::physical_plan::functions::make_scalar_function;
     use crate::physical_plan::udf::ScalarUDF;
 
     #[test]

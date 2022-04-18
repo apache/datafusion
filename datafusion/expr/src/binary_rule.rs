@@ -17,15 +17,59 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::Operator;
+
+/// Returns the return type of a binary operator or an error when the binary operator cannot
+/// perform the computation between the argument's types, even after type coercion.
+///
+/// This function makes some assumptions about the underlying available computations.
+pub fn binary_operator_data_type(
+    lhs_type: &DataType,
+    op: &Operator,
+    rhs_type: &DataType,
+) -> Result<DataType> {
+    // validate that it is possible to perform the operation on incoming types.
+    // (or the return datatype cannot be inferred)
+    let result_type = coerce_types(lhs_type, op, rhs_type)?;
+
+    match op {
+        // operators that return a boolean
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::And
+        | Operator::Or
+        | Operator::Like
+        | Operator::NotLike
+        | Operator::Lt
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::LtEq
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
+        // bitwise operations return the common coerced type
+        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
+        // math operations return the same value as the common coerced type
+        Operator::Plus
+        | Operator::Minus
+        | Operator::Divide
+        | Operator::Multiply
+        | Operator::Modulo => Ok(result_type),
+        // string operations return the same values as the common coerced type
+        Operator::StringConcat => Ok(result_type),
+    }
+}
 
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
-pub(crate) fn coerce_types(
+pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
     rhs_type: &DataType,
@@ -551,10 +595,10 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Operator;
     use arrow::datatypes::DataType;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
-    use datafusion_expr::Operator;
 
     #[test]
     fn test_coercion_error() -> Result<()> {

@@ -25,12 +25,14 @@ use crate::physical_plan::{
         PhysicalSortExpr, RowNumber,
     },
     type_coercion::coerce,
-    window_functions::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
     PhysicalExpr,
 };
 use crate::scalar::ScalarValue;
 use arrow::datatypes::Schema;
-use datafusion_expr::WindowFrame;
+use datafusion_expr::{
+    window_function::{signature_for_built_in, BuiltInWindowFunction, WindowFunction},
+    WindowFrame,
+};
 use datafusion_physical_expr::window::BuiltInWindowFunctionExpr;
 use std::convert::TryInto;
 use std::sync::Arc;
