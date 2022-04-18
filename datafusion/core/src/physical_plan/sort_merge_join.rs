@@ -65,8 +65,8 @@ pub struct SortMergeJoinExec {
     schema: SchemaRef,
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
-    /// Sort options used in sorting left and right execution plans
-    sort_options: SortOptions,
+    /// Sort options of join columns used in sorting left and right execution plans
+    sort_options: Vec<SortOptions>,
     /// If null_equals_null is true, null == null else null != null
     null_equals_null: bool,
 }
@@ -80,13 +80,21 @@ impl SortMergeJoinExec {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: JoinType,
-        sort_options: SortOptions,
+        sort_options: Vec<SortOptions>,
         null_equals_null: bool,
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
+        if sort_options.len() != on.len() {
+            return Err(DataFusionError::Plan(format!(
+                "Expected number of sort options: {}, actual: {}",
+                on.len(),
+                sort_options.len()
+            )));
+        }
+
         let schema =
             Arc::new(build_join_schema(&left_schema, &right_schema, &join_type).0);
 
@@ -135,7 +143,7 @@ impl ExecutionPlan for SortMergeJoinExec {
                 right.clone(),
                 self.on.clone(),
                 self.join_type,
-                self.sort_options,
+                self.sort_options.clone(),
                 self.null_equals_null,
             )?)),
             _ => Err(DataFusionError::Internal(
@@ -182,7 +190,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         // create join stream
         Ok(Box::pin(SMJStream::try_new(
             self.schema.clone(),
-            self.sort_options,
+            self.sort_options.clone(),
             self.null_equals_null,
             streamed,
             buffered,
@@ -308,8 +316,8 @@ struct SMJStream {
     pub state: SMJState,
     /// Output schema
     pub schema: SchemaRef,
-    /// Sort options used to sort streamed and buffered data stream
-    pub sort_options: SortOptions,
+    /// Sort options of join columns used to sort streamed and buffered data stream
+    pub sort_options: Vec<SortOptions>,
     /// null == null?
     pub null_equals_null: bool,
     /// Input schema of streamed
@@ -473,7 +481,7 @@ impl SMJStream {
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
-        sort_options: SortOptions,
+        sort_options: Vec<SortOptions>,
         null_equals_null: bool,
         streamed: SendableRecordBatchStream,
         buffered: SendableRecordBatchStream,
@@ -667,7 +675,7 @@ impl SMJStream {
             self.streamed_idx,
             &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
-            self.sort_options,
+            &self.sort_options,
             self.null_equals_null,
         );
     }
@@ -854,11 +862,13 @@ fn compare_join_arrays(
     left: usize,
     right_arrays: &[ArrayRef],
     right: usize,
-    sort_options: SortOptions,
+    sort_options: &[SortOptions],
     null_equals_null: bool,
 ) -> ArrowResult<Ordering> {
     let mut res = Ordering::Equal;
-    for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
+    for ((left_array, right_array), sort_options) in
+        left_arrays.iter().zip(right_arrays).zip(sort_options)
+    {
         macro_rules! compare_value {
             ($T:ty) => {{
                 let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
@@ -1162,14 +1172,8 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
     ) -> Result<SortMergeJoinExec> {
-        SortMergeJoinExec::try_new(
-            left,
-            right,
-            on,
-            join_type,
-            SortOptions::default(),
-            false,
-        )
+        let sort_options = vec![SortOptions::default(); on.len()];
+        SortMergeJoinExec::try_new(left, right, on, join_type, sort_options, false)
     }
 
     fn join_with_options(
@@ -1177,7 +1181,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: JoinType,
-        sort_options: SortOptions,
+        sort_options: Vec<SortOptions>,
         null_equals_null: bool,
     ) -> Result<SortMergeJoinExec> {
         SortMergeJoinExec::try_new(
@@ -1196,15 +1200,8 @@ mod tests {
         on: JoinOn,
         join_type: JoinType,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
-        join_collect_with_options(
-            left,
-            right,
-            on,
-            join_type,
-            SortOptions::default(),
-            false,
-        )
-        .await
+        let sort_options = vec![SortOptions::default(); on.len()];
+        join_collect_with_options(left, right, on, join_type, sort_options, false).await
     }
 
     async fn join_collect_with_options(
@@ -1212,7 +1209,7 @@ mod tests {
         right: Arc<dyn ExecutionPlan>,
         on: JoinOn,
         join_type: JoinType,
-        sort_options: SortOptions,
+        sort_options: Vec<SortOptions>,
         null_equals_null: bool,
     ) -> Result<(Vec<String>, Vec<RecordBatch>)> {
         let session_ctx = SessionContext::new();
@@ -1378,16 +1375,18 @@ mod tests {
                 Column::new_with_schema("b2", &right.schema())?,
             ),
         ];
-
         let (_, batches) = join_collect_with_options(
             left,
             right,
             on,
             JoinType::Inner,
-            SortOptions {
-                descending: true,
-                nulls_first: false,
-            },
+            vec![
+                SortOptions {
+                    descending: true,
+                    nulls_first: false
+                };
+                2
+            ],
             true,
         )
         .await?;
