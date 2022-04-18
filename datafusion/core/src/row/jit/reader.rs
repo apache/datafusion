@@ -20,6 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::reg_fn;
 use crate::row::jit::fn_name;
+use crate::row::layout::RowType;
 use crate::row::reader::RowReader;
 use crate::row::reader::*;
 use crate::row::MutableRecordBatch;
@@ -33,7 +34,7 @@ use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
 
-pub fn read_as_batch_jit(
+pub fn read_compact_rows_as_batch_jit(
     data: &[u8],
     schema: Arc<Schema>,
     offsets: &[usize],
@@ -41,7 +42,7 @@ pub fn read_as_batch_jit(
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema);
+    let mut row = RowReader::new(&schema, RowType::Compact);
     register_read_functions(assembler)?;
     let gen_func = gen_read_row(&schema, assembler)?;
     let mut jit = assembler.create_jit();

@@ -54,7 +54,7 @@ use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
 #[cfg(feature = "jit")]
-mod jit;
+pub mod jit;
 mod layout;
 pub mod reader;
 mod validity;
@@ -155,8 +155,8 @@ mod tests {
     use crate::physical_plan::file_format::FileScanConfig;
     use crate::physical_plan::{collect, ExecutionPlan};
     use crate::prelude::SessionContext;
-    use crate::row::reader::read_as_batch;
-    use crate::row::writer::write_batch_unchecked;
+    use crate::row::reader::read_compact_rows_as_batch;
+    use crate::row::writer::write_compact_batch_unchecked;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
     use datafusion_data_access::object_store::local::LocalFileSystem;
@@ -176,8 +176,8 @@ mod tests {
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
                     let row_offsets =
-                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+                        { write_compact_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+                    let output_batch = { read_compact_rows_as_batch(&vector, schema, &row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -191,8 +191,8 @@ mod tests {
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
                     let row_offsets =
-                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+                        { write_compact_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+                    let output_batch = { read_compact_rows_as_batch(&vector, schema, &row_offsets)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -293,8 +293,8 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
         let mut vector = vec![0; 8192];
         let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+            { write_compact_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_compact_rows_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -307,8 +307,8 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
         let mut vector = vec![0; 8192];
         let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+            { write_compact_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
+        let output_batch = { read_compact_rows_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -327,8 +327,8 @@ mod tests {
 
         let mut vector = vec![0; 20480];
         let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+            { write_compact_batch_unchecked(&mut vector, 0, batch, 0, schema.clone()) };
+        let output_batch = { read_compact_rows_as_batch(&vector, schema, &row_offsets)? };
         assert_eq!(*batch, output_batch);
 
         Ok(())
@@ -341,7 +341,7 @@ mod tests {
         let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
         let schema = batch.schema();
         let mut vector = vec![0; 1024];
-        write_batch_unchecked(&mut vector, 0, &batch, 0, schema);
+        write_compact_batch_unchecked(&mut vector, 0, &batch, 0, schema);
     }
 
     #[test]
@@ -354,7 +354,7 @@ mod tests {
         )]));
         let vector = vec![0; 1024];
         let row_offsets = vec![0];
-        read_as_batch(&vector, schema, &row_offsets).unwrap();
+        read_compact_rows_as_batch(&vector, schema, &row_offsets).unwrap();
     }
 
     async fn get_exec(

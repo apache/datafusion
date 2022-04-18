@@ -17,8 +17,8 @@
 
 //! Just-In-Time(JIT) version for row reader and writers
 
-mod reader;
-mod writer;
+pub mod reader;
+pub mod writer;
 
 #[macro_export]
 /// register external functions to the assembler
@@ -44,8 +44,8 @@ fn fn_name<T>(f: T) -> &'static str {
 #[cfg(test)]
 mod tests {
     use crate::error::Result;
-    use crate::row::jit::reader::read_as_batch_jit;
-    use crate::row::jit::writer::write_batch_unchecked_jit;
+    use crate::row::jit::reader::read_compact_rows_as_batch_jit;
+    use crate::row::jit::writer::write_compact_batch_unchecked_jit;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
     use datafusion_jit::api::Assembler;
@@ -64,8 +64,8 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let assembler = Assembler::default();
                     let row_offsets =
-                        { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
-                    let output_batch = { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
+                        { write_compact_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
+                    let output_batch = { read_compact_rows_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -80,8 +80,8 @@ mod tests {
                     let mut vector = vec![0; 1024];
                     let assembler = Assembler::default();
                     let row_offsets =
-                        { write_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
-                    let output_batch = { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
+                        { write_compact_batch_unchecked_jit(&mut vector, 0, &batch, 0, schema.clone(), &assembler)? };
+                    let output_batch = { read_compact_rows_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -183,7 +183,7 @@ mod tests {
         let mut vector = vec![0; 8192];
         let assembler = Assembler::default();
         let row_offsets = {
-            write_batch_unchecked_jit(
+            write_compact_batch_unchecked_jit(
                 &mut vector,
                 0,
                 &batch,
@@ -192,8 +192,9 @@ mod tests {
                 &assembler,
             )?
         };
-        let output_batch =
-            { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
+        let output_batch = {
+            read_compact_rows_as_batch_jit(&vector, schema, &row_offsets, &assembler)?
+        };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -207,7 +208,7 @@ mod tests {
         let mut vector = vec![0; 8192];
         let assembler = Assembler::default();
         let row_offsets = {
-            write_batch_unchecked_jit(
+            write_compact_batch_unchecked_jit(
                 &mut vector,
                 0,
                 &batch,
@@ -216,8 +217,9 @@ mod tests {
                 &assembler,
             )?
         };
-        let output_batch =
-            { read_as_batch_jit(&vector, schema, &row_offsets, &assembler)? };
+        let output_batch = {
+            read_compact_rows_as_batch_jit(&vector, schema, &row_offsets, &assembler)?
+        };
         assert_eq!(batch, output_batch);
         Ok(())
     }
