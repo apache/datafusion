@@ -191,6 +191,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.join_type,
             output_buffer,
             batch_size,
+            SortMergeJoinMetrics::new(partition, &self.metrics),
         )?))
     }
 
@@ -353,6 +354,8 @@ struct SMJStream {
     pub batch_size: usize,
     /// How the join is performed
     pub join_type: JoinType,
+    /// Metrics
+    pub join_metrics: SortMergeJoinMetrics,
 }
 
 impl RecordBatchStream for SMJStream {
@@ -368,6 +371,7 @@ impl Stream for SMJStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
+        self.join_metrics.join_time.timer();
         loop {
             match &self.state {
                 SMJState::Init => {
@@ -437,6 +441,8 @@ impl Stream for SMJStream {
                     self.join_partial()?;
                     if self.output_size == self.batch_size {
                         let record_batch = self.output_record_batch_and_reset()?;
+                        self.join_metrics.output_batches.add(1);
+                        self.join_metrics.output_rows.add(record_batch.num_rows());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
                     if self.buffered_data.scanning_finished() {
@@ -452,6 +458,8 @@ impl Stream for SMJStream {
                 SMJState::Exhausted => {
                     if self.output_size > 0 {
                         let record_batch = self.output_record_batch_and_reset()?;
+                        self.join_metrics.output_batches.add(1);
+                        self.join_metrics.output_rows.add(record_batch.num_rows());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
                     return Poll::Ready(None);
@@ -474,6 +482,7 @@ impl SMJStream {
         join_type: JoinType,
         output_buffer: Vec<Box<dyn ArrayBuilder>>,
         batch_size: usize,
+        join_metrics: SortMergeJoinMetrics,
     ) -> Result<Self> {
         Ok(Self {
             state: SMJState::Init,
@@ -501,6 +510,7 @@ impl SMJStream {
             output_size: 0,
             batch_size,
             join_type,
+            join_metrics,
         })
     }
 
@@ -527,11 +537,11 @@ impl SMJStream {
                     }
                     Poll::Ready(Some(batch)) => {
                         if batch.num_rows() > 0 {
+                            self.join_metrics.input_batches.add(1);
+                            self.join_metrics.input_rows.add(batch.num_rows());
                             self.streamed_batch = batch;
-                            self.streamed_join_arrays = join_arrays(
-                                &self.streamed_batch,
-                                &self.on_streamed
-                            );
+                            self.streamed_join_arrays =
+                                join_arrays(&self.streamed_batch, &self.on_streamed);
                             self.streamed_idx = 0;
                             self.streamed_state = StreamedState::Ready;
                         }
@@ -582,6 +592,8 @@ impl SMJStream {
                         return Poll::Ready(None);
                     }
                     Poll::Ready(Some(batch)) => {
+                        self.join_metrics.input_batches.add(1);
+                        self.join_metrics.input_rows.add(batch.num_rows());
                         if batch.num_rows() > 0 {
                             self.buffered_data.batches.push_back(BufferedBatch::new(
                                 batch,
@@ -620,6 +632,8 @@ impl SMJStream {
                                 self.buffered_state = BufferedState::Ready;
                             }
                             Poll::Ready(Some(batch)) => {
+                                self.join_metrics.input_batches.add(1);
+                                self.join_metrics.input_rows.add(batch.num_rows());
                                 self.buffered_data.batches.push_back(BufferedBatch::new(
                                     batch,
                                     0..0,
@@ -1490,6 +1504,42 @@ mod tests {
             "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
+
+        let metrics = join.metrics().unwrap();
+        assert!(
+            0 < metrics
+                .sum(|m| m.value().name() == "join_time")
+                .map(|v| v.as_usize())
+                .unwrap()
+        );
+        assert_eq!(
+            2,
+            metrics
+                .sum(|m| m.value().name() == "output_batches")
+                .map(|v| v.as_usize())
+                .unwrap()
+        ); // 1+1
+        assert_eq!(
+            3,
+            metrics
+                .sum(|m| m.value().name() == "output_rows")
+                .map(|v| v.as_usize())
+                .unwrap()
+        ); // 2+1
+        assert_eq!(
+            4,
+            metrics
+                .sum(|m| m.value().name() == "input_batches")
+                .map(|v| v.as_usize())
+                .unwrap()
+        ); // (1+1) + (1+1)
+        assert_eq!(
+            9,
+            metrics
+                .sum(|m| m.value().name() == "input_rows")
+                .map(|v| v.as_usize())
+                .unwrap()
+        ); // (3+2) + (3+1)
         Ok(())
     }
 
