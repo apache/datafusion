@@ -49,7 +49,7 @@ jit = ["datafusion-jit"]
 pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable row format experiment
-row = []
+row = ["datafusion-row"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
 
@@ -64,6 +64,7 @@ datafusion-data-access = { path = "../../data-access", version = "1.0.0" }
 datafusion-expr = { path = "../expr", version = "7.0.0" }
 datafusion-jit = { path = "../jit", version = "7.0.0", optional = true }
 datafusion-physical-expr = { path = "../physical-expr", version = "7.0.0" }
+datafusion-row = { path = "../row", version = "7.0.0", optional = true }
 futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
 lazy_static = { version = "^1.4.0" }
@@ -125,3 +126,7 @@ name = "parquet_query_sql"
 harness = false
 name = "jit"
 required-features = ["row", "jit"]
+
+[[test]]
+name = "row"
+required-features = ["row"]

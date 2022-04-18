@@ -17,14 +17,14 @@
 
 //! Accessing row from raw bytes
 
-use crate::error::{DataFusionError, Result};
-use crate::row::layout::{RowLayout, RowType};
-use crate::row::validity::{all_valid, NullBitsFormatter};
-use crate::row::MutableRecordBatch;
+use crate::layout::{RowLayout, RowType};
+use crate::validity::{all_valid, NullBitsFormatter};
+use crate::MutableRecordBatch;
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::get_bit_raw;
+use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
@@ -315,7 +315,7 @@ fn_read_field!(date32, Date32Builder);
 fn_read_field!(date64, Date64Builder);
 fn_read_field!(utf8, StringBuilder);
 
-pub(crate) fn read_field_binary(
+pub fn read_field_binary(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,
@@ -328,7 +328,7 @@ pub(crate) fn read_field_binary(
     }
 }
 
-pub(crate) fn read_field_binary_null_free(
+pub fn read_field_binary_null_free(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,
