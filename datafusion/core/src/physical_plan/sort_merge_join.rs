@@ -15,6 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Defines the Sort-Merge join execution plan.
+//! A sort-merge join plan consumes two sorted children plan and produces
+//! joined output by given join type and other options.
+
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -45,19 +49,32 @@ use crate::physical_plan::{
     Statistics,
 };
 
+/// join execution plan executes partitions in parallel and combines them into a set of
+/// partitions.
 #[derive(Debug)]
 pub struct SortMergeJoinExec {
+    /// Left sorted joining execution plan
     left: Arc<dyn ExecutionPlan>,
+    /// Right sorting joining execution plan
     right: Arc<dyn ExecutionPlan>,
+    /// Set of common columns used to join on
     on: JoinOn,
+    /// How the join is performed
     join_type: JoinType,
+    /// The schema once the join is applied
     schema: SchemaRef,
+    /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
+    /// Sort options used in sorting left and right execution plans
     sort_options: SortOptions,
+    /// If null_equals_null is true, null == null else null != null
     null_equals_null: bool,
 }
 
 impl SortMergeJoinExec {
+    /// Tries to create a new [SortMergeJoinExec].
+    /// # Error
+    /// This function errors when it is not possible to join the left and right sides on keys `on`.
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -186,8 +203,8 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 }
 
-/// Metrics for SortMergeJoinExec
-#[warn(dead_code)]
+/// Metrics for SortMergeJoinExec (Not yet implemented)
+#[allow(dead_code)]
 struct SortMergeJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
     join_time: metrics::Time,
@@ -222,35 +239,54 @@ impl SortMergeJoinMetrics {
     }
 }
 
+/// State of SMJ stream
 #[derive(Debug, PartialEq, Eq)]
 enum SMJState {
+    /// Init joining with a new streamed row or a new buffered batches
     Init,
+    /// Polling one streamed row or one buffered batch, or both
     Polling,
+    /// Joining polled data and making output
     JoinOutput,
+    /// No more output
     Exhausted,
 }
 
+/// State of streamed data stream
 #[derive(Debug, PartialEq, Eq)]
 enum StreamedState {
+    /// Init polling
     Init,
+    /// Polling one streamed row
     Polling,
+    /// Ready to produce one streamed row
     Ready,
+    /// No more streamed row
     Exhausted,
 }
 
+/// State of buffered data stream
 #[derive(Debug, PartialEq, Eq)]
 enum BufferedState {
+    /// Init polling
     Init,
+    /// Polling first row in the next batch
     PollingFirst,
+    /// Polling rest rows in the next batch
     PollingRest,
+    /// Ready to produce one batch
     Ready,
+    /// No more buffered batches
     Exhausted,
 }
 
-#[derive(Debug)]
+/// A buffered batch that contains contiguous rows with same join key
 struct BufferedBatch {
+    /// The buffered record batch
     pub batch: RecordBatch,
+    /// The range in which the rows share the same join key
     pub range: Range<usize>,
+    /// Array refs of the join key
     pub join_arrays: Vec<ArrayRef>,
 }
 impl BufferedBatch {
@@ -264,30 +300,58 @@ impl BufferedBatch {
     }
 }
 
+/// Sort-merge join stream that consumes streamed and buffered data stream
+/// and produces joined output
 struct SMJStream {
+    /// Current state of the stream
     pub state: SMJState,
+    /// Output schema
     pub schema: SchemaRef,
+    /// Sort options used to sort streamed and buffered data stream
     pub sort_options: SortOptions,
+    /// null == null?
     pub null_equals_null: bool,
+    /// Input schema of streamed
     pub streamed_schema: SchemaRef,
+    /// Input schema of buffered
     pub buffered_schema: SchemaRef,
+    /// Number of columns of streamed
     pub num_streamed_columns: usize,
+    /// Number of columns of buffered
     pub num_buffered_columns: usize,
+    /// Streamed data stream
     pub streamed: SendableRecordBatchStream,
+    /// Buffered data stream
     pub buffered: SendableRecordBatchStream,
+    /// Current processing record batch of streamed
     pub streamed_batch: RecordBatch,
+    /// Current processing streamed join arrays
+    pub streamed_join_arrays: Vec<ArrayRef>,
+    /// Current processing row of streamed
     pub streamed_idx: usize,
+    /// Currrent buffered data
     pub buffered_data: BufferedData,
+    /// (used in outer join) Is current streamed row joined at least once?
     pub streamed_joined: bool,
+    /// (used in outer join) Is current buffered batches joined at least once?
     pub buffered_joined: bool,
+    /// State of streamed
     pub streamed_state: StreamedState,
+    /// State of buffered
     pub buffered_state: BufferedState,
+    /// The comparison result of current streamed row and buffered batches
     pub current_ordering: Ordering,
+    /// Join key columns of streamed
     pub on_streamed: Vec<Column>,
+    /// Join key columns of buffered
     pub on_buffered: Vec<Column>,
+    /// Staging output array builders
     pub output_buffer: Vec<Box<dyn ArrayBuilder>>,
+    /// Staging output size
     pub output_size: usize,
+    /// Target output batch size
     pub batch_size: usize,
+    /// How the join is performed
     pub join_type: JoinType,
 }
 
@@ -398,6 +462,7 @@ impl Stream for SMJStream {
 }
 
 impl SMJStream {
+    #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
         sort_options: SortOptions,
@@ -422,6 +487,7 @@ impl SMJStream {
             streamed,
             buffered,
             streamed_batch: RecordBatch::new_empty(schema),
+            streamed_join_arrays: vec![],
             streamed_idx: 0,
             buffered_data: BufferedData::default(),
             streamed_joined: false,
@@ -438,6 +504,7 @@ impl SMJStream {
         })
     }
 
+    /// Poll next streamed row
     fn poll_streamed_row(&mut self, cx: &mut Context) -> Poll<Option<ArrowResult<()>>> {
         loop {
             match &self.streamed_state {
@@ -461,6 +528,10 @@ impl SMJStream {
                     Poll::Ready(Some(batch)) => {
                         if batch.num_rows() > 0 {
                             self.streamed_batch = batch;
+                            self.streamed_join_arrays = join_arrays(
+                                &self.streamed_batch,
+                                &self.on_streamed
+                            );
                             self.streamed_idx = 0;
                             self.streamed_state = StreamedState::Ready;
                         }
@@ -476,6 +547,7 @@ impl SMJStream {
         }
     }
 
+    /// Poll next buffered batches
     fn poll_buffered_batches(
         &mut self,
         cx: &mut Context,
@@ -567,6 +639,7 @@ impl SMJStream {
         }
     }
 
+    /// Get comparison result of streamed row and buffered batches
     fn compare_streamed_buffered(&self) -> ArrowResult<Ordering> {
         if self.streamed_state == StreamedState::Exhausted {
             return Ok(Ordering::Greater);
@@ -576,15 +649,17 @@ impl SMJStream {
         }
 
         return compare_join_arrays(
-            &join_arrays(&self.streamed_batch, &self.on_streamed),
+            &self.streamed_join_arrays,
             self.streamed_idx,
-            &join_arrays(&self.buffered_data.head_batch().batch, &self.on_buffered),
+            &self.buffered_data.head_batch().join_arrays,
             self.buffered_data.head_batch().range.start,
             self.sort_options,
             self.null_equals_null,
         );
     }
 
+    /// Produce join and fill output buffer until reaching target batch size
+    /// or the join is finished
     fn join_partial(&mut self) -> ArrowResult<()> {
         // decide streamed/buffered output columns by join type
         let output_parts =
@@ -679,11 +754,6 @@ impl SMJStream {
         Ok(())
     }
 
-    #[inline]
-    fn output_buffer_full(&self) -> bool {
-        self.output_size == self.batch_size
-    }
-
     fn output_record_batch_and_reset(&mut self) -> ArrowResult<RecordBatch> {
         let record_batch =
             make_batch(self.schema.clone(), self.output_buffer.drain(..).collect())?;
@@ -694,10 +764,14 @@ impl SMJStream {
     }
 }
 
+/// Buffered data contains all buffered batches with one unique join key
 #[derive(Default)]
 struct BufferedData {
+    /// Buffered batches with the same key
     pub batches: VecDeque<BufferedBatch>,
+    /// current scanning batch index used in join_partial()
     pub scanning_batch_idx: usize,
+    /// current scanning offset used in join_partial()
     pub scanning_offset: usize,
 }
 impl BufferedData {
@@ -707,10 +781,6 @@ impl BufferedData {
 
     pub fn tail_batch(&self) -> &BufferedBatch {
         self.batches.back().unwrap()
-    }
-
-    pub fn head_batch_mut(&mut self) -> &mut BufferedBatch {
-        self.batches.front_mut().unwrap()
     }
 
     pub fn tail_batch_mut(&mut self) -> &mut BufferedBatch {
@@ -756,6 +826,7 @@ impl BufferedData {
     }
 }
 
+/// Get join array refs of given batch and join columns
 fn join_arrays(batch: &RecordBatch, on_column: &[Column]) -> Vec<ArrayRef> {
     on_column
         .iter()
@@ -763,6 +834,7 @@ fn join_arrays(batch: &RecordBatch, on_column: &[Column]) -> Vec<ArrayRef> {
         .collect()
 }
 
+/// Get comparison result of two rows of join arrays
 fn compare_join_arrays(
     left_arrays: &[ArrayRef],
     left: usize,
@@ -838,6 +910,8 @@ fn compare_join_arrays(
     Ok(res)
 }
 
+/// A faster version of compare_join_arrays() that only output whether
+/// the given two rows are equal
 fn is_join_arrays_equal(
     left_arrays: &[ArrayRef],
     left: usize,
@@ -890,6 +964,7 @@ fn is_join_arrays_equal(
     Ok(true)
 }
 
+/// Create new array builders of given schema and batch size
 fn new_array_builders(
     schema: SchemaRef,
     batch_size: usize,
@@ -905,6 +980,7 @@ fn new_array_builders(
     Ok(arrays)
 }
 
+/// Append one row to part of output buffer (the array builders)
 fn append_row_to_output(
     batch: &RecordBatch,
     idx: usize,
@@ -923,6 +999,8 @@ fn append_row_to_output(
     Ok(())
 }
 
+/// Append one row which all values are null to part of output buffer (the
+/// array builders), used in outer join
 fn append_nulls_row_to_output(
     schema: &Schema,
     arrays: &mut [Box<dyn ArrayBuilder>],
@@ -937,6 +1015,7 @@ fn append_nulls_row_to_output(
     Ok(())
 }
 
+/// Finish output buffer and produce one record batch
 fn make_batch(
     schema: SchemaRef,
     mut arrays: Vec<Box<dyn ArrayBuilder>>,
@@ -945,7 +1024,7 @@ fn make_batch(
     RecordBatch::try_new(schema, columns)
 }
 
-/// repeat times of cell located by `idx` at streamed side to output
+/// Append null value to a array builder
 fn array_append_null(
     data_type: &DataType,
     to: &mut Box<dyn ArrayBuilder>,
@@ -972,6 +1051,7 @@ fn array_append_null(
     }
 }
 
+/// Append value to a array builder
 fn array_append_value(
     data_type: &DataType,
     to: &mut Box<dyn ArrayBuilder>,
