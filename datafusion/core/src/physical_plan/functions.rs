@@ -271,7 +271,7 @@ where
 /// Create a table function.
 pub fn make_table_function<F>(inner: F) -> TableFunctionImplementation
 where
-    F: Fn(&[ArrayRef]) -> Result<Vec<ArrayRef>> + Sync + Send + 'static,
+    F: Fn(&[ArrayRef]) -> Result<(ArrayRef, Vec<usize>)> + Sync + Send + 'static,
 {
     Arc::new(move |args: &[ColumnarValue]| {
         let len = args
@@ -294,11 +294,10 @@ where
 
         let result = (inner)(&args);
 
-        let to_return = result
-            .unwrap()
+        let to_return: (ColumnarValue, Vec<usize>) = result
             .iter()
-            .map(|r| ColumnarValue::Array(r.clone()))
-            .collect::<Vec<ColumnarValue>>();
+            .map(|(r, indexes)| (ColumnarValue::Array(r.clone()), indexes.clone()))
+            .next().unwrap();
 
         Ok(to_return)
     })

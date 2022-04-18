@@ -257,7 +257,7 @@ impl TableFunStream {
     fn batch(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
         // Table UDFs return Vec<ColumnarValue> otherwise Column always is ColumnarValue
         // We wrap Column result to Vec (to have the same structure with udtfs results)
-        let arrays: Vec<(Vec<ColumnarValue>, bool)> = self
+        let arrays: Vec<((ColumnarValue, Vec<usize>), bool)> = self
             .expr
             .iter()
             .map(|expr| {
@@ -265,83 +265,74 @@ impl TableFunStream {
                 if t_expr.is_some() {
                     (t_expr.unwrap().evaluate_table(batch).unwrap(), true)
                 } else {
-                    let mut vec = Vec::new();
-                    vec.push(expr.evaluate(batch).unwrap());
-
-                    (vec, false)
+                    ((expr.evaluate(batch).unwrap(), Vec::new()), false)
                 }
             })
             .collect();
 
         // We are going to map udtf results with simple columns
-        // Create ArrayBuilder for each column
-        let mut columns: Vec<Box<dyn ArrayBuilder>> = arrays
-            .iter()
-            .map(|(v, _)| make_builder(&v.first().unwrap().data_type(), 1))
-            .collect();
-
-        // Get maximum count of batches per column (scalar value in case with column and array in case with udtf)
-        // Iterate batches
-        let batches_count = arrays.iter().map(|(a, _)| a.len()).max().unwrap_or(0);
-        for (i_column, (arr, if_fun)) in arrays.iter().enumerate() {
-            for i in 0..=batches_count - 1 {
-                // Get the maximum number of rows in current batch
-                // It always 1 for columns
-                let rows_count: usize = arrays
-                    .iter()
-                    .map(|(a, is_fun)| {
-                        if *is_fun {
-                            // In some cases it can be different count of batches
-                            //
-                            // Example: SELECT my_func(1, col), my_fun(1, 5) from my_table
-                            //
-                            // In example abowe my_func(1, col) return number of bathes equal to count of col.
-                            // Otherwise my_fun(1, 5) returns only one batch (because of static parameters)
-                            let a = if a.len() > i { &a[i] } else { &a[a.len() - 1] };
-                            if let ColumnarValue::Array(arr) = &a {
-                                return arr.len();
-                            }
-                        }
-
-                        1
-                    })
-                    .max()
-                    .unwrap_or(0);
-
-                // The same situation as in rows_count calculation
-                let batch = if *if_fun {
-                    if arr.len() > i {
-                        &arr[i]
-                    } else {
-                        &arr[arr.len() - 1]
+        // 1. Create ArrayBuilder for each column
+        // 2. Detect count of batches && sizes of batches
+        let mut columns: Vec<Box<dyn ArrayBuilder>> = Vec::new();
+        let mut batches_sizes: Vec<usize> = Vec::new();
+        for ((val, indexes), _) in arrays.iter() {
+            columns.push(make_builder(&val.data_type(), 1));
+            let mut prev_value: usize = 0;
+            for (i, end_of_batch) in indexes.iter().enumerate() {
+                if batches_sizes.len() > i {
+                    let batch_size = end_of_batch - prev_value + 1;
+                    if  batches_sizes[i] < batch_size {
+                        batches_sizes[i] = batch_size;
                     }
                 } else {
-                    &arr[0]
+                    batches_sizes.push(end_of_batch - prev_value + 1);
+                }
+                prev_value = end_of_batch.clone();
+            }
+        }
+
+        // Iterate arrays to fill columns
+        for (i_column, ((arr, indexes), is_fun)) in arrays.iter().enumerate() {
+            let column_arr = match arr {
+                ColumnarValue::Array(a) => a,
+                ColumnarValue::Scalar(_) => todo!(),
+            };
+            let builder = columns[i_column].as_any_mut();
+
+            // Iterate batches
+            for (i_batch, max_batch_size) in batches_sizes.iter().enumerate() {
+                let start_i_of_batch = if i_batch > 0 && *is_fun {
+                    indexes[i_batch-1]
+                } else {
+                    0
+                };
+                let current_batch_size: usize = if *is_fun {
+                    indexes[i_batch] - start_i_of_batch + 1
+                } else {
+                    1
                 };
 
-                // Now we fill up the current column with data from the current batch
-                // For column - copy scalar value
-                // For UDTF - ARR[Index] or NULL
+                // Iterate rows
+                for i_row in 0..=*max_batch_size-1 {
+                    // Now we fill up the current column with data from the current batch
+                    // For column - copy scalar value
+                    // For UDTF - ARR[Index] or NULL
 
-                // Example: SELECT asd, generate_series(1,asd), generate_series(1,2) FROM (select 1 asd UNION ALL select 2 asd) x;
-                // Result:
-                // 1  1   1
-                // 1 NULL 2
-                // 2  1   1
-                // 2  2   2
-                for i_row in 0..=rows_count - 1 {
-                    let index = if *if_fun { i_row } else { i };
-
-                    let builder = columns[i_column].as_any_mut();
-
-                    if let ColumnarValue::Array(arr) = batch {
-                        if arr.len() > index {
-                            append_value_from_array(arr, index, builder);
-                        } else {
+                    // Example: SELECT asd, generate_series(1,asd), generate_series(1,2) FROM (select 1 asd UNION ALL select 2 asd) x;
+                    // Select unused, generate_series(1,asd) from (select 8 as unused, 1 asd union all select 25 as unused, 3 asd)
+                    // Result:
+                    // 1  1   1
+                    // 1 NULL 2
+                    // 2  1   1
+                    // 2  2   2
+                    if *is_fun {
+                        if i_row >= current_batch_size {
                             append_null(builder);
+                        } else {
+                            append_value_from_array(column_arr, start_i_of_batch+i_row, builder);
                         }
                     } else {
-                        append_null(builder);
+                        append_value_from_array(column_arr, i_batch, builder);
                     }
                 }
             }
@@ -874,7 +865,7 @@ fn append_value_from_array(array: &ArrayRef, index: usize, to: &mut dyn Any) {
     }
 
     // TODO: Support Struct
-    // let arr = to.downcast_mut::<StructBuilder>();
+    let arr = to.downcast_mut::<StructBuilder>();
     // if arr.is_some() {
     //     let array = array.as_any().downcast_ref::<StructArray>().unwrap();
     //     arr.unwrap().append(array.value(index), true).unwrap();

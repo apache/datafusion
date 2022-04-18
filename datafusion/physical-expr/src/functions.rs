@@ -201,7 +201,10 @@ impl TableFunctionExpr {
         &self.return_type
     }
 
-    pub fn evaluate_table(&self, batch: &RecordBatch) -> Result<Vec<ColumnarValue>> {
+    pub fn evaluate_table(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<(ColumnarValue, Vec<usize>)> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {

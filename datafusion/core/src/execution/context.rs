@@ -2155,23 +2155,23 @@ mod tests {
                 .downcast_ref::<Int64Array>()
                 .expect("cast failed");
 
-            let result = start_arr
-                .iter()
-                .zip(end_arr.iter())
-                .map(|(start, end)| {
-                    let start_number = start.unwrap();
-                    let end_number = end.unwrap();
-                    let count: usize = (end_number - start_number).try_into().unwrap();
-                    let mut builder = Int64Builder::new(count);
-                    for i in start_number..end_number + 1 {
-                        builder.append_value(i).unwrap();
-                    }
+            let mut indexes: Vec<usize> = Vec::new();
+            let mut builder = Int64Builder::new(1);
 
-                    Arc::new(builder.finish()) as ArrayRef
-                })
-                .collect::<Vec<ArrayRef>>();
+            let mut current_index: usize = 0;
+            for (start, end) in start_arr.iter().zip(end_arr.iter()) {
+                let start_number = start.unwrap();
+                let end_number = end.unwrap();
+                let count: usize = (end_number - start_number).try_into().unwrap();
+                current_index += count;
+                indexes.push(current_index);
 
-            Ok(result)
+                for i in start_number..end_number + 1 {
+                    builder.append_value(i).unwrap();
+                }
+            }
+
+            Ok((Arc::new(builder.finish()) as ArrayRef, indexes))
         });
 
         let mut ctx = SessionContext::new();
@@ -2210,13 +2210,14 @@ mod tests {
 
         let result = plan_and_collect(
             &ctx,
-            // "SELECT asd, 1 + my_func(1, asd) + 5 + 1 kek, my_func(1, 2) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-            // "select my_func(1, 5) pos(n)",
-            "SELECT asd, my_func(1, asd) x FROM (select 1 asd, 3 qwe) x",
+            "SELECT my_func(1, 5) + 1 + 1 kek, my_func(asd, qwe), qwe, my_func(1, qwe) r FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            // "SELECT asd, my_func(1, asd) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            // "SELECT * from (select my_func(1, 5)) x",
+            // "SELECT * from my_func(1, 5)",
+            // "select unused, asd, my_func(1,asd) from (select 8 as unused, 1 asd union all select 25 as unused, 3 asd union all select 44 as unused, 5 asd) x",
             // "SELECT my_func(asd, 1000000) FROM my_table",
             // "SELECT asd, qwe, my_func(1, asd), my_func(1, 5) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
             // "SELECT asd, my_func(asd, 1000000) + 5 FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-            // "SELECT my_func(1, my_func(1, asd)) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
         )
         .await?;
 
