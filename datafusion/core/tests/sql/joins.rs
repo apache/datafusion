@@ -952,59 +952,54 @@ async fn join_timestamp() -> Result<()> {
 #[tokio::test]
 async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
     let ctx = SessionContext::new();
-    let id64_array = Int64Array::from(vec![
-        Some(5247),
-        Some(3821),
-        Some(6321),
-        Some(8821),
-        Some(7748),
+
+    let t1_schema = Schema::new(vec![
+        Field::new("t1_id", DataType::Int64, true),
+        Field::new("t1_value", DataType::Utf8, false),
     ]);
-    let str_array = StringArray::from(vec!["1", "2", "3", "4", "5"]);
-    let schema = Schema::new(vec![
-        Field::new("id64", DataType::Int64, true),
-        Field::new("STR", DataType::Utf8, false),
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Int64Array::from_slice(&[5247, 3821, 6321, 8821, 7748])),
+            Arc::new(StringArray::from(vec!["1", "2", "3", "4", "5"])),
+        ],
+    )?;
+    let t1_table = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let t2_schema = Schema::new(vec![
+        Field::new("t2_id", DataType::Int64, true),
+        Field::new("t2_value", DataType::Boolean, true),
     ]);
-
-    let batch = RecordBatch::try_new(
-        Arc::new(schema),
-        vec![Arc::new(id64_array), Arc::new(str_array)],
-    )
-    .unwrap();
-
-    let db1 = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
-    ctx.register_table("t1", Arc::new(db1)).unwrap();
-
-    let id64_2array =
-        Int64Array::from(vec![Some(358), Some(2820), Some(3804), Some(7748)]);
-    let bool_2array = BooleanArray::from(vec![Some(true), Some(false), None, None]);
-    let schema = Schema::new(vec![
-        Field::new("id64", DataType::Int64, true),
-        Field::new("col_b", DataType::Boolean, true),
-    ]);
-
-    let batch2 = RecordBatch::try_new(
-        Arc::new(schema),
-        vec![Arc::new(id64_2array), Arc::new(bool_2array)],
-    )
-    .unwrap();
-    let db2 = MemTable::try_new(batch2.schema(), vec![vec![batch2]]).unwrap();
-    ctx.register_table("t2", Arc::new(db2)).unwrap();
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Int64Array::from_slice(&[358, 2820, 3804, 7748])),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                None,
+                None,
+            ])),
+        ],
+    )?;
+    let t2_table = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2_table))?;
 
     let expected = vec![
-        "+------+-----+------+-------+",
-        "| id64 | STR | id64 | col_b |",
-        "+------+-----+------+-------+",
-        "| 5247 | 1   |      |       |",
-        "| 3821 | 2   |      |       |",
-        "| 6321 | 3   |      |       |",
-        "| 8821 | 4   |      |       |",
-        "| 7748 | 5   | 7748 |       |",
-        "+------+-----+------+-------+",
+        "+-------+----------+-------+----------+",
+        "| t1_id | t1_value | t2_id | t2_value |",
+        "+-------+----------+-------+----------+",
+        "| 5247  | 1        |       |          |",
+        "| 3821  | 2        |       |          |",
+        "| 6321  | 3        |       |          |",
+        "| 8821  | 4        |       |          |",
+        "| 7748  | 5        | 7748  |          |",
+        "+-------+----------+-------+----------+",
     ];
 
     let results =
-        execute_to_batches(&ctx, "select * from t1 left join t2 on t1.id64 = t2.id64")
-            .await;
+        execute_to_batches(&ctx, "select * from t1 left join t2 on t1_id = t2_id").await;
 
     assert_batches_sorted_eq!(expected, &results);
 
