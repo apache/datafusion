@@ -22,6 +22,7 @@ use super::{
     aggregates, empty::EmptyExec, expressions::binary, functions,
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
+use crate::catalog::catalog::get_table_provider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
@@ -338,7 +339,7 @@ impl DefaultPhysicalPlanner {
                     filters,
                     limit,
                     ..
-                }) => match session_state.execution_props.get_table_provider(&table_name) {
+                }) => match get_table_provider(session_state.execution_props.catalog_list.as_ref(), &table_name) {
                     Some(t) => {
                         // Remove all qualifiers from the scan as the provider
                         // doesn't know (nor should care) how the relation was

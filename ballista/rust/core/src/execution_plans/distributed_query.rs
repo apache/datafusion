@@ -164,7 +164,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
     async fn execute(
         &self,
         partition: usize,
-        _context: Arc<TaskContext>,
+        task_context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(0, partition);
 
@@ -178,15 +178,17 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
         let schema: Schema = self.plan.schema().as_ref().clone().into();
 
         let mut buf: Vec<u8> = vec![];
-        let plan_message =
-            T::try_from_logical_plan(&self.plan, self.extension_codec.as_ref()).map_err(
-                |e| {
-                    DataFusionError::Internal(format!(
-                        "failed to serialize logical plan: {:?}",
-                        e
-                    ))
-                },
-            )?;
+        let plan_message = T::try_from_logical_plan(
+            &self.plan,
+            task_context.catalog_list.as_ref(),
+            self.extension_codec.as_ref(),
+        )
+        .map_err(|e| {
+            DataFusionError::Internal(format!(
+                "failed to serialize logical plan: {:?}",
+                e
+            ))
+        })?;
         plan_message.try_encode(&mut buf).map_err(|e| {
             DataFusionError::Execution(format!("failed to encode logical plan: {:?}", e))
         })?;

@@ -19,6 +19,8 @@
 //! representing collections of named schemas.
 
 use crate::catalog::schema::SchemaProvider;
+use crate::catalog::TableReference;
+use crate::datasource::TableProvider;
 use datafusion_common::{DataFusionError, Result};
 use parking_lot::RwLock;
 use std::any::Any;
@@ -44,6 +46,46 @@ pub trait CatalogList: Sync + Send {
 
     /// Retrieves a specific catalog by name, provided it exists.
     fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>>;
+}
+
+/// Get a TableProvider from the catalog
+pub fn get_table_provider(
+    catalog_list: &dyn CatalogList,
+    table_name: &str,
+) -> Option<Arc<dyn TableProvider>> {
+    // TODO do we have these defined as defaults somewhere?
+    let mut catalog_name = "datafusion".to_owned();
+    let mut schema_name = "public".to_owned();
+    let table_ref_name;
+
+    let table_ref: TableReference = table_name.into();
+    match table_ref {
+        TableReference::Bare { table } => table_ref_name = table.to_string(),
+        TableReference::Partial { schema, table } => {
+            schema_name = schema.to_string();
+            table_ref_name = table.to_string();
+        }
+        TableReference::Full {
+            catalog,
+            schema,
+            table,
+        } => {
+            catalog_name = catalog.to_string();
+            schema_name = schema.to_string();
+            table_ref_name = table.to_string();
+        }
+    }
+
+    match catalog_list.catalog(&catalog_name) {
+        Some(catalog) => match catalog.schema(&schema_name) {
+            Some(schema) => match schema.table(&table_ref_name) {
+                Some(table) => Some(table.clone()),
+                _ => None,
+            },
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Simple in-memory list of catalogs

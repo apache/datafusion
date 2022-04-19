@@ -38,6 +38,7 @@ use datafusion::logical_plan::{
 };
 use datafusion::prelude::SessionContext;
 
+use datafusion::catalog::catalog::{get_table_provider, CatalogList};
 use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
@@ -249,6 +250,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .with_schema(Arc::new(schema));
 
                 let provider = ListingTable::try_new(config)?;
+
+                //TODO we need to be building a catalog here as well
 
                 LogicalPlanBuilder::scan_with_filters(
                     &scan.table_name,
@@ -477,6 +480,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
     fn try_from_logical_plan(
         plan: &LogicalPlan,
+        catalog_list: &dyn CatalogList,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<Self, BallistaError>
     where
@@ -505,87 +509,94 @@ impl AsLogicalPlan for LogicalPlanNode {
             }
             LogicalPlan::TableScan(TableScan {
                 table_name,
-                table_provider_name,
                 filters,
                 projection,
                 ..
             }) => {
-                todo!("ballista serde")
+                match get_table_provider(catalog_list, &table_name) {
+                    Some(source) => {
+                        let schema = source.schema();
+                        let source = source.as_any();
 
-                // let schema = source.schema();
-                // let source = source.as_any();
-                //
-                // let projection = match projection {
-                //     None => None,
-                //     Some(columns) => {
-                //         let column_names = columns
-                //             .iter()
-                //             .map(|i| schema.field(*i).name().to_owned())
-                //             .collect();
-                //         Some(protobuf::ProjectionColumns {
-                //             columns: column_names,
-                //         })
-                //     }
-                // };
-                // let schema: datafusion_proto::protobuf::Schema = schema.as_ref().into();
-                //
-                // let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> = filters
-                //     .iter()
-                //     .map(|filter| filter.try_into())
-                //     .collect::<Result<Vec<_>, _>>()?;
-                //
-                // if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                //     let any = listing_table.options().format.as_any();
-                //     let file_format_type = if let Some(parquet) =
-                //         any.downcast_ref::<ParquetFormat>()
-                //     {
-                //         FileFormatType::Parquet(protobuf::ParquetFormat {
-                //             enable_pruning: parquet.enable_pruning(),
-                //         })
-                //     } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                //         FileFormatType::Csv(protobuf::CsvFormat {
-                //             delimiter: byte_to_string(csv.delimiter())?,
-                //             has_header: csv.has_header(),
-                //         })
-                //     } else if any.is::<AvroFormat>() {
-                //         FileFormatType::Avro(protobuf::AvroFormat {})
-                //     } else {
-                //         return Err(proto_error(format!(
-                //             "Error converting file format, {:?} is invalid as a datafusion foramt.",
-                //             listing_table.options().format
-                //         )));
-                //     };
-                //     Ok(protobuf::LogicalPlanNode {
-                //         logical_plan_type: Some(LogicalPlanType::ListingScan(
-                //             protobuf::ListingTableScanNode {
-                //                 file_format_type: Some(file_format_type),
-                //                 table_name: table_name.to_owned(),
-                //                 collect_stat: listing_table.options().collect_stat,
-                //                 file_extension: listing_table
-                //                     .options()
-                //                     .file_extension
-                //                     .clone(),
-                //                 table_partition_cols: listing_table
-                //                     .options()
-                //                     .table_partition_cols
-                //                     .clone(),
-                //                 path: listing_table.table_path().to_owned(),
-                //                 schema: Some(schema),
-                //                 projection,
-                //                 filters,
-                //                 target_partitions: listing_table
-                //                     .options()
-                //                     .target_partitions
-                //                     as u32,
-                //             },
-                //         )),
-                //     })
-                // } else {
-                //     Err(BallistaError::General(format!(
-                //         "logical plan to_proto unsupported table provider {:?}",
-                //         source
-                //     )))
-                // }
+                        let projection = match projection {
+                            None => None,
+                            Some(columns) => {
+                                let column_names = columns
+                                    .iter()
+                                    .map(|i| schema.field(*i).name().to_owned())
+                                    .collect();
+                                Some(protobuf::ProjectionColumns {
+                                    columns: column_names,
+                                })
+                            }
+                        };
+                        let schema: datafusion_proto::protobuf::Schema =
+                            schema.as_ref().into();
+
+                        let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> =
+                            filters
+                                .iter()
+                                .map(|filter| filter.try_into())
+                                .collect::<Result<Vec<_>, _>>()?;
+
+                        if let Some(listing_table) = source.downcast_ref::<ListingTable>()
+                        {
+                            let any = listing_table.options().format.as_any();
+                            let file_format_type = if let Some(parquet) =
+                                any.downcast_ref::<ParquetFormat>()
+                            {
+                                FileFormatType::Parquet(protobuf::ParquetFormat {
+                                    enable_pruning: parquet.enable_pruning(),
+                                })
+                            } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                                FileFormatType::Csv(protobuf::CsvFormat {
+                                    delimiter: byte_to_string(csv.delimiter())?,
+                                    has_header: csv.has_header(),
+                                })
+                            } else if any.is::<AvroFormat>() {
+                                FileFormatType::Avro(protobuf::AvroFormat {})
+                            } else {
+                                return Err(proto_error(format!(
+                                    "Error converting file format, {:?} is invalid as a datafusion foramt.",
+                                    listing_table.options().format
+                                )));
+                            };
+                            Ok(protobuf::LogicalPlanNode {
+                                logical_plan_type: Some(LogicalPlanType::ListingScan(
+                                    protobuf::ListingTableScanNode {
+                                        file_format_type: Some(file_format_type),
+                                        table_name: table_name.to_owned(),
+                                        collect_stat: listing_table
+                                            .options()
+                                            .collect_stat,
+                                        file_extension: listing_table
+                                            .options()
+                                            .file_extension
+                                            .clone(),
+                                        table_partition_cols: listing_table
+                                            .options()
+                                            .table_partition_cols
+                                            .clone(),
+                                        path: listing_table.table_path().to_owned(),
+                                        schema: Some(schema),
+                                        projection,
+                                        filters,
+                                        target_partitions: listing_table
+                                            .options()
+                                            .target_partitions
+                                            as u32,
+                                    },
+                                )),
+                            })
+                        } else {
+                            Err(BallistaError::General(format!(
+                                "logical plan to_proto unsupported table provider {:?}",
+                                source
+                            )))
+                        }
+                    }
+                    _ => unimplemented!(), // TODO
+                }
             }
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
@@ -595,6 +606,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         input: Some(Box::new(
                             protobuf::LogicalPlanNode::try_from_logical_plan(
                                 input.as_ref(),
+                                catalog_list,
                                 extension_codec,
                             )?,
                         )),
@@ -613,6 +625,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -630,6 +643,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -653,6 +667,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -683,11 +698,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let left: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         left.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 let right: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         right.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 let (left_join_column, right_join_column) =
@@ -713,6 +730,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -728,6 +746,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -743,6 +762,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
                 let selection_expr: Vec<datafusion_proto::protobuf::LogicalExprNode> =
@@ -766,6 +786,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
                         input.as_ref(),
+                        catalog_list,
                         extension_codec,
                     )?;
 
@@ -873,6 +894,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Analyze(a) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     a.input.as_ref(),
+                    catalog_list,
                     extension_codec,
                 )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -887,6 +909,7 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::Explain(a) => {
                 let input = protobuf::LogicalPlanNode::try_from_logical_plan(
                     a.plan.as_ref(),
+                    catalog_list,
                     extension_codec,
                 )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -905,6 +928,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|i| {
                         protobuf::LogicalPlanNode::try_from_logical_plan(
                             i,
+                            catalog_list,
                             extension_codec,
                         )
                     })
@@ -918,10 +942,12 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
                 let left = protobuf::LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
+                    catalog_list,
                     extension_codec,
                 )?;
                 let right = protobuf::LogicalPlanNode::try_from_logical_plan(
                     right.as_ref(),
+                    catalog_list,
                     extension_codec,
                 )?;
                 Ok(protobuf::LogicalPlanNode {
@@ -944,6 +970,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map(|i| {
                         protobuf::LogicalPlanNode::try_from_logical_plan(
                             i,
+                            catalog_list,
                             extension_codec,
                         )
                     })
@@ -984,6 +1011,9 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
+    use datafusion::catalog::catalog::{
+        get_table_provider, CatalogList, MemoryCatalogList,
+    };
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
         datafusion_data_access::{
@@ -1054,10 +1084,10 @@ mod roundtrip_tests {
                 format!("{:?}", round_trip)
             );
         };
-        ($initial_struct:ident, $struct_type:ty) => {
-            roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
-        };
-        ($initial_struct:ident) => {
+        // ($initial_struct:ident, $struct_type:ty) => {
+        //     roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
+        // };
+        ($initial_struct:ident, $catalog_list:ident) => {
             let ctx = SessionContext::new();
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
@@ -1066,6 +1096,7 @@ mod roundtrip_tests {
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &$initial_struct,
+                    $catalog_list.as_ref(),
                     codec.logical_extension_codec(),
                 )
                 .expect("from logical plan");
@@ -1077,24 +1108,23 @@ mod roundtrip_tests {
                 format!("{:?}", $initial_struct),
                 format!("{:?}", round_trip)
             );
-        };
-        ($initial_struct:ident, $ctx:ident) => {
-            let codec: BallistaCodec<
-                protobuf::LogicalPlanNode,
-                protobuf::PhysicalPlanNode,
-            > = BallistaCodec::default();
-            let proto: protobuf::LogicalPlanNode =
-                protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
-                    .expect("from logical plan");
-            let round_trip: LogicalPlan = proto
-                .try_into_logical_plan(&$ctx, codec.logical_extension_codec())
-                .expect("to logical plan");
-
-            assert_eq!(
-                format!("{:?}", $initial_struct),
-                format!("{:?}", round_trip)
-            );
-        };
+        }; // ($initial_struct:ident, $ctx:ident) => {
+           //     let codec: BallistaCodec<
+           //         protobuf::LogicalPlanNode,
+           //         protobuf::PhysicalPlanNode,
+           //     > = BallistaCodec::default();
+           //     let proto: protobuf::LogicalPlanNode =
+           //         protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
+           //             .expect("from logical plan");
+           //     let round_trip: LogicalPlan = proto
+           //         .try_into_logical_plan(&$ctx, $catalog_list, codec.logical_extension_codec())
+           //         .expect("to logical plan");
+           //
+           //     assert_eq!(
+           //         format!("{:?}", $initial_struct),
+           //         format!("{:?}", round_trip)
+           //     );
+           // };
     }
 
     #[tokio::test]
@@ -1128,6 +1158,7 @@ mod roundtrip_tests {
             .map_err(BallistaError::DataFusionError)?,
         );
 
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
         for partition_count in test_partition_counts.iter() {
             let rr_repartition = Partitioning::RoundRobinBatch(*partition_count);
 
@@ -1136,7 +1167,7 @@ mod roundtrip_tests {
                 partitioning_scheme: rr_repartition,
             });
 
-            roundtrip_test!(roundtrip_plan);
+            roundtrip_test!(roundtrip_plan, catalog_list);
 
             let h_repartition = Partitioning::Hash(test_expr.clone(), *partition_count);
 
@@ -1145,7 +1176,7 @@ mod roundtrip_tests {
                 partitioning_scheme: h_repartition,
             });
 
-            roundtrip_test!(roundtrip_plan);
+            roundtrip_test!(roundtrip_plan, catalog_list);
 
             let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *partition_count);
 
@@ -1154,7 +1185,7 @@ mod roundtrip_tests {
                 partitioning_scheme: no_expr_hrepartition,
             });
 
-            roundtrip_test!(roundtrip_plan);
+            roundtrip_test!(roundtrip_plan, catalog_list);
         }
 
         Ok(())
@@ -1179,6 +1210,8 @@ mod roundtrip_tests {
             FileType::Avro,
         ];
 
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+
         for file in filetypes.iter() {
             let create_table_node =
                 LogicalPlan::CreateExternalTable(CreateExternalTable {
@@ -1192,7 +1225,7 @@ mod roundtrip_tests {
                     if_not_exists: false,
                 });
 
-            roundtrip_test!(create_table_node);
+            roundtrip_test!(create_table_node, catalog_list);
         }
 
         Ok(())
@@ -1234,9 +1267,11 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan);
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
 
-        roundtrip_test!(verbose_plan);
+        roundtrip_test!(plan, catalog_list);
+
+        roundtrip_test!(verbose_plan, catalog_list);
 
         Ok(())
     }
@@ -1277,9 +1312,11 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan);
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
 
-        roundtrip_test!(verbose_plan);
+        roundtrip_test!(plan, catalog_list);
+
+        roundtrip_test!(verbose_plan, catalog_list);
 
         Ok(())
     }
@@ -1317,7 +1354,9 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan);
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+
+        roundtrip_test!(plan, catalog_list);
         Ok(())
     }
 
@@ -1342,7 +1381,10 @@ mod roundtrip_tests {
         .and_then(|plan| plan.sort(vec![col("salary")]))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
-        roundtrip_test!(plan);
+
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+
+        roundtrip_test!(plan, catalog_list);
 
         Ok(())
     }
@@ -1353,13 +1395,14 @@ mod roundtrip_tests {
             .build()
             .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan_false);
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+        roundtrip_test!(plan_false, catalog_list);
 
         let plan_true = LogicalPlanBuilder::empty(true)
             .build()
             .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan_true);
+        roundtrip_test!(plan_true, catalog_list);
 
         Ok(())
     }
@@ -1386,7 +1429,9 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan);
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+
+        roundtrip_test!(plan, catalog_list);
 
         Ok(())
     }
@@ -1423,9 +1468,12 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+
         let proto: protobuf::LogicalPlanNode =
             protobuf::LogicalPlanNode::try_from_logical_plan(
                 &plan,
+                catalog_list.as_ref(),
                 codec.logical_extension_codec(),
             )
             .expect("from logical plan");
@@ -1435,20 +1483,21 @@ mod roundtrip_tests {
 
         assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
 
-        todo!("ballista serde");
-        // let round_trip_store = match round_trip {
-        //     LogicalPlan::TableScan(scan) => {
-        //         match scan.source.as_ref().as_any().downcast_ref::<ListingTable>() {
-        //             Some(listing_table) => {
-        //                 format!("{:?}", listing_table.object_store())
-        //             }
-        //             _ => panic!("expected a ListingTable"),
-        //         }
-        //     }
-        //     _ => panic!("expected a TableScan"),
-        // };
-        //
-        // assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
+        let round_trip_store = match round_trip {
+            LogicalPlan::TableScan(scan) => {
+                let source =
+                    get_table_provider(catalog_list.as_ref(), &scan.table_name).unwrap();
+                match source.as_ref().as_any().downcast_ref::<ListingTable>() {
+                    Some(listing_table) => {
+                        format!("{:?}", listing_table.object_store())
+                    }
+                    _ => panic!("expected a ListingTable"),
+                }
+            }
+            _ => panic!("expected a TableScan"),
+        };
+
+        assert_eq!(round_trip_store, format!("{:?}", custom_object_store));
 
         Ok(())
     }

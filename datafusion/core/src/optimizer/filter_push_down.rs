@@ -14,6 +14,7 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
+use crate::catalog::catalog::get_table_provider;
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
@@ -521,74 +522,75 @@ fn optimize(
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
-            match execution_props.get_table_provider(table_name) {
-                Some(source) => {
-                    // TODO consolidate this logic and remove duplication
+            if let Some(source) =
+                get_table_provider(execution_props.catalog_list.as_ref(), table_name)
+            {
+                // TODO consolidate this logic and remove duplication
 
-                    let mut full_filters: Vec<Expr> = vec![];
-                    let mut partial_filters: Vec<Expr> = vec![];
-                    let mut unsupported_filters: Vec<Expr> = vec![];
+                let mut full_filters: Vec<Expr> = vec![];
+                let mut partial_filters: Vec<Expr> = vec![];
+                let mut unsupported_filters: Vec<Expr> = vec![];
 
-                    if !filters.is_empty() {
-                        filters.iter().for_each(|x| {
-                            if let Ok(t) = source.supports_filter_pushdown(x) {
-                                match t {
-                                    TableProviderFilterPushDown::Exact => {
-                                        full_filters.push(x.clone())
-                                    }
-                                    TableProviderFilterPushDown::Inexact => {
-                                        partial_filters.push(x.clone())
-                                    }
-                                    TableProviderFilterPushDown::Unsupported => {
-                                        unsupported_filters.push(x.clone())
-                                    }
+                if !filters.is_empty() {
+                    filters.iter().for_each(|x| {
+                        if let Ok(t) = source.supports_filter_pushdown(x) {
+                            match t {
+                                TableProviderFilterPushDown::Exact => {
+                                    full_filters.push(x.clone())
+                                }
+                                TableProviderFilterPushDown::Inexact => {
+                                    partial_filters.push(x.clone())
+                                }
+                                TableProviderFilterPushDown::Unsupported => {
+                                    unsupported_filters.push(x.clone())
                                 }
                             }
-                        });
-                    }
-
-                    for (filter_expr, cols) in &state.filters {
-                        let (preserve_filter_node, add_to_provider) =
-                            match source.supports_filter_pushdown(filter_expr)? {
-                                TableProviderFilterPushDown::Unsupported => (true, false),
-                                TableProviderFilterPushDown::Inexact => (true, true),
-                                TableProviderFilterPushDown::Exact => (false, true),
-                            };
-
-                        if preserve_filter_node {
-                            used_columns.extend(cols.clone());
                         }
-
-                        if add_to_provider {
-                            // Don't add expression again if it's already present in
-                            // pushed down filters.
-                            if new_filters.contains(filter_expr) {
-                                continue;
-                            }
-                            new_filters.push(filter_expr.clone());
-                        }
-                    }
-
-                    issue_filters(
-                        state,
-                        execution_props,
-                        used_columns,
-                        &LogicalPlan::TableScan(TableScan {
-                            projection: projection.clone(),
-                            projected_schema: projected_schema.clone(),
-                            table_name: table_name.clone(),
-                            filters: new_filters,
-                            full_filters,
-                            partial_filters,
-                            unsupported_filters,
-                            limit: *limit,
-                        }),
-                    )
+                    });
                 }
-                _ => Err(DataFusionError::Plan(format!(
+
+                for (filter_expr, cols) in &state.filters {
+                    let (preserve_filter_node, add_to_provider) =
+                        match source.supports_filter_pushdown(filter_expr)? {
+                            TableProviderFilterPushDown::Unsupported => (true, false),
+                            TableProviderFilterPushDown::Inexact => (true, true),
+                            TableProviderFilterPushDown::Exact => (false, true),
+                        };
+
+                    if preserve_filter_node {
+                        used_columns.extend(cols.clone());
+                    }
+
+                    if add_to_provider {
+                        // Don't add expression again if it's already present in
+                        // pushed down filters.
+                        if new_filters.contains(filter_expr) {
+                            continue;
+                        }
+                        new_filters.push(filter_expr.clone());
+                    }
+                }
+
+                issue_filters(
+                    state,
+                    execution_props,
+                    used_columns,
+                    &LogicalPlan::TableScan(TableScan {
+                        projection: projection.clone(),
+                        projected_schema: projected_schema.clone(),
+                        table_name: table_name.clone(),
+                        filters: new_filters,
+                        full_filters,
+                        partial_filters,
+                        unsupported_filters,
+                        limit: *limit,
+                    }),
+                )
+            } else {
+                Err(DataFusionError::Plan(format!(
                     "No table provider named {}",
                     table_name
-                ))),
+                )))
             }
         }
         _ => {

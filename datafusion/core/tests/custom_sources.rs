@@ -213,14 +213,9 @@ async fn custom_source_dataframe() -> Result<()> {
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
             LogicalPlan::TableScan(TableScan {
-                table_provider_name,
-                projected_schema,
-                ..
+                projected_schema, ..
             }) => {
-                let source = builder
-                    .table_providers
-                    .get(table_provider_name)
-                    .expect("table provider found");
+                let source = provider;
                 assert_eq!(source.schema().fields().len(), 2);
                 assert_eq!(projected_schema.fields().len(), 1);
             }

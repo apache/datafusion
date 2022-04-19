@@ -30,6 +30,7 @@ use datafusion::logical_plan::{
 
 use crate::{error::BallistaError, serde::scheduler::Action as BallistaAction};
 
+use datafusion::catalog::catalog::CatalogList;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::plan::Extension;
 use datafusion::physical_plan::ExecutionPlan;
@@ -76,6 +77,7 @@ pub trait AsLogicalPlan: Debug + Send + Sync + Clone {
 
     fn try_from_logical_plan(
         plan: &LogicalPlan,
+        catalog_list: &dyn CatalogList,
         extension_codec: &dyn LogicalExtensionCodec,
     ) -> Result<Self, BallistaError>
     where
@@ -726,7 +728,11 @@ mod tests {
 
         let extension_codec = TopKExtensionCodec {};
 
-        let proto = LogicalPlanNode::try_from_logical_plan(&topk_plan, &extension_codec)?;
+        let proto = LogicalPlanNode::try_from_logical_plan(
+            &topk_plan,
+            ctx.state.read().execution_props.catalog_list.as_ref(),
+            &extension_codec,
+        )?;
         let logical_round_trip = proto.try_into_logical_plan(&ctx, &extension_codec)?;
 
         assert_eq!(

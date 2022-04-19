@@ -18,6 +18,7 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
+use crate::catalog::catalog::get_table_provider;
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
@@ -344,30 +345,31 @@ fn optimize_plan(
             limit,
             ..
         }) => {
-            match _execution_props.get_table_provider(table_name) {
-                Some(source) => {
-                    let (projection, projected_schema) = get_projected_schema(
-                        Some(table_name),
-                        &source.schema(),
-                        required_columns,
-                        has_projection,
-                    )?;
-                    // return the table scan with projection
-                    Ok(LogicalPlan::TableScan(TableScan {
-                        table_name: table_name.clone(),
-                        projection: Some(projection),
-                        projected_schema,
-                        filters: filters.clone(),
-                        full_filters: full_filters.clone(),
-                        partial_filters: partial_filters.clone(),
-                        unsupported_filters: unsupported_filters.clone(),
-                        limit: *limit,
-                    }))
-                }
-                _ => Err(DataFusionError::Execution(format!(
+            if let Some(source) =
+                get_table_provider(_execution_props.catalog_list.as_ref(), table_name)
+            {
+                let (projection, projected_schema) = get_projected_schema(
+                    Some(table_name),
+                    &source.schema(),
+                    required_columns,
+                    has_projection,
+                )?;
+                // return the table scan with projection
+                Ok(LogicalPlan::TableScan(TableScan {
+                    table_name: table_name.clone(),
+                    projection: Some(projection),
+                    projected_schema,
+                    filters: filters.clone(),
+                    full_filters: full_filters.clone(),
+                    partial_filters: partial_filters.clone(),
+                    unsupported_filters: unsupported_filters.clone(),
+                    limit: *limit,
+                }))
+            } else {
+                Err(DataFusionError::Execution(format!(
                     "Could not resolve table provider named {}",
                     table_name
-                ))),
+                )))
             }
         }
         LogicalPlan::Explain { .. } => Err(DataFusionError::Internal(

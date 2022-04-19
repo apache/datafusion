@@ -1127,43 +1127,6 @@ impl ExecutionProps {
             .as_ref()
             .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
     }
-
-    /// Get a TableProvider from the catalog
-    pub fn get_table_provider(&self, table_name: &str) -> Option<Arc<dyn TableProvider>> {
-        // TODO do we have these defined as defaults somewhere?
-        let mut catalog_name = "datafusion".to_owned();
-        let mut schema_name = "public".to_owned();
-        let table_ref_name;
-
-        let table_ref: TableReference = table_name.into();
-        match table_ref {
-            TableReference::Bare { table } => table_ref_name = table.to_string(),
-            TableReference::Partial { schema, table } => {
-                schema_name = schema.to_string();
-                table_ref_name = table.to_string();
-            }
-            TableReference::Full {
-                catalog,
-                schema,
-                table,
-            } => {
-                catalog_name = catalog.to_string();
-                schema_name = schema.to_string();
-                table_ref_name = table.to_string();
-            }
-        }
-
-        match self.catalog_list.catalog(&catalog_name) {
-            Some(catalog) => match catalog.schema(&schema_name) {
-                Some(schema) => match schema.table(&table_ref_name) {
-                    Some(table) => Some(table.clone()),
-                    _ => None,
-                },
-                _ => None,
-            },
-            _ => None,
-        }
-    }
 }
 
 /// Execution context for registering data sources and executing queries
@@ -1492,6 +1455,8 @@ pub struct TaskContext {
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
+    /// Catalog for table provider discovery
+    pub catalog_list: Arc<dyn CatalogList>,
 }
 
 impl TaskContext {
@@ -1503,6 +1468,7 @@ impl TaskContext {
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
+        catalog_list: Arc<dyn CatalogList>,
     ) -> Self {
         Self {
             task_id: Some(task_id),
@@ -1511,6 +1477,7 @@ impl TaskContext {
             scalar_functions,
             aggregate_functions,
             runtime,
+            catalog_list,
         }
     }
 
@@ -1570,12 +1537,13 @@ impl TaskContext {
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
         let session_id = session.session_id.clone();
-        let (config, scalar_functions, aggregate_functions) = {
+        let (config, scalar_functions, aggregate_functions, catalog_list) = {
             let session_state = session.state.read();
             (
                 session_state.config.clone(),
                 session_state.scalar_functions.clone(),
                 session_state.aggregate_functions.clone(),
+                session_state.catalog_list.clone(),
             )
         };
         let runtime = session.runtime_env();
@@ -1586,6 +1554,7 @@ impl From<&SessionContext> for TaskContext {
             scalar_functions,
             aggregate_functions,
             runtime,
+            catalog_list,
         }
     }
 }
@@ -1598,6 +1567,7 @@ impl From<&SessionState> for TaskContext {
         let scalar_functions = state.scalar_functions.clone();
         let aggregate_functions = state.aggregate_functions.clone();
         let runtime = state.runtime_env.clone();
+        let catalog_list = state.catalog_list.clone();
         Self {
             task_id: None,
             session_id,
@@ -1605,6 +1575,7 @@ impl From<&SessionState> for TaskContext {
             scalar_functions,
             aggregate_functions,
             runtime,
+            catalog_list,
         }
     }
 }

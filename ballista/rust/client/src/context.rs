@@ -269,10 +269,7 @@ impl BallistaContext {
         options: CsvReadOptions<'_>,
     ) -> Result<()> {
         match self.read_csv(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan(TableScan {
-                table_provider_name,
-                ..
-            }) => {
+            LogicalPlan::TableScan(TableScan { table_name, .. }) => {
                 todo!("ballista context")
                 //self.register_table(name, source)
             }
@@ -287,10 +284,7 @@ impl BallistaContext {
         options: ParquetReadOptions<'_>,
     ) -> Result<()> {
         match self.read_parquet(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan(TableScan {
-                table_provider_name,
-                ..
-            }) => {
+            LogicalPlan::TableScan(TableScan { table_name, .. }) => {
                 todo!("ballista context")
                 // self.register_table(name, source)
             }
@@ -305,10 +299,7 @@ impl BallistaContext {
         options: AvroReadOptions<'_>,
     ) -> Result<()> {
         match self.read_avro(path, options).await?.to_logical_plan() {
-            LogicalPlan::TableScan(TableScan {
-                table_provider_name,
-                ..
-            }) => {
+            LogicalPlan::TableScan(TableScan { table_name, .. }) => {
                 todo!("ballista context")
                 // self.register_table(name, source)
             }

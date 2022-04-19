@@ -1428,6 +1428,7 @@ mod tests {
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &plan,
+                    ctx.state.read().execution_props.catalog_list.as_ref(),
                     codec.logical_extension_codec(),
                 )
                 .unwrap();
@@ -1445,6 +1446,7 @@ mod tests {
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &plan,
+                    ctx.state.read().execution_props.catalog_list.as_ref(),
                     codec.logical_extension_codec(),
                 )
                 .unwrap();
