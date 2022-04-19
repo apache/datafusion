@@ -297,7 +297,8 @@ where
         let to_return: (ColumnarValue, Vec<usize>) = result
             .iter()
             .map(|(r, indexes)| (ColumnarValue::Array(r.clone()), indexes.clone()))
-            .next().unwrap();
+            .next()
+            .unwrap();
 
         Ok(to_return)
     })

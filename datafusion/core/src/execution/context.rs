@@ -2142,7 +2142,86 @@ mod tests {
 
     #[tokio::test]
     async fn user_defined_table_function() -> Result<()> {
-        let myfunc = make_table_function(move |args: &[ArrayRef]| {
+        let mut ctx = SessionContext::new();
+
+        let integer_serries = integer_udtf();
+        ctx.register_udtf(create_udtf(
+            "integer_serries",
+            vec![DataType::Int64, DataType::Int64],
+            Arc::new(DataType::Int64),
+            Volatility::Immutable,
+            integer_serries,
+        ));
+
+        let struct_func = struct_udtf();
+        ctx.register_udtf(create_udtf(
+            "struct_func",
+            vec![DataType::Int64],
+            Arc::new(DataType::Struct(
+                [
+                    Field::new("f1", DataType::Utf8, false),
+                    Field::new("f2", DataType::Int64, false),
+                ]
+                .to_vec(),
+            )),
+            Volatility::Immutable,
+            struct_func,
+        ));
+
+        let result = plan_and_collect(&ctx, "SELECT struct_func(5)").await?;
+
+        let expected = vec![
+            "+-------------------------+",
+            "| struct_func(Int64(5))   |",
+            "+-------------------------+",
+            "| {\"f1\": \"test\", \"f2\": 5} |",
+            "+-------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &result);
+
+        let result = plan_and_collect(&ctx, "SELECT integer_serries(1,5)").await?;
+
+        let expected = vec![
+            "+------------------------------------+",
+            "| integer_serries(Int64(1),Int64(5)) |",
+            "+------------------------------------+",
+            "| 1                                  |",
+            "| 2                                  |",
+            "| 3                                  |",
+            "| 4                                  |",
+            "| 5                                  |",
+            "+------------------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &result);
+
+        let result = plan_and_collect(
+            &ctx,
+            "SELECT asd, struct_func(qwe), integer_serries(asd, qwe), integer_serries(1, qwe) r FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+        )
+        .await?;
+
+        let expected = vec![
+            "+-----+-------------------------+------------------------------+---+",
+            "| asd | struct_func(x.qwe)      | integer_serries(x.asd,x.qwe) | r |",
+            "+-----+-------------------------+------------------------------+---+",
+            "| 1   | {\"f1\": \"test\", \"f2\": 3} | 1                            | 1 |",
+            "|     |                         | 2                            | 2 |",
+            "|     |                         | 3                            | 3 |",
+            "| 2   | {\"f1\": \"test\", \"f2\": 4} | 2                            | 1 |",
+            "|     |                         | 3                            | 2 |",
+            "|     |                         | 4                            | 3 |",
+            "|     |                         |                              | 4 |",
+            "+-----+-------------------------+------------------------------+---+",
+        ];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
+    fn integer_udtf() -> TableFunctionImplementation {
+        make_table_function(move |args: &[ArrayRef]| {
             assert!(args.len() == 2);
 
             let start_arr = &args[0]
@@ -2172,75 +2251,44 @@ mod tests {
             }
 
             Ok((Arc::new(builder.finish()) as ArrayRef, indexes))
-        });
+        })
+    }
 
-        let mut ctx = SessionContext::new();
-        ctx.register_udtf(create_udtf(
-            "my_func",
-            vec![DataType::Int64, DataType::Int64],
-            Arc::new(DataType::Int64),
-            Volatility::Immutable,
-            myfunc,
-        ));
+    fn struct_udtf() -> TableFunctionImplementation {
+        make_table_function(move |args: &[ArrayRef]| {
+            let start_arr = &args[0]
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("cast failed");
 
-        let dual_schema = Arc::new(Schema::new(vec![
-            Field::new("asd", DataType::Int64, false),
-            Field::new("qwe", DataType::Utf8, false),
-        ]));
+            let mut string_builder = StringBuilder::new(1);
+            let mut int_builder = Int64Builder::new(1);
 
-        let mut kek1: Vec<i64> = vec![];
-        let mut kek2: Vec<String> = vec![];
-        for i in 1..=1000 {
-            kek1.push(i);
-            kek2.push("kek".to_string());
-        }
+            let mut indexes: Vec<usize> = Vec::new();
+            let mut current_index: usize = 0;
+            for start in start_arr.iter() {
+                let start_number = start.unwrap();
+                indexes.push(current_index);
+                current_index += 1;
 
-        let batch = RecordBatch::try_new(
-            dual_schema.clone(),
-            vec![
-                Arc::new(array::Int64Array::from_slice(&kek1)),
-                Arc::new(array::StringArray::from_slice(&kek2)),
-            ],
-        )
-        .unwrap();
-        let provider = MemTable::try_new(dual_schema, vec![vec![batch]]).unwrap();
-        let provider = Arc::new(provider);
+                string_builder.append_value("test".to_string()).unwrap();
+                int_builder.append_value(start_number.clone()).unwrap();
+            }
 
-        ctx.register_table("my_table", provider)?;
+            let mut fields = Vec::new();
+            let mut field_builders = Vec::new();
+            fields.push(Field::new("f1", DataType::Utf8, false));
+            field_builders.push(Box::new(string_builder) as Box<dyn ArrayBuilder>);
+            fields.push(Field::new("f2", DataType::Int64, false));
+            field_builders.push(Box::new(int_builder) as Box<dyn ArrayBuilder>);
 
-        let result = plan_and_collect(
-            &ctx,
-            "SELECT my_func(1, 5) + 1 + 1 kek, my_func(asd, qwe), qwe, my_func(1, qwe) r FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-            // "SELECT asd, my_func(1, asd) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-            // "SELECT * from (select my_func(1, 5)) x",
-            // "SELECT * from my_func(1, 5)",
-            // "select unused, asd, my_func(1,asd) from (select 8 as unused, 1 asd union all select 25 as unused, 3 asd union all select 44 as unused, 5 asd) x",
-            // "SELECT my_func(asd, 1000000) FROM my_table",
-            // "SELECT asd, qwe, my_func(1, asd), my_func(1, 5) FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-            // "SELECT asd, my_func(asd, 1000000) + 5 FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
-        )
-        .await?;
+            let mut builder = StructBuilder::new(fields, field_builders);
+            for _start in start_arr.iter() {
+                builder.append(true).unwrap();
+            }
 
-        let formatted = arrow::util::pretty::pretty_format_batches(&result)
-            .unwrap()
-            .to_string();
-
-        println!("{}", formatted);
-
-        let expected = vec![
-            "+----------------------------+",
-            "| my_func(Int64(1),Int64(5)) |",
-            "+----------------------------+",
-            "| 1                          |",
-            "| 2                          |",
-            "| 3                          |",
-            "| 4                          |",
-            "| 5                          |",
-            "+----------------------------+",
-        ];
-        // assert_batches_eq!(expected, &result);
-
-        Ok(())
+            Ok((Arc::new(builder.finish()) as ArrayRef, indexes))
+        })
     }
 
     struct MyPhysicalPlanner {}
