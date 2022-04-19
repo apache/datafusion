@@ -999,7 +999,7 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
     ];
 
     let results =
-        execute_to_batches(&ctx, "select * from t1 left join t2 on t1_id = t2_id").await;
+        execute_to_batches(&ctx, "SELECT * FROM t1 LEFT JOIN t2 ON t1_id = t2_id").await;
 
     assert_batches_sorted_eq!(expected, &results);
 
