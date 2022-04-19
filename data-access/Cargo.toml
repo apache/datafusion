@@ -34,7 +34,7 @@ path = "src/lib.rs"
 
 [dependencies]
 async-trait = "0.1.41"
-chrono = { version = "0.4"}
+chrono = { version = "0.4", features = ["std"] }
 futures = "0.3"
 parking_lot = "0.12"
 tempfile = "3"
