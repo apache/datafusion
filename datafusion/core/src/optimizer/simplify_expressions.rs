@@ -17,6 +17,7 @@
 
 //! Simplify expressions optimizer rule
 
+use crate::catalog::catalog::CatalogList;
 use crate::error::DataFusionError;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::ExprSchemable;
@@ -195,6 +196,7 @@ impl OptimizerRule for SimplifyExpressions {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         // We need to pass down the all schemas within the plan tree to `optimize_expr` in order to
         // to evaluate expression types. For example, a projection plan's schema will only include
@@ -206,7 +208,7 @@ impl OptimizerRule for SimplifyExpressions {
         let new_inputs = plan
             .inputs()
             .iter()
-            .map(|input| self.optimize(input, execution_props))
+            .map(|input| self.optimize(input, execution_props, catalog_list))
             .collect::<Result<Vec<_>>>()?;
 
         let expr = plan
@@ -1177,7 +1179,6 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
-            catalog_list: Arc::new(MemoryCatalogList::default()),
         };
 
         let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1511,10 +1512,19 @@ mod tests {
             .expect("building plan")
     }
 
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::default())
+            .optimize(
+                plan,
+                &ExecutionProps::default(),
+                create_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);
@@ -1736,11 +1746,10 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
-            catalog_list: Arc::new(MemoryCatalogList::default()),
         };
 
         let err = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan, &execution_props, create_catalog_list().as_ref())
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1754,11 +1763,10 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
-            catalog_list: Arc::new(MemoryCatalogList::default()),
         };
 
         let optimized_plan = rule
-            .optimize(plan, &execution_props)
+            .optimize(plan, &execution_props, create_catalog_list().as_ref())
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }

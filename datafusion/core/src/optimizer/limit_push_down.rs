@@ -18,6 +18,7 @@
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
 use super::utils;
+use crate::catalog::catalog::CatalogList;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::Projection;
@@ -155,6 +156,7 @@ impl OptimizerRule for LimitPushDown {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        _catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         limit_push_down(self, None, plan, execution_props)
     }
@@ -167,15 +169,25 @@ impl OptimizerRule for LimitPushDown {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::{
         logical_plan::{col, max, LogicalPlan, LogicalPlanBuilder},
         test::*,
     };
 
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::default())
+            .optimize(
+                plan,
+                &ExecutionProps::default(),
+                create_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

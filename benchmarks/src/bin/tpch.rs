@@ -1308,15 +1308,6 @@ mod tests {
         }
 
         let plan = create_logical_plan(&ctx, n)?;
-        println!("state: {:?}", ctx.state.read().catalog_list.catalog_names());
-        println!(
-            "props: {:?}",
-            ctx.state
-                .read()
-                .execution_props
-                .catalog_list
-                .catalog_names()
-        );
         execute_query(&ctx, &plan, false).await?;
 
         Ok(())
@@ -1437,7 +1428,7 @@ mod tests {
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &plan,
-                    ctx.state.read().execution_props.catalog_list.as_ref(),
+                    ctx.state.read().catalog_list.as_ref(),
                     codec.logical_extension_codec(),
                 )
                 .unwrap();
@@ -1455,7 +1446,7 @@ mod tests {
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &plan,
-                    ctx.state.read().execution_props.catalog_list.as_ref(),
+                    ctx.state.read().catalog_list.as_ref(),
                     codec.logical_extension_codec(),
                 )
                 .unwrap();

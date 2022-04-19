@@ -730,7 +730,7 @@ mod tests {
 
         let proto = LogicalPlanNode::try_from_logical_plan(
             &topk_plan,
-            ctx.state.read().execution_props.catalog_list.as_ref(),
+            ctx.state.read().catalog_list.as_ref(),
             &extension_codec,
         )?;
         let logical_round_trip = proto.try_into_logical_plan(&ctx, &extension_codec)?;

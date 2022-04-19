@@ -17,6 +17,7 @@
 
 //! Eliminate common sub-expression.
 
+use crate::catalog::catalog::CatalogList;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Filter, Projection, Window};
@@ -60,8 +61,9 @@ impl OptimizerRule for CommonSubexprEliminate {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
-        optimize(plan, execution_props)
+        optimize(plan, execution_props, catalog_list)
     }
 
     fn name(&self) -> &str {
@@ -82,7 +84,11 @@ impl CommonSubexprEliminate {
     }
 }
 
-fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<LogicalPlan> {
+fn optimize(
+    plan: &LogicalPlan,
+    execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
+) -> Result<LogicalPlan> {
     let mut expr_set = ExprSet::new();
 
     match plan {
@@ -101,6 +107,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 &mut expr_set,
                 schema,
                 execution_props,
+                catalog_list,
             )?;
 
             Ok(LogicalPlan::Projection(Projection {
@@ -135,6 +142,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 &mut expr_set,
                 input.schema(),
                 execution_props,
+                catalog_list,
             )?;
 
             Ok(LogicalPlan::Filter(Filter {
@@ -156,6 +164,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 &mut expr_set,
                 schema,
                 execution_props,
+                catalog_list,
             )?;
 
             Ok(LogicalPlan::Window(Window {
@@ -180,6 +189,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 &mut expr_set,
                 schema,
                 execution_props,
+                catalog_list,
             )?;
             // note the reversed pop order.
             let new_aggr_expr = new_expr.pop().unwrap();
@@ -202,6 +212,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
                 &mut expr_set,
                 input.schema(),
                 execution_props,
+                catalog_list,
             )?;
 
             Ok(LogicalPlan::Sort(Sort {
@@ -231,7 +242,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
             let inputs = plan.inputs();
             let new_inputs = inputs
                 .iter()
-                .map(|input_plan| optimize(input_plan, execution_props))
+                .map(|input_plan| optimize(input_plan, execution_props, catalog_list))
                 .collect::<Result<Vec<_>>>()?;
 
             utils::from_plan(plan, &expr, &new_inputs)
@@ -299,6 +310,7 @@ fn rewrite_expr(
     expr_set: &mut ExprSet,
     schema: &DFSchema,
     execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
 ) -> Result<(Vec<Vec<Expr>>, LogicalPlan)> {
     let mut affected_id = HashSet::<Identifier>::new();
 
@@ -323,7 +335,7 @@ fn rewrite_expr(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut new_input = optimize(input, execution_props)?;
+    let mut new_input = optimize(input, execution_props, catalog_list)?;
     if !affected_id.is_empty() {
         new_input = build_project_plan(new_input, affected_id, expr_set)?;
     }
@@ -651,16 +663,26 @@ fn replace_common_expr(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{
         avg, binary_expr, col, lit, sum, LogicalPlanBuilder, Operator,
     };
     use crate::test::*;
     use std::iter;
 
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
+
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let optimizer = CommonSubexprEliminate {};
         let optimized_plan = optimizer
-            .optimize(plan, &ExecutionProps::default())
+            .optimize(
+                plan,
+                &ExecutionProps::default(),
+                create_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

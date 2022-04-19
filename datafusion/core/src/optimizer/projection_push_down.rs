@@ -18,7 +18,7 @@
 //! Projection Push Down optimizer rule ensures that only referenced columns are
 //! loaded into memory
 
-use crate::catalog::catalog::get_table_provider;
+use crate::catalog::catalog::{get_table_provider, CatalogList};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
@@ -48,6 +48,7 @@ impl OptimizerRule for ProjectionPushDown {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         // set of all columns refered by the plan (and thus considered required by the root)
         let required_columns = plan
@@ -56,7 +57,14 @@ impl OptimizerRule for ProjectionPushDown {
             .iter()
             .map(|f| f.qualified_column())
             .collect::<HashSet<Column>>();
-        optimize_plan(self, plan, &required_columns, false, execution_props)
+        optimize_plan(
+            self,
+            plan,
+            &required_columns,
+            false,
+            execution_props,
+            catalog_list,
+        )
     }
 
     fn name(&self) -> &str {
@@ -132,6 +140,7 @@ fn optimize_plan(
     required_columns: &HashSet<Column>, // set of columns required up to this step
     has_projection: bool,
     _execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
 ) -> Result<LogicalPlan> {
     let mut new_required_columns = required_columns.clone();
     match plan {
@@ -171,6 +180,7 @@ fn optimize_plan(
                 &new_required_columns,
                 true,
                 _execution_props,
+                catalog_list,
             )?;
 
             let new_required_columns_optimized = new_input
@@ -217,6 +227,7 @@ fn optimize_plan(
                 &new_required_columns,
                 true,
                 _execution_props,
+                catalog_list,
             )?);
 
             let optimized_right = Arc::new(optimize_plan(
@@ -225,6 +236,7 @@ fn optimize_plan(
                 &new_required_columns,
                 true,
                 _execution_props,
+                catalog_list,
             )?);
 
             let schema = build_join_schema(
@@ -278,6 +290,7 @@ fn optimize_plan(
                 &new_required_columns,
                 true,
                 _execution_props,
+                catalog_list,
             )?)
             .window(new_window_expr)?
             .build()
@@ -330,6 +343,7 @@ fn optimize_plan(
                     &new_required_columns,
                     true,
                     _execution_props,
+                    catalog_list,
                 )?),
                 schema: DFSchemaRef::new(new_schema),
             }))
@@ -345,14 +359,7 @@ fn optimize_plan(
             limit,
             ..
         }) => {
-            println!(
-                "proj push down: {:?}",
-                _execution_props.catalog_list.catalog_names()
-            );
-
-            if let Some(source) =
-                get_table_provider(_execution_props.catalog_list.as_ref(), table_name)
-            {
+            if let Some(source) = get_table_provider(catalog_list, table_name) {
                 let (projection, projected_schema) = get_projected_schema(
                     Some(table_name),
                     &source.schema(),
@@ -397,6 +404,7 @@ fn optimize_plan(
                     &required_columns,
                     false,
                     _execution_props,
+                    catalog_list,
                 )?),
                 verbose: a.verbose,
                 schema: a.schema.clone(),
@@ -433,6 +441,7 @@ fn optimize_plan(
                         &new_required_columns,
                         has_projection,
                         _execution_props,
+                        catalog_list,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -470,6 +479,7 @@ fn optimize_plan(
                         &new_required_columns,
                         has_projection,
                         _execution_props,
+                        catalog_list,
                     )?];
                     let expr = vec![];
                     utils::from_plan(plan, &expr, &new_inputs)
@@ -509,6 +519,7 @@ fn optimize_plan(
                         &new_required_columns,
                         has_projection,
                         _execution_props,
+                        catalog_list,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -524,6 +535,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{
         col, exprlist_to_fields, lit, max, min, Expr, JoinType, LogicalPlanBuilder,
     };
@@ -1000,6 +1012,15 @@ mod tests {
 
     fn optimize(plan: &LogicalPlan) -> Result<LogicalPlan> {
         let rule = ProjectionPushDown::new();
-        rule.optimize(plan, &ExecutionProps::default())
+        rule.optimize(
+            plan,
+            &ExecutionProps::default(),
+            create_catalog_list().as_ref(),
+        )
+    }
+
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
     }
 }

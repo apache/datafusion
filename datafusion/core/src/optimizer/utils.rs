@@ -23,6 +23,7 @@ use crate::logical_plan::plan::{
     Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 
+use crate::catalog::catalog::CatalogList;
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
     Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
@@ -108,12 +109,13 @@ pub fn optimize_children(
     optimizer: &impl OptimizerRule,
     plan: &LogicalPlan,
     execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
 ) -> Result<LogicalPlan> {
     let new_exprs = plan.expressions();
     let new_inputs = plan
         .inputs()
         .into_iter()
-        .map(|plan| optimizer.optimize(plan, execution_props))
+        .map(|plan| optimizer.optimize(plan, execution_props, catalog_list))
         .collect::<Result<Vec<_>>>()?;
 
     from_plan(plan, &new_exprs, &new_inputs)

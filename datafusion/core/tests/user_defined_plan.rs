@@ -86,6 +86,7 @@ use std::task::{Context, Poll};
 use std::{any::Any, collections::BTreeMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
+use datafusion::catalog::catalog::CatalogList;
 use datafusion::execution::context::{ExecutionProps, TaskContext};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::logical_plan::plan::{Extension, Sort};
@@ -285,6 +286,7 @@ impl OptimizerRule for TopKOptimizerRule {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         // Note: this code simply looks for the pattern of a Limit followed by a
         // Sort and replaces it by a TopK node. It does not handle many
@@ -300,7 +302,11 @@ impl OptimizerRule for TopKOptimizerRule {
                     return Ok(LogicalPlan::Extension(Extension {
                         node: Arc::new(TopKPlanNode {
                             k: *n,
-                            input: self.optimize(input.as_ref(), execution_props)?,
+                            input: self.optimize(
+                                input.as_ref(),
+                                execution_props,
+                                catalog_list,
+                            )?,
                             expr: expr[0].clone(),
                         }),
                     }));
@@ -310,7 +316,7 @@ impl OptimizerRule for TopKOptimizerRule {
 
         // If we didn't find the Limit/Sort combination, recurse as
         // normal and build the result.
-        optimize_children(self, plan, execution_props)
+        optimize_children(self, plan, execution_props, catalog_list)
     }
 
     fn name(&self) -> &str {

@@ -17,6 +17,7 @@
 
 //! espression/function to approx_percentile optimizer rule
 
+use crate::catalog::catalog::CatalogList;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::Aggregate;
@@ -114,6 +115,7 @@ impl OptimizerRule for ToApproxPerc {
         &self,
         plan: &LogicalPlan,
         _execution_props: &ExecutionProps,
+        _catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         optimize(plan)
     }
@@ -125,14 +127,24 @@ impl OptimizerRule for ToApproxPerc {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{col, LogicalPlanBuilder};
     use crate::physical_plan::aggregates;
     use crate::test::*;
+    use std::sync::Arc;
 
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = ToApproxPerc::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::default())
+            .optimize(
+                plan,
+                &ExecutionProps::default(),
+                create_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());
         assert_eq!(formatted_plan, expected);

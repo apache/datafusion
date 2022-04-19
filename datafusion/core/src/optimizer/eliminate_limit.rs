@@ -17,6 +17,7 @@
 
 //! Optimizer rule to replace `LIMIT 0` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
+use crate::catalog::catalog::CatalogList;
 use crate::error::Result;
 use crate::logical_plan::{EmptyRelation, Limit, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
@@ -40,6 +41,7 @@ impl OptimizerRule for EliminateLimit {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Limit(Limit { n, input }) if *n == 0 => {
@@ -56,7 +58,7 @@ impl OptimizerRule for EliminateLimit {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan, execution_props))
+                    .map(|plan| self.optimize(plan, execution_props, catalog_list))
                     .collect::<Result<Vec<_>>>()?;
 
                 utils::from_plan(plan, &expr, &new_inputs)
@@ -72,14 +74,25 @@ impl OptimizerRule for EliminateLimit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::LogicalPlanBuilder;
     use crate::logical_plan::{col, sum};
     use crate::test::*;
+    use std::sync::Arc;
+
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateLimit::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::default())
+            .optimize(
+                plan,
+                &ExecutionProps::default(),
+                create_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

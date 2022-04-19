@@ -810,7 +810,6 @@ impl SessionContext {
         let state_cloned = {
             let mut state = self.state.write();
             state.execution_props.start_execution();
-            state.execution_props.catalog_list = state.catalog_list.clone();
 
             // We need to clone `state` to release the lock that is not `Send`. We could
             // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
@@ -1077,23 +1076,20 @@ pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
     /// providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
-    /// providers for registered tables
-    pub catalog_list: Arc<dyn CatalogList>,
 }
 
 impl Default for ExecutionProps {
     fn default() -> Self {
-        Self::new(Arc::new(MemoryCatalogList::default()))
+        Self::new()
     }
 }
 
 impl ExecutionProps {
     /// Creates a new execution props
-    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
+    pub fn new() -> Self {
         ExecutionProps {
             query_execution_start_time: chrono::Utc::now(),
             var_providers: None,
-            catalog_list,
         }
     }
 
@@ -1346,13 +1342,7 @@ impl SessionState {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let mut execution_props = &mut self.execution_props.clone();
-        execution_props.catalog_list = self.catalog_list.clone(); // TODO hacky ?
-
-        println!(
-            "optimize_internal = {:?}",
-            execution_props.catalog_list.catalog_names()
-        );
+        let execution_props = &mut self.execution_props.clone();
         let optimizers = &self.optimizers;
 
         let execution_props = execution_props.start_execution();
@@ -1361,7 +1351,11 @@ impl SessionState {
         debug!("Input logical plan:\n{}\n", plan.display_indent());
         trace!("Full input logical plan:\n{:?}", plan);
         for optimizer in optimizers {
-            new_plan = optimizer.optimize(&new_plan, execution_props)?;
+            new_plan = optimizer.optimize(
+                &new_plan,
+                execution_props,
+                self.catalog_list.as_ref(),
+            )?;
             observer(&new_plan, optimizer.as_ref());
         }
         debug!("Optimized logical plan:\n{}\n", new_plan.display_indent());

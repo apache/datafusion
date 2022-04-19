@@ -17,6 +17,7 @@
 
 //! Query optimizer traits
 
+use crate::catalog::catalog::CatalogList;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::LogicalPlan;
@@ -30,6 +31,7 @@ pub trait OptimizerRule {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan>;
 
     /// A human readable name for this optimizer rule

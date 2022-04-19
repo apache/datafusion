@@ -18,6 +18,7 @@
 //! Optimizer rule to replace `where false` on a plan with an empty relation.
 //! This saves time in planning and executing the query.
 //! Note that this rule should be applied after simplify expressions optimizer rule.
+use crate::catalog::catalog::CatalogList;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Expr;
 
@@ -45,6 +46,7 @@ impl OptimizerRule for EliminateFilter {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter {
@@ -65,7 +67,7 @@ impl OptimizerRule for EliminateFilter {
                 let inputs = plan.inputs();
                 let new_inputs = inputs
                     .iter()
-                    .map(|plan| self.optimize(plan, execution_props))
+                    .map(|plan| self.optimize(plan, execution_props, catalog_list))
                     .collect::<Result<Vec<_>>>()?;
 
                 utils::from_plan(plan, &plan.expressions(), &new_inputs)
@@ -81,14 +83,25 @@ impl OptimizerRule for EliminateFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::LogicalPlanBuilder;
     use crate::logical_plan::{col, sum};
     use crate::test::*;
+    use std::sync::Arc;
+
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
         let optimized_plan = rule
-            .optimize(plan, &ExecutionProps::default())
+            .optimize(
+                plan,
+                &ExecutionProps::default(),
+                create_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
         assert_eq!(formatted_plan, expected);

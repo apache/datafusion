@@ -14,7 +14,7 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::catalog::catalog::get_table_provider;
+use crate::catalog::catalog::{get_table_provider, CatalogList};
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
@@ -90,11 +90,12 @@ fn push_down(
     state: &State,
     plan: &LogicalPlan,
     execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
 ) -> Result<LogicalPlan> {
     let new_inputs = plan
         .inputs()
         .iter()
-        .map(|input| optimize(input, state.clone(), execution_props))
+        .map(|input| optimize(input, state.clone(), execution_props, catalog_list))
         .collect::<Result<Vec<_>>>()?;
 
     let expr = plan.expressions();
@@ -147,6 +148,7 @@ fn keep_filters(
 fn issue_filters(
     mut state: State,
     execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
     used_columns: HashSet<Column>,
     plan: &LogicalPlan,
 ) -> Result<LogicalPlan> {
@@ -154,7 +156,7 @@ fn issue_filters(
 
     if predicates.is_empty() {
         // all filters can be pushed down => optimize inputs and return new plan
-        return push_down(&state, plan, execution_props);
+        return push_down(&state, plan, execution_props, catalog_list);
     }
 
     let plan = add_filter(plan.clone(), &predicates);
@@ -162,7 +164,7 @@ fn issue_filters(
     state.filters = remove_filters(&state.filters, &predicate_columns);
 
     // continue optimization over all input nodes by cloning the current state (i.e. each node is independent)
-    push_down(&state, &plan, execution_props)
+    push_down(&state, &plan, execution_props, catalog_list)
 }
 
 /// converts "A AND B AND C" => [A, B, C]
@@ -262,6 +264,7 @@ fn get_pushable_join_predicates<'a>(
 fn optimize_join(
     mut state: State,
     execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
     plan: &LogicalPlan,
     left: &LogicalPlan,
     right: &LogicalPlan,
@@ -283,11 +286,11 @@ fn optimize_join(
 
     let mut left_state = state.clone();
     left_state.filters = keep_filters(&left_state.filters, &to_left);
-    let left = optimize(left, left_state, execution_props)?;
+    let left = optimize(left, left_state, execution_props, catalog_list)?;
 
     let mut right_state = state.clone();
     right_state.filters = keep_filters(&right_state.filters, &to_right);
-    let right = optimize(right, right_state, execution_props)?;
+    let right = optimize(right, right_state, execution_props, catalog_list)?;
 
     // create a new Join with the new `left` and `right`
     let expr = plan.expressions();
@@ -308,13 +311,16 @@ fn optimize(
     plan: &LogicalPlan,
     mut state: State,
     execution_props: &ExecutionProps,
+    catalog_list: &dyn CatalogList,
 ) -> Result<LogicalPlan> {
     match plan {
         LogicalPlan::Explain { .. } => {
             // push the optimization to the plan of this explain
-            push_down(&state, plan, execution_props)
+            push_down(&state, plan, execution_props, catalog_list)
         }
-        LogicalPlan::Analyze { .. } => push_down(&state, plan, execution_props),
+        LogicalPlan::Analyze { .. } => {
+            push_down(&state, plan, execution_props, catalog_list)
+        }
         LogicalPlan::Filter(Filter { input, predicate }) => {
             let mut predicates = vec![];
             split_members(predicate, &mut predicates);
@@ -341,11 +347,11 @@ fn optimize(
             // and removal of WHERE TRUE / WHERE FALSE
             if !no_col_predicates.is_empty() {
                 Ok(add_filter(
-                    optimize(input, state, execution_props)?,
+                    optimize(input, state, execution_props, catalog_list)?,
                     &no_col_predicates,
                 ))
             } else {
-                optimize(input, state, execution_props)
+                optimize(input, state, execution_props, catalog_list)
             }
         }
         LogicalPlan::Projection(Projection {
@@ -381,7 +387,7 @@ fn optimize(
             }
 
             // optimize inner
-            let new_input = optimize(input, state, execution_props)?;
+            let new_input = optimize(input, state, execution_props, catalog_list)?;
 
             utils::from_plan(plan, expr, &[new_input])
         }
@@ -402,11 +408,11 @@ fn optimize(
                 .collect::<Result<HashSet<_>>>()?;
             used_columns.extend(agg_columns);
 
-            issue_filters(state, execution_props, used_columns, plan)
+            issue_filters(state, execution_props, catalog_list, used_columns, plan)
         }
         LogicalPlan::Sort { .. } => {
             // sort is filter-commutable
-            push_down(&state, plan, execution_props)
+            push_down(&state, plan, execution_props, catalog_list)
         }
         LogicalPlan::Union(Union {
             inputs: _,
@@ -431,7 +437,7 @@ fn optimize(
                 }
             }
 
-            push_down(&state, plan, execution_props)
+            push_down(&state, plan, execution_props, catalog_list)
         }
         LogicalPlan::Limit(Limit { input, .. }) => {
             // limit is _not_ filter-commutable => collect all columns from its input
@@ -441,10 +447,10 @@ fn optimize(
                 .iter()
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<_>>();
-            issue_filters(state, execution_props, used_columns, plan)
+            issue_filters(state, execution_props, catalog_list, used_columns, plan)
         }
         LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => {
-            optimize_join(state, execution_props, plan, left, right)
+            optimize_join(state, execution_props, catalog_list, plan, left, right)
         }
         LogicalPlan::Join(Join {
             left,
@@ -509,7 +515,7 @@ fn optimize(
                     .collect::<Result<Vec<_>>>()?;
                 state.filters.extend(join_side_filters);
             }
-            optimize_join(state, execution_props, plan, left, right)
+            optimize_join(state, execution_props, catalog_list, plan, left, right)
         }
         LogicalPlan::TableScan(TableScan {
             projected_schema,
@@ -522,9 +528,7 @@ fn optimize(
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
-            if let Some(source) =
-                get_table_provider(execution_props.catalog_list.as_ref(), table_name)
-            {
+            if let Some(source) = get_table_provider(catalog_list, table_name) {
                 // TODO consolidate this logic and remove duplication
 
                 let mut full_filters: Vec<Expr> = vec![];
@@ -574,6 +578,7 @@ fn optimize(
                 issue_filters(
                     state,
                     execution_props,
+                    catalog_list,
                     used_columns,
                     &LogicalPlan::TableScan(TableScan {
                         projection: projection.clone(),
@@ -601,7 +606,7 @@ fn optimize(
                 .iter()
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<_>>();
-            issue_filters(state, execution_props, used_columns, plan)
+            issue_filters(state, execution_props, catalog_list, used_columns, plan)
         }
     }
 }
@@ -615,8 +620,9 @@ impl OptimizerRule for FilterPushDown {
         &self,
         plan: &LogicalPlan,
         execution_props: &ExecutionProps,
+        catalog_list: &dyn CatalogList,
     ) -> Result<LogicalPlan> {
-        optimize(plan, State::default(), execution_props)
+        optimize(plan, State::default(), execution_props, catalog_list)
     }
 }
 
@@ -648,6 +654,7 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::datasource::TableProvider;
     use crate::logical_plan::{
         lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder, Operator,
@@ -658,10 +665,19 @@ mod tests {
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
 
+    fn create_catalog_list() -> Arc<dyn CatalogList> {
+        // TODO populate
+        Arc::new(MemoryCatalogList::default())
+    }
+
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        rule.optimize(plan, &ExecutionProps::default())
-            .expect("failed to optimize plan")
+        rule.optimize(
+            plan,
+            &ExecutionProps::default(),
+            create_catalog_list().as_ref(),
+        )
+        .expect("failed to optimize plan")
     }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
