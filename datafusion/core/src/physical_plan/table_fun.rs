@@ -30,6 +30,7 @@ use crate::physical_plan::{
 use arrow::array::{
     make_array, Array, ArrayData, ArrayRef, Capacities, MutableArrayData,
 };
+use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -294,11 +295,22 @@ impl TableFunStream {
             let mut sections: Vec<ArrayRef> = Vec::new();
             let mut lengths: Vec<usize> = Vec::new();
 
-            for (i_batch, _) in batches_sizes.iter().enumerate() {
+            for (i_batch, size) in batches_sizes.iter().enumerate() {
                 let (start_i_of_batch, current_batch_size) =
                     index_and_size_of_sec(indexes.clone(), i_batch, *is_fun);
-                sections.push(col_arr.slice(start_i_of_batch, current_batch_size));
-                lengths.push(current_batch_size);
+                if *is_fun {
+                    sections.push(col_arr.slice(start_i_of_batch, current_batch_size));
+                    lengths.push(current_batch_size);
+                } else {
+                    let mut concat: Vec<_> = Vec::new();
+                    let arr = col_arr.slice(start_i_of_batch, current_batch_size);
+                    for _ in 0..=size - 1 {
+                        concat.push(arr.as_ref());
+                    }
+
+                    sections.push(kernels::concat::concat(&concat).unwrap());
+                    lengths.push(size.clone());
+                }
             }
 
             let sections: Vec<&ArrayData> = sections.iter().map(|s| s.data()).collect();
