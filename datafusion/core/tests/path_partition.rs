@@ -533,11 +533,18 @@ impl ObjectStore for MirroringObjectStore {
         }
     }
 
-    fn file_writer(&self, _path: &str) -> datafusion_data_access::Result<Arc<dyn ObjectWriter>> {
+    fn file_writer(
+        &self,
+        _path: &str,
+    ) -> datafusion_data_access::Result<Arc<dyn ObjectWriter>> {
         unimplemented!();
     }
 
-    async fn create_dir(&self, _path: &str, _recursive: bool) -> datafusion_data_access::Result<()> {
+    async fn create_dir(
+        &self,
+        _path: &str,
+        _recursive: bool,
+    ) -> datafusion_data_access::Result<()> {
         unimplemented!();
     }
 
@@ -545,7 +552,10 @@ impl ObjectStore for MirroringObjectStore {
         unimplemented!();
     }
 
-    async fn remove_dir_contents(&self, _path: &str) -> datafusion_data_access::Result<()> {
+    async fn remove_dir_contents(
+        &self,
+        _path: &str,
+    ) -> datafusion_data_access::Result<()> {
         unimplemented!();
     }
 
@@ -553,11 +563,19 @@ impl ObjectStore for MirroringObjectStore {
         unimplemented!();
     }
 
-    async fn rename(&self, _source: &str, _dest: &str) -> datafusion_data_access::Result<()> {
+    async fn rename(
+        &self,
+        _source: &str,
+        _dest: &str,
+    ) -> datafusion_data_access::Result<()> {
         unimplemented!();
     }
 
-    async fn copy(&self, _source: &str, _dest: &str) -> datafusion_data_access::Result<()> {
+    async fn copy(
+        &self,
+        _source: &str,
+        _dest: &str,
+    ) -> datafusion_data_access::Result<()> {
         unimplemented!();
     }
 }
