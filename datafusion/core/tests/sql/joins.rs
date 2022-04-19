@@ -986,7 +986,7 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
     let t2_table = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
     ctx.register_table("t2", Arc::new(t2_table))?;
 
-    let expected = vec![
+    let expected_left_join = vec![
         "+-------+----------+-------+----------+",
         "| t1_id | t1_value | t2_id | t2_value |",
         "+-------+----------+-------+----------+",
@@ -998,10 +998,25 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
         "+-------+----------+-------+----------+",
     ];
 
-    let results =
+    let results_left_join =
         execute_to_batches(&ctx, "SELECT * FROM t1 LEFT JOIN t2 ON t1_id = t2_id").await;
+    assert_batches_sorted_eq!(expected_left_join, &results_left_join);
 
-    assert_batches_sorted_eq!(expected, &results);
+    let expected_right_join = vec![
+        "+-------+----------+-------+----------+",
+        "| t2_id | t2_value | t1_id | t1_value |",
+        "+-------+----------+-------+----------+",
+        "|       |          | 3821  | b        |",
+        "|       |          | 5247  | a        |",
+        "|       |          | 6321  | c        |",
+        "|       |          | 8821  | d        |",
+        "| 7748  |          | 7748  | e        |",
+        "+-------+----------+-------+----------+",
+    ];
+
+    let result_right_join =
+        execute_to_batches(&ctx, "SELECT * FROM t2 RIGHT JOIN t1 ON t1_id = t2_id").await;
+    assert_batches_sorted_eq!(expected_right_join, &result_right_join);
 
     Ok(())
 }
