@@ -22,6 +22,8 @@ use super::{
     aggregates, empty::EmptyExec, expressions::binary, functions,
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
+use crate::catalog::TableReference;
+use crate::datasource::TableProvider;
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
@@ -339,14 +341,39 @@ impl DefaultPhysicalPlanner {
                     limit,
                     ..
                 }) => {
-                    match session_state.execution_props.table_providers.get(table_name) {
-                        Some(source) => {
+
+                    // TODO do we have these defined as defaults somewhere?
+                    let mut catalog_name = "datafusion".to_owned();
+                    let mut schema_name = "public".to_owned();
+                    let mut table_name = "".to_owned();
+
+                    let table_ref: TableReference = table_name.as_str().into();
+                    match table_ref {
+                        TableReference::Bare { table } => {
+                            table_name = table.to_string()
+                        }
+                        _ => unimplemented!()
+                    }
+
+                    let table_provider: Option<Arc<dyn TableProvider>> = match session_state.catalog_list.catalog(&catalog_name) {
+                         Some(catalog) => match catalog.schema(&schema_name) {
+                            Some(schema) => match schema.table(&table_name) {
+                                Some(table) => Some(table.clone()),
+                                _ => None
+                            }
+                             _ => None
+                         }
+                        _ => None
+                    };
+
+                    match table_provider {
+                        Some(t) => {
                             // Remove all qualifiers from the scan as the provider
                             // doesn't know (nor should care) how the relation was
                             // referred to in the query
                             let filters = unnormalize_cols(filters.iter().cloned());
                             let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                            source.scan(projection, &unaliased, *limit).await
+                            t.scan(projection, &unaliased, *limit).await
                         }
                         _ => Err(DataFusionError::Plan(format!("No table provider named {}", table_name)))
                     }

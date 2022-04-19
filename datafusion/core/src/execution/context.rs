@@ -1076,6 +1076,7 @@ pub struct ExecutionProps {
     pub(crate) query_execution_start_time: DateTime<Utc>,
     /// providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
+    /// providers for registered tables
     pub table_providers: HashMap<String, Arc<dyn TableProvider>>,
 }
 
@@ -1334,6 +1335,28 @@ impl SessionState {
         }
     }
 
+    fn create_execution_props(&self) -> ExecutionProps {
+        let mut execution_props = self.execution_props.clone();
+        let catalog_list = &self.catalog_list;
+        for catalog_name in &catalog_list.catalog_names() {
+            let catalog = catalog_list.catalog(catalog_name).expect("catalog exists"); // infallible ?
+            for schema_name in catalog.schema_names() {
+                let schema = catalog.schema(&schema_name).expect("schema exists"); // infallible ?
+                for table_name in schema.table_names() {
+                    let table = schema.table(&table_name).expect("table exists"); // infallible ?
+                    println!(
+                        "Registering {}.{}.{}",
+                        catalog_name, schema_name, table_name
+                    );
+                    execution_props
+                        .table_providers
+                        .insert(table_name, table.clone());
+                }
+            }
+        }
+        execution_props
+    }
+
     /// Optimizes the logical plan by applying optimizer rules, and
     /// invoking observer function after each call
     fn optimize_internal<F>(
@@ -1344,7 +1367,7 @@ impl SessionState {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let execution_props = &mut self.execution_props.clone();
+        let execution_props = &mut self.create_execution_props();
         let optimizers = &self.optimizers;
 
         let execution_props = execution_props.start_execution();
