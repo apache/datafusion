@@ -73,6 +73,7 @@ pub struct SortMergeJoinExec {
 
 impl SortMergeJoinExec {
     /// Tries to create a new [SortMergeJoinExec].
+    /// The inputs are sorted using `sort_options` are applied to the columns in the `on`
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
     pub fn try_new(
