@@ -512,92 +512,90 @@ impl AsLogicalPlan for LogicalPlanNode {
                 filters,
                 projection,
                 ..
-            }) => {
-                match get_table_provider(catalog_list, &table_name) {
-                    Some(source) => {
-                        let schema = source.schema();
-                        let source = source.as_any();
+            }) => match get_table_provider(catalog_list, &table_name) {
+                Some(source) => {
+                    let schema = source.schema();
+                    let source = source.as_any();
 
-                        let projection = match projection {
-                            None => None,
-                            Some(columns) => {
-                                let column_names = columns
-                                    .iter()
-                                    .map(|i| schema.field(*i).name().to_owned())
-                                    .collect();
-                                Some(protobuf::ProjectionColumns {
-                                    columns: column_names,
-                                })
-                            }
-                        };
-                        let schema: datafusion_proto::protobuf::Schema =
-                            schema.as_ref().into();
-
-                        let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> =
-                            filters
+                    let projection = match projection {
+                        None => None,
+                        Some(columns) => {
+                            let column_names = columns
                                 .iter()
-                                .map(|filter| filter.try_into())
-                                .collect::<Result<Vec<_>, _>>()?;
+                                .map(|i| schema.field(*i).name().to_owned())
+                                .collect();
+                            Some(protobuf::ProjectionColumns {
+                                columns: column_names,
+                            })
+                        }
+                    };
+                    let schema: datafusion_proto::protobuf::Schema =
+                        schema.as_ref().into();
 
-                        if let Some(listing_table) = source.downcast_ref::<ListingTable>()
+                    let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> =
+                        filters
+                            .iter()
+                            .map(|filter| filter.try_into())
+                            .collect::<Result<Vec<_>, _>>()?;
+
+                    if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
+                        let any = listing_table.options().format.as_any();
+                        let file_format_type = if let Some(parquet) =
+                            any.downcast_ref::<ParquetFormat>()
                         {
-                            let any = listing_table.options().format.as_any();
-                            let file_format_type = if let Some(parquet) =
-                                any.downcast_ref::<ParquetFormat>()
-                            {
-                                FileFormatType::Parquet(protobuf::ParquetFormat {
-                                    enable_pruning: parquet.enable_pruning(),
-                                })
-                            } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                                FileFormatType::Csv(protobuf::CsvFormat {
-                                    delimiter: byte_to_string(csv.delimiter())?,
-                                    has_header: csv.has_header(),
-                                })
-                            } else if any.is::<AvroFormat>() {
-                                FileFormatType::Avro(protobuf::AvroFormat {})
-                            } else {
-                                return Err(proto_error(format!(
+                            FileFormatType::Parquet(protobuf::ParquetFormat {
+                                enable_pruning: parquet.enable_pruning(),
+                            })
+                        } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                            FileFormatType::Csv(protobuf::CsvFormat {
+                                delimiter: byte_to_string(csv.delimiter())?,
+                                has_header: csv.has_header(),
+                            })
+                        } else if any.is::<AvroFormat>() {
+                            FileFormatType::Avro(protobuf::AvroFormat {})
+                        } else {
+                            return Err(proto_error(format!(
                                     "Error converting file format, {:?} is invalid as a datafusion foramt.",
                                     listing_table.options().format
                                 )));
-                            };
-                            Ok(protobuf::LogicalPlanNode {
-                                logical_plan_type: Some(LogicalPlanType::ListingScan(
-                                    protobuf::ListingTableScanNode {
-                                        file_format_type: Some(file_format_type),
-                                        table_name: table_name.to_owned(),
-                                        collect_stat: listing_table
-                                            .options()
-                                            .collect_stat,
-                                        file_extension: listing_table
-                                            .options()
-                                            .file_extension
-                                            .clone(),
-                                        table_partition_cols: listing_table
-                                            .options()
-                                            .table_partition_cols
-                                            .clone(),
-                                        path: listing_table.table_path().to_owned(),
-                                        schema: Some(schema),
-                                        projection,
-                                        filters,
-                                        target_partitions: listing_table
-                                            .options()
-                                            .target_partitions
-                                            as u32,
-                                    },
-                                )),
-                            })
-                        } else {
-                            Err(BallistaError::General(format!(
-                                "logical plan to_proto unsupported table provider {:?}",
-                                source
-                            )))
-                        }
+                        };
+                        Ok(protobuf::LogicalPlanNode {
+                            logical_plan_type: Some(LogicalPlanType::ListingScan(
+                                protobuf::ListingTableScanNode {
+                                    file_format_type: Some(file_format_type),
+                                    table_name: table_name.to_owned(),
+                                    collect_stat: listing_table.options().collect_stat,
+                                    file_extension: listing_table
+                                        .options()
+                                        .file_extension
+                                        .clone(),
+                                    table_partition_cols: listing_table
+                                        .options()
+                                        .table_partition_cols
+                                        .clone(),
+                                    path: listing_table.table_path().to_owned(),
+                                    schema: Some(schema),
+                                    projection,
+                                    filters,
+                                    target_partitions: listing_table
+                                        .options()
+                                        .target_partitions
+                                        as u32,
+                                },
+                            )),
+                        })
+                    } else {
+                        Err(BallistaError::General(format!(
+                            "logical plan to_proto unsupported table provider {:?}",
+                            source
+                        )))
                     }
-                    _ => unimplemented!(), // TODO
                 }
-            }
+                _ => Err(BallistaError::General(format!(
+                    "logical plan to_proto table '{}' does not exist in catalog",
+                    table_name
+                ))),
+            },
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
             }) => Ok(protobuf::LogicalPlanNode {
