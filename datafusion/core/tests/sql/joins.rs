@@ -961,7 +961,7 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
         Arc::new(t1_schema),
         vec![
             Arc::new(Int64Array::from_slice(&[5247, 3821, 6321, 8821, 7748])),
-            Arc::new(StringArray::from(vec!["1", "2", "3", "4", "5"])),
+            Arc::new(StringArray::from_slice(&["a", "b", "c", "d", "e"])),
         ],
     )?;
     let t1_table = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
@@ -990,11 +990,11 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
         "+-------+----------+-------+----------+",
         "| t1_id | t1_value | t2_id | t2_value |",
         "+-------+----------+-------+----------+",
-        "| 5247  | 1        |       |          |",
-        "| 3821  | 2        |       |          |",
-        "| 6321  | 3        |       |          |",
-        "| 8821  | 4        |       |          |",
-        "| 7748  | 5        | 7748  |          |",
+        "| 5247  | a        |       |          |",
+        "| 3821  | b        |       |          |",
+        "| 6321  | c        |       |          |",
+        "| 8821  | d        |       |          |",
+        "| 7748  | e        | 7748  |          |",
         "+-------+----------+-------+----------+",
     ];
 
