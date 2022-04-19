@@ -490,7 +490,7 @@ mod tests {
         // rename replaces files
         let test_content = b"test";
         let mut f = File::create(&a_path)?;
-        f.write(test_content)?;
+        f.write_all(test_content)?;
         f.flush()?;
         fs.rename(a_path.to_str().unwrap(), b_path.to_str().unwrap())
             .await?;
@@ -565,7 +565,7 @@ mod tests {
         // Copy replaces files
         let test_content = b"test";
         let mut f = File::create(&a_path)?;
-        f.write(test_content)?;
+        f.write_all(test_content)?;
         f.flush()?;
         fs.copy(a_path.to_str().unwrap(), b_path.to_str().unwrap())
             .await?;
