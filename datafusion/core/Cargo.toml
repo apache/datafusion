@@ -55,7 +55,7 @@ unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-arrow = { version = "11.1", features = ["prettyprint"] }
+arrow = { version = "12", features = ["prettyprint"] }
 async-trait = "0.1.41"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 chrono = { version = "0.4", default-features = false }
@@ -72,7 +72,7 @@ num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
 ordered-float = "2.10"
 parking_lot = "0.12"
-parquet = { version = "11.1", features = ["arrow"] }
+parquet = { version = "12", features = ["arrow"] }
 paste = "^1.0"
 pin-project-lite= "^0.2.7"
 pyo3 = { version = "0.16", optional = true }
