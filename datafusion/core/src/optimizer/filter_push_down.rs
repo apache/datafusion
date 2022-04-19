@@ -511,7 +511,6 @@ fn optimize(
             optimize_join(state, execution_props, plan, left, right)
         }
         LogicalPlan::TableScan(TableScan {
-            table_provider_name,
             projected_schema,
             filters,
             projection,
@@ -521,7 +520,7 @@ fn optimize(
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
-            match execution_props.table_providers.get(table_provider_name) {
+            match execution_props.table_providers.get(table_name) {
                 Some(source) => {
                     for (filter_expr, cols) in &state.filters {
                         let (preserve_filter_node, add_to_provider) =
@@ -550,7 +549,6 @@ fn optimize(
                         execution_props,
                         used_columns,
                         &LogicalPlan::TableScan(TableScan {
-                            table_provider_name: table_provider_name.clone(),
                             projection: projection.clone(),
                             projected_schema: projected_schema.clone(),
                             table_name: table_name.clone(),
@@ -561,7 +559,7 @@ fn optimize(
                 }
                 _ => Err(DataFusionError::Plan(format!(
                     "No table provider named {}",
-                    table_provider_name
+                    table_name
                 ))),
             }
         }
@@ -1439,7 +1437,6 @@ mod tests {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
-            table_provider_name: "test".to_string(),
             filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
@@ -1516,7 +1513,6 @@ mod tests {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
-            table_provider_name: "test".to_string(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),

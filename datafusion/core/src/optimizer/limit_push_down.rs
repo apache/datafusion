@@ -61,7 +61,6 @@ fn limit_push_down(
         (
             LogicalPlan::TableScan(TableScan {
                 table_name,
-                table_provider_name,
                 projection,
                 filters,
                 limit,
@@ -70,7 +69,6 @@ fn limit_push_down(
             Some(upper_limit),
         ) => Ok(LogicalPlan::TableScan(TableScan {
             table_name: table_name.clone(),
-            table_provider_name: table_provider_name.clone(),
             projection: projection.clone(),
             filters: filters.clone(),
             limit: limit

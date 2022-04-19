@@ -337,12 +337,11 @@ fn optimize_plan(
         // * remove un-used columns from the scan projection
         LogicalPlan::TableScan(TableScan {
             table_name,
-            table_provider_name,
             filters,
             limit,
             ..
         }) => {
-            match _execution_props.table_providers.get(table_provider_name) {
+            match _execution_props.table_providers.get(table_name) {
                 Some(source) => {
                     let (projection, projected_schema) = get_projected_schema(
                         Some(table_name),
@@ -353,7 +352,6 @@ fn optimize_plan(
                     // return the table scan with projection
                     Ok(LogicalPlan::TableScan(TableScan {
                         table_name: table_name.clone(),
-                        table_provider_name: table_provider_name.clone(),
                         projection: Some(projection),
                         projected_schema,
                         filters: filters.clone(),
@@ -362,7 +360,7 @@ fn optimize_plan(
                 }
                 _ => Err(DataFusionError::Execution(format!(
                     "Could not resolve table provider named {}",
-                    table_provider_name
+                    table_name
                 ))),
             }
         }

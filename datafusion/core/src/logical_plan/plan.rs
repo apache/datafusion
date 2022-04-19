@@ -130,8 +130,6 @@ pub struct Window {
 pub struct TableScan {
     /// The name of the table
     pub table_name: String,
-    /// The name of the table provider
-    pub table_provider_name: String,
     /// Optional column indices to use as a projection
     pub projection: Option<Vec<usize>>,
     /// The schema description of the output
@@ -950,7 +948,6 @@ impl LogicalPlan {
                     }
 
                     LogicalPlan::TableScan(TableScan {
-                        ref table_provider_name,
                         ref table_name,
                         ref projection,
                         ref filters,

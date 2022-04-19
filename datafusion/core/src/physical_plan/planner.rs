@@ -333,13 +333,13 @@ impl DefaultPhysicalPlanner {
         async move {
             let exec_plan: Result<Arc<dyn ExecutionPlan>> = match logical_plan {
                 LogicalPlan::TableScan (TableScan {
-                    table_provider_name,
+                    table_name,
                     projection,
                     filters,
                     limit,
                     ..
                 }) => {
-                    match session_state.execution_props.table_providers.get(table_provider_name) {
+                    match session_state.execution_props.table_providers.get(table_name) {
                         Some(source) => {
                             // Remove all qualifiers from the scan as the provider
                             // doesn't know (nor should care) how the relation was
@@ -348,7 +348,7 @@ impl DefaultPhysicalPlanner {
                             let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
                             source.scan(projection, &unaliased, *limit).await
                         }
-                        _ => Err(DataFusionError::Plan(format!("No table provider named {}", table_provider_name)))
+                        _ => Err(DataFusionError::Plan(format!("No table provider named {}", table_name)))
                     }
                 }
                 LogicalPlan::Values(Values {
