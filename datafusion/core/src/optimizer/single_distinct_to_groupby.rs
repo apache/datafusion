@@ -202,15 +202,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{col, count, count_distinct, lit, max, LogicalPlanBuilder};
     use crate::physical_plan::aggregates;
     use crate::test::*;
-
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
-    }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SingleDistinctToGroupBy::new();
@@ -218,7 +212,7 @@ mod tests {
             .optimize(
                 plan,
                 &ExecutionProps::default(),
-                create_catalog_list().as_ref(),
+                create_test_table_catalog_list().as_ref(),
             )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());

@@ -83,16 +83,9 @@ impl OptimizerRule for EliminateFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::LogicalPlanBuilder;
     use crate::logical_plan::{col, sum};
     use crate::test::*;
-    use std::sync::Arc;
-
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
-    }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = EliminateFilter::new();
@@ -100,7 +93,7 @@ mod tests {
             .optimize(
                 plan,
                 &ExecutionProps::default(),
-                create_catalog_list().as_ref(),
+                create_test_table_catalog_list().as_ref(),
             )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);

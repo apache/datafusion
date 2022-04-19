@@ -43,6 +43,7 @@ use datafusion::physical_plan::{
 use crate::serde::protobuf::execute_query_params::OptionalSessionId;
 use crate::serde::{AsLogicalPlan, DefaultLogicalExtensionCodec, LogicalExtensionCodec};
 use async_trait::async_trait;
+use datafusion::catalog::catalog::{CatalogList, MemoryCatalogList};
 use datafusion::execution::context::TaskContext;
 use futures::future;
 use futures::StreamExt;
@@ -176,11 +177,16 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
         let schema: Schema = self.plan.schema().as_ref().clone().into();
+        let mut catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::new());
+        println!(
+            "ballista catalogs BEFORE decoding logical plan: {:?}",
+            catalog_list.catalog_names()
+        );
 
         let mut buf: Vec<u8> = vec![];
         let plan_message = T::try_from_logical_plan(
             &self.plan,
-            task_context.catalog_list.as_ref(),
+            catalog_list.as_ref(),
             self.extension_codec.as_ref(),
         )
         .map_err(|e| {
@@ -189,6 +195,11 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
                 e
             ))
         })?;
+        println!(
+            "ballista catalogs AFTER decoding logical plan: {:?}",
+            catalog_list.catalog_names()
+        );
+
         plan_message.try_encode(&mut buf).map_err(|e| {
             DataFusionError::Execution(format!("failed to encode logical plan: {:?}", e))
         })?;

@@ -535,7 +535,6 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{
         col, exprlist_to_fields, lit, max, min, Expr, JoinType, LogicalPlanBuilder,
     };
@@ -1015,12 +1014,7 @@ mod tests {
         rule.optimize(
             plan,
             &ExecutionProps::default(),
-            create_catalog_list().as_ref(),
+            create_test_table_catalog_list().as_ref(),
         )
-    }
-
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
     }
 }

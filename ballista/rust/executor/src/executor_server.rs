@@ -206,7 +206,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             task_scalar_functions,
             task_aggregate_functions,
             runtime.clone(),
-            catalog_list,
+            // catalog_list,
         ));
 
         let encoded_plan = &task.plan.as_slice();

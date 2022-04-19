@@ -127,23 +127,17 @@ impl OptimizerRule for ToApproxPerc {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{col, LogicalPlanBuilder};
     use crate::physical_plan::aggregates;
     use crate::test::*;
-    use std::sync::Arc;
 
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
-    }
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = ToApproxPerc::new();
         let optimized_plan = rule
             .optimize(
                 plan,
                 &ExecutionProps::default(),
-                create_catalog_list().as_ref(),
+                create_test_table_catalog_list().as_ref(),
             )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{}", optimized_plan.display_indent_schema());

@@ -740,13 +740,13 @@ mod tests {
 
     use super::*;
     use crate::assert_contains;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
         Expr, LogicalPlanBuilder,
     };
     use crate::physical_plan::functions::{make_scalar_function, BuiltinScalarFunction};
     use crate::physical_plan::udf::ScalarUDF;
+    use crate::test::create_test_table_catalog_list;
 
     #[test]
     fn test_simplify_or_true() {
@@ -1512,18 +1512,13 @@ mod tests {
             .expect("building plan")
     }
 
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
-    }
-
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = SimplifyExpressions::new();
         let optimized_plan = rule
             .optimize(
                 plan,
                 &ExecutionProps::default(),
-                create_catalog_list().as_ref(),
+                create_test_table_catalog_list().as_ref(),
             )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);
@@ -1749,7 +1744,11 @@ mod tests {
         };
 
         let err = rule
-            .optimize(plan, &execution_props, create_catalog_list().as_ref())
+            .optimize(
+                plan,
+                &execution_props,
+                create_test_table_catalog_list().as_ref(),
+            )
             .expect_err("expected optimization to fail");
 
         err.to_string()
@@ -1766,7 +1765,11 @@ mod tests {
         };
 
         let optimized_plan = rule
-            .optimize(plan, &execution_props, create_catalog_list().as_ref())
+            .optimize(
+                plan,
+                &execution_props,
+                create_test_table_catalog_list().as_ref(),
+            )
             .expect("failed to optimize plan");
         return format!("{:?}", optimized_plan);
     }

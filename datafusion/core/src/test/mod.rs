@@ -18,16 +18,22 @@
 //! Common unit test utility methods
 
 use crate::arrow::array::UInt32Array;
+use crate::catalog::catalog::{
+    CatalogList, CatalogProvider, MemoryCatalogList, MemoryCatalogProvider,
+};
+use crate::catalog::schema::MemorySchemaProvider;
+use crate::catalog::schema::SchemaProvider;
 use crate::datasource::{
     listing::{local_unpartitioned_file, PartitionedFile},
     MemTable, TableProvider,
 };
 use crate::error::Result;
+use crate::execution::context::{DEFAULT_CATALOG, DEFAULT_SCHEMA};
 use crate::from_slice::FromSlice;
 use crate::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 use array::{Array, ArrayRef};
 use arrow::array::{self, DecimalBuilder, Int32Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use futures::{Future, FutureExt};
 use std::fs::File;
@@ -122,6 +128,23 @@ pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
 /// some tests share a common table
 pub fn test_table_scan() -> Result<LogicalPlan> {
     test_table_scan_with_name("test")
+}
+
+pub fn create_test_table_catalog_list() -> Arc<dyn CatalogList> {
+    let catalog_list = MemoryCatalogList::default();
+    let catalog = Arc::new(MemoryCatalogProvider::new());
+    catalog_list.register_catalog(DEFAULT_CATALOG.to_owned(), catalog.clone());
+    let schema = Arc::new(MemorySchemaProvider::new());
+
+    let test_table =
+        Arc::new(MemTable::try_new(SchemaRef::new(test_table_schema()), vec![]).unwrap());
+    for table_name in &["test", "test2"] {
+        schema
+            .register_table(table_name.to_string(), test_table.clone())
+            .unwrap();
+    }
+    catalog.register_schema(DEFAULT_SCHEMA, schema).unwrap();
+    Arc::new(catalog_list)
 }
 
 pub fn assert_fields_eq(plan: &LogicalPlan, expected: Vec<&str>) {

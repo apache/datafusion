@@ -654,7 +654,6 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::datasource::TableProvider;
     use crate::logical_plan::{
         lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder, Operator,
@@ -665,17 +664,12 @@ mod tests {
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
 
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
-    }
-
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
         rule.optimize(
             plan,
             &ExecutionProps::default(),
-            create_catalog_list().as_ref(),
+            create_test_table_catalog_list().as_ref(),
         )
         .expect("failed to optimize plan")
     }

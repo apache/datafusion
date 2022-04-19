@@ -169,16 +169,10 @@ impl OptimizerRule for LimitPushDown {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::catalog::catalog::MemoryCatalogList;
     use crate::{
         logical_plan::{col, max, LogicalPlan, LogicalPlanBuilder},
         test::*,
     };
-
-    fn create_catalog_list() -> Arc<dyn CatalogList> {
-        // TODO populate
-        Arc::new(MemoryCatalogList::default())
-    }
 
     fn assert_optimized_plan_eq(plan: &LogicalPlan, expected: &str) {
         let rule = LimitPushDown::new();
@@ -186,7 +180,7 @@ mod test {
             .optimize(
                 plan,
                 &ExecutionProps::default(),
-                create_catalog_list().as_ref(),
+                create_test_table_catalog_list().as_ref(),
             )
             .expect("failed to optimize plan");
         let formatted_plan = format!("{:?}", optimized_plan);

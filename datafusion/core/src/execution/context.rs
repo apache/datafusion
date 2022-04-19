@@ -100,9 +100,9 @@ use super::options::{
 };
 
 /// The default catalog name - this impacts what SQL queries use if not specified
-const DEFAULT_CATALOG: &str = "datafusion";
+pub const DEFAULT_CATALOG: &str = "datafusion";
 /// The default schema name - this impacts what SQL queries use if not specified
-const DEFAULT_SCHEMA: &str = "public";
+pub const DEFAULT_SCHEMA: &str = "public";
 
 /// SessionContext is the main interface for executing queries with DataFusion. It stands for
 /// the connection between user and DataFusion/Ballista cluster.
@@ -1456,8 +1456,6 @@ pub struct TaskContext {
     aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
     /// Runtime environment associated with this task context
     runtime: Arc<RuntimeEnv>,
-    /// Catalog for table provider discovery
-    pub catalog_list: Arc<dyn CatalogList>,
 }
 
 impl TaskContext {
@@ -1469,7 +1467,7 @@ impl TaskContext {
         scalar_functions: HashMap<String, Arc<ScalarUDF>>,
         aggregate_functions: HashMap<String, Arc<AggregateUDF>>,
         runtime: Arc<RuntimeEnv>,
-        catalog_list: Arc<dyn CatalogList>,
+        // catalog_list: Arc<dyn CatalogList>,
     ) -> Self {
         Self {
             task_id: Some(task_id),
@@ -1478,7 +1476,7 @@ impl TaskContext {
             scalar_functions,
             aggregate_functions,
             runtime,
-            catalog_list,
+            // catalog_list,
         }
     }
 
@@ -1555,7 +1553,6 @@ impl From<&SessionContext> for TaskContext {
             scalar_functions,
             aggregate_functions,
             runtime,
-            catalog_list,
         }
     }
 }
@@ -1576,7 +1573,6 @@ impl From<&SessionState> for TaskContext {
             scalar_functions,
             aggregate_functions,
             runtime,
-            catalog_list,
         }
     }
 }

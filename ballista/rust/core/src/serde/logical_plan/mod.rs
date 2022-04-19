@@ -39,6 +39,7 @@ use datafusion::logical_plan::{
 use datafusion::prelude::SessionContext;
 
 use datafusion::catalog::catalog::{get_table_provider, CatalogList};
+use datafusion::execution::context::{DEFAULT_CATALOG, DEFAULT_SCHEMA};
 use datafusion_proto::from_proto::parse_expr;
 use prost::bytes::BufMut;
 use prost::Message;
@@ -249,18 +250,41 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .with_listing_options(options)
                     .with_schema(Arc::new(schema));
 
-                let provider = ListingTable::try_new(config)?;
+                let provider = Arc::new(ListingTable::try_new(config)?);
 
-                //TODO we need to be building a catalog here as well
+                //TODO remove hard-coded catalog and schema here and parse table name
+                // into TableReference first
+                let catalog_name = DEFAULT_CATALOG;
+                let schema_name = DEFAULT_SCHEMA;
 
-                LogicalPlanBuilder::scan_with_filters(
-                    &scan.table_name,
-                    Arc::new(provider),
-                    projection,
-                    filters,
-                )?
-                .build()
-                .map_err(|e| e.into())
+                let session_state = ctx.state.write();
+                match session_state.catalog_list.catalog(catalog_name) {
+                    Some(catalog) => match catalog.schema(schema_name) {
+                        Some(schema) => {
+                            println!("Registering table '{}'", scan.table_name);
+                            schema.register_table(
+                                scan.table_name.to_string(),
+                                provider.clone(),
+                            )?;
+                            LogicalPlanBuilder::scan_with_filters(
+                                &scan.table_name,
+                                provider,
+                                projection,
+                                filters,
+                            )?
+                            .build()
+                            .map_err(|e| e.into())
+                        }
+                        _ => Err(BallistaError::General(format!(
+                            "schema '{}' not found in catalog '{}'",
+                            schema_name, catalog_name
+                        ))),
+                    },
+                    _ => Err(BallistaError::General(format!(
+                        "catalog '{}' not found",
+                        catalog_name
+                    ))),
+                }
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -512,90 +536,107 @@ impl AsLogicalPlan for LogicalPlanNode {
                 filters,
                 projection,
                 ..
-            }) => match get_table_provider(catalog_list, &table_name) {
-                Some(source) => {
-                    let schema = source.schema();
-                    let source = source.as_any();
+            }) => {
+                for catalog_name in catalog_list.catalog_names() {
+                    let catalog = catalog_list.catalog(&catalog_name).unwrap();
+                    for schema_name in catalog.schema_names() {
+                        let schema = catalog.schema(&schema_name).unwrap();
+                        println!(
+                            "{}.{} tables = {:?}",
+                            catalog_name,
+                            schema_name,
+                            schema.table_names()
+                        );
+                    }
+                }
+                match get_table_provider(catalog_list, &table_name) {
+                    Some(source) => {
+                        let schema = source.schema();
+                        let source = source.as_any();
 
-                    let projection = match projection {
-                        None => None,
-                        Some(columns) => {
-                            let column_names = columns
+                        let projection = match projection {
+                            None => None,
+                            Some(columns) => {
+                                let column_names = columns
+                                    .iter()
+                                    .map(|i| schema.field(*i).name().to_owned())
+                                    .collect();
+                                Some(protobuf::ProjectionColumns {
+                                    columns: column_names,
+                                })
+                            }
+                        };
+                        let schema: datafusion_proto::protobuf::Schema =
+                            schema.as_ref().into();
+
+                        let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> =
+                            filters
                                 .iter()
-                                .map(|i| schema.field(*i).name().to_owned())
-                                .collect();
-                            Some(protobuf::ProjectionColumns {
-                                columns: column_names,
-                            })
-                        }
-                    };
-                    let schema: datafusion_proto::protobuf::Schema =
-                        schema.as_ref().into();
+                                .map(|filter| filter.try_into())
+                                .collect::<Result<Vec<_>, _>>()?;
 
-                    let filters: Vec<datafusion_proto::protobuf::LogicalExprNode> =
-                        filters
-                            .iter()
-                            .map(|filter| filter.try_into())
-                            .collect::<Result<Vec<_>, _>>()?;
-
-                    if let Some(listing_table) = source.downcast_ref::<ListingTable>() {
-                        let any = listing_table.options().format.as_any();
-                        let file_format_type = if let Some(parquet) =
-                            any.downcast_ref::<ParquetFormat>()
+                        if let Some(listing_table) = source.downcast_ref::<ListingTable>()
                         {
-                            FileFormatType::Parquet(protobuf::ParquetFormat {
-                                enable_pruning: parquet.enable_pruning(),
-                            })
-                        } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
-                            FileFormatType::Csv(protobuf::CsvFormat {
-                                delimiter: byte_to_string(csv.delimiter())?,
-                                has_header: csv.has_header(),
-                            })
-                        } else if any.is::<AvroFormat>() {
-                            FileFormatType::Avro(protobuf::AvroFormat {})
-                        } else {
-                            return Err(proto_error(format!(
+                            let any = listing_table.options().format.as_any();
+                            let file_format_type = if let Some(parquet) =
+                                any.downcast_ref::<ParquetFormat>()
+                            {
+                                FileFormatType::Parquet(protobuf::ParquetFormat {
+                                    enable_pruning: parquet.enable_pruning(),
+                                })
+                            } else if let Some(csv) = any.downcast_ref::<CsvFormat>() {
+                                FileFormatType::Csv(protobuf::CsvFormat {
+                                    delimiter: byte_to_string(csv.delimiter())?,
+                                    has_header: csv.has_header(),
+                                })
+                            } else if any.is::<AvroFormat>() {
+                                FileFormatType::Avro(protobuf::AvroFormat {})
+                            } else {
+                                return Err(proto_error(format!(
                                     "Error converting file format, {:?} is invalid as a datafusion foramt.",
                                     listing_table.options().format
                                 )));
-                        };
-                        Ok(protobuf::LogicalPlanNode {
-                            logical_plan_type: Some(LogicalPlanType::ListingScan(
-                                protobuf::ListingTableScanNode {
-                                    file_format_type: Some(file_format_type),
-                                    table_name: table_name.to_owned(),
-                                    collect_stat: listing_table.options().collect_stat,
-                                    file_extension: listing_table
-                                        .options()
-                                        .file_extension
-                                        .clone(),
-                                    table_partition_cols: listing_table
-                                        .options()
-                                        .table_partition_cols
-                                        .clone(),
-                                    path: listing_table.table_path().to_owned(),
-                                    schema: Some(schema),
-                                    projection,
-                                    filters,
-                                    target_partitions: listing_table
-                                        .options()
-                                        .target_partitions
-                                        as u32,
-                                },
-                            )),
-                        })
-                    } else {
-                        Err(BallistaError::General(format!(
-                            "logical plan to_proto unsupported table provider {:?}",
-                            source
-                        )))
+                            };
+                            Ok(protobuf::LogicalPlanNode {
+                                logical_plan_type: Some(LogicalPlanType::ListingScan(
+                                    protobuf::ListingTableScanNode {
+                                        file_format_type: Some(file_format_type),
+                                        table_name: table_name.to_owned(),
+                                        collect_stat: listing_table
+                                            .options()
+                                            .collect_stat,
+                                        file_extension: listing_table
+                                            .options()
+                                            .file_extension
+                                            .clone(),
+                                        table_partition_cols: listing_table
+                                            .options()
+                                            .table_partition_cols
+                                            .clone(),
+                                        path: listing_table.table_path().to_owned(),
+                                        schema: Some(schema),
+                                        projection,
+                                        filters,
+                                        target_partitions: listing_table
+                                            .options()
+                                            .target_partitions
+                                            as u32,
+                                    },
+                                )),
+                            })
+                        } else {
+                            Err(BallistaError::General(format!(
+                                "logical plan to_proto unsupported table provider {:?}",
+                                source
+                            )))
+                        }
                     }
+                    _ => Err(BallistaError::General(format!(
+                        "logical plan to_proto table '{}' does not exist in catalog",
+                        table_name
+                    ))),
                 }
-                _ => Err(BallistaError::General(format!(
-                    "logical plan to_proto table '{}' does not exist in catalog",
-                    table_name
-                ))),
-            },
+            }
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
             }) => Ok(protobuf::LogicalPlanNode {
@@ -1082,10 +1123,10 @@ mod roundtrip_tests {
                 format!("{:?}", round_trip)
             );
         };
-        // ($initial_struct:ident, $struct_type:ty) => {
-        //     roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
-        // };
-        ($initial_struct:ident, $catalog_list:ident) => {
+        ($initial_struct:ident, $struct_type:ty) => {
+            roundtrip_test!($initial_struct, protobuf::LogicalPlanNode, $struct_type);
+        };
+        ($initial_struct:ident) => {
             let ctx = SessionContext::new();
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
@@ -1094,7 +1135,7 @@ mod roundtrip_tests {
             let proto: protobuf::LogicalPlanNode =
                 protobuf::LogicalPlanNode::try_from_logical_plan(
                     &$initial_struct,
-                    $catalog_list.as_ref(),
+                    ctx.state.read().catalog_list.as_ref(),
                     codec.logical_extension_codec(),
                 )
                 .expect("from logical plan");
@@ -1106,23 +1147,28 @@ mod roundtrip_tests {
                 format!("{:?}", $initial_struct),
                 format!("{:?}", round_trip)
             );
-        }; // ($initial_struct:ident, $ctx:ident) => {
-           //     let codec: BallistaCodec<
-           //         protobuf::LogicalPlanNode,
-           //         protobuf::PhysicalPlanNode,
-           //     > = BallistaCodec::default();
-           //     let proto: protobuf::LogicalPlanNode =
-           //         protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
-           //             .expect("from logical plan");
-           //     let round_trip: LogicalPlan = proto
-           //         .try_into_logical_plan(&$ctx, $catalog_list, codec.logical_extension_codec())
-           //         .expect("to logical plan");
-           //
-           //     assert_eq!(
-           //         format!("{:?}", $initial_struct),
-           //         format!("{:?}", round_trip)
-           //     );
-           // };
+        };
+        ($initial_struct:ident, $ctx:ident) => {
+            let codec: BallistaCodec<
+                protobuf::LogicalPlanNode,
+                protobuf::PhysicalPlanNode,
+            > = BallistaCodec::default();
+            let proto: protobuf::LogicalPlanNode =
+                protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
+                    .expect("from logical plan");
+            let round_trip: LogicalPlan = proto
+                .try_into_logical_plan(
+                    &$ctx,
+                    $catalog_list,
+                    codec.logical_extension_codec(),
+                )
+                .expect("to logical plan");
+
+            assert_eq!(
+                format!("{:?}", $initial_struct),
+                format!("{:?}", round_trip)
+            );
+        };
     }
 
     #[tokio::test]
@@ -1156,7 +1202,6 @@ mod roundtrip_tests {
             .map_err(BallistaError::DataFusionError)?,
         );
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
         for partition_count in test_partition_counts.iter() {
             let rr_repartition = Partitioning::RoundRobinBatch(*partition_count);
 
@@ -1165,7 +1210,7 @@ mod roundtrip_tests {
                 partitioning_scheme: rr_repartition,
             });
 
-            roundtrip_test!(roundtrip_plan, catalog_list);
+            roundtrip_test!(roundtrip_plan);
 
             let h_repartition = Partitioning::Hash(test_expr.clone(), *partition_count);
 
@@ -1174,7 +1219,7 @@ mod roundtrip_tests {
                 partitioning_scheme: h_repartition,
             });
 
-            roundtrip_test!(roundtrip_plan, catalog_list);
+            roundtrip_test!(roundtrip_plan);
 
             let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *partition_count);
 
@@ -1183,7 +1228,7 @@ mod roundtrip_tests {
                 partitioning_scheme: no_expr_hrepartition,
             });
 
-            roundtrip_test!(roundtrip_plan, catalog_list);
+            roundtrip_test!(roundtrip_plan);
         }
 
         Ok(())
@@ -1208,8 +1253,6 @@ mod roundtrip_tests {
             FileType::Avro,
         ];
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
-
         for file in filetypes.iter() {
             let create_table_node =
                 LogicalPlan::CreateExternalTable(CreateExternalTable {
@@ -1223,7 +1266,7 @@ mod roundtrip_tests {
                     if_not_exists: false,
                 });
 
-            roundtrip_test!(create_table_node, catalog_list);
+            roundtrip_test!(create_table_node);
         }
 
         Ok(())
@@ -1265,11 +1308,9 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+        roundtrip_test!(plan);
 
-        roundtrip_test!(plan, catalog_list);
-
-        roundtrip_test!(verbose_plan, catalog_list);
+        roundtrip_test!(verbose_plan);
 
         Ok(())
     }
@@ -1310,11 +1351,9 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
+        roundtrip_test!(plan);
 
-        roundtrip_test!(plan, catalog_list);
-
-        roundtrip_test!(verbose_plan, catalog_list);
+        roundtrip_test!(verbose_plan);
 
         Ok(())
     }
@@ -1352,9 +1391,7 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
-
-        roundtrip_test!(plan, catalog_list);
+        roundtrip_test!(plan);
         Ok(())
     }
 
@@ -1380,9 +1417,7 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
-
-        roundtrip_test!(plan, catalog_list);
+        roundtrip_test!(plan);
 
         Ok(())
     }
@@ -1393,14 +1428,13 @@ mod roundtrip_tests {
             .build()
             .map_err(BallistaError::DataFusionError)?;
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
-        roundtrip_test!(plan_false, catalog_list);
+        roundtrip_test!(plan_false);
 
         let plan_true = LogicalPlanBuilder::empty(true)
             .build()
             .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan_true, catalog_list);
+        roundtrip_test!(plan_true);
 
         Ok(())
     }
@@ -1427,9 +1461,7 @@ mod roundtrip_tests {
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
-        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
-
-        roundtrip_test!(plan, catalog_list);
+        roundtrip_test!(plan);
 
         Ok(())
     }

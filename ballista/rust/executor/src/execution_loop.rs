@@ -153,7 +153,7 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
         task_scalar_functions,
         task_aggregate_functions,
         runtime.clone(),
-        catalog_list,
+        // catalog_list,
     ));
 
     let plan: Arc<dyn ExecutionPlan> =
