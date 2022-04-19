@@ -84,7 +84,7 @@ fn supported_type(dt: &DataType) -> bool {
 
 /// Tell if we can create raw-bytes based rows since we currently
 /// has limited data type supports in the row format
-pub fn row_supported(schema: &Arc<Schema>) -> bool {
+pub fn row_supported(schema: &Schema) -> bool {
     schema
         .fields()
         .iter()
@@ -97,12 +97,12 @@ fn var_length(dt: &DataType) -> bool {
 }
 
 /// Tell if the row is of fixed size
-pub fn fixed_size(schema: &Arc<Schema>) -> bool {
+pub fn fixed_size(schema: &Schema) -> bool {
     schema.fields().iter().all(|f| !var_length(f.data_type()))
 }
 
 /// Tell if schema contains no nullable field
-pub fn schema_null_free(schema: &Arc<Schema>) -> bool {
+pub fn schema_null_free(schema: &Schema) -> bool {
     schema.fields().iter().all(|f| !f.is_nullable())
 }
 
@@ -126,7 +126,7 @@ impl MutableRecordBatch {
     }
 }
 
-fn new_arrays(schema: &Arc<Schema>, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
+fn new_arrays(schema: &Schema, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
     schema
         .fields()
         .iter()

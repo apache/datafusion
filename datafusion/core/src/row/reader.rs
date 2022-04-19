@@ -110,7 +110,7 @@ impl<'a> std::fmt::Debug for RowReader<'a> {
 
 impl<'a> RowReader<'a> {
     /// new
-    pub fn new(schema: &Arc<Schema>, type_: RowType) -> Self {
+    pub fn new(schema: &Schema, type_: RowType) -> Self {
         Self {
             layout: RowLayout::new(schema, type_),
             data: &[],
@@ -251,7 +251,7 @@ impl<'a> RowReader<'a> {
 }
 
 /// Read the row currently pointed by RowWriter to the output columnar batch buffer
-pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
+pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Schema) {
     if row.all_valid() {
         for ((col_idx, to), field) in batch
             .arrays

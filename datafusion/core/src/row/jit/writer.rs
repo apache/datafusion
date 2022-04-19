@@ -127,10 +127,7 @@ fn register_write_functions(asm: &Assembler) -> Result<()> {
     Ok(())
 }
 
-fn gen_write_row(
-    schema: &Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<GeneratedFunction> {
+fn gen_write_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunction> {
     let mut builder = assembler
         .new_func_builder("write_row")
         .param("row", PTR)

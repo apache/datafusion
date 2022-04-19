@@ -103,10 +103,7 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
     Ok(())
 }
 
-fn gen_read_row(
-    schema: &Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<GeneratedFunction> {
+fn gen_read_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunction> {
     use DataType::*;
     let mut builder = assembler
         .new_func_builder("read_row")

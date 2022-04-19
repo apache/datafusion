@@ -110,7 +110,7 @@ pub struct RowWriter {
 
 impl RowWriter {
     /// new
-    pub fn new(schema: &Arc<Schema>, type_: RowType) -> Self {
+    pub fn new(schema: &Schema, type_: RowType) -> Self {
         let layout = RowLayout::new(schema, type_);
         let mut init_capacity = estimate_row_width(schema);
         if !fixed_size(schema) {
@@ -256,7 +256,7 @@ impl RowWriter {
 pub fn write_row(
     row: &mut RowWriter,
     row_idx: usize,
-    schema: &Arc<Schema>,
+    schema: &Schema,
     columns: &[ArrayRef],
 ) -> usize {
     // Get the row from the batch denoted by row_idx

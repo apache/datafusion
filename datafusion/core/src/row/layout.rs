@@ -21,7 +21,6 @@ use crate::row::{row_supported, schema_null_free, var_length};
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{ceil, round_upto_power_of_2};
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 const UTF8_DEFAULT_SIZE: usize = 20;
 const BINARY_DEFAULT_SIZE: usize = 100;
@@ -40,6 +39,7 @@ pub enum RowType {
 }
 
 /// Reveals how the fields of a record are stored in the raw-bytes format
+#[derive(Debug)]
 pub(crate) struct RowLayout {
     /// Type of the layout
     type_: RowType,
@@ -81,18 +81,6 @@ impl RowLayout {
     }
 }
 
-impl Debug for RowLayout {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RowLayout")
-            .field("type", &self.type_)
-            .field("null_width", &self.null_width)
-            .field("values_width", &self.values_width)
-            .field("field_count", &self.field_count)
-            .field("offsets", &self.field_offsets)
-            .finish()
-    }
-}
-
 /// Get relative offsets for each field and total width for values
 fn compact_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
     let mut offsets = vec![];
@@ -118,7 +106,7 @@ fn compact_type_width(dt: &DataType) -> usize {
     }
 }
 
-fn word_aligned_offsets(null_width: usize, schema: &Arc<Schema>) -> (Vec<usize>, usize) {
+fn word_aligned_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
     let mut offsets = vec![];
     let mut offset = null_width;
     for _ in schema.fields() {
@@ -129,7 +117,7 @@ fn word_aligned_offsets(null_width: usize, schema: &Arc<Schema>) -> (Vec<usize>,
 }
 
 /// Estimate row width based on schema
-pub fn estimate_row_width(schema: &Arc<Schema>) -> usize {
+pub fn estimate_row_width(schema: &Schema) -> usize {
     let null_free = schema_null_free(schema);
     let field_count = schema.fields().len();
     let mut width = if null_free { 0 } else { ceil(field_count, 8) };
