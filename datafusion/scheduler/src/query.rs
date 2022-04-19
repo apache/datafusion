@@ -17,10 +17,6 @@
 
 use std::sync::Arc;
 
-use futures::channel::mpsc;
-use log::debug;
-
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -30,7 +26,6 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use crate::pipeline::{
     execution::ExecutionPipeline, repartition::RepartitionPipeline, Pipeline,
 };
-use crate::{ArrowResult, Spawner};
 
 /// Identifies the [`Pipeline`] within the [`Query`] to route output to
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,55 +54,7 @@ pub struct RoutablePipeline {
 /// necessary to route output from one stage to the next
 #[derive(Debug)]
 pub struct Query {
-    /// Spawner for this query
-    spawner: Spawner,
-
-    /// List of pipelines that belong to this query, pipelines are addressed
-    /// based on their index within this list
-    pipelines: Vec<RoutablePipeline>,
-
-    /// The output stream for this query's execution
-    output: mpsc::UnboundedSender<ArrowResult<RecordBatch>>,
-}
-
-impl Drop for Query {
-    fn drop(&mut self) {
-        debug!("Query finished");
-    }
-}
-
-impl Query {
-    /// Creates a new [`Query`] from the provided [`ExecutionPlan`], returning
-    /// an [`mpsc::UnboundedReceiver`] that can be used to receive the results
-    /// of this query's execution
-    pub fn new(
-        plan: Arc<dyn ExecutionPlan>,
-        task_context: Arc<TaskContext>,
-        spawner: Spawner,
-    ) -> Result<(Query, mpsc::UnboundedReceiver<ArrowResult<RecordBatch>>)> {
-        QueryBuilder::new(plan, task_context).build(spawner)
-    }
-
-    /// Returns a list of this queries [`RoutablePipeline`]
-    pub fn pipelines(&self) -> &[RoutablePipeline] {
-        &self.pipelines
-    }
-
-    /// Returns `true` if this query has been dropped, specifically if the
-    /// stream returned by [`super::Scheduler::schedule`] has been dropped
-    pub fn is_cancelled(&self) -> bool {
-        self.output.is_closed()
-    }
-
-    /// Sends `output` to this query's output stream
-    pub fn send_query_output(&self, output: ArrowResult<RecordBatch>) {
-        let _ = self.output.unbounded_send(output);
-    }
-
-    /// Returns the [`Spawner`] associated with this [`Query`]
-    pub fn spawner(&self) -> &Spawner {
-        &self.spawner
-    }
+    pub pipelines: Vec<RoutablePipeline>,
 }
 
 /// When converting [`ExecutionPlan`] to [`Pipeline`] we may wish to group
@@ -128,7 +75,7 @@ struct OperatorGroup {
 /// The [`ExecutionPlan`] is visited in a depth-first fashion, gradually building
 /// up the [`RoutablePipeline`] for the [`Query`]. As nodes are visited depth-first,
 /// a node is visited only after its parent has been.
-struct QueryBuilder {
+pub struct QueryBuilder {
     task_context: Arc<TaskContext>,
 
     /// The current list of completed pipelines
@@ -144,7 +91,7 @@ struct QueryBuilder {
 }
 
 impl QueryBuilder {
-    fn new(plan: Arc<dyn ExecutionPlan>, task_context: Arc<TaskContext>) -> Self {
+    pub fn new(plan: Arc<dyn ExecutionPlan>, task_context: Arc<TaskContext>) -> Self {
         Self {
             in_progress: vec![],
             to_visit: vec![(plan, None)],
@@ -312,10 +259,7 @@ impl QueryBuilder {
     /// The above logic is liable to change, is considered an implementation detail of the
     /// scheduler, and should not be relied upon by operators
     ///
-    fn build(
-        mut self,
-        spawner: Spawner,
-    ) -> Result<(Query, mpsc::UnboundedReceiver<ArrowResult<RecordBatch>>)> {
+    pub fn build(mut self) -> Result<Query> {
         // We do a depth-first scan of the operator tree, extracting a list of [`QueryNode`]
         while let Some((plan, parent)) = self.to_visit.pop() {
             self.visit_operator(plan, parent)?;
@@ -325,14 +269,8 @@ impl QueryBuilder {
             self.flush_exec()?;
         }
 
-        let (sender, receiver) = mpsc::unbounded();
-        Ok((
-            Query {
-                spawner,
-                pipelines: self.in_progress,
-                output: sender,
-            },
-            receiver,
-        ))
+        Ok(Query {
+            pipelines: self.in_progress,
+        })
     }
 }

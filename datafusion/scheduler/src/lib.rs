@@ -17,19 +17,20 @@
 
 use std::sync::Arc;
 
-use futures::stream::{BoxStream, StreamExt};
+use futures::stream::BoxStream;
 use log::{debug, error};
 
 use datafusion::arrow::error::Result as ArrowResult;
-use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 
-use crate::query::Query;
+use crate::query::{Query, QueryBuilder, RoutablePipeline};
 use crate::task::{spawn_query, Task};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
+
+pub use task::QueryResults;
 
 mod pipeline;
 mod query;
@@ -120,10 +121,14 @@ impl Scheduler {
         &self,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-    ) -> Result<BoxStream<'static, ArrowResult<RecordBatch>>> {
-        let (query, receiver) = Query::new(plan, context, self.spawner())?;
-        spawn_query(Arc::new(query));
-        Ok(receiver.boxed())
+    ) -> Result<QueryResults> {
+        let query = QueryBuilder::new(plan, context).build()?;
+        Ok(self.schedule_query(query))
+    }
+
+    /// Schedule the provided [`Query`] on this [`Scheduler`].
+    pub(crate) fn schedule_query(&self, query: Query) -> QueryResults {
+        spawn_query(query, self.spawner())
     }
 
     fn spawner(&self) -> Spawner {
