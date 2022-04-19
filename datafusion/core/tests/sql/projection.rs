@@ -188,6 +188,8 @@ async fn preserve_nullability_on_projection() -> Result<()> {
     let schema: Schema = ctx.table("test").unwrap().schema().clone().into();
     assert!(!schema.field_with_name("c1")?.is_nullable());
 
+    ctx.register_table(UNNAMED_TABLE, Arc::new(MemTable::try_new(SchemaRef::new(schema.clone()), vec![])?))?;
+
     let plan = LogicalPlanBuilder::scan_empty(None, &schema, None)?
         .project(vec![col("c1")])?
         .build()?;
@@ -216,12 +218,15 @@ async fn projection_on_memory_scan() -> Result<()> {
         ],
     )?]];
 
-    let plan = LogicalPlanBuilder::scan_memory(partitions, schema, None)?
+    let provider = Arc::new(MemTable::try_new(schema.clone(), partitions.clone())?);
+
+    let plan = LogicalPlanBuilder::scan_memory(partitions, schema.clone(), None)?
         .project(vec![col("b")])?
         .build()?;
     assert_fields_eq(&plan, vec!["b"]);
 
     let ctx = SessionContext::new();
+    ctx.register_table(UNNAMED_TABLE, provider)?;
     let optimized_plan = ctx.optimize(&plan)?;
     match &optimized_plan {
         LogicalPlan::Projection(Projection { input, .. }) => match &**input {
