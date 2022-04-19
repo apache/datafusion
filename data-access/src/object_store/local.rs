@@ -66,6 +66,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn create_dir(&self, path: &str, recursive: bool) -> Result<()> {
+        let path = path_without_scheme(path);
         let res = match recursive {
             false => tokio::fs::create_dir(path).await,
             true => tokio::fs::create_dir_all(path).await,
@@ -78,10 +79,12 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn remove_dir_all(&self, path: &str) -> Result<()> {
+        let path = path_without_scheme(path);
         tokio::fs::remove_dir_all(path).await
     }
 
     async fn remove_dir_contents(&self, path: &str) -> Result<()> {
+        let path = path_without_scheme(path);
         let mut entries = tokio::fs::read_dir(path).await?;
         while let Some(entry) = entries.next_entry().await? {
             if entry.file_type().await?.is_dir() {
@@ -94,6 +97,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn remove_file(&self, path: &str) -> Result<()> {
+        let path = path_without_scheme(path);
         let res = tokio::fs::remove_file(path).await;
         match res {
             Ok(()) => Ok(()),
@@ -113,12 +117,14 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn rename(&self, source: &str, dest: &str) -> Result<()> {
+        let source = path_without_scheme(source);
+        let dest = path_without_scheme(dest);
         tokio::fs::rename(source, dest).await
     }
 
     async fn copy(&self, source: &str, dest: &str) -> Result<()> {
-        let source_root = PathBuf::from(source);
-        let dest_root = PathBuf::from(dest);
+        let source_root = PathBuf::from(path_without_scheme(source));
+        let dest_root = PathBuf::from(path_without_scheme(dest));
 
         if !source_root.exists() {
             return Err(io::Error::new(
