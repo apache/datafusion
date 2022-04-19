@@ -16,6 +16,7 @@
 // under the License.
 
 //! Execution plan for reading line-delimited JSON files
+use arrow::json::reader::DecoderOptions;
 use async_trait::async_trait;
 
 use crate::error::{DataFusionError, Result};
@@ -102,12 +103,19 @@ impl ExecutionPlan for NdJsonExec {
 
         // The json reader cannot limit the number of records, so `remaining` is ignored.
         let fun = move |file, _remaining: &Option<usize>| {
-            Box::new(json::Reader::new(
-                file,
-                Arc::clone(&file_schema),
-                batch_size,
-                proj.clone(),
-            )) as BatchIter
+            // TODO: make DecoderOptions implement Clone so we can
+            // clone here rather than recreating the options each time
+            // https://github.com/apache/arrow-rs/issues/1580
+            let options = DecoderOptions::new().with_batch_size(batch_size);
+
+            let options = if let Some(proj) = proj.clone() {
+                options.with_projection(proj)
+            } else {
+                options
+            };
+
+            Box::new(json::Reader::new(file, Arc::clone(&file_schema), options))
+                as BatchIter
         };
 
         Ok(Box::pin(FileStream::new(
