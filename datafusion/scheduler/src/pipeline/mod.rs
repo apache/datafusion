@@ -36,10 +36,10 @@ pub mod repartition;
 /// within DataFusion, [`ExecutionPlan`], but rather a generic interface that
 /// parts of the physical plan are "compiled" into by the scheduler.
 ///
-/// # Push vs Pull Execution
+/// # Eager vs Lazy Execution
 ///
-/// Whilst the interface exposed to the scheduler is push-based, in which member functions
-/// computation is performed is intentionally left as an implementation detail of the [`Pipeline`]
+/// Whether computation is eagerly done on push, or lazily done on pull, is
+/// intentionally left as an implementation detail of the [`Pipeline`]
 ///
 /// This allows flexibility to support the following different patterns, and potentially more:
 ///
@@ -52,12 +52,13 @@ pub mod repartition;
 ///
 /// A merge pipeline which combines data from one or more input partitions into one or
 /// more output partitions. [`Pipeline::push`] adds data to an input buffer, and wakes
-/// any output partitions that may now be able to make progress. This may be none none
-/// if the operator is waiting on data from a different input partition
+/// any output partitions that may now be able to make progress. This may be none if
+/// the operator is waiting on data from a different input partition
 ///
 /// An aggregation pipeline which combines data from one or more input partitions into
 /// a single output partition. [`Pipeline::push`] would eagerly update the computed
-/// aggregates, and the final [`Pipeline::close`] trigger flushing these to the output
+/// aggregates, and the final [`Pipeline::close`] trigger flushing these to the output.
+/// It would also be possible to flush once the partial aggregates reach a certain size
 ///
 /// A partition-aware aggregation pipeline, which functions similarly to the above, but
 /// computes aggregations per input partition, before combining these prior to flush.

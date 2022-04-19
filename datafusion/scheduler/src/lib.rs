@@ -157,7 +157,10 @@ fn format_worker_panic(panic: Box<dyn std::any::Any + Send>) -> String {
     format!("worker {} panicked with: {}", worker, message)
 }
 
-/// Returns `true` if the current thread is a worker thread
+/// Returns `true` if the current thread is a rayon worker thread
+///
+/// Note: if there are multiple rayon pools, this will return `true` if the current thread
+/// belongs to ANY rayon pool, even if this isn't a worker thread of a [`Scheduler`] instance
 fn is_worker() -> bool {
     rayon::current_thread_index().is_some()
 }

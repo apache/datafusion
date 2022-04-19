@@ -49,9 +49,11 @@ use crate::BoxStream;
 /// [`ExecutionPlan`] allowing full interoperability with the existing ecosystem
 ///
 /// Longer term we will likely want to introduce new traits that differentiate between
-/// stateless operators like filters, and stateful aggregations, and are better aligned
-/// with a push-based execution model. This in turn will allow for [`Pipeline`] implementations
-/// that are able to introduce parallelism beyond that expressed in their partitioning
+/// pipeline-able operators like filters, and pipeline-breakers like aggregations, and
+/// are better aligned with a push-based execution model.
+///
+/// This in turn will allow for [`Pipeline`] implementations that are able to introduce
+/// parallelism beyond that expressed in their partitioning
 pub struct ExecutionPipeline {
     proxied: Arc<dyn ExecutionPlan>,
     inputs: Vec<Vec<Arc<Mutex<InputPartition>>>>,
