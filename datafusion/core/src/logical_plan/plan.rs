@@ -20,8 +20,6 @@
 use super::display::{GraphvizVisitor, IndentVisitor};
 use super::expr::{Column, Expr};
 use super::extension::UserDefinedLogicalNode;
-use crate::datasource::datasource::TableProviderFilterPushDown;
-use crate::datasource::TableProvider;
 use crate::error::DataFusionError;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;

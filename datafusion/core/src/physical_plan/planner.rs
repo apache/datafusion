@@ -345,19 +345,19 @@ impl DefaultPhysicalPlanner {
                     // TODO do we have these defined as defaults somewhere?
                     let mut catalog_name = "datafusion".to_owned();
                     let mut schema_name = "public".to_owned();
-                    let mut table_name = "".to_owned();
+                    let mut table_ref_name = "".to_owned();
 
                     let table_ref: TableReference = table_name.as_str().into();
                     match table_ref {
                         TableReference::Bare { table } => {
-                            table_name = table.to_string()
+                            table_ref_name = table.to_string()
                         }
                         _ => unimplemented!()
                     }
 
                     let table_provider: Option<Arc<dyn TableProvider>> = match session_state.catalog_list.catalog(&catalog_name) {
                          Some(catalog) => match catalog.schema(&schema_name) {
-                            Some(schema) => match schema.table(&table_name) {
+                            Some(schema) => match schema.table(&table_ref_name) {
                                 Some(table) => Some(table.clone()),
                                 _ => None
                             }

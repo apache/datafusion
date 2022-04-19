@@ -17,7 +17,6 @@
 
 //! This module provides a builder for creating LogicalPlans
 
-use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::datasource::{
     empty::EmptyTable,
     listing::{ListingTable, ListingTableConfig},

@@ -646,6 +646,7 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::datasource::empty::EmptyTable;
     use crate::datasource::TableProvider;
     use crate::logical_plan::{
         lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder, Operator,
@@ -658,7 +659,11 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        rule.optimize(plan, &ExecutionProps::new(HashMap::new()))
+        let mut table_providers = HashMap::new();
+        let table_provider: Arc<dyn TableProvider> =
+            Arc::new(EmptyTable::new(SchemaRef::new(test_table_schema())));
+        table_providers.insert("test".to_owned(), table_provider);
+        rule.optimize(plan, &ExecutionProps::new(table_providers))
             .expect("failed to optimize plan")
     }
 
@@ -1466,6 +1471,9 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
             filters: vec![],
+            full_filters: vec![],
+            partial_filters: vec![],
+            unsupported_filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
             )?),
@@ -1473,13 +1481,9 @@ mod tests {
             limit: None,
         });
 
-        let mut builder =
-            LogicalPlanBuilder::from(table_scan).filter(col("a").eq(lit(1i64)))?;
-
-        builder
-            .table_providers
-            .insert("test".to_string(), Arc::new(test_provider));
-        builder.build()
+        LogicalPlanBuilder::from(table_scan)
+            .filter(col("a").eq(lit(1i64)))?
+            .build()
     }
 
     #[test]
@@ -1542,6 +1546,9 @@ mod tests {
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".to_string(),
             filters: vec![col("a").eq(lit(10i64)), col("b").gt(lit(11i64))],
+            full_filters: vec![],
+            partial_filters: vec![],
+            unsupported_filters: vec![],
             projected_schema: Arc::new(DFSchema::try_from(
                 (*test_provider.schema()).clone(),
             )?),
@@ -1549,15 +1556,10 @@ mod tests {
             limit: None,
         });
 
-        let mut builder = LogicalPlanBuilder::from(table_scan)
+        let plan = LogicalPlanBuilder::from(table_scan)
             .filter(and(col("a").eq(lit(10i64)), col("b").gt(lit(11i64))))?
-            .project(vec![col("a"), col("b")])?;
-
-        builder
-            .table_providers
-            .insert("test".to_string(), Arc::new(test_provider));
-
-        let plan = builder.build()?;
+            .project(vec![col("a"), col("b")])?
+            .build()?;
 
         let expected ="Projection: #a, #b\
             \n  Filter: #a = Int64(10) AND #b > Int64(11)\

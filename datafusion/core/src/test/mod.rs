@@ -105,13 +105,17 @@ pub fn create_partitioned_csv(
     Ok((tmp_dir.into_path().to_str().unwrap().to_string(), groups))
 }
 
-/// some tests share a common table with different names
-pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
-    let schema = Schema::new(vec![
+pub fn test_table_schema() -> Schema {
+    Schema::new(vec![
         Field::new("a", DataType::UInt32, false),
         Field::new("b", DataType::UInt32, false),
         Field::new("c", DataType::UInt32, false),
-    ]);
+    ])
+}
+
+/// some tests share a common table with different names
+pub fn test_table_scan_with_name(name: &str) -> Result<LogicalPlan> {
+    let schema = test_table_schema();
     LogicalPlanBuilder::scan_empty(Some(name), &schema, None)?.build()
 }
 
