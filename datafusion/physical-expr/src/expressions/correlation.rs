@@ -22,8 +22,8 @@ use crate::{
     AggregateExpr, PhysicalExpr,
 };
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
@@ -36,42 +36,6 @@ pub struct Correlation {
     name: String,
     expr1: Arc<dyn PhysicalExpr>,
     expr2: Arc<dyn PhysicalExpr>,
-}
-
-/// function return type of correlation
-pub fn correlation_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
-        other => Err(DataFusionError::Plan(format!(
-            "CORR does not support {:?}",
-            other
-        ))),
-    }
-}
-
-pub fn is_correlation_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-    )
 }
 
 impl Correlation {
@@ -346,17 +310,6 @@ mod tests {
             ScalarValue::from(1_f64),
             DataType::Float64
         )
-    }
-
-    #[test]
-    fn test_correlation_return_data_type() -> Result<()> {
-        let data_type = DataType::Float64;
-        let result_type = correlation_return_type(&data_type)?;
-        assert_eq!(DataType::Float64, result_type);
-
-        let data_type = DataType::Decimal(36, 10);
-        assert!(correlation_return_type(&data_type).is_err());
-        Ok(())
     }
 
     #[test]

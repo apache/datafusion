@@ -18,7 +18,6 @@
 use arrow::array::{new_null_array, Array, BooleanArray};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
-use arrow::datatypes::DataType;
 
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
@@ -79,22 +78,3 @@ pub fn coalesce(args: &[ColumnarValue]) -> Result<ColumnarValue> {
         Ok(result)
     }
 }
-
-/// Currently supported types by the coalesce function.
-/// The order of these types correspond to the order on which coercion applies
-/// This should thus be from least informative to most informative
-pub static SUPPORTED_COALESCE_TYPES: &[DataType] = &[
-    DataType::Boolean,
-    DataType::UInt8,
-    DataType::UInt16,
-    DataType::UInt32,
-    DataType::UInt64,
-    DataType::Int8,
-    DataType::Int16,
-    DataType::Int32,
-    DataType::Int64,
-    DataType::Float32,
-    DataType::Float64,
-    DataType::Utf8,
-    DataType::LargeUtf8,
-];

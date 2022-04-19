@@ -15,9 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Define coercion rules for different Expr type.
-//!
-//! Aggregate function rule
-//! Binary operation rule
+use arrow::datatypes::DataType;
 
-pub mod aggregate_rule;
+/// Currently supported types by the coalesce function.
+/// The order of these types correspond to the order on which coercion applies
+/// This should thus be from least informative to most informative
+pub static SUPPORTED_COALESCE_TYPES: &[DataType] = &[
+    DataType::Boolean,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::Float32,
+    DataType::Float64,
+    DataType::Utf8,
+    DataType::LargeUtf8,
+];

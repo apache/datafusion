@@ -1064,10 +1064,11 @@ mod roundtrip_tests {
 
     use datafusion::arrow::array::ArrayRef;
     use datafusion::execution::context::ExecutionProps;
+    use datafusion::logical_expr::{BuiltinScalarFunction, Volatility};
     use datafusion::logical_plan::create_udf;
     use datafusion::physical_plan::functions;
     use datafusion::physical_plan::functions::{
-        make_scalar_function, BuiltinScalarFunction, ScalarFunctionExpr, Volatility,
+        make_scalar_function, ScalarFunctionExpr,
     };
     use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::{

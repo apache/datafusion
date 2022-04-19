@@ -548,7 +548,7 @@ mod tests {
     use super::*;
     use crate::logical_plan::col;
     use crate::physical_plan::aggregates::AggregateFunction;
-    use crate::physical_plan::window_functions::WindowFunction;
+    use datafusion_expr::window_function::WindowFunction;
 
     #[test]
     fn test_group_window_expr_by_sort_keys_empty_case() -> Result<()> {
