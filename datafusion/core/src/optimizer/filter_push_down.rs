@@ -521,7 +521,7 @@ fn optimize(
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
-            match execution_props.table_providers.get(table_name) {
+            match execution_props.get_table_provider(table_name) {
                 Some(source) => {
                     // TODO consolidate this logic and remove duplication
 
@@ -646,7 +646,6 @@ fn rewrite(expr: &Expr, projection: &HashMap<String, Expr>) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::empty::EmptyTable;
     use crate::datasource::TableProvider;
     use crate::logical_plan::{
         lit, sum, union_with_alias, DFSchema, Expr, LogicalPlanBuilder, Operator,
@@ -659,11 +658,7 @@ mod tests {
 
     fn optimize_plan(plan: &LogicalPlan) -> LogicalPlan {
         let rule = FilterPushDown::new();
-        let mut table_providers = HashMap::new();
-        let table_provider: Arc<dyn TableProvider> =
-            Arc::new(EmptyTable::new(SchemaRef::new(test_table_schema())));
-        table_providers.insert("test".to_owned(), table_provider);
-        rule.optimize(plan, &ExecutionProps::new(table_providers))
+        rule.optimize(plan, &ExecutionProps::default())
             .expect("failed to optimize plan")
     }
 

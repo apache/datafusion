@@ -738,6 +738,7 @@ mod tests {
 
     use super::*;
     use crate::assert_contains;
+    use crate::catalog::catalog::MemoryCatalogList;
     use crate::logical_plan::{
         and, binary_expr, call_fn, col, create_udf, lit, lit_timestamp_nano, DFField,
         Expr, LogicalPlanBuilder,
@@ -1176,7 +1177,7 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
-            table_providers: HashMap::new(),
+            catalog_list: Arc::new(MemoryCatalogList::default()),
         };
 
         let mut const_evaluator = ConstEvaluator::new(&execution_props);
@@ -1735,7 +1736,7 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
-            table_providers: HashMap::new(),
+            catalog_list: Arc::new(MemoryCatalogList::default()),
         };
 
         let err = rule
@@ -1753,7 +1754,7 @@ mod tests {
         let execution_props = ExecutionProps {
             query_execution_start_time: *date_time,
             var_providers: None,
-            table_providers: HashMap::new(),
+            catalog_list: Arc::new(MemoryCatalogList::default()),
         };
 
         let optimized_plan = rule

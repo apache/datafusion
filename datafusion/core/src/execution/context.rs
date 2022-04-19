@@ -1077,22 +1077,22 @@ pub struct ExecutionProps {
     /// providers for scalar variables
     pub var_providers: Option<HashMap<VarType, Arc<dyn VarProvider + Send + Sync>>>,
     /// providers for registered tables
-    pub table_providers: HashMap<String, Arc<dyn TableProvider>>,
+    pub catalog_list: Arc<dyn CatalogList>,
 }
 
 impl Default for ExecutionProps {
     fn default() -> Self {
-        Self::new(HashMap::new())
+        Self::new(Arc::new(MemoryCatalogList::default()))
     }
 }
 
 impl ExecutionProps {
     /// Creates a new execution props
-    pub fn new(table_providers: HashMap<String, Arc<dyn TableProvider>>) -> Self {
+    pub fn new(catalog_list: Arc<dyn CatalogList>) -> Self {
         ExecutionProps {
             query_execution_start_time: chrono::Utc::now(),
             var_providers: None,
-            table_providers,
+            catalog_list,
         }
     }
 
@@ -1126,6 +1126,43 @@ impl ExecutionProps {
         self.var_providers
             .as_ref()
             .and_then(|var_providers| var_providers.get(&var_type).map(Arc::clone))
+    }
+
+    /// Get a TableProvider from the catalog
+    pub fn get_table_provider(&self, table_name: &str) -> Option<Arc<dyn TableProvider>> {
+        // TODO do we have these defined as defaults somewhere?
+        let mut catalog_name = "datafusion".to_owned();
+        let mut schema_name = "public".to_owned();
+        let table_ref_name;
+
+        let table_ref: TableReference = table_name.into();
+        match table_ref {
+            TableReference::Bare { table } => table_ref_name = table.to_string(),
+            TableReference::Partial { schema, table } => {
+                schema_name = schema.to_string();
+                table_ref_name = table.to_string();
+            }
+            TableReference::Full {
+                catalog,
+                schema,
+                table,
+            } => {
+                catalog_name = catalog.to_string();
+                schema_name = schema.to_string();
+                table_ref_name = table.to_string();
+            }
+        }
+
+        match self.catalog_list.catalog(&catalog_name) {
+            Some(catalog) => match catalog.schema(&schema_name) {
+                Some(schema) => match schema.table(&table_ref_name) {
+                    Some(table) => Some(table.clone()),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }
 
@@ -1335,28 +1372,6 @@ impl SessionState {
         }
     }
 
-    fn create_execution_props(&self) -> ExecutionProps {
-        let mut execution_props = self.execution_props.clone();
-        let catalog_list = &self.catalog_list;
-        for catalog_name in &catalog_list.catalog_names() {
-            let catalog = catalog_list.catalog(catalog_name).expect("catalog exists"); // infallible ?
-            for schema_name in catalog.schema_names() {
-                let schema = catalog.schema(&schema_name).expect("schema exists"); // infallible ?
-                for table_name in schema.table_names() {
-                    let table = schema.table(&table_name).expect("table exists"); // infallible ?
-                    println!(
-                        "Registering {}.{}.{}",
-                        catalog_name, schema_name, table_name
-                    );
-                    execution_props
-                        .table_providers
-                        .insert(table_name, table.clone());
-                }
-            }
-        }
-        execution_props
-    }
-
     /// Optimizes the logical plan by applying optimizer rules, and
     /// invoking observer function after each call
     fn optimize_internal<F>(
@@ -1367,7 +1382,7 @@ impl SessionState {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let execution_props = &mut self.create_execution_props();
+        let execution_props = &mut self.execution_props.clone();
         let optimizers = &self.optimizers;
 
         let execution_props = execution_props.start_execution();

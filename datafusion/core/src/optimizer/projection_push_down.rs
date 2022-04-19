@@ -344,7 +344,7 @@ fn optimize_plan(
             limit,
             ..
         }) => {
-            match _execution_props.table_providers.get(table_name) {
+            match _execution_props.get_table_provider(table_name) {
                 Some(source) => {
                     let (projection, projected_schema) = get_projected_schema(
                         Some(table_name),
