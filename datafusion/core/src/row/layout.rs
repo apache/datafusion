@@ -56,7 +56,7 @@ pub(crate) struct RowLayout {
 }
 
 impl RowLayout {
-    pub(crate) fn new(schema: &Arc<Schema>, type_: RowType) -> Self {
+    pub(crate) fn new(schema: &Schema, type_: RowType) -> Self {
         assert!(row_supported(schema));
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
@@ -94,7 +94,7 @@ impl Debug for RowLayout {
 }
 
 /// Get relative offsets for each field and total width for values
-fn compact_offsets(null_width: usize, schema: &Arc<Schema>) -> (Vec<usize>, usize) {
+fn compact_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
     let mut offsets = vec![];
     let mut offset = null_width;
     for f in schema.fields() {
