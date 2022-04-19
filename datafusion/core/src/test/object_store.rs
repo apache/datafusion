@@ -23,7 +23,9 @@ use std::{
 };
 
 use crate::datafusion_data_access::{
-    object_store::{FileMetaStream, ListEntryStream, ObjectReader, ObjectStore},
+    object_store::{
+        FileMetaStream, ListEntryStream, ObjectReader, ObjectStore, ObjectWriter,
+    },
     FileMeta, Result, SizedFile,
 };
 use async_trait::async_trait;
@@ -90,6 +92,34 @@ impl ObjectStore for TestObjectStore {
                 "not in provided test list",
             )),
         }
+    }
+
+    fn file_writer(&self, _path: &str) -> Result<Arc<dyn ObjectWriter>> {
+        unimplemented!();
+    }
+
+    async fn create_dir(&self, _path: &str, _recursive: bool) -> Result<()> {
+        unimplemented!();
+    }
+
+    async fn remove_dir_all(&self, _path: &str) -> Result<()> {
+        unimplemented!();
+    }
+
+    async fn remove_dir_contents(&self, _path: &str) -> Result<()> {
+        unimplemented!();
+    }
+
+    async fn remove_file(&self, _path: &str) -> Result<()> {
+        unimplemented!();
+    }
+
+    async fn rename(&self, _source: &str, _dest: &str) -> Result<()> {
+        unimplemented!();
+    }
+
+    async fn copy(&self, _source: &str, _dest: &str) -> Result<()> {
+        unimplemented!();
     }
 }
 

@@ -966,7 +966,7 @@ mod roundtrip_tests {
             self,
             object_store::{
                 local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
-                ObjectStore,
+                ObjectStore, ObjectWriter,
             },
             SizedFile,
         },
@@ -1015,6 +1015,55 @@ mod roundtrip_tests {
                 io::ErrorKind::Unsupported,
                 "this is only a test object store".to_string(),
             ))
+        }
+
+        fn file_writer(
+            &self,
+            _path: &str,
+        ) -> datafusion_data_access::Result<Arc<dyn ObjectWriter>> {
+            unimplemented!();
+        }
+
+        async fn create_dir(
+            &self,
+            _path: &str,
+            _recursive: bool,
+        ) -> datafusion_data_access::Result<()> {
+            unimplemented!();
+        }
+
+        async fn remove_dir_all(
+            &self,
+            _path: &str,
+        ) -> datafusion_data_access::Result<()> {
+            unimplemented!();
+        }
+
+        async fn remove_dir_contents(
+            &self,
+            _path: &str,
+        ) -> datafusion_data_access::Result<()> {
+            unimplemented!();
+        }
+
+        async fn remove_file(&self, _path: &str) -> datafusion_data_access::Result<()> {
+            unimplemented!();
+        }
+
+        async fn rename(
+            &self,
+            _source: &str,
+            _dest: &str,
+        ) -> datafusion_data_access::Result<()> {
+            unimplemented!();
+        }
+
+        async fn copy(
+            &self,
+            _source: &str,
+            _dest: &str,
+        ) -> datafusion_data_access::Result<()> {
+            unimplemented!();
         }
     }
 

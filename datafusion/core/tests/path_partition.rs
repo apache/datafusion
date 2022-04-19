@@ -25,7 +25,7 @@ use datafusion::{
     datafusion_data_access::{
         object_store::{
             local::LocalFileSystem, FileMetaStream, ListEntryStream, ObjectReader,
-            ObjectStore,
+            ObjectStore, ObjectWriter,
         },
         FileMeta, SizedFile,
     },
@@ -531,5 +531,33 @@ impl ObjectStore for MirroringObjectStore {
                 "not in provided test list",
             )),
         }
+    }
+
+    fn file_writer(&self, _path: &str) -> datafusion_data_access::Result<Arc<dyn ObjectWriter>> {
+        unimplemented!();
+    }
+
+    async fn create_dir(&self, _path: &str, _recursive: bool) -> datafusion_data_access::Result<()> {
+        unimplemented!();
+    }
+
+    async fn remove_dir_all(&self, _path: &str) -> datafusion_data_access::Result<()> {
+        unimplemented!();
+    }
+
+    async fn remove_dir_contents(&self, _path: &str) -> datafusion_data_access::Result<()> {
+        unimplemented!();
+    }
+
+    async fn remove_file(&self, _path: &str) -> datafusion_data_access::Result<()> {
+        unimplemented!();
+    }
+
+    async fn rename(&self, _source: &str, _dest: &str) -> datafusion_data_access::Result<()> {
+        unimplemented!();
+    }
+
+    async fn copy(&self, _source: &str, _dest: &str) -> datafusion_data_access::Result<()> {
+        unimplemented!();
     }
 }
