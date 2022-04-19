@@ -948,3 +948,65 @@ async fn join_timestamp() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
+    let ctx = SessionContext::new();
+    let id64_array = Int64Array::from(vec![
+        Some(5247),
+        Some(3821),
+        Some(6321),
+        Some(8821),
+        Some(7748),
+    ]);
+    let str_array = StringArray::from(vec!["1", "2", "3", "4", "5"]);
+    let schema = Schema::new(vec![
+        Field::new("id64", DataType::Int64, true),
+        Field::new("STR", DataType::Utf8, false),
+    ]);
+
+    let batch = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(id64_array), Arc::new(str_array)],
+    )
+    .unwrap();
+
+    let db1 = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+    ctx.register_table("t1", Arc::new(db1)).unwrap();
+
+    let id64_2array =
+        Int64Array::from(vec![Some(358), Some(2820), Some(3804), Some(7748)]);
+    let bool_2array = BooleanArray::from(vec![Some(true), Some(false), None, None]);
+    let schema = Schema::new(vec![
+        Field::new("id64", DataType::Int64, true),
+        Field::new("col_b", DataType::Boolean, true),
+    ]);
+
+    let batch2 = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![Arc::new(id64_2array), Arc::new(bool_2array)],
+    )
+    .unwrap();
+    let db2 = MemTable::try_new(batch2.schema(), vec![vec![batch2]]).unwrap();
+    ctx.register_table("t2", Arc::new(db2)).unwrap();
+
+    let expected = vec![
+        "+------+-----+------+-------+",
+        "| id64 | STR | id64 | col_b |",
+        "+------+-----+------+-------+",
+        "| 5247 | 1   |      |       |",
+        "| 3821 | 2   |      |       |",
+        "| 6321 | 3   |      |       |",
+        "| 8821 | 4   |      |       |",
+        "| 7748 | 5   | 7748 |       |",
+        "+------+-----+------+-------+",
+    ];
+
+    let results =
+        execute_to_batches(&ctx, "select * from t1 left join t2 on t1.id64 = t2.id64")
+            .await;
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
