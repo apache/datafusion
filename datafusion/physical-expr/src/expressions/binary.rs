@@ -279,14 +279,45 @@ where
         .collect()
 }
 
+fn arith_decimal_scalar<F>(
+    left: &DecimalArray,
+    right: i128,
+    op: F,
+) -> Result<DecimalArray>
+where
+    F: Fn(i128, i128) -> Result<i128>,
+{
+    left.iter()
+        .map(|left| {
+            if let Some(left) = left {
+                Some(op(left, right)).transpose()
+            } else {
+                Ok(None)
+            }
+        })
+        .collect()
+}
+
 fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let array = arith_decimal(left, right, |left, right| Ok(left + right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
+fn add_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left + right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
 fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let array = arith_decimal(left, right, |left, right| Ok(left - right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn subtract_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left - right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
@@ -298,9 +329,29 @@ fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<Decimal
     Ok(array)
 }
 
+fn multiply_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let divide = 10_i128.pow(left.scale() as u32);
+    let array =
+        arith_decimal_scalar(left, right, |left, right| Ok(left * right / divide))?
+            .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
 fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal(left, right, |left, right| {
+        let l_value = left as f64;
+        let r_value = right as f64;
+        let result = ((l_value / r_value) * mul) as i128;
+        Ok(result)
+    })?
+    .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn divide_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let mul = 10_f64.powi(left.scale() as i32);
+    let array = arith_decimal_scalar(left, right, |left, right| {
         let l_value = left as f64;
         let r_value = right as f64;
         let result = ((l_value / r_value) * mul) as i128;
@@ -319,6 +370,15 @@ fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalA
         }
     })?
     .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn modulus_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    if right == 0 {
+        return Err(DataFusionError::ArrowError(DivideByZero));
+    }
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left % right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -777,6 +837,7 @@ macro_rules! binary_primitive_array_op {
 macro_rules! binary_primitive_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
@@ -2916,13 +2977,24 @@ mod tests {
         let expect =
             create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3)?;
         assert_eq!(expect, result);
+        let result = add_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3)?;
+        assert_eq!(expect, result);
         // subtract
         let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
+        let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3)?;
+        assert_eq!(expect, result);
         // multiply
         let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
+        assert_eq!(expect, result);
+        let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
@@ -2939,9 +3011,19 @@ mod tests {
             3,
         )?;
         assert_eq!(expect, result);
+        let result = divide_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(
+            &[Some(123456700), None, Some(123456700), Some(123456700)],
+            25,
+            3,
+        )?;
+        assert_eq!(expect, result);
         // modulus
         let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3)?;
+        assert_eq!(expect, result);
+        let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(7), Some(7)], 25, 3)?;
         assert_eq!(expect, result);
 
         Ok(())
