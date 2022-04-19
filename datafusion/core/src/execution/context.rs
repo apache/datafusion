@@ -810,6 +810,7 @@ impl SessionContext {
         let state_cloned = {
             let mut state = self.state.write();
             state.execution_props.start_execution();
+            state.execution_props.catalog_list = state.catalog_list.clone();
 
             // We need to clone `state` to release the lock that is not `Send`. We could
             // make the lock `Send` by using `tokio::sync::Mutex`, but that would require to
@@ -1345,7 +1346,13 @@ impl SessionState {
     where
         F: FnMut(&LogicalPlan, &dyn OptimizerRule),
     {
-        let execution_props = &mut self.execution_props.clone();
+        let mut execution_props = &mut self.execution_props.clone();
+        execution_props.catalog_list = self.catalog_list.clone(); // TODO hacky ?
+
+        println!(
+            "optimize_internal = {:?}",
+            execution_props.catalog_list.catalog_names()
+        );
         let optimizers = &self.optimizers;
 
         let execution_props = execution_props.start_execution();

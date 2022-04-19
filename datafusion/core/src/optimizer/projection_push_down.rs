@@ -345,6 +345,11 @@ fn optimize_plan(
             limit,
             ..
         }) => {
+            println!(
+                "proj push down: {:?}",
+                _execution_props.catalog_list.catalog_names()
+            );
+
             if let Some(source) =
                 get_table_provider(_execution_props.catalog_list.as_ref(), table_name)
             {

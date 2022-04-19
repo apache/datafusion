@@ -1308,6 +1308,15 @@ mod tests {
         }
 
         let plan = create_logical_plan(&ctx, n)?;
+        println!("state: {:?}", ctx.state.read().catalog_list.catalog_names());
+        println!(
+            "props: {:?}",
+            ctx.state
+                .read()
+                .execution_props
+                .catalog_list
+                .catalog_names()
+        );
         execute_query(&ctx, &plan, false).await?;
 
         Ok(())
