@@ -1536,13 +1536,12 @@ impl TaskContext {
 impl From<&SessionContext> for TaskContext {
     fn from(session: &SessionContext) -> Self {
         let session_id = session.session_id.clone();
-        let (config, scalar_functions, aggregate_functions, catalog_list) = {
+        let (config, scalar_functions, aggregate_functions) = {
             let session_state = session.state.read();
             (
                 session_state.config.clone(),
                 session_state.scalar_functions.clone(),
                 session_state.aggregate_functions.clone(),
-                session_state.catalog_list.clone(),
             )
         };
         let runtime = session.runtime_env();
@@ -1565,7 +1564,6 @@ impl From<&SessionState> for TaskContext {
         let scalar_functions = state.scalar_functions.clone();
         let aggregate_functions = state.aggregate_functions.clone();
         let runtime = state.runtime_env.clone();
-        let catalog_list = state.catalog_list.clone();
         Self {
             task_id: None,
             session_id,

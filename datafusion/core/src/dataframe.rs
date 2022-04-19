@@ -658,8 +658,8 @@ mod tests {
     #[tokio::test]
     async fn select_columns() -> Result<()> {
         // build plan using Table API
-
-        let t = test_table().await?;
+        let mut ctx = SessionContext::new();
+        let t = test_table(&mut ctx).await?;
         let t2 = t.select_columns(&["c1", "c2", "c11"])?;
         let plan = t2.to_logical_plan();
 
@@ -675,7 +675,8 @@ mod tests {
     #[tokio::test]
     async fn select_expr() -> Result<()> {
         // build plan using Table API
-        let t = test_table().await?;
+        let mut ctx = SessionContext::new();
+        let t = test_table(&mut ctx).await?;
         let t2 = t.select(vec![col("c1"), col("c2"), col("c11")])?;
         let plan = t2.to_logical_plan();
 
@@ -691,7 +692,8 @@ mod tests {
     #[tokio::test]
     async fn select_with_window_exprs() -> Result<()> {
         // build plan using Table API
-        let t = test_table().await?;
+        let mut ctx = SessionContext::new();
+        let t = test_table(&mut ctx).await?;
         let first_row = Expr::WindowFunction {
             fun: window_functions::WindowFunction::BuiltInWindowFunction(
                 window_functions::BuiltInWindowFunction::FirstValue,
@@ -716,7 +718,8 @@ mod tests {
     #[tokio::test]
     async fn aggregate() -> Result<()> {
         // build plan using DataFrame API
-        let df = test_table().await?;
+        let mut ctx = SessionContext::new();
+        let df = test_table(&mut ctx).await?;
         let group_expr = vec![col("c1")];
         let aggr_expr = vec![
             min(col("c12")),
@@ -749,8 +752,9 @@ mod tests {
 
     #[tokio::test]
     async fn join() -> Result<()> {
-        let left = test_table().await?.select_columns(&["c1", "c2"])?;
-        let right = test_table_with_name("c2")
+        let mut ctx = SessionContext::new();
+        let left = test_table(&mut ctx).await?.select_columns(&["c1", "c2"])?;
+        let right = test_table_with_name(&mut ctx, "c2")
             .await?
             .select_columns(&["c1", "c3"])?;
         let left_rows = left.collect().await?;
@@ -766,7 +770,8 @@ mod tests {
     #[tokio::test]
     async fn limit() -> Result<()> {
         // build query using Table API
-        let t = test_table().await?;
+        let mut ctx = SessionContext::new();
+        let t = test_table(&mut ctx).await?;
         let t2 = t.select_columns(&["c1", "c2", "c11"])?.limit(10)?;
         let plan = t2.to_logical_plan();
 
@@ -783,7 +788,8 @@ mod tests {
     #[tokio::test]
     async fn explain() -> Result<()> {
         // build query using Table API
-        let df = test_table().await?;
+        let mut ctx = SessionContext::new();
+        let df = test_table(&mut ctx).await?;
         let df = df
             .select_columns(&["c1", "c2", "c11"])?
             .limit(10)?
@@ -839,7 +845,8 @@ mod tests {
 
     #[tokio::test]
     async fn sendable() {
-        let df = test_table().await.unwrap();
+        let mut ctx = SessionContext::new();
+        let df = test_table(&mut ctx).await.unwrap();
         // dataframes should be sendable between threads/tasks
         let task = tokio::task::spawn(async move {
             df.select_columns(&["c1"])
@@ -850,7 +857,8 @@ mod tests {
 
     #[tokio::test]
     async fn intersect() -> Result<()> {
-        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let mut ctx = SessionContext::new();
+        let df = test_table(&mut ctx).await?.select_columns(&["c1", "c3"])?;
         let plan = df.intersect(df.clone())?;
         let result = plan.to_logical_plan();
         let expected = create_plan(
@@ -864,7 +872,8 @@ mod tests {
 
     #[tokio::test]
     async fn except() -> Result<()> {
-        let df = test_table().await?.select_columns(&["c1", "c3"])?;
+        let mut ctx = SessionContext::new();
+        let df = test_table(&mut ctx).await?.select_columns(&["c1", "c3"])?;
         let plan = df.except(df.clone())?;
         let result = plan.to_logical_plan();
         let expected = create_plan(
@@ -878,8 +887,8 @@ mod tests {
 
     #[tokio::test]
     async fn register_table() -> Result<()> {
-        let df = test_table().await?.select_columns(&["c1", "c12"])?;
-        let ctx = SessionContext::new();
+        let mut ctx = SessionContext::new();
+        let df = test_table(&mut ctx).await?.select_columns(&["c1", "c12"])?;
         let df_impl = Arc::new(DataFrame::new(ctx.state.clone(), &df.to_logical_plan()));
 
         // register a dataframe as a table
@@ -942,14 +951,16 @@ mod tests {
         ctx.create_logical_plan(sql)
     }
 
-    async fn test_table_with_name(name: &str) -> Result<Arc<DataFrame>> {
-        let mut ctx = SessionContext::new();
-        register_aggregate_csv(&mut ctx, name).await?;
+    async fn test_table_with_name(
+        ctx: &mut SessionContext,
+        name: &str,
+    ) -> Result<Arc<DataFrame>> {
+        register_aggregate_csv(ctx, name).await?;
         ctx.table(name)
     }
 
-    async fn test_table() -> Result<Arc<DataFrame>> {
-        test_table_with_name("aggregate_test_100").await
+    async fn test_table(ctx: &mut SessionContext) -> Result<Arc<DataFrame>> {
+        test_table_with_name(ctx, "aggregate_test_100").await
     }
 
     async fn register_aggregate_csv(
