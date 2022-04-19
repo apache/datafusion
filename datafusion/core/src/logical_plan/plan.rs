@@ -136,6 +136,12 @@ pub struct TableScan {
     pub projected_schema: DFSchemaRef,
     /// Optional expressions to be used as filters by the table provider
     pub filters: Vec<Expr>,
+    /// Filters that are fully supported by the table provider
+    pub full_filters: Vec<Expr>,
+    /// Filters that are partially supported by the table provider
+    pub partial_filters: Vec<Expr>,
+    /// Filters that are not supported by the table provider
+    pub unsupported_filters: Vec<Expr>,
     /// Optional limit to skip reading
     pub limit: Option<usize>,
 }
@@ -951,6 +957,9 @@ impl LogicalPlan {
                         ref table_name,
                         ref projection,
                         ref filters,
+                        ref full_filters,
+                        ref partial_filters,
+                        ref unsupported_filters,
                         ref limit,
                         ..
                     }) => {
@@ -960,43 +969,21 @@ impl LogicalPlan {
                             table_name, projection
                         )?;
 
-                        // if !filters.is_empty() {
-                        //     let mut full_filter: Vec<Expr> = vec![];
-                        //     let mut partial_filter: Vec<Expr> = vec![];
-                        //     let mut unsupported_filters: Vec<Expr> = vec![];
-                        //
-                        //     filters.iter().for_each(|x| {
-                        //         // TODO need access to table provider map to do this, or we
-                        //         // need to copy more info into TableScan struct
-                        //         // if let Ok(t) = source.supports_filter_pushdown(x) {
-                        //         //     match t {
-                        //         //         TableProviderFilterPushDown::Exact => {
-                        //         //             full_filter.push(x)
-                        //         //         }
-                        //         //         TableProviderFilterPushDown::Inexact => {
-                        //         //             partial_filter.push(x)
-                        //         //         }
-                        //         //         TableProviderFilterPushDown::Unsupported => {
-                        //         //             unsupported_filters.push(x)
-                        //         //         }
-                        //         //     }
-                        //         // }
-                        //     });
-                        //
-                        //     if !full_filter.is_empty() {
-                        //         write!(f, ", full_filters={:?}", full_filter)?;
-                        //     };
-                        //     if !partial_filter.is_empty() {
-                        //         write!(f, ", partial_filters={:?}", partial_filter)?;
-                        //     }
-                        //     if !unsupported_filters.is_empty() {
-                        //         write!(
-                        //             f,
-                        //             ", unsupported_filters={:?}",
-                        //             unsupported_filters
-                        //         )?;
-                        //     }
-                        // }
+                        if !filters.is_empty() {
+                            if !full_filters.is_empty() {
+                                write!(f, ", full_filters={:?}", full_filters)?;
+                            };
+                            if !partial_filters.is_empty() {
+                                write!(f, ", partial_filters={:?}", partial_filters)?;
+                            }
+                            if !unsupported_filters.is_empty() {
+                                write!(
+                                    f,
+                                    ", unsupported_filters={:?}",
+                                    unsupported_filters
+                                )?;
+                            }
+                        }
 
                         if let Some(n) = limit {
                             write!(f, ", limit={}", n)?;

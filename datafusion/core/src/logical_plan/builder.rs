@@ -17,6 +17,7 @@
 
 //! This module provides a builder for creating LogicalPlans
 
+use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::datasource::{
     empty::EmptyTable,
     listing::{ListingTable, ListingTableConfig},
@@ -453,6 +454,9 @@ impl LogicalPlanBuilder {
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
+            full_filters: vec![],
+            partial_filters: vec![],
+            unsupported_filters: vec![],
             limit: None,
         });
         Ok(Self::from(table_scan))

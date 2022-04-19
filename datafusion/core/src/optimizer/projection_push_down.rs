@@ -338,6 +338,9 @@ fn optimize_plan(
         LogicalPlan::TableScan(TableScan {
             table_name,
             filters,
+            full_filters,
+            partial_filters,
+            unsupported_filters,
             limit,
             ..
         }) => {
@@ -355,6 +358,9 @@ fn optimize_plan(
                         projection: Some(projection),
                         projected_schema,
                         filters: filters.clone(),
+                        full_filters: full_filters.clone(),
+                        partial_filters: partial_filters.clone(),
+                        unsupported_filters: unsupported_filters.clone(),
                         limit: *limit,
                     }))
                 }

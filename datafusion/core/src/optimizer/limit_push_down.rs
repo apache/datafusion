@@ -63,6 +63,9 @@ fn limit_push_down(
                 table_name,
                 projection,
                 filters,
+                full_filters,
+                partial_filters,
+                unsupported_filters,
                 limit,
                 projected_schema,
             }),
@@ -71,6 +74,9 @@ fn limit_push_down(
             table_name: table_name.clone(),
             projection: projection.clone(),
             filters: filters.clone(),
+            full_filters: full_filters.clone(),
+            partial_filters: partial_filters.clone(),
+            unsupported_filters: unsupported_filters.clone(),
             limit: limit
                 .map(|x| std::cmp::min(x, upper_limit))
                 .or(Some(upper_limit)),

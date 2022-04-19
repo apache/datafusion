@@ -516,12 +516,37 @@ fn optimize(
             projection,
             table_name,
             limit,
+            ..
         }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
 
             match execution_props.table_providers.get(table_name) {
                 Some(source) => {
+                    // TODO consolidate this logic and remove duplication
+
+                    let mut full_filters: Vec<Expr> = vec![];
+                    let mut partial_filters: Vec<Expr> = vec![];
+                    let mut unsupported_filters: Vec<Expr> = vec![];
+
+                    if !filters.is_empty() {
+                        filters.iter().for_each(|x| {
+                            if let Ok(t) = source.supports_filter_pushdown(x) {
+                                match t {
+                                    TableProviderFilterPushDown::Exact => {
+                                        full_filters.push(x.clone())
+                                    }
+                                    TableProviderFilterPushDown::Inexact => {
+                                        partial_filters.push(x.clone())
+                                    }
+                                    TableProviderFilterPushDown::Unsupported => {
+                                        unsupported_filters.push(x.clone())
+                                    }
+                                }
+                            }
+                        });
+                    }
+
                     for (filter_expr, cols) in &state.filters {
                         let (preserve_filter_node, add_to_provider) =
                             match source.supports_filter_pushdown(filter_expr)? {
@@ -553,6 +578,9 @@ fn optimize(
                             projected_schema: projected_schema.clone(),
                             table_name: table_name.clone(),
                             filters: new_filters,
+                            full_filters,
+                            partial_filters,
+                            unsupported_filters,
                             limit: *limit,
                         }),
                     )
