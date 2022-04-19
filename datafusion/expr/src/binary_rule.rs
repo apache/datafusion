@@ -17,15 +17,59 @@
 
 //! Coercion rules for matching argument types for binary operators
 
+use crate::Operator;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
-use datafusion_expr::Operator;
+
+/// Returns the return type of a binary operator or an error when the binary operator cannot
+/// perform the computation between the argument's types, even after type coercion.
+///
+/// This function makes some assumptions about the underlying available computations.
+pub fn binary_operator_data_type(
+    lhs_type: &DataType,
+    op: &Operator,
+    rhs_type: &DataType,
+) -> Result<DataType> {
+    // validate that it is possible to perform the operation on incoming types.
+    // (or the return datatype cannot be inferred)
+    let result_type = coerce_types(lhs_type, op, rhs_type)?;
+
+    match op {
+        // operators that return a boolean
+        Operator::Eq
+        | Operator::NotEq
+        | Operator::And
+        | Operator::Or
+        | Operator::Like
+        | Operator::NotLike
+        | Operator::Lt
+        | Operator::Gt
+        | Operator::GtEq
+        | Operator::LtEq
+        | Operator::RegexMatch
+        | Operator::RegexIMatch
+        | Operator::RegexNotMatch
+        | Operator::RegexNotIMatch
+        | Operator::IsDistinctFrom
+        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
+        // bitwise operations return the common coerced type
+        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
+        // math operations return the same value as the common coerced type
+        Operator::Plus
+        | Operator::Minus
+        | Operator::Divide
+        | Operator::Multiply
+        | Operator::Modulo => Ok(result_type),
+        // string operations return the same values as the common coerced type
+        Operator::StringConcat => Ok(result_type),
+    }
+}
 
 /// Coercion rules for all binary operators. Returns the output type
 /// of applying `op` to an argument of `lhs_type` and `rhs_type`.
-pub(crate) fn coerce_types(
+pub fn coerce_types(
     lhs_type: &DataType,
     op: &Operator,
     rhs_type: &DataType,
@@ -48,6 +92,15 @@ pub(crate) fn coerce_types(
         }
         // "like" operators operate on strings and always return a boolean
         Operator::Like | Operator::NotLike => like_coercion(lhs_type, rhs_type),
+        // date +/- interval returns date
+        Operator::Plus | Operator::Minus
+            if (*lhs_type == DataType::Date32 || *lhs_type == DataType::Date64) =>
+        {
+            match rhs_type {
+                DataType::Interval(_) => Some(lhs_type.clone()),
+                _ => None,
+            }
+        }
         // for math expressions, the final value of the coercion is also the return type
         // because coercion favours higher information types
         Operator::Plus
@@ -107,6 +160,7 @@ fn comparison_eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Da
     comparison_binary_numeric_coercion(lhs_type, rhs_type)
         .or_else(|| dictionary_coercion(lhs_type, rhs_type))
         .or_else(|| temporal_coercion(lhs_type, rhs_type))
+        .or_else(|| string_coercion(lhs_type, rhs_type))
 }
 
 fn comparison_order_coercion(
@@ -143,7 +197,7 @@ fn comparison_binary_numeric_coercion(
     // that the coercion removes the least amount of information
     match (lhs_type, rhs_type) {
         // support decimal data type for comparison operation
-        (Decimal(p1, s1), Decimal(p2, s2)) => Some(Decimal(*p1.max(p2), *s1.max(s2))),
+        (d1 @ Decimal(_, _), d2 @ Decimal(_, _)) => get_wider_decimal_type(d1, d2),
         (Decimal(_, _), _) => get_comparison_common_decimal_type(lhs_type, rhs_type),
         (_, Decimal(_, _)) => get_comparison_common_decimal_type(rhs_type, lhs_type),
         (Float64, _) | (_, Float64) => Some(Float64),
@@ -178,12 +232,28 @@ fn get_comparison_common_decimal_type(
         }
     };
     match (decimal_type, &other_decimal_type) {
-        (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
-            let new_precision = p1.max(p2);
-            let new_scale = s1.max(s2);
-            Some(DataType::Decimal(*new_precision, *new_scale))
+        (d1 @ DataType::Decimal(_, _), d2 @ DataType::Decimal(_, _)) => {
+            get_wider_decimal_type(d1, d2)
         }
         _ => None,
+    }
+}
+
+// Returns a `DataType::Decimal` that can store any value from either
+// `lhs_decimal_type` and `rhs_decimal_type`
+// The result decimal type is (max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)).
+fn get_wider_decimal_type(
+    lhs_decimal_type: &DataType,
+    rhs_type: &DataType,
+) -> Option<DataType> {
+    match (lhs_decimal_type, rhs_type) {
+        (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
+            // max(s1, s2) + max(p1-s1, p2-s2), max(s1, s2)
+            let s = *s1.max(s2);
+            let range = (p1 - s1).max(p2 - s2);
+            Some(create_decimal_type(range + s, s))
+        }
+        (_, _) => None,
     }
 }
 
@@ -525,13 +595,12 @@ fn eq_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Operator;
     use arrow::datatypes::DataType;
     use datafusion_common::DataFusionError;
     use datafusion_common::Result;
-    use datafusion_expr::Operator;
 
     #[test]
-
     fn test_coercion_error() -> Result<()> {
         let result_type =
             coerce_types(&DataType::Float32, &Operator::Plus, &DataType::Utf8);
@@ -557,15 +626,17 @@ mod tests {
             DataType::Float32,
             DataType::Float64,
             DataType::Decimal(38, 10),
+            DataType::Decimal(20, 8),
         ];
         let result_types = [
             DataType::Decimal(20, 3),
             DataType::Decimal(20, 3),
             DataType::Decimal(20, 3),
-            DataType::Decimal(20, 3),
-            DataType::Decimal(20, 7),
-            DataType::Decimal(30, 15),
+            DataType::Decimal(23, 3),
+            DataType::Decimal(24, 7),
+            DataType::Decimal(32, 15),
             DataType::Decimal(38, 10),
+            DataType::Decimal(25, 8),
         ];
         let comparison_op_types = [
             Operator::NotEq,

@@ -189,6 +189,12 @@ impl HashJoinExec {
     ) -> Result<Self> {
         let left_schema = left.schema();
         let right_schema = right.schema();
+        if on.is_empty() {
+            return Err(DataFusionError::Plan(
+                "On constraints in HashJoinExec should be non-empty".to_string(),
+            ));
+        }
+
         check_join_is_valid(&left_schema, &right_schema, &on)?;
 
         let (schema, column_indices) =

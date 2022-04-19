@@ -27,6 +27,7 @@ use datafusion::prelude::bit_length;
 use datafusion::{
     arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionMode},
     error::DataFusionError,
+    logical_expr::{BuiltInWindowFunction, BuiltinScalarFunction},
     logical_plan::{
         abs, acos, ascii, asin, atan, ceil, character_length, chr, concat_expr,
         concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, nullif,
@@ -36,10 +37,7 @@ use datafusion::{
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
     },
-    physical_plan::{
-        aggregates::AggregateFunction, functions::BuiltinScalarFunction,
-        window_functions::BuiltInWindowFunction,
-    },
+    physical_plan::aggregates::AggregateFunction,
     prelude::{
         array, btrim, coalesce, date_part, date_trunc, lower, lpad, ltrim, md5,
         octet_length, regexp_match, rpad, rtrim, sha224, sha256, sha384, sha512, trim,
@@ -914,7 +912,7 @@ pub fn parse_expr(
     proto: &protobuf::LogicalExprNode,
     registry: &dyn FunctionRegistry,
 ) -> Result<Expr, Error> {
-    use datafusion::physical_plan::window_functions;
+    use datafusion::logical_expr::window_function;
     use protobuf::{logical_expr_node::ExprType, window_expr_node, ScalarFunction};
 
     let expr_type = proto
@@ -970,7 +968,7 @@ pub fn parse_expr(
                     let aggr_function = protobuf::AggregateFunction::try_from(i)?.into();
 
                     Ok(Expr::WindowFunction {
-                        fun: window_functions::WindowFunction::AggregateFunction(
+                        fun: window_function::WindowFunction::AggregateFunction(
                             aggr_function,
                         ),
                         args: vec![parse_required_expr(&expr.expr, registry, "expr")?],
@@ -985,7 +983,7 @@ pub fn parse_expr(
                         .into();
 
                     Ok(Expr::WindowFunction {
-                        fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                        fun: window_function::WindowFunction::BuiltInWindowFunction(
                             built_in_function,
                         ),
                         args: vec![parse_required_expr(&expr.expr, registry, "expr")?],

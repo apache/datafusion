@@ -337,6 +337,14 @@ impl ParquetExecStream {
                 file_metrics,
             ));
         }
+        if let Some(range) = &file.range {
+            assert!(
+                range.start >= 0 && range.end > 0 && range.end > range.start,
+                "invalid range specified: {:?}",
+                range
+            );
+            opt = opt.with_range(range.start, range.end);
+        }
 
         let file_reader = SerializedFileReader::new_with_options(
             ChunkObjectReader(object_reader),
@@ -649,6 +657,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::datasource::listing::FileRange;
     use crate::execution::options::CsvReadOptions;
     use crate::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
     use arrow::array::Float32Array;
@@ -656,6 +665,7 @@ mod tests {
         array::{Int64Array, Int8Array, StringArray},
         datatypes::{DataType, Field},
     };
+    use datafusion_data_access::object_store::local;
     use datafusion_expr::{col, lit};
     use futures::StreamExt;
     use parquet::{
@@ -1100,6 +1110,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parquet_exec_with_range() -> Result<()> {
+        fn file_range(file: String, start: i64, end: i64) -> PartitionedFile {
+            PartitionedFile {
+                file_meta: local::local_unpartitioned_file(file),
+                partition_values: vec![],
+                range: Some(FileRange { start, end }),
+            }
+        }
+
+        async fn assert_parquet_read(
+            file_groups: Vec<Vec<PartitionedFile>>,
+            expected_row_num: Option<usize>,
+            task_ctx: Arc<TaskContext>,
+            file_schema: SchemaRef,
+        ) -> Result<()> {
+            let parquet_exec = ParquetExec::new(
+                FileScanConfig {
+                    object_store: Arc::new(LocalFileSystem {}),
+                    file_groups,
+                    file_schema,
+                    statistics: Statistics::default(),
+                    projection: None,
+                    limit: None,
+                    table_partition_cols: vec![],
+                },
+                None,
+            );
+            assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
+            let results = parquet_exec.execute(0, task_ctx).await?.next().await;
+
+            if let Some(expected_row_num) = expected_row_num {
+                let batch = results.unwrap()?;
+                assert_eq!(expected_row_num, batch.num_rows());
+            } else {
+                assert!(results.is_none());
+            }
+
+            Ok(())
+        }
+
+        let session_ctx = SessionContext::new();
+        let testdata = crate::test_util::parquet_test_data();
+        let filename = format!("{}/alltypes_plain.parquet", testdata);
+        let file_schema = ParquetFormat::default()
+            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
+            .await?;
+
+        let group_empty = vec![vec![file_range(filename.clone(), 0, 5)]];
+        let group_contain = vec![vec![file_range(filename.clone(), 5, i64::MAX)]];
+        let group_all = vec![vec![
+            file_range(filename.clone(), 0, 5),
+            file_range(filename.clone(), 5, i64::MAX),
+        ]];
+
+        assert_parquet_read(
+            group_empty,
+            None,
+            session_ctx.task_ctx(),
+            file_schema.clone(),
+        )
+        .await?;
+        assert_parquet_read(
+            group_contain,
+            Some(8),
+            session_ctx.task_ctx(),
+            file_schema.clone(),
+        )
+        .await?;
+        assert_parquet_read(group_all, Some(8), session_ctx.task_ctx(), file_schema)
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_exec_with_partition() -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
@@ -1171,6 +1256,7 @@ mod tests {
                 last_modified: None,
             },
             partition_values: vec![],
+            range: None,
         };
 
         let parquet_exec = ParquetExec::new(

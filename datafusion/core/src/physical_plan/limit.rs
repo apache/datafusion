@@ -24,6 +24,7 @@ use std::task::{Context, Poll};
 
 use futures::stream::Stream;
 use futures::stream::StreamExt;
+use log::debug;
 
 use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
@@ -131,6 +132,10 @@ impl ExecutionPlan for GlobalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!(
+            "Start GlobalLimitExec::execute for partition: {}",
+            partition
+        );
         // GlobalLimitExec has a single output partition
         if 0 != partition {
             return Err(DataFusionError::Internal(format!(
@@ -282,6 +287,7 @@ impl ExecutionPlan for LocalLimitExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!("Start LocalLimitExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = self.input.execute(partition, context).await?;
         Ok(Box::pin(LimitStream::new(

@@ -40,14 +40,13 @@ use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident};
 use crate::{
     error::{DataFusionError, Result},
+    physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
-};
-use crate::{
     physical_plan::udf::ScalarUDF,
-    physical_plan::{aggregates, functions, window_functions},
     sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
 use sqlparser::ast::{
@@ -524,7 +523,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     keys.into_iter().unzip();
 
                 // return the logical plan representing the join
-                if filter.is_empty() {
+                if left_keys.is_empty() {
+                    // When we don't have join keys, use cross join
+                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
+
+                    join.filter(filter.into_iter().reduce(Expr::and).unwrap())?
+                        .build()
+                } else if filter.is_empty() {
                     let join = LogicalPlanBuilder::from(left).join(
                         &right,
                         join_type,
@@ -537,13 +542,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         join_type,
                         (left_keys, right_keys),
                     )?;
-                    let join_filter_init = filter.remove(0);
-                    join.filter(
-                        filter
-                            .into_iter()
-                            .fold(join_filter_init, |acc, e| acc.and(e)),
-                    )?
-                    .build()
+                    join.filter(filter.into_iter().reduce(Expr::and).unwrap())?
+                        .build()
                 }
                 // Left join with all non-equijoin expressions from the right
                 // l left join r
@@ -1417,7 +1417,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Utf8(None))),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: functions::BuiltinScalarFunction::DatePart,
+                fun: BuiltinScalarFunction::DatePart,
                 args: vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{}", field)))),
                     self.sql_expr_to_logical_expr(*expr, schema)?,
@@ -1671,7 +1671,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 
                 Ok(Expr::ScalarFunction {
-                    fun: functions::BuiltinScalarFunction::Substr,
+                    fun: BuiltinScalarFunction::Substr,
                     args,
                 })
             }
@@ -1688,15 +1688,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Trim { expr, trim_where } => {
                 let (fun, where_expr) = match trim_where {
                     Some((TrimWhereField::Leading, expr)) => {
-                        (functions::BuiltinScalarFunction::Ltrim, Some(expr))
+                        (BuiltinScalarFunction::Ltrim, Some(expr))
                     }
                     Some((TrimWhereField::Trailing, expr)) => {
-                        (functions::BuiltinScalarFunction::Rtrim, Some(expr))
+                        (BuiltinScalarFunction::Rtrim, Some(expr))
                     }
                     Some((TrimWhereField::Both, expr)) => {
-                        (functions::BuiltinScalarFunction::Btrim, Some(expr))
+                        (BuiltinScalarFunction::Btrim, Some(expr))
                     }
-                    None => (functions::BuiltinScalarFunction::Trim, None),
+                    None => (BuiltinScalarFunction::Trim, None),
                 };
                 let arg = self.sql_expr_to_logical_expr(*expr, schema)?;
                 let args = match where_expr {
@@ -1719,7 +1719,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 // first, scalar built-in
-                if let Ok(fun) = functions::BuiltinScalarFunction::from_str(&name) {
+                if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
                     let args = self.function_args_to_expr(function.args, schema)?;
 
                     return Ok(Expr::ScalarFunction { fun, args });
@@ -1752,13 +1752,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         })
                         .transpose()?;
-                    let fun = window_functions::WindowFunction::from_str(&name)?;
+                    let fun = WindowFunction::from_str(&name)?;
                     match fun {
-                        window_functions::WindowFunction::AggregateFunction(
+                        WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
                             return Ok(Expr::WindowFunction {
-                                fun: window_functions::WindowFunction::AggregateFunction(
+                                fun: WindowFunction::AggregateFunction(
                                     aggregate_fun.clone(),
                                 ),
                                 args: self.aggregate_fn_to_expr(
@@ -1771,11 +1771,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 window_frame,
                             });
                         }
-                        window_functions::WindowFunction::BuiltInWindowFunction(
+                        WindowFunction::BuiltInWindowFunction(
                             window_fun,
                         ) => {
                             return Ok(Expr::WindowFunction {
-                                fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                                fun: WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
                                 args: self.function_args_to_expr(function.args, schema)?,
@@ -2307,9 +2307,8 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use crate::datasource::empty::EmptyTable;
-    use crate::physical_plan::functions::Volatility;
     use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
-    use datafusion_expr::ScalarFunctionImplementation;
+    use datafusion_expr::{ScalarFunctionImplementation, Volatility};
 
     use super::*;
 
@@ -4033,6 +4032,10 @@ mod tests {
             name: TableReference,
         ) -> Option<Arc<dyn TableProvider>> {
             let schema = match name.table() {
+                "test" => Some(Schema::new(vec![
+                    Field::new("t_date32", DataType::Date32, false),
+                    Field::new("t_date64", DataType::Date64, false),
+                ])),
                 "person" => Some(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
                     Field::new("first_name", DataType::Utf8, false),
@@ -4157,5 +4160,26 @@ mod tests {
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
         let result = logical_plan(sql).err().unwrap();
         assert_eq!(expected, format!("{}", result));
+    }
+
+    #[test]
+    fn date_plus_interval_in_projection() {
+        let sql = "select t_date32 + interval '5 days' FROM test";
+        let expected = "Projection: #test.t_date32 + IntervalDayTime(\"21474836480\")\
+                            \n  TableScan: test projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn date_plus_interval_in_filter() {
+        let sql = "select t_date64 FROM test \
+                    WHERE t_date64 \
+                    BETWEEN cast('1999-12-31' as date) \
+                        AND cast('1999-12-31' as date) + interval '30 days'";
+        let expected =
+            "Projection: #test.t_date64\
+            \n  Filter: #test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalDayTime(\"128849018880\")\
+            \n    TableScan: test projection=None";
+        quick_test(sql, expected);
     }
 }

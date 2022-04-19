@@ -34,7 +34,6 @@ use datafusion::from_slice::FromSlice;
 use datafusion::logical_plan::plan::{Aggregate, Projection};
 use datafusion::logical_plan::LogicalPlan;
 use datafusion::logical_plan::TableScan;
-use datafusion::physical_plan::functions::Volatility;
 use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::ExecutionPlanVisitor;
@@ -46,6 +45,7 @@ use datafusion::{
     physical_plan::ColumnarValue,
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
+use datafusion_expr::Volatility;
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -98,7 +98,9 @@ pub mod union;
 pub mod wildcard;
 pub mod window;
 
+pub mod decimal;
 mod explain;
+mod idenfifers;
 pub mod information_schema;
 mod partitioned_csv;
 #[cfg(feature = "unicode_expressions")]
@@ -597,17 +599,19 @@ fn result_vec(results: &[RecordBatch]) -> Vec<Vec<String>> {
     result
 }
 
-async fn register_simple_aggregate_csv_with_decimal_by_sql(ctx: &SessionContext) {
+async fn register_decimal_csv_table_by_sql(ctx: &SessionContext) {
     let df = ctx
         .sql(
-            "CREATE EXTERNAL TABLE aggregate_simple (
+            "CREATE EXTERNAL TABLE decimal_simple (
             c1  DECIMAL(10,6) NOT NULL,
             c2  DOUBLE NOT NULL,
-            c3  BOOLEAN NOT NULL
+            c3  BIGINT NOT NULL,
+            c4  BOOLEAN NOT NULL,
+            c5  DECIMAL(12,7) NOT NULL
             )
             STORED AS CSV
             WITH HEADER ROW
-            LOCATION 'tests/aggregate_simple.csv'",
+            LOCATION 'tests/decimal_data.csv'",
         )
         .await
         .expect("Creating dataframe for CREATE EXTERNAL TABLE with decimal data type");

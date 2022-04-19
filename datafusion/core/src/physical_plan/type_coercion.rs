@@ -31,12 +31,12 @@
 
 use std::{sync::Arc, vec};
 
-use arrow::datatypes::{DataType, Schema, TimeUnit};
+use arrow::datatypes::Schema;
 
-use super::{functions::Signature, PhysicalExpr};
-use crate::error::{DataFusionError, Result};
+use super::PhysicalExpr;
+use crate::error::Result;
 use crate::physical_plan::expressions::try_cast;
-use crate::physical_plan::functions::TypeSignature;
+use datafusion_expr::{type_coercion::data_types, Signature};
 
 /// Returns `expressions` coerced to types compatible with
 /// `signature`, if possible.
@@ -65,193 +65,13 @@ pub fn coerce(
         .collect::<Result<Vec<_>>>()
 }
 
-/// Returns the data types that each argument must be coerced to match
-/// `signature`.
-///
-/// See the module level documentation for more detail on coercion.
-pub fn data_types(
-    current_types: &[DataType],
-    signature: &Signature,
-) -> Result<Vec<DataType>> {
-    if current_types.is_empty() {
-        return Ok(vec![]);
-    }
-    let valid_types = get_valid_types(&signature.type_signature, current_types)?;
-
-    if valid_types
-        .iter()
-        .any(|data_type| data_type == current_types)
-    {
-        return Ok(current_types.to_vec());
-    }
-
-    for valid_types in valid_types {
-        if let Some(types) = maybe_data_types(&valid_types, current_types) {
-            return Ok(types);
-        }
-    }
-
-    // none possible -> Error
-    Err(DataFusionError::Plan(format!(
-        "Coercion from {:?} to the signature {:?} failed.",
-        current_types, &signature.type_signature
-    )))
-}
-
-fn get_valid_types(
-    signature: &TypeSignature,
-    current_types: &[DataType],
-) -> Result<Vec<Vec<DataType>>> {
-    let valid_types = match signature {
-        TypeSignature::Variadic(valid_types) => valid_types
-            .iter()
-            .map(|valid_type| current_types.iter().map(|_| valid_type.clone()).collect())
-            .collect(),
-        TypeSignature::Uniform(number, valid_types) => valid_types
-            .iter()
-            .map(|valid_type| (0..*number).map(|_| valid_type.clone()).collect())
-            .collect(),
-        TypeSignature::VariadicEqual => {
-            // one entry with the same len as current_types, whose type is `current_types[0]`.
-            vec![current_types
-                .iter()
-                .map(|_| current_types[0].clone())
-                .collect()]
-        }
-        TypeSignature::Exact(valid_types) => vec![valid_types.clone()],
-        TypeSignature::Any(number) => {
-            if current_types.len() != *number {
-                return Err(DataFusionError::Plan(format!(
-                    "The function expected {} arguments but received {}",
-                    number,
-                    current_types.len()
-                )));
-            }
-            vec![(0..*number).map(|i| current_types[i].clone()).collect()]
-        }
-        TypeSignature::OneOf(types) => types
-            .iter()
-            .filter_map(|t| get_valid_types(t, current_types).ok())
-            .flatten()
-            .collect::<Vec<_>>(),
-    };
-
-    Ok(valid_types)
-}
-
-/// Try to coerce current_types into valid_types.
-fn maybe_data_types(
-    valid_types: &[DataType],
-    current_types: &[DataType],
-) -> Option<Vec<DataType>> {
-    if valid_types.len() != current_types.len() {
-        return None;
-    }
-
-    let mut new_type = Vec::with_capacity(valid_types.len());
-    for (i, valid_type) in valid_types.iter().enumerate() {
-        let current_type = &current_types[i];
-
-        if current_type == valid_type {
-            new_type.push(current_type.clone())
-        } else {
-            // attempt to coerce
-            if can_coerce_from(valid_type, current_type) {
-                new_type.push(valid_type.clone())
-            } else {
-                // not possible
-                return None;
-            }
-        }
-    }
-    Some(new_type)
-}
-
-/// Return true if a value of type `type_from` can be coerced
-/// (losslessly converted) into a value of `type_to`
-///
-/// See the module level documentation for more detail on coercion.
-pub fn can_coerce_from(type_into: &DataType, type_from: &DataType) -> bool {
-    use self::DataType::*;
-    match type_into {
-        Int8 => matches!(type_from, Int8),
-        Int16 => matches!(type_from, Int8 | Int16 | UInt8),
-        Int32 => matches!(type_from, Int8 | Int16 | Int32 | UInt8 | UInt16),
-        Int64 => matches!(
-            type_from,
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32
-        ),
-        UInt8 => matches!(type_from, UInt8),
-        UInt16 => matches!(type_from, UInt8 | UInt16),
-        UInt32 => matches!(type_from, UInt8 | UInt16 | UInt32),
-        UInt64 => matches!(type_from, UInt8 | UInt16 | UInt32 | UInt64),
-        Float32 => matches!(
-            type_from,
-            Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float32
-        ),
-        Float64 => matches!(
-            type_from,
-            Int8 | Int16
-                | Int32
-                | Int64
-                | UInt8
-                | UInt16
-                | UInt32
-                | UInt64
-                | Float32
-                | Float64
-        ),
-        Timestamp(TimeUnit::Nanosecond, None) => matches!(type_from, Timestamp(_, None)),
-        Utf8 | LargeUtf8 => true,
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::{
-        expressions::col,
-        functions::{TypeSignature, Volatility},
-    };
     use arrow::datatypes::{DataType, Field, Schema};
-
-    #[test]
-    fn test_maybe_data_types() {
-        // this vec contains: arg1, arg2, expected result
-        let cases = vec![
-            // 2 entries, same values
-            (
-                vec![DataType::UInt8, DataType::UInt16],
-                vec![DataType::UInt8, DataType::UInt16],
-                Some(vec![DataType::UInt8, DataType::UInt16]),
-            ),
-            // 2 entries, can coerse values
-            (
-                vec![DataType::UInt16, DataType::UInt16],
-                vec![DataType::UInt8, DataType::UInt16],
-                Some(vec![DataType::UInt16, DataType::UInt16]),
-            ),
-            // 0 entries, all good
-            (vec![], vec![], Some(vec![])),
-            // 2 entries, can't coerce
-            (
-                vec![DataType::Boolean, DataType::UInt16],
-                vec![DataType::UInt8, DataType::UInt16],
-                None,
-            ),
-            // u32 -> u16 is possible
-            (
-                vec![DataType::Boolean, DataType::UInt32],
-                vec![DataType::Boolean, DataType::UInt16],
-                Some(vec![DataType::Boolean, DataType::UInt32]),
-            ),
-        ];
-
-        for case in cases {
-            assert_eq!(maybe_data_types(&case.0, &case.1), case.2)
-        }
-    }
+    use datafusion_common::DataFusionError;
+    use datafusion_expr::Volatility;
+    use datafusion_physical_expr::expressions::col;
 
     #[test]
     fn test_coerce() -> Result<()> {
@@ -377,30 +197,6 @@ mod tests {
                 )));
             }
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_get_valid_types_one_of() -> Result<()> {
-        let signature =
-            TypeSignature::OneOf(vec![TypeSignature::Any(1), TypeSignature::Any(2)]);
-
-        let invalid_types = get_valid_types(
-            &signature,
-            &[DataType::Int32, DataType::Int32, DataType::Int32],
-        )?;
-        assert_eq!(invalid_types.len(), 0);
-
-        let args = vec![DataType::Int32, DataType::Int32];
-        let valid_types = get_valid_types(&signature, &args)?;
-        assert_eq!(valid_types.len(), 1);
-        assert_eq!(valid_types[0], args);
-
-        let args = vec![DataType::Int32];
-        let valid_types = get_valid_types(&signature, &args)?;
-        assert_eq!(valid_types.len(), 1);
-        assert_eq!(valid_types[0], args);
 
         Ok(())
     }

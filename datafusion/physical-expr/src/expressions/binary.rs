@@ -54,13 +54,12 @@ use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
-use crate::coercion_rule::binary_rule::coerce_types;
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::Operator;
+use datafusion_expr::binary_rule::binary_operator_data_type;
+use datafusion_expr::{binary_rule::coerce_types, ColumnarValue, Operator};
 
 // TODO move to arrow_rs
 // https://github.com/apache/arrow-rs/issues/1312
@@ -986,50 +985,6 @@ macro_rules! compute_utf8_flag_op_scalar {
             )))
         }
     }};
-}
-
-/// Returns the return type of a binary operator or an error when the binary operator cannot
-/// perform the computation between the argument's types, even after type coercion.
-///
-/// This function makes some assumptions about the underlying available computations.
-pub fn binary_operator_data_type(
-    lhs_type: &DataType,
-    op: &Operator,
-    rhs_type: &DataType,
-) -> Result<DataType> {
-    // validate that it is possible to perform the operation on incoming types.
-    // (or the return datatype cannot be inferred)
-    let result_type = coerce_types(lhs_type, op, rhs_type)?;
-
-    match op {
-        // operators that return a boolean
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::And
-        | Operator::Or
-        | Operator::Like
-        | Operator::NotLike
-        | Operator::Lt
-        | Operator::Gt
-        | Operator::GtEq
-        | Operator::LtEq
-        | Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::IsDistinctFrom
-        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
-        // bitwise operations return the common coerced type
-        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
-        // math operations return the same value as the common coerced type
-        Operator::Plus
-        | Operator::Minus
-        | Operator::Divide
-        | Operator::Multiply
-        | Operator::Modulo => Ok(result_type),
-        // string operations return the same values as the common coerced type
-        Operator::StringConcat => Ok(result_type),
-    }
 }
 
 impl PhysicalExpr for BinaryExpr {
