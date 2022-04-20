@@ -19,6 +19,7 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
+use crate::logical_plan::FileType;
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
     dialect::{keywords::Keyword, Dialect, GenericDialect},
@@ -33,19 +34,6 @@ macro_rules! parser_err {
     ($MSG:expr) => {
         Err(ParserError::ParserError($MSG.to_string()))
     };
-}
-
-/// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FileType {
-    /// Newline-delimited JSON
-    NdJson,
-    /// Apache Parquet columnar storage
-    Parquet,
-    /// Comma separated values
-    CSV,
-    /// Avro binary records
-    Avro,
 }
 
 impl FromStr for FileType {

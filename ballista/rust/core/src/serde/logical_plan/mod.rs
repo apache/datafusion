@@ -818,7 +818,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 table_partition_cols,
                 if_not_exists,
             }) => {
-                use datafusion::sql::parser::FileType;
+                use datafusion::logical_plan::FileType;
 
                 let pb_file_type: protobuf::FileType = match file_type {
                     FileType::NdJson => protobuf::FileType::NdJson,
@@ -994,11 +994,10 @@ mod roundtrip_tests {
         },
         datasource::listing::ListingTable,
         logical_plan::{
-            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
-            ToDFSchema,
+            col, CreateExternalTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder,
+            Repartition, ToDFSchema,
         },
         prelude::*,
-        sql::parser::FileType,
     };
     use std::io;
     use std::sync::Arc;
