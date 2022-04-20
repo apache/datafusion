@@ -39,9 +39,7 @@ pub trait TableProvider: Sync + Send {
     fn schema(&self) -> SchemaRef;
 
     /// Get the type of this table for metadata/catalog purposes.
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
+    fn table_type(&self) -> TableType;
 
     /// Create an ExecutionPlan that will scan the table.
     /// The table provider will be usually responsible of grouping

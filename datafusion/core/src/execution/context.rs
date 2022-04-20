@@ -734,6 +734,24 @@ impl SessionContext {
             .deregister_table(table_ref.table())
     }
 
+    /// Registers a view using a custom `TableProvider` so that
+    /// it can be referenced from SQL statements executed against this
+    /// context.
+    ///
+    /// Returns the `TableProvider` previously registered for this
+    /// reference, if any
+    pub fn register_view<'a>(
+        &'a self,
+        table_ref: impl Into<TableReference<'a>>,
+        provider: Arc<dyn TableProvider>,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        let table_ref = table_ref.into();
+        self.state
+            .read()
+            .schema_for_ref(table_ref)?
+            .register_view(table_ref.table().to_owned(), provider)
+    }
+
     /// Check whether the given table exists in the schema provider or not
     /// Returns true if the table exists.
     pub fn table_exist<'a>(
