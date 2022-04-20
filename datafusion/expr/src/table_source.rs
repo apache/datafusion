@@ -49,7 +49,14 @@ pub enum TableType {
     Temporary,
 }
 
-/// TableSource
+/// The TableSource trait is used during logical query planning and optimizations and
+/// provides access to schema information and filter push-down capabilities. This trait
+/// provides a subset of the functionality of the TableProvider trait in the core
+/// datafusion crate. The TableProvider trait provides additional capabilities needed for
+/// physical query execution (such as the ability to perform a scan). The reason for
+/// having two separate traits is to avoid having the logical plan code be dependent
+/// on the DataFusion execution engine. Other projects may want to use DataFusion's
+/// logical plans and have their own execution engine.
 pub trait TableSource: Sync + Send {
     fn as_any(&self) -> &dyn Any;
 

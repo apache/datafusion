@@ -169,7 +169,8 @@ pub fn provider_as_source(
     Arc::new(DefaultTableSource::new(table_provider))
 }
 
-/// Extract TableProvider from TableSource
+/// Attempt to downcast a TableSource to DefaultTableSource and access the
+/// TableProvider. This will only work with a TableSource created by DataFusion.
 pub fn source_as_provider(
     source: &Arc<dyn TableSource>,
 ) -> datafusion_common::Result<Arc<dyn TableProvider>> {
