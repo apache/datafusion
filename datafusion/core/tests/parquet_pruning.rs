@@ -403,6 +403,21 @@ async fn prune_f64_complex_expr_subtract() {
     assert_eq!(output.result_rows, 9, "{}", output.description());
 }
 
+#[tokio::test]
+async fn prune_int32_eq_in_list() {
+    // resulrt of sql "SELECT * FROM t where in (1)"
+    let output = ContextWithParquet::new(Scenario::Int32)
+        .await
+        .query("SELECT * FROM t where i in (1)")
+        .await;
+
+    println!("{}", output.description());
+    // This should prune out groups without error
+    assert_eq!(output.predicate_evaluation_errors(), Some(0));
+    assert_eq!(output.row_groups_pruned(), Some(3));
+    assert_eq!(output.result_rows, 1, "{}", output.description());
+}
+
 // ----------------------
 // Begin test fixture
 // ----------------------
