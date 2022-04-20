@@ -62,7 +62,8 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    DropTable, FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
+    UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -86,7 +87,7 @@ use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
 use crate::sql::{
-    parser::{DFParser, FileType},
+    parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
 use crate::variable::{VarProvider, VarType};
