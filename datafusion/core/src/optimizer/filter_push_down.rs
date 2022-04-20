@@ -14,8 +14,8 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
+use crate::logical_expr::TableProviderFilterPushDown;
 use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
 use crate::logical_plan::{
     and, col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
@@ -599,7 +599,11 @@ mod tests {
     };
     use crate::physical_plan::ExecutionPlan;
     use crate::test::*;
-    use crate::{logical_plan::col, prelude::JoinType};
+    use crate::{
+        logical_plan::{col, plan::provider_as_source},
+        prelude::JoinType,
+    };
+
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
 
@@ -1417,7 +1421,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: None,
-            source: Arc::new(test_provider),
+            source: provider_as_source(Arc::new(test_provider)),
             limit: None,
         });
 
@@ -1490,7 +1494,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
-            source: Arc::new(test_provider),
+            source: provider_as_source(Arc::new(test_provider)),
             limit: None,
         });
 

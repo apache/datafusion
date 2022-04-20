@@ -21,39 +21,12 @@ use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use datafusion_expr::{TableProviderFilterPushDown, TableType};
 
 use crate::arrow::datatypes::SchemaRef;
 use crate::error::Result;
 use crate::logical_plan::Expr;
 use crate::physical_plan::ExecutionPlan;
-
-/// Indicates whether and how a filter expression can be handled by a
-/// TableProvider for table scans.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TableProviderFilterPushDown {
-    /// The expression cannot be used by the provider.
-    Unsupported,
-    /// The expression can be used to help minimise the data retrieved,
-    /// but the provider cannot guarantee that all returned tuples
-    /// satisfy the filter. The Filter plan node containing this expression
-    /// will be preserved.
-    Inexact,
-    /// The provider guarantees that all returned data satisfies this
-    /// filter expression. The Filter plan node containing this expression
-    /// will be removed.
-    Exact,
-}
-
-/// Indicates the type of this table for metadata/catalog purposes.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TableType {
-    /// An ordinary physical table.
-    Base,
-    /// A non-materialised table that itself uses a query internally to provide data.
-    View,
-    /// A transient table.
-    Temporary,
-}
 
 /// Source table
 #[async_trait]

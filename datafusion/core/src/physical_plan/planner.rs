@@ -24,8 +24,8 @@ use super::{
 };
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, TableScan,
-    Window,
+    source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
+    SubqueryAlias, TableScan, Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
@@ -339,6 +339,7 @@ impl DefaultPhysicalPlanner {
                     limit,
                     ..
                 }) => {
+                    let source = source_as_provider(source)?;
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
