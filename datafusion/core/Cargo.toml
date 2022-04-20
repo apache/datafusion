@@ -82,7 +82,7 @@ sqlparser = "0.16"
 tempfile = "3"
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
 tokio-stream = "0.1"
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4"] }
 
 [dev-dependencies]
 criterion = "0.3"
