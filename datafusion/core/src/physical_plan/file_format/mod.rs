@@ -44,6 +44,7 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
+use arrow::record_batch::RecordBatchOptions;
 use datafusion_data_access::object_store::ObjectStore;
 use lazy_static::lazy_static;
 use log::info;
@@ -275,9 +276,15 @@ impl SchemaAdapter {
 
         let projected_schema = Arc::new(self.table_schema.clone().project(projections)?);
 
-        let merged_batch = RecordBatch::try_new(projected_schema, cols)?;
+        // Necessary to handle empty batches
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(batch.num_rows());
 
-        Ok(merged_batch)
+        Ok(RecordBatch::try_new_with_options(
+            projected_schema,
+            cols,
+            &options,
+        )?)
     }
 }
 
