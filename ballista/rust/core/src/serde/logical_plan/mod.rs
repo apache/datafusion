@@ -261,19 +261,20 @@ impl AsLogicalPlan for LogicalPlanNode {
                 match session_state.catalog_list.catalog(catalog_name) {
                     Some(catalog) => match catalog.schema(schema_name) {
                         Some(schema) => {
-                            println!("Registering table '{}'", scan.table_name);
-                            schema.register_table(
-                                scan.table_name.to_string(),
-                                provider.clone(),
-                            )?;
-                            LogicalPlanBuilder::scan_with_filters(
+                            let scan_info = LogicalPlanBuilder::scan_with_filters(
                                 &scan.table_name,
                                 provider,
                                 projection,
                                 filters,
-                            )?
-                            .build()
-                            .map_err(|e| e.into())
+                            )?;
+
+                            println!("Registering table '{}'", scan_info.table_name);
+                            schema.register_table(
+                                scan_info.table_name.to_string(),
+                                scan_info.provider.clone(),
+                            )?;
+
+                            scan_info.build().map_err(|e| e.into())
                         }
                         _ => Err(BallistaError::General(format!(
                             "schema '{}' not found in catalog '{}'",
@@ -1111,6 +1112,29 @@ mod roundtrip_tests {
         }
     }
 
+    fn roundtrip_test_new(plan: &LogicalPlan, ctx: &SessionContext) {
+        let codec: BallistaCodec<protobuf::LogicalPlanNode, protobuf::PhysicalPlanNode> =
+            BallistaCodec::default();
+
+        let proto: protobuf::LogicalPlanNode =
+            protobuf::LogicalPlanNode::try_from_logical_plan(
+                plan,
+                ctx.state.read().catalog_list.as_ref(),
+                codec.logical_extension_codec.as_ref(),
+            )
+            .expect("from logical plan");
+
+        let ctx2 = SessionContext::new();
+
+        let round_trip: LogicalPlan = proto
+            .try_into_logical_plan(&ctx2, codec.logical_extension_codec())
+            .expect("to logical plan");
+
+        // TODO compare catalogs in the contexts
+
+        assert_eq!(format!("{:?}", plan), format!("{:?}", round_trip));
+    }
+
     // Given a identity of a LogicalPlan converts it to protobuf and back, using debug formatting to test equality.
     macro_rules! roundtrip_test {
         ($initial_struct:ident, $proto_type:ty, $struct_type:ty) => {
@@ -1157,11 +1181,7 @@ mod roundtrip_tests {
                 protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
                     .expect("from logical plan");
             let round_trip: LogicalPlan = proto
-                .try_into_logical_plan(
-                    &$ctx,
-                    $catalog_list,
-                    codec.logical_extension_codec(),
-                )
+                .try_into_logical_plan(&$ctx, codec.logical_extension_codec())
                 .expect("to logical plan");
 
             assert_eq!(
@@ -1325,35 +1345,47 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let verbose_plan = LogicalPlanBuilder::scan_csv(
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
-        .and_then(|plan| plan.explain(true, false))
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        let plan = LogicalPlanBuilder::scan_csv(
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
+
+        let verbose_plan = scan_info
+            .builder
+            .sort(vec![col("salary")])?
+            .explain(true, false)?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&verbose_plan, &ctx);
+
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
-        .and_then(|plan| plan.explain(false, false))
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        roundtrip_test!(plan);
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
 
-        roundtrip_test!(verbose_plan);
+        let plan = scan_info
+            .builder
+            .sort(vec![col("salary")])?
+            .explain(false, false)?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&plan, &ctx);
 
         Ok(())
     }
@@ -1379,22 +1411,25 @@ mod roundtrip_tests {
         .build()
         .map_err(BallistaError::DataFusionError)?;
 
-        let plan = LogicalPlanBuilder::scan_csv(
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee2",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![0, 3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| {
-            plan.builder
-                .join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"]))
-        })
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        roundtrip_test!(plan);
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
+
+        let plan = scan_info
+            .builder
+            .join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"]))?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&plan, &ctx);
         Ok(())
     }
 
@@ -1408,19 +1443,25 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let plan = LogicalPlanBuilder::scan_csv(
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        roundtrip_test!(plan);
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
+
+        let plan = scan_info
+            .builder
+            .sort(vec![col("salary")])?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&plan, &ctx);
 
         Ok(())
     }
@@ -1452,22 +1493,28 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let plan = LogicalPlanBuilder::scan_csv(
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| {
-            plan.builder
-                .aggregate(vec![col("state")], vec![max(col("salary"))])
-        })
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        roundtrip_test!(plan);
+        assert_eq!("employee_csv", scan_info.table_name);
+
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_str(), scan_info.provider.clone())?;
+        let catalog_list = ctx.state.read().catalog_list.clone();
+
+        let plan = scan_info
+            .builder
+            .aggregate(vec![col("state")], vec![max(col("salary"))])?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&plan, &ctx);
 
         Ok(())
     }

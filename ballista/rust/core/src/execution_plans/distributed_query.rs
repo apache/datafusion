@@ -177,7 +177,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
             .map_err(|e| DataFusionError::Execution(format!("{:?}", e)))?;
 
         let schema: Schema = self.plan.schema().as_ref().clone().into();
-        let mut catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::new());
+        let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::new());
         println!(
             "ballista catalogs BEFORE decoding logical plan: {:?}",
             catalog_list.catalog_names()

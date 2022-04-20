@@ -457,6 +457,10 @@ impl LogicalPlanBuilder {
             ));
         }
 
+        //TODO hack so we don't register "employee.csv" as schema "employee" table "csv"
+        // this did not come up before because we accessed TableProvider directly
+        let table_name = table_name.replace(".", "_");
+
         let schema = provider.schema();
 
         let projected_schema = projection
