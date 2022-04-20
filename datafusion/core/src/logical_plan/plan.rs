@@ -23,55 +23,18 @@ use super::extension::UserDefinedLogicalNode;
 use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::datasource::TableProvider;
 use crate::error::DataFusionError;
+pub use crate::logical_expr::logical_plan::{
+    CreateCatalog, CreateCatalogSchema, DropTable, EmptyRelation, JoinConstraint,
+    JoinType, Partitioning, PlanType, StringifiedPlan, ToStringifiedPlan, Values,
+};
 use crate::logical_plan::dfschema::DFSchemaRef;
 use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use std::fmt::Formatter;
 use std::{
     collections::HashSet,
     fmt::{self, Display},
     sync::Arc,
 };
-
-/// Join type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JoinType {
-    /// Inner Join
-    Inner,
-    /// Left Join
-    Left,
-    /// Right Join
-    Right,
-    /// Full Join
-    Full,
-    /// Semi Join
-    Semi,
-    /// Anti Join
-    Anti,
-}
-
-impl Display for JoinType {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        let join_type = match self {
-            JoinType::Inner => "Inner",
-            JoinType::Left => "Left",
-            JoinType::Right => "Right",
-            JoinType::Full => "Full",
-            JoinType::Semi => "Semi",
-            JoinType::Anti => "Anti",
-        };
-        write!(f, "{}", join_type)
-    }
-}
-
-/// Join constraint
-#[derive(Debug, Clone, Copy)]
-pub enum JoinConstraint {
-    /// Join ON
-    On,
-    /// Join USING
-    Using,
-}
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
@@ -205,39 +168,6 @@ pub struct CreateExternalTable {
     pub if_not_exists: bool,
 }
 
-/// Creates a schema.
-#[derive(Clone)]
-pub struct CreateCatalogSchema {
-    /// The table schema
-    pub schema_name: String,
-    /// Do nothing (except issuing a notice) if a schema with the same name already exists
-    pub if_not_exists: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Creates a catalog (aka "Database").
-#[derive(Clone)]
-pub struct CreateCatalog {
-    /// The catalog name
-    pub catalog_name: String,
-    /// Do nothing (except issuing a notice) if a schema with the same name already exists
-    pub if_not_exists: bool,
-    /// Empty schema
-    pub schema: DFSchemaRef,
-}
-
-/// Drops a table.
-#[derive(Clone)]
-pub struct DropTable {
-    /// The table name
-    pub name: String,
-    /// If the table exists
-    pub if_exists: bool,
-    /// Dummy schema
-    pub schema: DFSchemaRef,
-}
-
 /// Produces a relation with string representations of
 /// various parts of the plan
 #[derive(Clone)]
@@ -271,15 +201,6 @@ pub struct Extension {
     pub node: Arc<dyn UserDefinedLogicalNode + Send + Sync>,
 }
 
-/// Produces no rows: An empty relation with an empty schema
-#[derive(Clone)]
-pub struct EmptyRelation {
-    /// Whether to produce a placeholder row
-    pub produce_one_row: bool,
-    /// The schema description of the output
-    pub schema: DFSchemaRef,
-}
-
 /// Produces the first `n` tuples from its input and discards the rest.
 #[derive(Clone)]
 pub struct Limit {
@@ -287,17 +208,6 @@ pub struct Limit {
     pub n: usize,
     /// The logical plan
     pub input: Arc<LogicalPlan>,
-}
-
-/// Values expression. See
-/// [Postgres VALUES](https://www.postgresql.org/docs/current/queries-values.html)
-/// documentation for more details.
-#[derive(Clone)]
-pub struct Values {
-    /// The table schema
-    pub schema: DFSchemaRef,
-    /// Values
-    pub values: Vec<Vec<Expr>>,
 }
 
 /// Aggregates its input based on a set of grouping and aggregate
@@ -623,17 +533,6 @@ impl LogicalPlan {
         self.accept(&mut visitor)?;
         Ok(visitor.using_columns)
     }
-}
-
-/// Logical partitioning schemes supported by the repartition operator.
-#[derive(Debug, Clone)]
-pub enum Partitioning {
-    /// Allocate batches using a round-robin algorithm and the specified number of partitions
-    RoundRobinBatch(usize),
-    /// Allocate rows based on a hash of one of more expressions and the specified number
-    /// of partitions.
-    /// This partitioning scheme is not yet fully supported. See <https://issues.apache.org/jira/browse/ARROW-11011>
-    Hash(Vec<Expr>, usize),
 }
 
 /// Trait that implements the [Visitor
@@ -1139,83 +1038,6 @@ impl fmt::Debug for LogicalPlan {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         self.display_indent().fmt(f)
     }
-}
-
-/// Represents which type of plan, when storing multiple
-/// for use in EXPLAIN plans
-#[derive(Debug, Clone, PartialEq)]
-pub enum PlanType {
-    /// The initial LogicalPlan provided to DataFusion
-    InitialLogicalPlan,
-    /// The LogicalPlan which results from applying an optimizer pass
-    OptimizedLogicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized LogicalPlan that was converted to a physical plan
-    FinalLogicalPlan,
-    /// The initial physical plan, prepared for execution
-    InitialPhysicalPlan,
-    /// The ExecutionPlan which results from applying an optimizer pass
-    OptimizedPhysicalPlan {
-        /// The name of the optimizer which produced this plan
-        optimizer_name: String,
-    },
-    /// The final, fully optimized physical which would be executed
-    FinalPhysicalPlan,
-}
-
-impl fmt::Display for PlanType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            PlanType::InitialLogicalPlan => write!(f, "initial_logical_plan"),
-            PlanType::OptimizedLogicalPlan { optimizer_name } => {
-                write!(f, "logical_plan after {}", optimizer_name)
-            }
-            PlanType::FinalLogicalPlan => write!(f, "logical_plan"),
-            PlanType::InitialPhysicalPlan => write!(f, "initial_physical_plan"),
-            PlanType::OptimizedPhysicalPlan { optimizer_name } => {
-                write!(f, "physical_plan after {}", optimizer_name)
-            }
-            PlanType::FinalPhysicalPlan => write!(f, "physical_plan"),
-        }
-    }
-}
-
-/// Represents some sort of execution plan, in String form
-#[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::rc_buffer)]
-pub struct StringifiedPlan {
-    /// An identifier of what type of plan this string represents
-    pub plan_type: PlanType,
-    /// The string representation of the plan
-    pub plan: Arc<String>,
-}
-
-impl StringifiedPlan {
-    /// Create a new Stringified plan of `plan_type` with string
-    /// representation `plan`
-    pub fn new(plan_type: PlanType, plan: impl Into<String>) -> Self {
-        StringifiedPlan {
-            plan_type,
-            plan: Arc::new(plan.into()),
-        }
-    }
-
-    /// returns true if this plan should be displayed. Generally
-    /// `verbose_mode = true` will display all available plans
-    pub fn should_display(&self, verbose_mode: bool) -> bool {
-        match self.plan_type {
-            PlanType::FinalLogicalPlan | PlanType::FinalPhysicalPlan => true,
-            _ => verbose_mode,
-        }
-    }
-}
-
-/// Trait for something that can be formatted as a stringified plan
-pub trait ToStringifiedPlan {
-    /// Create a stringified plan with the specified type
-    fn to_stringified(&self, plan_type: PlanType) -> StringifiedPlan;
 }
 
 impl ToStringifiedPlan for LogicalPlan {

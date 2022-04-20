@@ -27,6 +27,7 @@ pub mod expr_fn;
 pub mod field_util;
 pub mod function;
 mod literal;
+pub mod logical_plan;
 mod nullif;
 mod operator;
 mod signature;
