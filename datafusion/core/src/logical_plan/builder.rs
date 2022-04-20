@@ -45,7 +45,11 @@ use std::{
 
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
-use crate::logical_plan::{columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values, provider_as_source};
+use crate::logical_plan::{
+    columnize_expr, normalize_col, normalize_cols, provider_as_source,
+    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
+    Partitioning, Repartition, Values,
+};
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
 /// Default table name for unnamed table
