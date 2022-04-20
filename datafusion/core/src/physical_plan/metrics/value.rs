@@ -300,6 +300,11 @@ impl<'a> ScopedTimerGuard<'a> {
         }
     }
 
+    /// Restarts the timer recording from the current time
+    pub fn restart(&mut self) {
+        self.start = Some(Instant::now())
+    }
+
     /// Stop the timer, record the time taken and consume self
     pub fn done(mut self) {
         self.stop()
