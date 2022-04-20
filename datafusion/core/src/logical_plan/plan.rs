@@ -24,7 +24,6 @@ use crate::datasource::TableProvider;
 use crate::error::DataFusionError;
 use crate::logical_expr::TableProviderFilterPushDown;
 use crate::logical_plan::dfschema::DFSchemaRef;
-use crate::sql::parser::FileType;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_expr::TableSource;
 use std::any::Any;
@@ -246,6 +245,19 @@ pub struct CreateMemoryTable {
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+}
+
+/// Types of files to parse as DataFrames
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FileType {
+    /// Newline-delimited JSON
+    NdJson,
+    /// Apache Parquet columnar storage
+    Parquet,
+    /// Comma separated values
+    CSV,
+    /// Avro binary records
+    Avro,
 }
 
 /// Creates an external table.

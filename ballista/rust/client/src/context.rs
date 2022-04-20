@@ -35,12 +35,12 @@ use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_plan::{
-    source_as_provider, CreateExternalTable, LogicalPlan, TableScan,
+    source_as_provider, CreateExternalTable, FileType, LogicalPlan, TableScan,
 };
 use datafusion::prelude::{
     AvroReadOptions, CsvReadOptions, ParquetReadOptions, SessionConfig, SessionContext,
 };
-use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
+use datafusion::sql::parser::{DFParser, Statement as DFStatement};
 
 struct BallistaContextState {
     /// Ballista configuration
