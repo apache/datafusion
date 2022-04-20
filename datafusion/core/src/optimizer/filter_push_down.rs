@@ -16,9 +16,7 @@
 
 use crate::execution::context::ExecutionProps;
 use crate::logical_expr::TableProviderFilterPushDown;
-use crate::logical_plan::plan::{
-    provider_as_source, source_as_provider, Aggregate, Filter, Join, Projection, Union,
-};
+use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
 use crate::logical_plan::{
     and, col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
 };
@@ -508,7 +506,6 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
-            let source = source_as_provider(source)?;
 
             for (filter_expr, cols) in &state.filters {
                 let (preserve_filter_node, add_to_provider) =
@@ -536,7 +533,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 state,
                 used_columns,
                 &LogicalPlan::TableScan(TableScan {
-                    source: provider_as_source(source),
+                    source: source.clone(),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
@@ -602,7 +599,11 @@ mod tests {
     };
     use crate::physical_plan::ExecutionPlan;
     use crate::test::*;
-    use crate::{logical_plan::col, prelude::JoinType};
+    use crate::{
+        logical_plan::{col, plan::provider_as_source},
+        prelude::JoinType,
+    };
+
     use arrow::datatypes::SchemaRef;
     use async_trait::async_trait;
 
