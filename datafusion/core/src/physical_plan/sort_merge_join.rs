@@ -29,7 +29,7 @@ use std::task::{Context, Poll};
 
 use arrow::array::*;
 use arrow::compute::{take, SortOptions};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -208,7 +208,7 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 }
 
-/// Metrics for SortMergeJoinExec (Not yet implemented)
+/// Metrics for SortMergeJoinExec
 #[allow(dead_code)]
 struct SortMergeJoinMetrics {
     /// Total time for joining probe-side batches to the build-side batches
@@ -1137,9 +1137,15 @@ fn compare_join_arrays(
             DataType::UInt16 => compare_value!(UInt16Array),
             DataType::UInt32 => compare_value!(UInt32Array),
             DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Timestamp(_, _) => compare_value!(Int64Array),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Decimal(..) => compare_value!(DecimalArray),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
             _ => {
                 return Err(ArrowError::NotYetImplemented(
                     "Unsupported data type in sort merge join comparator".to_owned(),
@@ -1193,9 +1199,15 @@ fn is_join_arrays_equal(
             DataType::UInt16 => compare_value!(UInt16Array),
             DataType::UInt32 => compare_value!(UInt32Array),
             DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Timestamp(_, None) => compare_value!(Int64Array),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
+            DataType::Decimal(..) => compare_value!(DecimalArray),
+            DataType::Timestamp(time_unit, None) => match time_unit {
+                TimeUnit::Second => compare_value!(TimestampSecondArray),
+                TimeUnit::Millisecond => compare_value!(TimestampMillisecondArray),
+                TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
+                TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
+            },
             _ => {
                 return Err(ArrowError::NotYetImplemented(
                     "Unsupported data type in sort merge join comparator".to_owned(),
