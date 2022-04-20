@@ -286,6 +286,7 @@ enum BufferedState {
 }
 
 /// A buffered batch that contains contiguous rows with same join key
+#[derive(Debug)]
 struct BufferedBatch {
     /// The buffered record batch
     pub batch: RecordBatch,
@@ -375,7 +376,6 @@ impl Stream for SMJStream {
         loop {
             match &self.state {
                 SMJState::Init => {
-                    self.buffered_data.scanning_reset();
                     let streamed_exhausted =
                         self.streamed_state == StreamedState::Exhausted;
                     let buffered_exhausted =
@@ -404,12 +404,8 @@ impl Stream for SMJStream {
                     if ![StreamedState::Exhausted, StreamedState::Ready]
                         .contains(&self.streamed_state)
                     {
-                        match self.poll_streamed_row(cx) {
-                            Poll::Ready(Some(Ok(()))) => {}
-                            Poll::Ready(Some(Err(e))) => {
-                                return Poll::Ready(Some(Err(e)))
-                            }
-                            Poll::Ready(None) => {}
+                        match self.poll_streamed_row(cx)? {
+                            Poll::Ready(_) => {}
                             Poll::Pending => return Poll::Pending,
                         }
                     }
@@ -417,12 +413,8 @@ impl Stream for SMJStream {
                     if ![BufferedState::Exhausted, BufferedState::Ready]
                         .contains(&self.buffered_state)
                     {
-                        match self.poll_buffered_batches(cx) {
-                            Poll::Ready(Some(Ok(()))) => {}
-                            Poll::Ready(Some(Err(e))) => {
-                                return Poll::Ready(Some(Err(e)))
-                            }
-                            Poll::Ready(None) => {}
+                        match self.poll_buffered_batches(cx)? {
+                            Poll::Ready(_) => {}
                             Poll::Pending => return Poll::Pending,
                         }
                     }
@@ -439,20 +431,18 @@ impl Stream for SMJStream {
                 }
                 SMJState::JoinOutput => {
                     let output_indices = self.join_partial()?;
-                    self.output_partial(&output_indices)?;
+                    if !output_indices.is_empty() {
+                        self.output_partial(&output_indices)?;
+                    }
 
-                    if self.output_size == self.batch_size {
+                    if self.output_size < self.batch_size {
+                        if self.buffered_data.scanning_finished() {
+                            self.buffered_data.scanning_reset();
+                            self.state = SMJState::Init;
+                        }
+                    } else {
                         let record_batch = self.output_record_batch_and_reset()?;
                         return Poll::Ready(Some(Ok(record_batch)));
-                    }
-                    if self.buffered_data.scanning_finished() {
-                        if self.current_ordering.is_le() {
-                            self.streamed_joined = true;
-                        }
-                        if self.current_ordering.is_ge() {
-                            self.buffered_joined = true;
-                        }
-                        self.state = SMJState::Init;
                     }
                 }
                 SMJState::Exhausted => {
@@ -607,9 +597,9 @@ impl SMJStream {
                             < self.buffered_data.tail_batch().batch.num_rows()
                         {
                             if is_join_arrays_equal(
-                                self.buffered_data.head_batch().batch.columns(),
+                                &self.buffered_data.head_batch().join_arrays,
                                 self.buffered_data.head_batch().range.start,
-                                self.buffered_data.tail_batch().batch.columns(),
+                                &self.buffered_data.tail_batch().join_arrays,
                                 self.buffered_data.tail_batch().range.end,
                             )? {
                                 self.buffered_data.tail_batch_mut().range.end += 1;
@@ -628,12 +618,16 @@ impl SMJStream {
                             }
                             Poll::Ready(Some(batch)) => {
                                 self.join_metrics.input_batches.add(1);
-                                self.join_metrics.input_rows.add(batch.num_rows());
-                                self.buffered_data.batches.push_back(BufferedBatch::new(
-                                    batch,
-                                    0..0,
-                                    &self.on_buffered,
-                                ));
+                                if batch.num_rows() > 0 {
+                                    self.join_metrics.input_rows.add(batch.num_rows());
+                                    self.buffered_data.batches.push_back(
+                                        BufferedBatch::new(
+                                            batch,
+                                            0..0,
+                                            &self.on_buffered,
+                                        ),
+                                    );
+                                }
                             }
                         }
                     }
@@ -670,104 +664,79 @@ impl SMJStream {
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
     fn join_partial(&mut self) -> ArrowResult<Vec<OutputIndex>> {
-        let mut output_indices = vec![];
+        let mut join_streamed = false;
+        let mut join_buffered = false;
+
+        // determine whether we need to join streamed/buffered rows
         match self.current_ordering {
             Ordering::Less => {
-                let output_streamed_join = match self.join_type {
-                    JoinType::Inner | JoinType::Semi => false,
-                    JoinType::Left
-                    | JoinType::Right
-                    | JoinType::Full
-                    | JoinType::Anti => !self.streamed_joined,
-                };
-
-                // streamed joins null
-                if output_streamed_join {
-                    output_indices.push(OutputIndex {
-                        streamed_idx: Some(self.streamed_idx),
-                        buffered_idx: None,
-                    });
-                    self.output_size += 1;
+                if matches!(
+                    self.join_type,
+                    JoinType::Left | JoinType::Right | JoinType::Full | JoinType::Anti
+                ) {
+                    join_streamed = !self.streamed_joined;
                 }
-                self.buffered_data.scanning_finish();
             }
             Ordering::Equal => {
-                let output_equal_join = match self.join_type {
-                    JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::Right
-                    | JoinType::Full
-                    | JoinType::Semi => true,
-                    JoinType::Anti => false,
-                };
-
-                // streamed joins buffered
-                if output_equal_join {
-                    if JoinType::Semi == self.join_type {
-                        if !self.streamed_joined {
-                            output_indices.push(OutputIndex {
-                                streamed_idx: Some(self.streamed_idx),
-                                buffered_idx: None,
-                            });
-                            self.output_size += 1;
-                        }
-                        self.buffered_data.scanning_finish();
-                    }
-                } else {
-                    self.buffered_data.scanning_finish();
+                if matches!(self.join_type, JoinType::Semi) {
+                    join_streamed = !self.streamed_joined;
                 }
+                if matches!(
+                    self.join_type,
+                    JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
+                ) {
+                    join_streamed = true;
+                    join_buffered = true;
+                };
             }
             Ordering::Greater => {
-                let output_buffered_join = match self.join_type {
-                    JoinType::Inner
-                    | JoinType::Left
-                    | JoinType::Right
-                    | JoinType::Anti
-                    | JoinType::Semi => false,
-                    JoinType::Full => !self.buffered_joined,
+                if matches!(self.join_type, JoinType::Full) {
+                    join_buffered = !self.buffered_joined;
                 };
-
-                // null joins buffered
-                if output_buffered_join {
-                    if JoinType::Anti == self.join_type {
-                        if !self.streamed_joined {
-                            output_indices.push(OutputIndex {
-                                streamed_idx: Some(self.streamed_idx),
-                                buffered_idx: None,
-                            });
-                            self.output_size += 1;
-                        }
-                        self.buffered_data.scanning_finish();
-                    }
-                } else {
-                    self.buffered_data.scanning_finish();
-                }
             }
         }
+        if !join_streamed && !join_buffered {
+            // no joined data
+            self.buffered_data.scanning_finish();
+            return Ok(vec![]);
+        }
 
-        // scan buffered stream and write to output buffer
-        while !self.buffered_data.scanning_finished()
-            && self.output_size < self.batch_size
-        {
-            if self.current_ordering == Ordering::Equal {
-                output_indices.push(OutputIndex {
-                    streamed_idx: Some(self.streamed_idx),
-                    buffered_idx: Some((
-                        self.buffered_data.scanning_batch_idx,
-                        self.buffered_data.scanning_idx(),
-                    )),
-                });
+        let mut output_indices = vec![];
+
+        if join_buffered {
+            // joining streamed/nulls and buffered
+            let streamed_idx = if join_streamed {
+                Some(self.streamed_idx)
             } else {
+                None
+            };
+            while !self.buffered_data.scanning_finished()
+                && self.output_size < self.batch_size
+            {
                 output_indices.push(OutputIndex {
-                    streamed_idx: None,
+                    streamed_idx,
                     buffered_idx: Some((
                         self.buffered_data.scanning_batch_idx,
                         self.buffered_data.scanning_idx(),
                     )),
                 });
+                self.output_size += 1;
+                self.buffered_data.scanning_advance();
+
+                if self.buffered_data.scanning_finished() {
+                    self.streamed_joined = join_streamed;
+                    self.buffered_joined = true;
+                }
             }
+        } else {
+            // joining streamed and nulls
+            output_indices.push(OutputIndex {
+                streamed_idx: Some(self.streamed_idx),
+                buffered_idx: None,
+            });
             self.output_size += 1;
-            self.buffered_data.scanning_advance();
+            self.buffered_data.scanning_finish();
+            self.streamed_joined = true;
         }
         Ok(output_indices)
     }
@@ -867,13 +836,12 @@ impl SMJStream {
             .filter(|index| index.buffered_idx.is_some())
         {
             let buffered_idx = index.buffered_idx.unwrap();
-            if buffered_idx.0 == buffered_batch_idx {
-                indices.push(index);
-            } else {
+            if index.buffered_idx.unwrap().0 != buffered_batch_idx {
                 output(buffered_batch_idx, &indices)?;
                 buffered_batch_idx = buffered_idx.0;
                 indices.clear();
             }
+            indices.push(index);
         }
         output(buffered_batch_idx, &indices)?;
         Ok(())
@@ -984,13 +952,12 @@ impl SMJStream {
             .filter(|index| index.buffered_idx.is_some())
         {
             let buffered_idx = index.buffered_idx.unwrap();
-            if buffered_idx.0 == buffered_batch_idx {
-                indices.push(index);
-            } else {
+            if buffered_idx.0 != buffered_batch_idx {
                 output(buffered_batch_idx, &indices)?;
                 buffered_batch_idx = buffered_idx.0;
                 indices.clear();
             }
+            indices.push(index);
         }
         output(buffered_batch_idx, &indices)?;
         Ok(())
@@ -998,7 +965,7 @@ impl SMJStream {
 }
 
 /// Buffered data contains all buffered batches with one unique join key
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct BufferedData {
     /// Buffered batches with the same key
     pub batches: VecDeque<BufferedBatch>,
@@ -1418,6 +1385,44 @@ mod tests {
             "| 1  | 1  | 7  | 1  | 1  | 70 |",
             "| 2  | 2  | 8  | 2  | 2  | 80 |",
             "| 2  | 2  | 9  | 2  | 2  | 80 |",
+            "+----+----+----+----+----+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_two_two() -> Result<()> {
+        let left = build_table(
+            ("a1", &vec![1, 1, 2]),
+            ("b2", &vec![1, 1, 2]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a1", &vec![1, 1, 3]),
+            ("b2", &vec![1, 1, 2]),
+            ("c2", &vec![70, 80, 90]),
+        );
+        let on = vec![
+            (
+                Column::new_with_schema("a1", &left.schema())?,
+                Column::new_with_schema("a1", &right.schema())?,
+            ),
+            (
+                Column::new_with_schema("b2", &left.schema())?,
+                Column::new_with_schema("b2", &right.schema())?,
+            ),
+        ];
+
+        let (_columns, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+        let expected = vec![
+            "+----+----+----+----+----+----+",
+            "| a1 | b2 | c1 | a1 | b2 | c2 |",
+            "+----+----+----+----+----+----+",
+            "| 1  | 1  | 7  | 1  | 1  | 70 |",
+            "| 1  | 1  | 7  | 1  | 1  | 80 |",
+            "| 1  | 1  | 8  | 1  | 1  | 70 |",
+            "| 1  | 1  | 8  | 1  | 1  | 80 |",
             "+----+----+----+----+----+----+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
