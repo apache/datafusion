@@ -23,11 +23,12 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::expr_schema::ExprSchemable;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, DefaultTableSource, EmptyRelation, Explain, Filter, Join,
-    Projection, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
+use crate::logical_expr::logical_plan::{
+    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
+    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
+use crate::logical_plan::expr_schema::ExprSchemable;
+use crate::logical_plan::plan::DefaultTableSource;
 use crate::optimizer::utils;
 use crate::prelude::*;
 use crate::scalar::ScalarValue;
@@ -44,12 +45,16 @@ use std::{
 };
 
 use super::dfschema::ToDFSchema;
-use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
+use super::{exprlist_to_fields, Expr};
+use crate::logical_expr::logical_plan::{
+    CrossJoin, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
+    Repartition, Values,
+};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column,
-    CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
+use datafusion_common::{DFField, DFSchema, DFSchemaRef};
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";

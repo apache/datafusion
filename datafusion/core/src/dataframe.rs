@@ -19,10 +19,8 @@
 
 use crate::arrow::record_batch::RecordBatch;
 use crate::error::Result;
-use crate::logical_plan::{
-    col, DFSchema, Expr, FunctionRegistry, JoinType, LogicalPlan, LogicalPlanBuilder,
-    Partitioning,
-};
+use crate::logical_expr::logical_plan::{JoinType, LogicalPlan, Partitioning};
+use crate::logical_plan::{col, DFSchema, Expr, FunctionRegistry, LogicalPlanBuilder};
 use parquet::file::properties::WriterProperties;
 use std::sync::Arc;
 

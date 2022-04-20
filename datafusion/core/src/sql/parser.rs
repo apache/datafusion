@@ -35,36 +35,6 @@ macro_rules! parser_err {
     };
 }
 
-/// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FileType {
-    /// Newline-delimited JSON
-    NdJson,
-    /// Apache Parquet columnar storage
-    Parquet,
-    /// Comma separated values
-    CSV,
-    /// Avro binary records
-    Avro,
-}
-
-impl FromStr for FileType {
-    type Err = ParserError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "PARQUET" => Ok(Self::Parquet),
-            "NDJSON" => Ok(Self::NdJson),
-            "CSV" => Ok(Self::CSV),
-            "AVRO" => Ok(Self::Avro),
-            other => Err(ParserError::ParserError(format!(
-                "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
-                other
-            ))),
-        }
-    }
-}
-
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateExternalTable {

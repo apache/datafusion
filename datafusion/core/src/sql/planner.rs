@@ -25,14 +25,16 @@ use std::{convert::TryInto, vec};
 
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
+use crate::logical_expr::logical_plan::{
+    CreateCatalog, CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, LogicalPlan,
+    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
+};
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
-    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
-    ToDFSchema, ToStringifiedPlan,
+    normalize_col, union_with_alias, Column,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -67,8 +69,8 @@ use super::{
         resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
 };
+use crate::logical_expr::logical_plan::{Analyze, Explain};
 use crate::logical_plan::builder::project_with_alias;
-use crate::logical_plan::plan::{Analyze, Explain};
 
 /// The ContextProvider trait allows the query planner to obtain meta-data about tables and
 /// functions referenced in SQL statements

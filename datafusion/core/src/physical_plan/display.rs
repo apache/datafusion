@@ -21,7 +21,7 @@
 
 use std::fmt;
 
-use crate::logical_plan::{StringifiedPlan, ToStringifiedPlan};
+use crate::logical_expr::logical_plan::{StringifiedPlan, ToStringifiedPlan};
 
 use super::{accept, ExecutionPlan, ExecutionPlanVisitor};
 

@@ -20,9 +20,9 @@
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::Projection;
-use crate::logical_plan::{Limit, TableScan};
-use crate::logical_plan::{LogicalPlan, Union};
+use crate::logical_expr::logical_plan::{
+    Limit, LogicalPlan, Projection, TableScan, Union,
+};
 use crate::optimizer::optimizer::OptimizerRule;
 use std::sync::Arc;
 

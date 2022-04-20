@@ -20,13 +20,14 @@
 
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{
-    provider_as_source, source_as_provider, Aggregate, Analyze, Join, Projection,
-    SubqueryAlias, TableScan, Window,
+use crate::logical_expr::logical_plan::{
+    Aggregate, Analyze, Join, LogicalPlan, Projection, SubqueryAlias, TableScan, Union,
+    Window,
 };
+use crate::logical_plan::plan::{provider_as_source, source_as_provider};
 use crate::logical_plan::{
-    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
-    LogicalPlanBuilder, ToDFSchema, Union,
+    build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlanBuilder,
+    ToDFSchema,
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;

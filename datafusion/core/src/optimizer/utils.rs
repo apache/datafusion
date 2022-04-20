@@ -19,14 +19,17 @@
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, SubqueryAlias, Window,
+use crate::logical_expr::{
+    logical_plan::{
+        Aggregate, Analyze, CreateMemoryTable, Extension, Filter, Join, Limit,
+        LogicalPlan, Partitioning, Projection, Repartition, Sort, SubqueryAlias, Union,
+        Values, Window,
+    },
+    Expr, Operator,
 };
 
 use crate::logical_plan::{
-    build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
-    Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
-    Repartition, Union, Values,
+    build_join_schema, Column, DFSchemaRef, ExprVisitable, LogicalPlanBuilder, Recursion,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;

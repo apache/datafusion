@@ -17,13 +17,12 @@
 
 //! Expression rewriter
 
-use super::Expr;
-use crate::logical_plan::plan::Aggregate;
-use crate::logical_plan::DFSchema;
+use crate::logical_expr::{
+    logical_plan::{Aggregate, LogicalPlan},
+    Expr,
+};
 use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::LogicalPlan;
-use datafusion_common::Column;
-use datafusion_common::Result;
+use datafusion_common::{Column, DFSchema, Result};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;

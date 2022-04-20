@@ -15,13 +15,17 @@
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
 use crate::execution::context::ExecutionProps;
-use crate::logical_expr::TableProviderFilterPushDown;
-use crate::logical_plan::plan::{
-    provider_as_source, source_as_provider, Aggregate, Filter, Join, Projection, Union,
+use crate::logical_expr::{
+    logical_plan::{
+        Aggregate, CrossJoin, Filter, Join, JoinType, Limit, LogicalPlan, Projection,
+        TableScan, Union,
+    },
+    TableProviderFilterPushDown,
 };
-use crate::logical_plan::{
-    and, col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
-};
+use crate::logical_plan::plan::{provider_as_source, source_as_provider};
+use datafusion_common::Column;
+
+use crate::logical_plan::{and, col, replace_col};
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;

@@ -19,8 +19,10 @@
 
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::Aggregate;
-use crate::logical_plan::{Expr, LogicalPlan};
+use crate::logical_expr::{
+    logical_plan::{Aggregate, LogicalPlan},
+    Expr,
+};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use crate::physical_plan::aggregates;

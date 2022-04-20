@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::{
     error::{DataFusionError, Result},
-    logical_plan::StringifiedPlan,
+    logical_expr::logical_plan::StringifiedPlan,
     physical_plan::{
         common::SizedRecordBatchStream, DisplayFormatType, ExecutionPlan, Partitioning,
         Statistics,

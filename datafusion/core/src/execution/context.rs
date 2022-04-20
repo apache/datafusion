@@ -32,7 +32,11 @@ use crate::{
         },
         MemTable,
     },
-    logical_plan::{PlanType, ToStringifiedPlan},
+    logical_expr::logical_plan::{
+        CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
+        DropTable, Explain, FileType, LogicalPlan, PlanType, ToStringifiedPlan,
+    },
+    logical_plan::FunctionRegistry,
     optimizer::eliminate_filter::EliminateFilter,
     optimizer::eliminate_limit::EliminateLimit,
     physical_optimizer::{
@@ -40,6 +44,7 @@ use crate::{
         hash_build_probe_order::HashBuildProbeOrder, optimizer::PhysicalOptimizerRule,
     },
 };
+
 use log::{debug, trace};
 use parking_lot::RwLock;
 use std::string::String;
@@ -60,10 +65,6 @@ use crate::dataframe::DataFrame;
 use crate::datasource::listing::ListingTableConfig;
 use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::{
-    CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    DropTable, FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
-};
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
 use crate::optimizer::limit_push_down::LimitPushDown;
@@ -78,7 +79,7 @@ use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use crate::logical_plan::plan::Explain;
+use crate::logical_plan::LogicalPlanBuilder;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;

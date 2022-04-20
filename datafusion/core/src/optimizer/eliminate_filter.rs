@@ -22,8 +22,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::Expr;
 
 use crate::error::Result;
-use crate::logical_plan::plan::Filter;
-use crate::logical_plan::{EmptyRelation, LogicalPlan};
+use crate::logical_expr::logical_plan::{EmptyRelation, Filter, LogicalPlan};
 use crate::optimizer::optimizer::OptimizerRule;
 
 use super::utils;

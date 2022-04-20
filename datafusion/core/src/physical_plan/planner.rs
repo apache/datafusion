@@ -23,16 +23,18 @@ use super::{
     hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
 };
 use crate::execution::context::{ExecutionProps, SessionState};
-use crate::logical_plan::plan::{
-    source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, Window,
+use crate::logical_expr::logical_plan::{Limit, Values};
+use crate::logical_expr::{
+    logical_plan::{
+        Aggregate, CrossJoin, EmptyRelation, Filter, Join, LogicalPlan, Operator,
+        Partitioning as LogicalPartitioning, PlanType, Projection, Repartition, Sort,
+        SubqueryAlias, TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode,
+        Window,
+    },
+    Expr,
 };
-use crate::logical_plan::{
-    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
-    Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
-    UserDefinedLogicalNode,
-};
-use crate::logical_plan::{Limit, Values};
+use crate::logical_plan::plan::source_as_provider;
+use crate::logical_plan::{unalias, unnormalize_cols};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
@@ -62,6 +64,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_common::DFSchema;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
