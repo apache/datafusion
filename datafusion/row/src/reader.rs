@@ -43,7 +43,7 @@ pub fn read_as_batch(
         read_row(&row, &mut output, &schema);
     }
 
-    Ok(output.output()?)
+    output.output().map_err(DataFusionError::ArrowError)
 }
 
 macro_rules! get_idx {
@@ -315,7 +315,7 @@ fn_read_field!(date32, Date32Builder);
 fn_read_field!(date64, Date64Builder);
 fn_read_field!(utf8, StringBuilder);
 
-pub fn read_field_binary(
+pub(crate) fn read_field_binary(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,
@@ -328,7 +328,7 @@ pub fn read_field_binary(
     }
 }
 
-pub fn read_field_binary_null_free(
+pub(crate) fn read_field_binary_null_free(
     to: &mut Box<dyn ArrayBuilder>,
     col_idx: usize,
     row: &RowReader,

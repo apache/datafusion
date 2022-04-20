@@ -102,7 +102,7 @@ pub struct RowWriter {
     /// buffer for the current tuple been written.
     data: Vec<u8>,
     /// Length in bytes for the current tuple, 8-bytes word aligned.
-    pub row_width: usize,
+    pub(crate) row_width: usize,
     /// Length in bytes for `variable length data` part of the current tuple.
     varlena_width: usize,
     /// Current offset for the next variable length field to write to.
@@ -147,7 +147,7 @@ impl RowWriter {
         self.layout.null_free
     }
 
-    pub fn set_null_at(&mut self, idx: usize) {
+    pub(crate) fn set_null_at(&mut self, idx: usize) {
         assert!(
             !self.null_free(),
             "Unexpected call to set_null_at on null-free row writer"
@@ -158,7 +158,7 @@ impl RowWriter {
         }
     }
 
-    pub fn set_non_null_at(&mut self, idx: usize) {
+    pub(crate) fn set_non_null_at(&mut self, idx: usize) {
         assert!(
             !self.null_free(),
             "Unexpected call to set_non_null_at on null-free row writer"
@@ -235,7 +235,7 @@ impl RowWriter {
     }
 
     /// End each row at 8-byte word boundary.
-    pub fn end_padding(&mut self) {
+    pub(crate) fn end_padding(&mut self) {
         let payload_width = self.current_width();
         self.row_width = round_upto_power_of_2(payload_width, 8);
         if self.data.capacity() < self.row_width {
@@ -302,7 +302,7 @@ fn_write_field!(i64, Int64Array);
 fn_write_field!(f32, Float32Array);
 fn_write_field!(f64, Float64Array);
 
-pub fn write_field_date32(
+pub(crate) fn write_field_date32(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
@@ -312,7 +312,7 @@ pub fn write_field_date32(
     to.set_date32(col_idx, from.value(row_idx));
 }
 
-pub fn write_field_date64(
+pub(crate) fn write_field_date64(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
@@ -322,7 +322,7 @@ pub fn write_field_date64(
     to.set_date64(col_idx, from.value(row_idx));
 }
 
-pub fn write_field_utf8(
+pub(crate) fn write_field_utf8(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
@@ -338,7 +338,7 @@ pub fn write_field_utf8(
     to.set_utf8(col_idx, s);
 }
 
-pub fn write_field_binary(
+pub(crate) fn write_field_binary(
     to: &mut RowWriter,
     from: &Arc<dyn Array>,
     col_idx: usize,
