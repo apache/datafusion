@@ -197,8 +197,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
         for agg_func in self.executor.aggregate_functions.clone() {
             task_aggregate_functions.insert(agg_func.0, agg_func.1);
         }
-        // TODO need to build a catalog list from the task definition
-        let catalog_list = Arc::new(MemoryCatalogList::default());
         let task_context = Arc::new(TaskContext::new(
             task_id_log.clone(),
             session_id,
@@ -206,7 +204,6 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> ExecutorServer<T,
             task_scalar_functions,
             task_aggregate_functions,
             runtime.clone(),
-            // catalog_list,
         ));
 
         let encoded_plan = &task.plan.as_slice();

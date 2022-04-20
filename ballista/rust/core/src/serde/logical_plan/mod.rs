@@ -1172,23 +1172,6 @@ mod roundtrip_tests {
                 format!("{:?}", round_trip)
             );
         };
-        ($initial_struct:ident, $ctx:ident) => {
-            let codec: BallistaCodec<
-                protobuf::LogicalPlanNode,
-                protobuf::PhysicalPlanNode,
-            > = BallistaCodec::default();
-            let proto: protobuf::LogicalPlanNode =
-                protobuf::LogicalPlanNode::try_from_logical_plan(&$initial_struct)
-                    .expect("from logical plan");
-            let round_trip: LogicalPlan = proto
-                .try_into_logical_plan(&$ctx, codec.logical_extension_codec())
-                .expect("to logical plan");
-
-            assert_eq!(
-                format!("{:?}", $initial_struct),
-                format!("{:?}", round_trip)
-            );
-        };
     }
 
     #[tokio::test]
@@ -1208,18 +1191,24 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
+        let scan_info = LogicalPlanBuilder::scan_csv(
+            Arc::new(LocalFileSystem {}),
+            "employee.csv",
+            CsvReadOptions::new().schema(&schema).has_header(true),
+            Some(vec![3, 4]),
+            4,
+        )
+        .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
+
         let plan = std::sync::Arc::new(
-            LogicalPlanBuilder::scan_csv(
-                Arc::new(LocalFileSystem {}),
-                "employee.csv",
-                CsvReadOptions::new().schema(&schema).has_header(true),
-                Some(vec![3, 4]),
-                4,
-            )
-            .await
-            .and_then(|plan| plan.builder.sort(vec![col("salary")]))
-            .and_then(|plan| plan.build())
-            .map_err(BallistaError::DataFusionError)?,
+            scan_info
+                .builder
+                .sort(vec![col("salary")])?
+                .build()
+                .map_err(BallistaError::DataFusionError)?,
         );
 
         for partition_count in test_partition_counts.iter() {
@@ -1230,7 +1219,7 @@ mod roundtrip_tests {
                 partitioning_scheme: rr_repartition,
             });
 
-            roundtrip_test!(roundtrip_plan);
+            roundtrip_test_new(&roundtrip_plan, &ctx);
 
             let h_repartition = Partitioning::Hash(test_expr.clone(), *partition_count);
 
@@ -1239,7 +1228,7 @@ mod roundtrip_tests {
                 partitioning_scheme: h_repartition,
             });
 
-            roundtrip_test!(roundtrip_plan);
+            roundtrip_test_new(&roundtrip_plan, &ctx);
 
             let no_expr_hrepartition = Partitioning::Hash(Vec::new(), *partition_count);
 
@@ -1248,7 +1237,7 @@ mod roundtrip_tests {
                 partitioning_scheme: no_expr_hrepartition,
             });
 
-            roundtrip_test!(roundtrip_plan);
+            roundtrip_test_new(&roundtrip_plan, &ctx);
         }
 
         Ok(())
@@ -1302,35 +1291,47 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let verbose_plan = LogicalPlanBuilder::scan_csv(
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
-        .and_then(|plan| plan.explain(true, true))
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        let plan = LogicalPlanBuilder::scan_csv(
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_str(), scan_info.provider.clone())?;
+
+        let verbose_plan = scan_info
+            .builder
+            .sort(vec![col("salary")])?
+            .explain(true, true)?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&verbose_plan, &ctx);
+
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
             4,
         )
-        .await
-        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
-        .and_then(|plan| plan.explain(false, true))
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
 
-        roundtrip_test!(plan);
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_str(), scan_info.provider.clone())?;
 
-        roundtrip_test!(verbose_plan);
+        let plan = scan_info
+            .builder
+            .sort(vec![col("salary")])?
+            .explain(false, true)?
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
+
+        roundtrip_test_new(&plan, &ctx);
 
         Ok(())
     }
@@ -1400,16 +1401,23 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let scan_plan = LogicalPlanBuilder::scan_csv(
+        let ctx = SessionContext::new();
+
+        let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
             "employee1",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![0, 3, 4]),
             4,
         )
-        .await?
-        .build()
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
+
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
+
+        let scan_plan = scan_info
+            .builder
+            .build()
+            .map_err(BallistaError::DataFusionError)?;
 
         let scan_info = LogicalPlanBuilder::scan_csv(
             Arc::new(LocalFileSystem {}),
@@ -1420,7 +1428,6 @@ mod roundtrip_tests {
         )
         .await?;
 
-        let ctx = SessionContext::new();
         ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
 
         let plan = scan_info
@@ -1468,17 +1475,19 @@ mod roundtrip_tests {
 
     #[tokio::test]
     async fn roundtrip_empty_relation() -> Result<()> {
+        let ctx = SessionContext::new();
+
         let plan_false = LogicalPlanBuilder::empty(false)
             .build()
             .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan_false);
+        roundtrip_test_new(&plan_false, &ctx);
 
         let plan_true = LogicalPlanBuilder::empty(true)
             .build()
             .map_err(BallistaError::DataFusionError)?;
 
-        roundtrip_test!(plan_true);
+        roundtrip_test_new(&plan_true, &ctx);
 
         Ok(())
     }
@@ -1506,7 +1515,6 @@ mod roundtrip_tests {
 
         let ctx = SessionContext::new();
         ctx.register_table(scan_info.table_name.as_str(), scan_info.provider.clone())?;
-        let catalog_list = ctx.state.read().catalog_list.clone();
 
         let plan = scan_info
             .builder
@@ -1540,16 +1548,20 @@ mod roundtrip_tests {
             Field::new("salary", DataType::Int32, false),
         ]);
 
-        let plan = LogicalPlanBuilder::scan_csv(
+        let scan_info = LogicalPlanBuilder::scan_csv_with_name(
             custom_object_store.clone(),
             "test://employee.csv",
             CsvReadOptions::new().schema(&schema).has_header(true),
             Some(vec![3, 4]),
+            "employee",
             4,
         )
-        .await
-        .and_then(|plan| plan.build())
-        .map_err(BallistaError::DataFusionError)?;
+        .await?;
+
+        let ctx = SessionContext::new();
+        ctx.register_table(scan_info.table_name.as_ref(), scan_info.provider.clone())?;
+
+        let plan = scan_info.build().map_err(BallistaError::DataFusionError)?;
 
         let catalog_list: Arc<dyn CatalogList> = Arc::new(MemoryCatalogList::default());
 

@@ -1394,7 +1394,7 @@ mod tests {
             let config = SessionConfig::new()
                 .with_target_partitions(1)
                 .with_batch_size(10);
-            let ctx = SessionContext::with_config(config);
+            let ctx = SessionContext::with_config(config.clone());
             let codec: BallistaCodec<
                 protobuf::LogicalPlanNode,
                 protobuf::PhysicalPlanNode,
@@ -1432,8 +1432,10 @@ mod tests {
                     codec.logical_extension_codec(),
                 )
                 .unwrap();
+
+            let round_trip_ctx = SessionContext::with_config(config.clone());
             let round_trip: LogicalPlan = (&proto)
-                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
+                .try_into_logical_plan(&round_trip_ctx, codec.logical_extension_codec())
                 .unwrap();
             assert_eq!(
                 format!("{:?}", plan),
@@ -1450,8 +1452,10 @@ mod tests {
                     codec.logical_extension_codec(),
                 )
                 .unwrap();
+
+            let round_trip_ctx = SessionContext::with_config(config.clone());
             let round_trip: LogicalPlan = (&proto)
-                .try_into_logical_plan(&ctx, codec.logical_extension_codec())
+                .try_into_logical_plan(&round_trip_ctx, codec.logical_extension_codec())
                 .unwrap();
             assert_eq!(
                 format!("{:?}", plan),
@@ -1495,16 +1499,15 @@ mod tests {
             };
         }
 
-        //TODO
-        // test_round_trip!(q1, 1);
-        // test_round_trip!(q3, 3);
-        // test_round_trip!(q5, 5);
-        // test_round_trip!(q6, 6);
-        // test_round_trip!(q7, 7);
-        // test_round_trip!(q8, 8);
-        // test_round_trip!(q9, 9);
-        // test_round_trip!(q10, 10);
-        // test_round_trip!(q12, 12);
-        // test_round_trip!(q13, 13);
+        test_round_trip!(q1, 1);
+        test_round_trip!(q3, 3);
+        test_round_trip!(q5, 5);
+        test_round_trip!(q6, 6);
+        test_round_trip!(q7, 7);
+        test_round_trip!(q8, 8);
+        test_round_trip!(q9, 9);
+        test_round_trip!(q10, 10);
+        test_round_trip!(q12, 12);
+        test_round_trip!(q13, 13);
     }
 }

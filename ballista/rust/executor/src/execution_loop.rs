@@ -144,8 +144,6 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
     for agg_func in executor.aggregate_functions.clone() {
         task_aggregate_functions.insert(agg_func.0, agg_func.1);
     }
-    // TODO need to build a catalog list from the task definition
-    let catalog_list = Arc::new(MemoryCatalogList::default());
     let task_context = Arc::new(TaskContext::new(
         task_id_log.clone(),
         session_id,
@@ -153,7 +151,6 @@ async fn run_received_tasks<T: 'static + AsLogicalPlan, U: 'static + AsExecution
         task_scalar_functions,
         task_aggregate_functions,
         runtime.clone(),
-        // catalog_list,
     ));
 
     let plan: Arc<dyn ExecutionPlan> =

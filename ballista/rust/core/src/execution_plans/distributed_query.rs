@@ -165,7 +165,7 @@ impl<T: 'static + AsLogicalPlan> ExecutionPlan for DistributedQueryExec<T> {
     async fn execute(
         &self,
         partition: usize,
-        task_context: Arc<TaskContext>,
+        _task_context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         assert_eq!(0, partition);
 
