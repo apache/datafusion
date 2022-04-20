@@ -128,7 +128,7 @@ pub struct Window {
 
 /// DataFusion default table source, wrapping TableProvider
 ///
-/// This structure adapts a `TableProvider` (physical plan trait) to the `TableSource` 
+/// This structure adapts a `TableProvider` (physical plan trait) to the `TableSource`
 /// (logical plan trait)
 pub struct DefaultTableSource {
     /// table provider
