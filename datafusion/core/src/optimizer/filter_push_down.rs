@@ -14,9 +14,11 @@
 
 //! Filter Push Down optimizer rule ensures that filters are applied as early as possible in the plan
 
-use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{Aggregate, Filter, Join, Projection, Union};
+use crate::logical_expr::TableProviderFilterPushDown;
+use crate::logical_plan::plan::{
+    provider_as_source, source_as_provider, Aggregate, Filter, Join, Projection, Union,
+};
 use crate::logical_plan::{
     and, col, replace_col, Column, CrossJoin, JoinType, Limit, LogicalPlan, TableScan,
 };
@@ -506,6 +508,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
         }) => {
             let mut used_columns = HashSet::new();
             let mut new_filters = filters.clone();
+            let source = source_as_provider(source)?;
 
             for (filter_expr, cols) in &state.filters {
                 let (preserve_filter_node, add_to_provider) =
@@ -533,7 +536,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 state,
                 used_columns,
                 &LogicalPlan::TableScan(TableScan {
-                    source: source.clone(),
+                    source: provider_as_source(source),
                     projection: projection.clone(),
                     projected_schema: projected_schema.clone(),
                     table_name: table_name.clone(),
@@ -1417,7 +1420,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: None,
-            source: Arc::new(test_provider),
+            source: provider_as_source(Arc::new(test_provider)),
             limit: None,
         });
 
@@ -1490,7 +1493,7 @@ mod tests {
                 (*test_provider.schema()).clone(),
             )?),
             projection: Some(vec![0]),
-            source: Arc::new(test_provider),
+            source: provider_as_source(Arc::new(test_provider)),
             limit: None,
         });
 

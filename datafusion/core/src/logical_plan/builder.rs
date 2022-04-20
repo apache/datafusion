@@ -25,8 +25,8 @@ use crate::datasource::{
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::expr_schema::ExprSchemable;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
+    Aggregate, Analyze, DefaultTableSource, EmptyRelation, Explain, Filter, Join,
+    Projection, Sort, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
@@ -449,7 +449,7 @@ impl LogicalPlanBuilder {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
-            source: provider,
+            source: Arc::new(DefaultTableSource::new(provider)),
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,

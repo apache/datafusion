@@ -21,7 +21,8 @@
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
 use crate::logical_plan::plan::{
-    Aggregate, Analyze, Join, Projection, SubqueryAlias, TableScan, Window,
+    provider_as_source, source_as_provider, Aggregate, Analyze, Join, Projection,
+    SubqueryAlias, TableScan, Window,
 };
 use crate::logical_plan::{
     build_join_schema, Column, DFField, DFSchema, DFSchemaRef, LogicalPlan,
@@ -342,6 +343,7 @@ fn optimize_plan(
             limit,
             ..
         }) => {
+            let source = source_as_provider(source)?;
             let (projection, projected_schema) = get_projected_schema(
                 Some(table_name),
                 &source.schema(),
@@ -351,7 +353,7 @@ fn optimize_plan(
             // return the table scan with projection
             Ok(LogicalPlan::TableScan(TableScan {
                 table_name: table_name.clone(),
-                source: source.clone(),
+                source: provider_as_source(source.clone()),
                 projection: Some(projection),
                 projected_schema,
                 filters: filters.clone(),
