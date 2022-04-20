@@ -20,11 +20,13 @@
 use super::display::{GraphvizVisitor, IndentVisitor};
 use super::expr::{Column, Expr};
 use super::extension::UserDefinedLogicalNode;
-use crate::datasource::datasource::TableProviderFilterPushDown;
 use crate::datasource::TableProvider;
 use crate::error::DataFusionError;
+use crate::logical_expr::TableProviderFilterPushDown;
 use crate::logical_plan::dfschema::DFSchemaRef;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion_expr::TableSource;
+use std::any::Any;
 use std::fmt::Formatter;
 use std::{
     collections::HashSet,
@@ -124,13 +126,75 @@ pub struct Window {
     pub schema: DFSchemaRef,
 }
 
+/// DataFusion default table source, wrapping TableProvider
+///
+/// This structure adapts a `TableProvider` (physical plan trait) to the `TableSource`
+/// (logical plan trait)
+pub struct DefaultTableSource {
+    /// table provider
+    pub table_provider: Arc<dyn TableProvider>,
+}
+
+impl DefaultTableSource {
+    /// Create a new DefaultTableSource to wrap a TableProvider
+    pub fn new(table_provider: Arc<dyn TableProvider>) -> Self {
+        Self { table_provider }
+    }
+}
+
+impl TableSource for DefaultTableSource {
+    /// Returns the table source as [`Any`](std::any::Any) so that it can be
+    /// downcast to a specific implementation.
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Get a reference to the schema for this table
+    fn schema(&self) -> SchemaRef {
+        self.table_provider.schema()
+    }
+
+    /// Tests whether the table provider can make use of a filter expression
+    /// to optimise data retrieval.
+    fn supports_filter_pushdown(
+        &self,
+        filter: &Expr,
+    ) -> datafusion_common::Result<TableProviderFilterPushDown> {
+        self.table_provider.supports_filter_pushdown(filter)
+    }
+}
+
+/// Wrap TableProvider in TableSource
+pub fn provider_as_source(
+    table_provider: Arc<dyn TableProvider>,
+) -> Arc<dyn TableSource> {
+    Arc::new(DefaultTableSource::new(table_provider))
+}
+
+/// Attempt to downcast a TableSource to DefaultTableSource and access the
+/// TableProvider. This will only work with a TableSource created by DataFusion.
+pub fn source_as_provider(
+    source: &Arc<dyn TableSource>,
+) -> datafusion_common::Result<Arc<dyn TableProvider>> {
+    match source
+        .as_ref()
+        .as_any()
+        .downcast_ref::<DefaultTableSource>()
+    {
+        Some(source) => Ok(source.table_provider.clone()),
+        _ => Err(DataFusionError::Internal(
+            "TableSource was not DefaultTableSource".to_string(),
+        )),
+    }
+}
+
 /// Produces rows from a table provider by reference or from the context
 #[derive(Clone)]
 pub struct TableScan {
     /// The name of the table
     pub table_name: String,
     /// The source of the table
-    pub source: Arc<dyn TableProvider>,
+    pub source: Arc<dyn TableSource>,
     /// Optional column indices to use as a projection
     pub projection: Option<Vec<usize>>,
     /// The schema description of the output

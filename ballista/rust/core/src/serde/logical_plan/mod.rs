@@ -32,9 +32,9 @@ use datafusion::logical_plan::plan::{
     Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr,
-    JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan,
-    Values,
+    source_as_provider, Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition,
+    TableScan, Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -510,6 +510,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 projection,
                 ..
             }) => {
+                let source = source_as_provider(source)?;
                 let schema = source.schema();
                 let source = source.as_any();
 
@@ -982,6 +983,7 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
+    use datafusion::logical_plan::source_as_provider;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
         datafusion_data_access::{
@@ -1434,7 +1436,8 @@ mod roundtrip_tests {
 
         let round_trip_store = match round_trip {
             LogicalPlan::TableScan(scan) => {
-                match scan.source.as_ref().as_any().downcast_ref::<ListingTable>() {
+                let source = source_as_provider(&scan.source)?;
+                match source.as_ref().as_any().downcast_ref::<ListingTable>() {
                     Some(listing_table) => {
                         format!("{:?}", listing_table.object_store())
                     }
