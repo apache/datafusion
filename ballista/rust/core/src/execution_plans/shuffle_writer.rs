@@ -207,7 +207,7 @@ impl ShuffleWriterExec {
                 let mut partitioner = BatchPartitioner::new(
                     Partitioning::Hash(exprs.clone(), *n),
                     write_metrics.repart_time.clone(),
-                );
+                )?;
 
                 while let Some(result) = stream.next().await {
                     let input_batch = result?;

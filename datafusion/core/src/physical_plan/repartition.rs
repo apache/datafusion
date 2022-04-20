@@ -87,7 +87,7 @@ impl BatchPartitioner {
     /// Create a new [`BatchPartitioner`] with the provided [`Partitioning`]
     ///
     /// The time spent repartitioning will be recorded to `timer`
-    pub fn new(partitioning: Partitioning, timer: metrics::Time) -> Self {
+    pub fn new(partitioning: Partitioning, timer: metrics::Time) -> Result<Self> {
         let state = match partitioning {
             Partitioning::RoundRobinBatch(num_partitions) => {
                 BatchPartitionerState::RoundRobin {
@@ -102,10 +102,15 @@ impl BatchPartitioner {
                 random_state: ahash::RandomState::with_seeds(0, 0, 0, 0),
                 hash_buffer: vec![],
             },
-            Partitioning::UnknownPartitioning(_) => unreachable!(),
+            other => {
+                return Err(DataFusionError::NotImplemented(format!(
+                    "Unsupported repartitioning scheme {:?}",
+                    other
+                )))
+            }
         };
 
-        Self { state, timer }
+        Ok(Self { state, timer })
     }
 
     /// Partition the provided [`RecordBatch`] into one or more partitioned [`RecordBatch`]
@@ -428,7 +433,7 @@ impl RepartitionExec {
         context: Arc<TaskContext>,
     ) -> Result<()> {
         let mut partitioner =
-            BatchPartitioner::new(partitioning, r_metrics.repart_time.clone());
+            BatchPartitioner::new(partitioning, r_metrics.repart_time.clone())?;
 
         // execute the child operator
         let timer = r_metrics.fetch_time.timer();
