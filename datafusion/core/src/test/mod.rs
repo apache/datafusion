@@ -216,7 +216,7 @@ pub fn assert_is_pending<'a, T>(fut: &mut Pin<Box<dyn Future<Output = T> + Send 
 }
 
 /// Create vector batches
-pub fn create_vec_batches(schema: &Arc<Schema>, n: usize) -> Vec<RecordBatch> {
+pub fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
     let batch = create_batch(schema);
     let mut vec = Vec::with_capacity(n);
     for _ in 0..n {
@@ -226,9 +226,9 @@ pub fn create_vec_batches(schema: &Arc<Schema>, n: usize) -> Vec<RecordBatch> {
 }
 
 /// Create batch
-fn create_batch(schema: &Arc<Schema>) -> RecordBatch {
+fn create_batch(schema: &Schema) -> RecordBatch {
     RecordBatch::try_new(
-        schema.clone(),
+        Arc::new(schema.clone()),
         vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
     )
     .unwrap()

@@ -20,6 +20,7 @@
 use crate::error::Result;
 use crate::reg_fn;
 use crate::row::jit::fn_name;
+use crate::row::layout::RowType;
 use crate::row::schema_null_free;
 use crate::row::writer::RowWriter;
 use crate::row::writer::*;
@@ -43,8 +44,9 @@ pub fn write_batch_unchecked_jit(
     row_idx: usize,
     schema: Arc<Schema>,
     assembler: &Assembler,
+    row_type: RowType,
 ) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut current_offset = offset;
     let mut offsets = vec![];
     register_write_functions(assembler)?;
@@ -74,9 +76,10 @@ pub fn write_batch_unchecked_jit(
 pub fn bench_write_batch_jit(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
+    row_type: RowType,
 ) -> Result<Vec<usize>> {
     let assembler = Assembler::default();
-    let mut writer = RowWriter::new(&schema);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut lengths = vec![];
     register_write_functions(&assembler)?;
     let gen_func = gen_write_row(&schema, &assembler)?;
@@ -126,10 +129,7 @@ fn register_write_functions(asm: &Assembler) -> Result<()> {
     Ok(())
 }
 
-fn gen_write_row(
-    schema: &Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<GeneratedFunction> {
+fn gen_write_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunction> {
     let mut builder = assembler
         .new_func_builder("write_row")
         .param("row", PTR)

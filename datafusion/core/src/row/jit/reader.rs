@@ -20,6 +20,7 @@
 use crate::error::{DataFusionError, Result};
 use crate::reg_fn;
 use crate::row::jit::fn_name;
+use crate::row::layout::RowType;
 use crate::row::reader::RowReader;
 use crate::row::reader::*;
 use crate::row::MutableRecordBatch;
@@ -38,10 +39,11 @@ pub fn read_as_batch_jit(
     schema: Arc<Schema>,
     offsets: &[usize],
     assembler: &Assembler,
+    row_type: RowType,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema);
+    let mut row = RowReader::new(&schema, row_type);
     register_read_functions(assembler)?;
     let gen_func = gen_read_row(&schema, assembler)?;
     let mut jit = assembler.create_jit();
@@ -102,10 +104,7 @@ fn register_read_functions(asm: &Assembler) -> Result<()> {
     Ok(())
 }
 
-fn gen_read_row(
-    schema: &Arc<Schema>,
-    assembler: &Assembler,
-) -> Result<GeneratedFunction> {
+fn gen_read_row(schema: &Schema, assembler: &Assembler) -> Result<GeneratedFunction> {
     use DataType::*;
     let mut builder = assembler
         .new_func_builder("read_row")
