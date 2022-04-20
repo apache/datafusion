@@ -39,9 +39,9 @@ impl TryFrom<i32> for protobuf::FileType {
 }
 
 #[allow(clippy::from_over_into)]
-impl Into<datafusion::sql::parser::FileType> for protobuf::FileType {
-    fn into(self) -> datafusion::sql::parser::FileType {
-        use datafusion::sql::parser::FileType;
+impl Into<datafusion::logical_plan::FileType> for protobuf::FileType {
+    fn into(self) -> datafusion::logical_plan::FileType {
+        use datafusion::logical_plan::FileType;
         match self {
             protobuf::FileType::NdJson => FileType::NdJson,
             protobuf::FileType::Parquet => FileType::Parquet,

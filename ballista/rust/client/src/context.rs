@@ -34,11 +34,11 @@ use datafusion::catalog::TableReference;
 use datafusion::dataframe::DataFrame;
 use datafusion::datasource::TableProvider;
 use datafusion::error::{DataFusionError, Result};
-use datafusion::logical_plan::{CreateExternalTable, LogicalPlan, TableScan};
+use datafusion::logical_plan::{CreateExternalTable, FileType, LogicalPlan, TableScan};
 use datafusion::prelude::{
     AvroReadOptions, CsvReadOptions, ParquetReadOptions, SessionConfig, SessionContext,
 };
-use datafusion::sql::parser::{DFParser, FileType, Statement as DFStatement};
+use datafusion::sql::parser::{DFParser, Statement as DFStatement};
 
 struct BallistaContextState {
     /// Ballista configuration
