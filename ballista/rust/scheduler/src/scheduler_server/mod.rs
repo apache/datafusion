@@ -603,6 +603,7 @@ mod test {
 
         LogicalPlanBuilder::scan_empty(None, &schema, Some(vec![0, 1]))
             .unwrap()
+            .builder
             .aggregate(vec![col("id")], vec![sum(col("gmv"))])
             .unwrap()
             .build()

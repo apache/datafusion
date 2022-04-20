@@ -25,12 +25,13 @@ use datafusion::{
 fn optimize_explain() {
     let schema = Schema::new(vec![Field::new("id", DataType::Int32, false)]);
 
-    let plan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None)
-        .unwrap()
-        .explain(true, false)
-        .unwrap()
-        .build()
+    let scan = LogicalPlanBuilder::scan_empty(Some("employee"), &schema, None).unwrap();
+
+    let ctx = SessionContext::new();
+    ctx.register_table(scan.table_name.as_str(), scan.provider)
         .unwrap();
+
+    let plan = scan.builder.explain(true, false).unwrap().build().unwrap();
 
     if let LogicalPlan::Explain(e) = &plan {
         assert_eq!(e.stringified_plans.len(), 1);
@@ -39,7 +40,7 @@ fn optimize_explain() {
     }
 
     // now optimize the plan and expect to see more plans
-    let optimized_plan = SessionContext::new().optimize(&plan).unwrap();
+    let optimized_plan = ctx.optimize(&plan).unwrap();
     if let LogicalPlan::Explain(e) = &optimized_plan {
         // should have more than one plan
         assert!(

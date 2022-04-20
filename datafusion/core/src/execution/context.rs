@@ -474,17 +474,18 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
+        let scan = &LogicalPlanBuilder::scan_avro(
+            object_store,
+            path,
+            options,
+            None,
+            target_partitions,
+        )
+        .await?;
+        self.register_table(scan.table_name.to_owned().as_str(), scan.provider.clone())?;
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan_avro(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
+            &scan.builder.build()?,
         )))
     }
 
@@ -497,17 +498,18 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
+        let scan = LogicalPlanBuilder::scan_json(
+            object_store,
+            path,
+            options,
+            None,
+            target_partitions,
+        )
+        .await?;
+        self.register_table(scan.table_name.as_str(), scan.provider.clone())?;
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan_json(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
+            &scan.builder.build()?,
         )))
     }
 
@@ -528,17 +530,18 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
+        let scan = LogicalPlanBuilder::scan_csv(
+            object_store,
+            path,
+            options,
+            None,
+            target_partitions,
+        )
+        .await?;
+        self.register_table(scan.table_name.as_str(), scan.provider.clone())?;
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan_csv(
-                object_store,
-                path,
-                options,
-                None,
-                target_partitions,
-            )
-            .await?
-            .build()?,
+            &scan.builder.build()?,
         )))
     }
 
@@ -551,23 +554,28 @@ impl SessionContext {
         let uri: String = uri.into();
         let (object_store, path) = self.runtime_env().object_store(&uri)?;
         let target_partitions = self.copied_config().target_partitions;
-        let logical_plan = LogicalPlanBuilder::scan_parquet(
+        let scan = LogicalPlanBuilder::scan_parquet(
             object_store,
             path,
             options,
             None,
             target_partitions,
         )
-        .await?
-        .build()?;
-        Ok(Arc::new(DataFrame::new(self.state.clone(), &logical_plan)))
+        .await?;
+        self.register_table(scan.table_name.as_str(), scan.provider.clone())?;
+        Ok(Arc::new(DataFrame::new(
+            self.state.clone(),
+            &scan.builder.build()?,
+        )))
     }
 
     /// Creates a DataFrame for reading a custom TableProvider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<Arc<DataFrame>> {
+        let scan = LogicalPlanBuilder::scan(UNNAMED_TABLE, provider.clone(), None)?;
+        self.register_table(scan.table_name.as_str(), scan.provider.clone())?;
         Ok(Arc::new(DataFrame::new(
             self.state.clone(),
-            &LogicalPlanBuilder::scan(UNNAMED_TABLE, provider, None)?.build()?,
+            &scan.builder.build()?,
         )))
     }
 
@@ -762,13 +770,15 @@ impl SessionContext {
         let schema = self.state.read().schema_for_ref(table_ref)?;
         match schema.table(table_ref.table()) {
             Some(ref provider) => {
-                let plan = LogicalPlanBuilder::scan(
+                let scan = LogicalPlanBuilder::scan(
                     table_ref.table(),
                     Arc::clone(provider),
                     None,
-                )?
-                .build()?;
-                Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                )?;
+                Ok(Arc::new(DataFrame::new(
+                    self.state.clone(),
+                    &scan.builder.build()?,
+                )))
             }
             _ => Err(DataFusionError::Plan(format!(
                 "No table named '{}'",
@@ -2699,6 +2709,7 @@ mod tests {
         ]));
 
         let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
+            .builder
             .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
             .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
             .build()?;

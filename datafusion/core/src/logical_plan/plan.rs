@@ -776,7 +776,8 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let (plan, _, _) = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap();
+    /// plan
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -817,7 +818,8 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let (plan, _, _) = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap();
+    /// plan
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -857,7 +859,8 @@ impl LogicalPlan {
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo.csv"), &schema, None).unwrap()
+    /// let (plan, _, _) = LogicalPlanBuilder::scan_empty(Some("foo.csv"), &schema, None).unwrap();
+    /// plan
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -1224,18 +1227,19 @@ mod tests {
     }
 
     fn display_plan() -> LogicalPlan {
-        LogicalPlanBuilder::scan_empty(
+        let scan = LogicalPlanBuilder::scan_empty(
             Some("employee_csv"),
             &employee_schema(),
             Some(vec![0, 3]),
         )
-        .unwrap()
-        .filter(col("state").eq(lit("CO")))
-        .unwrap()
-        .project(vec![col("id")])
-        .unwrap()
-        .build()
-        .unwrap()
+        .unwrap();
+        scan.builder
+            .filter(col("state").eq(lit("CO")))
+            .unwrap()
+            .project(vec![col("id")])
+            .unwrap()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -1535,6 +1539,7 @@ mod tests {
 
         LogicalPlanBuilder::scan_empty(None, &schema, Some(vec![0, 1]))
             .unwrap()
+            .builder
             .filter(col("state").eq(lit("CO")))
             .unwrap()
             .project(vec![col("id")])

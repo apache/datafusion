@@ -54,6 +54,32 @@ use crate::sql::utils::group_window_expr_by_sort_keys;
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
 
+/// Return type from all scan methods
+pub struct ScanInfo {
+    pub builder: LogicalPlanBuilder,
+    pub table_name: String,
+    pub provider: Arc<dyn TableProvider>,
+}
+
+impl ScanInfo {
+    fn new(
+        builder: LogicalPlanBuilder,
+        table_name: String,
+        provider: Arc<dyn TableProvider>,
+    ) -> Self {
+        Self {
+            builder,
+            table_name,
+            provider,
+        }
+    }
+
+    // TODO delete this hack once finished refactoring
+    pub fn build(&self) -> Result<LogicalPlan> {
+        self.builder.build()
+    }
+}
+
 /// Builder for logical plans
 ///
 /// ```
@@ -83,6 +109,7 @@ pub const UNNAMED_TABLE: &str = "?table?";
 ///              &employee_schema(),
 ///              None,
 ///            )?
+///            .builder
 ///            // Keep only rows where salary < 1000
 ///            .filter(col("salary").lt_eq(lit(1000)))?
 ///            // only show "last_name" in the final results
@@ -198,7 +225,7 @@ impl LogicalPlanBuilder {
         partitions: Vec<Vec<RecordBatch>>,
         schema: SchemaRef,
         projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let provider = Arc::new(MemTable::try_new(schema, partitions)?);
         Self::scan(UNNAMED_TABLE, provider, projection)
     }
@@ -210,7 +237,7 @@ impl LogicalPlanBuilder {
         options: CsvReadOptions<'_>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let path = path.into();
         Self::scan_csv_with_name(
             object_store,
@@ -231,7 +258,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         table_name: impl Into<String>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let listing_options = options.to_listing_options(target_partitions);
 
         let path: String = path.into();
@@ -259,7 +286,7 @@ impl LogicalPlanBuilder {
         options: ParquetReadOptions<'_>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let path = path.into();
         Self::scan_parquet_with_name(
             object_store,
@@ -280,7 +307,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         target_partitions: usize,
         table_name: impl Into<String>,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let listing_options = options.to_listing_options(target_partitions);
         let path: String = path.into();
 
@@ -304,7 +331,7 @@ impl LogicalPlanBuilder {
         options: AvroReadOptions<'_>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let path = path.into();
         Self::scan_avro_with_name(
             object_store,
@@ -325,7 +352,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         table_name: impl Into<String>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let listing_options = options.to_listing_options(target_partitions);
 
         let path: String = path.into();
@@ -353,7 +380,7 @@ impl LogicalPlanBuilder {
         options: NdJsonReadOptions<'_>,
         projection: Option<Vec<usize>>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let path = path.into();
         Self::scan_json_with_name(
             object_store,
@@ -374,7 +401,7 @@ impl LogicalPlanBuilder {
         projection: Option<Vec<usize>>,
         table_name: impl Into<String>,
         target_partitions: usize,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let listing_options = options.to_listing_options(target_partitions);
 
         let path: String = path.into();
@@ -400,7 +427,7 @@ impl LogicalPlanBuilder {
         name: Option<&str>,
         table_schema: &Schema,
         projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let table_schema = Arc::new(table_schema.clone());
         let provider = Arc::new(EmptyTable::new(table_schema));
         Self::scan(name.unwrap_or(UNNAMED_TABLE), provider, projection)
@@ -411,7 +438,7 @@ impl LogicalPlanBuilder {
         table_name: impl Into<String>,
         provider: Arc<dyn TableProvider>,
         projection: Option<Vec<usize>>,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         Self::scan_with_filters(table_name, provider, projection, vec![])
     }
 
@@ -421,7 +448,7 @@ impl LogicalPlanBuilder {
         provider: Arc<dyn TableProvider>,
         projection: Option<Vec<usize>>,
         filters: Vec<Expr>,
-    ) -> Result<Self> {
+    ) -> Result<ScanInfo> {
         let table_name = table_name.into();
 
         if table_name.is_empty() {
@@ -449,7 +476,7 @@ impl LogicalPlanBuilder {
             })?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
-            table_name,
+            table_name: table_name.clone(),
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
@@ -458,7 +485,7 @@ impl LogicalPlanBuilder {
             unsupported_filters: vec![],
             limit: None,
         });
-        Ok(Self::from(table_scan))
+        Ok(ScanInfo::new(Self::from(table_scan), table_name, provider))
     }
     /// Wrap a plan in a window
     pub(crate) fn window_plan(
@@ -1217,6 +1244,7 @@ mod tests {
             &employee_schema(),
             Some(vec![0, 3]),
         )?
+        .builder
         .filter(col("state").eq(lit("CO")))?
         .project(vec![col("id")])?
         .build()?;
@@ -1233,8 +1261,9 @@ mod tests {
     #[test]
     fn plan_builder_schema() {
         let schema = employee_schema();
-        let plan =
-            LogicalPlanBuilder::scan_empty(Some("employee_csv"), &schema, None).unwrap();
+        let plan = LogicalPlanBuilder::scan_empty(Some("employee_csv"), &schema, None)
+            .unwrap()
+            .builder;
 
         let expected =
             DFSchema::try_from_qualified_schema("employee_csv", &schema).unwrap();
@@ -1249,6 +1278,7 @@ mod tests {
             &employee_schema(),
             Some(vec![3, 4]),
         )?
+        .builder
         .aggregate(
             vec![col("state")],
             vec![sum(col("salary")).alias("total_salary")],
@@ -1272,6 +1302,7 @@ mod tests {
             &employee_schema(),
             Some(vec![3, 4]),
         )?
+        .builder
         .sort(vec![
             Expr::Sort {
                 expr: Box::new(col("state")),
@@ -1300,6 +1331,7 @@ mod tests {
             .build()?;
 
         let plan = LogicalPlanBuilder::scan_empty(Some("t1"), &employee_schema(), None)?
+            .builder
             .join_using(&t2, JoinType::Inner, vec!["id"])?
             .project(vec![Expr::Wildcard])?
             .build()?;
@@ -1324,6 +1356,7 @@ mod tests {
         )?;
 
         let plan = plan
+            .builder
             .union(plan.build()?)?
             .union(plan.build()?)?
             .union(plan.build()?)?
@@ -1349,6 +1382,7 @@ mod tests {
             // project id and first_name by column index
             Some(vec![0, 1]),
         )?
+        .builder
         // two columns with the same name => error
         .project(vec![col("id"), col("first_name").alias("id")]);
 
@@ -1375,6 +1409,7 @@ mod tests {
             // project state and salary by column index
             Some(vec![3, 4]),
         )?
+        .builder
         // two columns with the same name => error
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 

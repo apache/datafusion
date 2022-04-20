@@ -648,10 +648,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
                         (_, Some(provider)) => {
                             let scan =
-                                LogicalPlanBuilder::scan(&table_name, provider, None);
+                                LogicalPlanBuilder::scan(&table_name, provider, None)?;
                             let scan = match alias {
-                                Some(ref name) => scan?.alias(name.name.value.as_str()),
-                                _ => scan,
+                                Some(ref name) => {
+                                    scan.builder.alias(name.name.value.as_str())
+                                }
+                                _ => Ok(scan.builder),
                             };
                             scan?.build()
                         }

@@ -501,6 +501,7 @@ impl ContextWithParquet {
         let sql = format!("EXPR only: {:?}", expr);
         let logical_plan = LogicalPlanBuilder::scan("t", self.provider.clone(), None)
             .unwrap()
+            .builder
             .filter(expr)
             .unwrap()
             .build()

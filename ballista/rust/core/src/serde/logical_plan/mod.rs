@@ -1197,7 +1197,7 @@ mod roundtrip_tests {
                 4,
             )
             .await
-            .and_then(|plan| plan.sort(vec![col("salary")]))
+            .and_then(|plan| plan.builder.sort(vec![col("salary")]))
             .and_then(|plan| plan.build())
             .map_err(BallistaError::DataFusionError)?,
         );
@@ -1290,7 +1290,7 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(true, true))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
@@ -1303,7 +1303,7 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(false, true))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
@@ -1333,7 +1333,7 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(true, false))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
@@ -1346,7 +1346,7 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
         .and_then(|plan| plan.explain(false, false))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
@@ -1387,7 +1387,10 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"])))
+        .and_then(|plan| {
+            plan.builder
+                .join(&scan_plan, JoinType::Inner, (vec!["id"], vec!["id"]))
+        })
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
@@ -1413,7 +1416,7 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.sort(vec![col("salary")]))
+        .and_then(|plan| plan.builder.sort(vec![col("salary")]))
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 
@@ -1457,7 +1460,10 @@ mod roundtrip_tests {
             4,
         )
         .await
-        .and_then(|plan| plan.aggregate(vec![col("state")], vec![max(col("salary"))]))
+        .and_then(|plan| {
+            plan.builder
+                .aggregate(vec![col("state")], vec![max(col("salary"))])
+        })
         .and_then(|plan| plan.build())
         .map_err(BallistaError::DataFusionError)?;
 

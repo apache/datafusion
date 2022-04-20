@@ -1508,6 +1508,7 @@ mod tests {
         ]);
         LogicalPlanBuilder::scan_empty(Some("test"), &schema, None)
             .expect("creating scan")
+            .builder
             .build()
             .expect("building plan")
     }
