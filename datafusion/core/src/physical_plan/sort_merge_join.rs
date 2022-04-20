@@ -28,8 +28,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::array::*;
-use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Schema, SchemaRef};
+use arrow::compute::{take, SortOptions};
+use arrow::datatypes::{DataType, SchemaRef};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -39,7 +39,7 @@ use crate::error::DataFusionError;
 use crate::error::Result;
 use crate::execution::context::TaskContext;
 use crate::logical_plan::JoinType;
-use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::common::combine_batches;
 use crate::physical_plan::expressions::Column;
 use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::join_utils::{build_join_schema, check_join_is_valid, JoinOn};
@@ -178,15 +178,11 @@ impl ExecutionPlan for SortMergeJoinExec {
         };
 
         // execute children plans
-        let streamed = CoalescePartitionsExec::new(streamed)
-            .execute(0, context.clone())
-            .await?;
+        let streamed = streamed.execute(partition, context.clone()).await?;
         let buffered = buffered.execute(partition, context.clone()).await?;
 
         // create output buffer
         let batch_size = context.session_config().batch_size;
-        let output_buffer = new_array_builders(self.schema(), batch_size)
-            .map_err(DataFusionError::ArrowError)?;
 
         // create join stream
         Ok(Box::pin(SMJStream::try_new(
@@ -198,7 +194,6 @@ impl ExecutionPlan for SortMergeJoinExec {
             on_streamed,
             on_buffered,
             self.join_type,
-            output_buffer,
             batch_size,
             SortMergeJoinMetrics::new(partition, &self.metrics),
         )?))
@@ -325,10 +320,6 @@ struct SMJStream {
     pub streamed_schema: SchemaRef,
     /// Input schema of buffered
     pub buffered_schema: SchemaRef,
-    /// Number of columns of streamed
-    pub num_streamed_columns: usize,
-    /// Number of columns of buffered
-    pub num_buffered_columns: usize,
     /// Streamed data stream
     pub streamed: SendableRecordBatchStream,
     /// Buffered data stream
@@ -356,7 +347,7 @@ struct SMJStream {
     /// Join key columns of buffered
     pub on_buffered: Vec<Column>,
     /// Staging output array builders
-    pub output_buffer: Vec<Box<dyn ArrayBuilder>>,
+    pub output_record_batches: Vec<RecordBatch>,
     /// Staging output size
     pub output_size: usize,
     /// Target output batch size
@@ -447,11 +438,11 @@ impl Stream for SMJStream {
                     self.state = SMJState::JoinOutput;
                 }
                 SMJState::JoinOutput => {
-                    self.join_partial()?;
+                    let output_indices = self.join_partial()?;
+                    self.output_partial(&output_indices)?;
+
                     if self.output_size == self.batch_size {
                         let record_batch = self.output_record_batch_and_reset()?;
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(record_batch.num_rows());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
                     if self.buffered_data.scanning_finished() {
@@ -465,10 +456,8 @@ impl Stream for SMJStream {
                     }
                 }
                 SMJState::Exhausted => {
-                    if self.output_size > 0 {
+                    if !self.output_record_batches.is_empty() {
                         let record_batch = self.output_record_batch_and_reset()?;
-                        self.join_metrics.output_batches.add(1);
-                        self.join_metrics.output_rows.add(record_batch.num_rows());
                         return Poll::Ready(Some(Ok(record_batch)));
                     }
                     return Poll::Ready(None);
@@ -489,7 +478,6 @@ impl SMJStream {
         on_streamed: Vec<Column>,
         on_buffered: Vec<Column>,
         join_type: JoinType,
-        output_buffer: Vec<Box<dyn ArrayBuilder>>,
         batch_size: usize,
         join_metrics: SortMergeJoinMetrics,
     ) -> Result<Self> {
@@ -500,8 +488,6 @@ impl SMJStream {
             schema: schema.clone(),
             streamed_schema: streamed.schema(),
             buffered_schema: buffered.schema(),
-            num_streamed_columns: streamed.schema().fields().len(),
-            num_buffered_columns: buffered.schema().fields().len(),
             streamed,
             buffered,
             streamed_batch: RecordBatch::new_empty(schema),
@@ -515,7 +501,7 @@ impl SMJStream {
             current_ordering: Ordering::Equal,
             on_streamed,
             on_buffered,
-            output_buffer,
+            output_record_batches: vec![],
             output_size: 0,
             batch_size,
             join_type,
@@ -683,21 +669,8 @@ impl SMJStream {
 
     /// Produce join and fill output buffer until reaching target batch size
     /// or the join is finished
-    fn join_partial(&mut self) -> ArrowResult<()> {
-        // decide streamed/buffered output columns by join type
-        let output_parts =
-            self.output_buffer
-                .split_at_mut(if self.join_type != JoinType::Right {
-                    self.num_streamed_columns
-                } else {
-                    self.num_buffered_columns
-                });
-        let (streamed_output, buffered_output) = if self.join_type != JoinType::Right {
-            (output_parts.0, output_parts.1)
-        } else {
-            (output_parts.1, output_parts.0)
-        };
-
+    fn join_partial(&mut self) -> ArrowResult<Vec<OutputIndex>> {
+        let mut output_indices = vec![];
         match self.current_ordering {
             Ordering::Less => {
                 let output_streamed_join = match self.join_type {
@@ -710,12 +683,10 @@ impl SMJStream {
 
                 // streamed joins null
                 if output_streamed_join {
-                    append_row_to_output(
-                        &self.streamed_batch,
-                        self.streamed_idx,
-                        streamed_output,
-                    )?;
-                    append_nulls_row_to_output(&self.buffered_schema, buffered_output)?;
+                    output_indices.push(OutputIndex {
+                        streamed_idx: Some(self.streamed_idx),
+                        buffered_idx: None,
+                    });
                     self.output_size += 1;
                 }
                 self.buffered_data.scanning_finish();
@@ -731,7 +702,18 @@ impl SMJStream {
                 };
 
                 // streamed joins buffered
-                if !output_equal_join {
+                if output_equal_join {
+                    if JoinType::Semi == self.join_type {
+                        if !self.streamed_joined {
+                            output_indices.push(OutputIndex {
+                                streamed_idx: Some(self.streamed_idx),
+                                buffered_idx: None,
+                            });
+                            self.output_size += 1;
+                        }
+                        self.buffered_data.scanning_finish();
+                    }
+                } else {
                     self.buffered_data.scanning_finish();
                 }
             }
@@ -746,7 +728,18 @@ impl SMJStream {
                 };
 
                 // null joins buffered
-                if !output_buffered_join {
+                if output_buffered_join {
+                    if JoinType::Anti == self.join_type {
+                        if !self.streamed_joined {
+                            output_indices.push(OutputIndex {
+                                streamed_idx: Some(self.streamed_idx),
+                                buffered_idx: None,
+                            });
+                            self.output_size += 1;
+                        }
+                        self.buffered_data.scanning_finish();
+                    }
+                } else {
                     self.buffered_data.scanning_finish();
                 }
             }
@@ -757,33 +750,250 @@ impl SMJStream {
             && self.output_size < self.batch_size
         {
             if self.current_ordering == Ordering::Equal {
-                append_row_to_output(
-                    &self.streamed_batch,
-                    self.streamed_idx,
-                    streamed_output,
-                )?;
+                output_indices.push(OutputIndex {
+                    streamed_idx: Some(self.streamed_idx),
+                    buffered_idx: Some((
+                        self.buffered_data.scanning_batch_idx,
+                        self.buffered_data.scanning_idx(),
+                    )),
+                });
             } else {
-                append_nulls_row_to_output(&self.streamed_schema, streamed_output)?;
+                output_indices.push(OutputIndex {
+                    streamed_idx: None,
+                    buffered_idx: Some((
+                        self.buffered_data.scanning_batch_idx,
+                        self.buffered_data.scanning_idx(),
+                    )),
+                });
             }
-
-            append_row_to_output(
-                &self.buffered_data.scanning_batch().batch,
-                self.buffered_data.scanning_idx(),
-                buffered_output,
-            )?;
             self.output_size += 1;
             self.buffered_data.scanning_advance();
+        }
+        Ok(output_indices)
+    }
+
+    fn output_record_batch_and_reset(&mut self) -> ArrowResult<RecordBatch> {
+        assert!(!self.output_record_batches.is_empty());
+
+        let record_batch =
+            combine_batches(&self.output_record_batches, self.schema.clone())?.unwrap();
+        self.join_metrics.output_batches.add(1);
+        self.join_metrics.output_rows.add(record_batch.num_rows());
+        self.output_size = 0;
+        self.output_record_batches.clear();
+        Ok(record_batch)
+    }
+
+    fn output_partial(&mut self, output_indices: &[OutputIndex]) -> ArrowResult<()> {
+        match self.join_type {
+            JoinType::Inner => {
+                self.output_partial_streamed_joining_buffered(output_indices)?;
+            }
+            JoinType::Left | JoinType::Right => {
+                self.output_partial_streamed_joining_buffered(output_indices)?;
+                self.output_partial_streamed_joining_null(output_indices)?;
+            }
+            JoinType::Full => {
+                self.output_partial_streamed_joining_buffered(output_indices)?;
+                self.output_partial_streamed_joining_null(output_indices)?;
+                self.output_partial_null_joining_buffered(output_indices)?;
+            }
+            JoinType::Semi | JoinType::Anti => {
+                self.output_partial_streamed_joining_null(output_indices)?;
+            }
         }
         Ok(())
     }
 
-    fn output_record_batch_and_reset(&mut self) -> ArrowResult<RecordBatch> {
-        let record_batch =
-            make_batch(self.schema.clone(), self.output_buffer.drain(..).collect())?;
-        self.output_size = 0;
-        self.output_buffer
-            .extend(new_array_builders(self.schema.clone(), self.batch_size)?);
-        Ok(record_batch)
+    fn output_partial_streamed_joining_buffered(
+        &mut self,
+        output_indices: &[OutputIndex],
+    ) -> ArrowResult<()> {
+        let mut output = |buffered_batch_idx: usize, indices: &[OutputIndex]| {
+            if indices.is_empty() {
+                return ArrowResult::Ok(());
+            }
+
+            // take streamed columns
+            let streamed_indices = UInt64Array::from_iter_values(
+                indices
+                    .iter()
+                    .map(|index| index.streamed_idx.unwrap() as u64),
+            );
+            let mut streamed_columns = self
+                .streamed_batch
+                .columns()
+                .iter()
+                .map(|column| take(column, &streamed_indices, None))
+                .collect::<ArrowResult<Vec<_>>>()?;
+
+            // take buffered columns
+            let buffered_indices = UInt64Array::from_iter_values(
+                indices
+                    .iter()
+                    .map(|index| index.buffered_idx.unwrap().1 as u64),
+            );
+            let mut buffered_columns = self.buffered_data.batches[buffered_batch_idx]
+                .batch
+                .columns()
+                .iter()
+                .map(|column| take(column, &buffered_indices, None))
+                .collect::<ArrowResult<Vec<_>>>()?;
+
+            // combine columns and produce record batch
+            let columns = match self.join_type {
+                JoinType::Inner | JoinType::Left | JoinType::Full => {
+                    streamed_columns.extend(buffered_columns);
+                    streamed_columns
+                }
+                JoinType::Right => {
+                    buffered_columns.extend(streamed_columns);
+                    buffered_columns
+                }
+                JoinType::Semi | JoinType::Anti => {
+                    unreachable!()
+                }
+            };
+            let record_batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+            self.output_record_batches.push(record_batch);
+            Ok(())
+        };
+
+        let mut buffered_batch_idx = 0;
+        let mut indices = vec![];
+        for &index in output_indices
+            .iter()
+            .filter(|index| index.streamed_idx.is_some())
+            .filter(|index| index.buffered_idx.is_some())
+        {
+            let buffered_idx = index.buffered_idx.unwrap();
+            if buffered_idx.0 == buffered_batch_idx {
+                indices.push(index);
+            } else {
+                output(buffered_batch_idx, &indices)?;
+                buffered_batch_idx = buffered_idx.0;
+                indices.clear();
+            }
+        }
+        output(buffered_batch_idx, &indices)?;
+        Ok(())
+    }
+
+    fn output_partial_streamed_joining_null(
+        &mut self,
+        output_indices: &[OutputIndex],
+    ) -> ArrowResult<()> {
+        // streamed joining null
+        let streamed_indices = UInt64Array::from_iter_values(
+            output_indices
+                .iter()
+                .filter(|index| index.streamed_idx.is_some())
+                .filter(|index| index.buffered_idx.is_none())
+                .map(|index| index.streamed_idx.unwrap() as u64),
+        );
+        let mut streamed_columns = self
+            .streamed_batch
+            .columns()
+            .iter()
+            .map(|column| take(column, &streamed_indices, None))
+            .collect::<ArrowResult<Vec<_>>>()?;
+
+        let mut buffered_columns = self
+            .buffered_schema
+            .fields()
+            .iter()
+            .map(|f| new_null_array(f.data_type(), streamed_indices.len()))
+            .collect::<Vec<_>>();
+
+        let columns = match self.join_type {
+            JoinType::Inner => {
+                unreachable!()
+            }
+            JoinType::Left | JoinType::Full => {
+                streamed_columns.extend(buffered_columns);
+                streamed_columns
+            }
+            JoinType::Right => {
+                buffered_columns.extend(streamed_columns);
+                buffered_columns
+            }
+            JoinType::Anti | JoinType::Semi => streamed_columns,
+        };
+
+        if !streamed_indices.is_empty() {
+            let record_batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+            self.output_record_batches.push(record_batch);
+        }
+        Ok(())
+    }
+
+    fn output_partial_null_joining_buffered(
+        &mut self,
+        output_indices: &[OutputIndex],
+    ) -> ArrowResult<()> {
+        let mut output = |buffered_batch_idx: usize, indices: &[OutputIndex]| {
+            if indices.is_empty() {
+                return ArrowResult::Ok(());
+            }
+
+            // take buffered columns
+            let buffered_indices = UInt64Array::from_iter_values(
+                indices
+                    .iter()
+                    .map(|index| index.buffered_idx.unwrap().1 as u64),
+            );
+            let buffered_columns = self.buffered_data.batches[buffered_batch_idx]
+                .batch
+                .columns()
+                .iter()
+                .map(|column| take(column, &buffered_indices, None))
+                .collect::<ArrowResult<Vec<_>>>()?;
+
+            // create null streamed columns
+            let mut streamed_columns = self
+                .streamed_schema
+                .fields()
+                .iter()
+                .map(|f| new_null_array(f.data_type(), buffered_indices.len()))
+                .collect::<Vec<_>>();
+
+            // combine columns and produce record batch
+            let columns = match self.join_type {
+                JoinType::Full => {
+                    streamed_columns.extend(buffered_columns);
+                    streamed_columns
+                }
+                JoinType::Inner
+                | JoinType::Left
+                | JoinType::Right
+                | JoinType::Semi
+                | JoinType::Anti => {
+                    unreachable!()
+                }
+            };
+            let record_batch = RecordBatch::try_new(self.schema.clone(), columns)?;
+            self.output_record_batches.push(record_batch);
+            Ok(())
+        };
+
+        let mut buffered_batch_idx = 0;
+        let mut indices = vec![];
+        for &index in output_indices
+            .iter()
+            .filter(|index| index.streamed_idx.is_none())
+            .filter(|index| index.buffered_idx.is_some())
+        {
+            let buffered_idx = index.buffered_idx.unwrap();
+            if buffered_idx.0 == buffered_batch_idx {
+                indices.push(index);
+            } else {
+                output(buffered_batch_idx, &indices)?;
+                buffered_batch_idx = buffered_idx.0;
+                indices.clear();
+            }
+        }
+        output(buffered_batch_idx, &indices)?;
+        Ok(())
     }
 }
 
@@ -847,6 +1057,14 @@ impl BufferedData {
         self.scanning_batch_idx = self.batches.len();
         self.scanning_offset = 0;
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OutputIndex {
+    /// joined streamed row index
+    streamed_idx: Option<usize>,
+    /// joined buffered batch index and row index
+    buffered_idx: Option<(usize, usize)>,
 }
 
 /// Get join array refs of given batch and join columns
@@ -919,7 +1137,7 @@ fn compare_join_arrays(
             DataType::UInt16 => compare_value!(UInt16Array),
             DataType::UInt32 => compare_value!(UInt32Array),
             DataType::UInt64 => compare_value!(UInt64Array),
-            DataType::Timestamp(_, None) => compare_value!(Int64Array),
+            DataType::Timestamp(_, _) => compare_value!(Int64Array),
             DataType::Utf8 => compare_value!(StringArray),
             DataType::LargeUtf8 => compare_value!(LargeStringArray),
             _ => {
@@ -947,10 +1165,12 @@ fn is_join_arrays_equal(
     for (left_array, right_array) in left_arrays.iter().zip(right_arrays) {
         macro_rules! compare_value {
             ($T:ty) => {{
-                let left_array = left_array.as_any().downcast_ref::<$T>().unwrap();
-                let right_array = right_array.as_any().downcast_ref::<$T>().unwrap();
                 match (left_array.is_null(left), right_array.is_null(right)) {
                     (false, false) => {
+                        let left_array =
+                            left_array.as_any().downcast_ref::<$T>().unwrap();
+                        let right_array =
+                            right_array.as_any().downcast_ref::<$T>().unwrap();
                         if left_array.value(left) != right_array.value(right) {
                             is_equal = false;
                         }
@@ -989,138 +1209,13 @@ fn is_join_arrays_equal(
     Ok(true)
 }
 
-/// Create new array builders of given schema and batch size
-fn new_array_builders(
-    schema: SchemaRef,
-    batch_size: usize,
-) -> ArrowResult<Vec<Box<dyn ArrayBuilder>>> {
-    let arrays: Vec<Box<dyn ArrayBuilder>> = schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let dt = field.data_type();
-            make_builder(dt, batch_size)
-        })
-        .collect();
-    Ok(arrays)
-}
-
-/// Append one row to part of output buffer (the array builders)
-fn append_row_to_output(
-    batch: &RecordBatch,
-    idx: usize,
-    arrays: &mut [Box<dyn ArrayBuilder>],
-) -> ArrowResult<()> {
-    if !arrays.is_empty() {
-        return batch
-            .columns()
-            .iter()
-            .zip(batch.schema().fields())
-            .enumerate()
-            .try_for_each(|(i, (column, f))| {
-                array_append_value(f.data_type(), &mut arrays[i], &*column, idx)
-            });
-    }
-    Ok(())
-}
-
-/// Append one row which all values are null to part of output buffer (the
-/// array builders), used in outer join
-fn append_nulls_row_to_output(
-    schema: &Schema,
-    arrays: &mut [Box<dyn ArrayBuilder>],
-) -> ArrowResult<()> {
-    if !arrays.is_empty() {
-        return schema
-            .fields()
-            .iter()
-            .enumerate()
-            .try_for_each(|(i, f)| array_append_null(f.data_type(), &mut arrays[i]));
-    }
-    Ok(())
-}
-
-/// Finish output buffer and produce one record batch
-fn make_batch(
-    schema: SchemaRef,
-    mut arrays: Vec<Box<dyn ArrayBuilder>>,
-) -> ArrowResult<RecordBatch> {
-    let columns = arrays.iter_mut().map(|array| array.finish()).collect();
-    RecordBatch::try_new(schema, columns)
-}
-
-/// Append null value to a array builder
-fn array_append_null(
-    data_type: &DataType,
-    to: &mut Box<dyn ArrayBuilder>,
-) -> ArrowResult<()> {
-    macro_rules! append_null {
-        ($TO:ty) => {{
-            to.as_any_mut().downcast_mut::<$TO>().unwrap().append_null()
-        }};
-    }
-    match data_type {
-        DataType::Boolean => append_null!(BooleanBuilder),
-        DataType::Int8 => append_null!(Int8Builder),
-        DataType::Int16 => append_null!(Int16Builder),
-        DataType::Int32 => append_null!(Int32Builder),
-        DataType::Int64 => append_null!(Int64Builder),
-        DataType::UInt8 => append_null!(UInt8Builder),
-        DataType::UInt16 => append_null!(UInt16Builder),
-        DataType::UInt32 => append_null!(UInt32Builder),
-        DataType::UInt64 => append_null!(UInt64Builder),
-        DataType::Float32 => append_null!(Float32Builder),
-        DataType::Float64 => append_null!(Float64Builder),
-        DataType::Utf8 => append_null!(GenericStringBuilder<i32>),
-        _ => todo!(),
-    }
-}
-
-/// Append value to a array builder
-fn array_append_value(
-    data_type: &DataType,
-    to: &mut Box<dyn ArrayBuilder>,
-    from: &dyn Array,
-    idx: usize,
-) -> ArrowResult<()> {
-    macro_rules! append_value {
-        ($TO:ty, $FROM:ty) => {{
-            let to = to.as_any_mut().downcast_mut::<$TO>().unwrap();
-            let from = from.as_any().downcast_ref::<$FROM>().unwrap();
-            if from.is_valid(idx) {
-                to.append_value(from.value(idx))
-            } else {
-                to.append_null()
-            }
-        }};
-    }
-
-    match data_type {
-        DataType::Boolean => append_value!(BooleanBuilder, BooleanArray),
-        DataType::Int8 => append_value!(Int8Builder, Int8Array),
-        DataType::Int16 => append_value!(Int16Builder, Int16Array),
-        DataType::Int32 => append_value!(Int32Builder, Int32Array),
-        DataType::Int64 => append_value!(Int64Builder, Int64Array),
-        DataType::UInt8 => append_value!(UInt8Builder, UInt8Array),
-        DataType::UInt16 => append_value!(UInt16Builder, UInt16Array),
-        DataType::UInt32 => append_value!(UInt32Builder, UInt32Array),
-        DataType::UInt64 => append_value!(UInt64Builder, UInt64Array),
-        DataType::Float32 => append_value!(Float32Builder, Float32Array),
-        DataType::Float64 => append_value!(Float64Builder, Float64Array),
-        DataType::Utf8 => {
-            append_value!(GenericStringBuilder<i32>, GenericStringArray<i32>)
-        }
-        _ => todo!(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
-    use std::sync::Arc;
-
     use arrow::record_batch::RecordBatch;
 
     use crate::assert_batches_sorted_eq;
@@ -1443,103 +1538,6 @@ mod tests {
         assert_eq!(batches[0].num_rows(), 2);
         assert_eq!(batches[1].num_rows(), 1);
         assert_batches_sorted_eq!(expected, &batches);
-        Ok(())
-    }
-    /// Test where the left has 1 part, the right has 2 parts => 2 parts
-    #[tokio::test]
-    async fn join_inner_one_two_parts_right() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let left = build_table(
-            ("a1", &vec![1, 2, 3]),
-            ("b1", &vec![4, 5, 5]), // this has a repetition
-            ("c1", &vec![7, 8, 9]),
-        );
-
-        let batch1 = build_table_i32(
-            ("a2", &vec![10, 20]),
-            ("b1", &vec![4, 6]),
-            ("c2", &vec![70, 80]),
-        );
-        let batch2 =
-            build_table_i32(("a2", &vec![30]), ("b1", &vec![5]), ("c2", &vec![90]));
-        let schema = batch1.schema();
-        let right = Arc::new(
-            MemoryExec::try_new(&[vec![batch1], vec![batch2]], schema, None).unwrap(),
-        );
-
-        let on = vec![(
-            Column::new_with_schema("b1", &left.schema())?,
-            Column::new_with_schema("b1", &right.schema())?,
-        )];
-
-        let join = join(left, right, on, JoinType::Inner)?;
-        let columns = columns(&join.schema());
-        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b1", "c2"]);
-
-        // first part
-        let stream = join.execute(0, task_ctx.clone()).await?;
-        let batches = common::collect(stream).await?;
-        assert_eq!(batches.len(), 1);
-
-        let expected = vec![
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 1  | 4  | 7  | 10 | 4  | 70 |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
-
-        // second part
-        let stream = join.execute(1, task_ctx.clone()).await?;
-        let batches = common::collect(stream).await?;
-        assert_eq!(batches.len(), 1);
-        let expected = vec![
-            "+----+----+----+----+----+----+",
-            "| a1 | b1 | c1 | a2 | b1 | c2 |",
-            "+----+----+----+----+----+----+",
-            "| 2  | 5  | 8  | 30 | 5  | 90 |",
-            "| 3  | 5  | 9  | 30 | 5  | 90 |",
-            "+----+----+----+----+----+----+",
-        ];
-        assert_batches_sorted_eq!(expected, &batches);
-
-        let metrics = join.metrics().unwrap();
-        assert!(
-            0 < metrics
-                .sum(|m| m.value().name() == "join_time")
-                .map(|v| v.as_usize())
-                .unwrap()
-        );
-        assert_eq!(
-            2,
-            metrics
-                .sum(|m| m.value().name() == "output_batches")
-                .map(|v| v.as_usize())
-                .unwrap()
-        ); // 1+1
-        assert_eq!(
-            3,
-            metrics
-                .sum(|m| m.value().name() == "output_rows")
-                .map(|v| v.as_usize())
-                .unwrap()
-        ); // 2+1
-        assert_eq!(
-            4,
-            metrics
-                .sum(|m| m.value().name() == "input_batches")
-                .map(|v| v.as_usize())
-                .unwrap()
-        ); // (1+1) + (1+1)
-        assert_eq!(
-            9,
-            metrics
-                .sum(|m| m.value().name() == "input_rows")
-                .map(|v| v.as_usize())
-                .unwrap()
-        ); // (3+2) + (3+1)
         Ok(())
     }
 
