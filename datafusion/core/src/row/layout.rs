@@ -17,10 +17,9 @@
 
 //! Various row layout for different use case
 
-use crate::row::{row_supported, schema_null_free, var_length};
+use crate::row::schema_null_free;
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{ceil, round_upto_power_of_2};
-use std::fmt::{Debug, Formatter};
 
 const UTF8_DEFAULT_SIZE: usize = 20;
 const BINARY_DEFAULT_SIZE: usize = 100;
@@ -42,7 +41,8 @@ pub enum RowType {
 #[derive(Debug)]
 pub(crate) struct RowLayout {
     /// Type of the layout
-    type_: RowType,
+    #[allow(dead_code)]
+    row_type: RowType,
     /// If a row is null free according to its schema
     pub(crate) null_free: bool,
     /// The number of bytes used to store null bits for each field.
@@ -56,17 +56,24 @@ pub(crate) struct RowLayout {
 }
 
 impl RowLayout {
-    pub(crate) fn new(schema: &Schema, type_: RowType) -> Self {
-        assert!(row_supported(schema));
+    pub(crate) fn new(schema: &Schema, row_type: RowType) -> Self {
+        assert!(row_supported(schema, row_type));
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
-        let null_width = if null_free { 0 } else { ceil(field_count, 8) };
-        let (field_offsets, values_width) = match type_ {
+        let null_width = if null_free {
+            0
+        } else {
+            match row_type {
+                RowType::Compact => ceil(field_count, 8),
+                RowType::WordAligned => round_upto_power_of_2(ceil(field_count, 8), 8),
+            }
+        };
+        let (field_offsets, values_width) = match row_type {
             RowType::Compact => compact_offsets(null_width, schema),
             RowType::WordAligned => word_aligned_offsets(null_width, schema),
         };
         Self {
-            type_,
+            row_type,
             null_free,
             null_width,
             values_width,
@@ -76,7 +83,7 @@ impl RowLayout {
     }
 
     #[inline(always)]
-    pub(crate) fn init_varlena_offset(&self) -> usize {
+    pub(crate) fn fixed_part_width(&self) -> usize {
         self.null_width + self.values_width
     }
 }
@@ -90,6 +97,11 @@ fn compact_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
         offset += compact_type_width(f.data_type());
     }
     (offsets, offset - null_width)
+}
+
+fn var_length(dt: &DataType) -> bool {
+    use DataType::*;
+    matches!(dt, Utf8 | Binary)
 }
 
 fn compact_type_width(dt: &DataType) -> usize {
@@ -109,20 +121,24 @@ fn compact_type_width(dt: &DataType) -> usize {
 fn word_aligned_offsets(null_width: usize, schema: &Schema) -> (Vec<usize>, usize) {
     let mut offsets = vec![];
     let mut offset = null_width;
-    for _ in schema.fields() {
+    for f in schema.fields() {
         offsets.push(offset);
-        offset += 8; // a 8-bytes word for each field
+        assert!(!matches!(f.data_type(), DataType::Decimal(_, _)));
+        // All of the current support types can fit into one single 8-bytes word.
+        // When we decide to support Decimal type in the future, its width would be
+        // of two 8-bytes words and should adapt the width calculation below.
+        offset += 8;
     }
     (offsets, offset - null_width)
 }
 
 /// Estimate row width based on schema
-pub fn estimate_row_width(schema: &Schema) -> usize {
-    let null_free = schema_null_free(schema);
-    let field_count = schema.fields().len();
-    let mut width = if null_free { 0 } else { ceil(field_count, 8) };
+pub(crate) fn estimate_row_width(schema: &Schema, layout: &RowLayout) -> usize {
+    let mut width = layout.fixed_part_width();
+    if matches!(layout.row_type, RowType::WordAligned) {
+        return width;
+    }
     for f in schema.fields() {
-        width += compact_type_width(f.data_type());
         match f.data_type() {
             DataType::Utf8 => width += UTF8_DEFAULT_SIZE,
             DataType::Binary => width += BINARY_DEFAULT_SIZE,
@@ -130,4 +146,59 @@ pub fn estimate_row_width(schema: &Schema) -> usize {
         }
     }
     round_upto_power_of_2(width, 8)
+}
+
+/// Tell if we can create raw-bytes based rows since we currently
+/// has limited data type supports in the row format
+fn row_supported(schema: &Schema, row_type: RowType) -> bool {
+    schema
+        .fields()
+        .iter()
+        .all(|f| supported_type(f.data_type(), row_type))
+}
+
+fn supported_type(dt: &DataType, row_type: RowType) -> bool {
+    use DataType::*;
+
+    match row_type {
+        RowType::Compact => {
+            matches!(
+                dt,
+                Boolean
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Int8
+                    | Int16
+                    | Int32
+                    | Int64
+                    | Float32
+                    | Float64
+                    | Date32
+                    | Date64
+                    | Utf8
+                    | Binary
+            )
+        }
+        // only fixed length types are supported for fast in-place update.
+        RowType::WordAligned => {
+            matches!(
+                dt,
+                Boolean
+                    | UInt8
+                    | UInt16
+                    | UInt32
+                    | UInt64
+                    | Int8
+                    | Int16
+                    | Int32
+                    | Int64
+                    | Float32
+                    | Float64
+                    | Date32
+                    | Date64
+            )
+        }
+    }
 }

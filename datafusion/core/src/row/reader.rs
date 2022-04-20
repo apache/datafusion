@@ -28,21 +28,22 @@ use arrow::util::bit_util::get_bit_raw;
 use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
-pub fn read_compact_rows_as_batch(
+pub fn read_as_batch(
     data: &[u8],
     schema: Arc<Schema>,
     offsets: &[usize],
+    row_type: RowType,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema, RowType::Compact);
+    let mut row = RowReader::new(&schema, row_type);
 
     for offset in offsets.iter().take(row_num) {
         row.point_to(*offset, data);
         read_row(&row, &mut output, &schema);
     }
 
-    output.output().map_err(DataFusionError::ArrowError)
+    Ok(output.output()?)
 }
 
 macro_rules! get_idx {
@@ -110,9 +111,9 @@ impl<'a> std::fmt::Debug for RowReader<'a> {
 
 impl<'a> RowReader<'a> {
     /// new
-    pub fn new(schema: &Schema, type_: RowType) -> Self {
+    pub fn new(schema: &Schema, row_type: RowType) -> Self {
         Self {
-            layout: RowLayout::new(schema, type_),
+            layout: RowLayout::new(schema, row_type),
             data: &[],
             base_offset: 0,
         }

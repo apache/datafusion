@@ -37,15 +37,16 @@ use std::sync::Arc;
 /// # Panics
 ///
 /// This function will panic if the output buffer doesn't have enough space to hold all the rows
-pub fn write_compact_batch_unchecked_jit(
+pub fn write_batch_unchecked_jit(
     output: &mut [u8],
     offset: usize,
     batch: &RecordBatch,
     row_idx: usize,
     schema: Arc<Schema>,
     assembler: &Assembler,
+    row_type: RowType,
 ) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema, RowType::Compact);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut current_offset = offset;
     let mut offsets = vec![];
     register_write_functions(assembler)?;
@@ -72,12 +73,13 @@ pub fn write_compact_batch_unchecked_jit(
 
 /// bench jit version write
 #[inline(never)]
-pub fn bench_write_compact_batch_jit(
+pub fn bench_write_batch_jit(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
+    row_type: RowType,
 ) -> Result<Vec<usize>> {
     let assembler = Assembler::default();
-    let mut writer = RowWriter::new(&schema, RowType::Compact);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut lengths = vec![];
     register_write_functions(&assembler)?;
     let gen_func = gen_write_row(&schema, &assembler)?;

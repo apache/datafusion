@@ -18,7 +18,6 @@
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
 use crate::error::Result;
-use crate::row::fixed_size;
 use crate::row::layout::{estimate_row_width, RowLayout, RowType};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
@@ -31,14 +30,15 @@ use std::sync::Arc;
 /// # Panics
 ///
 /// This function will panic if the output buffer doesn't have enough space to hold all the rows
-pub fn write_compact_batch_unchecked(
+pub fn write_batch_unchecked(
     output: &mut [u8],
     offset: usize,
     batch: &RecordBatch,
     row_idx: usize,
     schema: Arc<Schema>,
+    row_type: RowType,
 ) -> Vec<usize> {
-    let mut writer = RowWriter::new(&schema, RowType::Compact);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut current_offset = offset;
     let mut offsets = vec![];
     let columns = batch.columns();
@@ -55,11 +55,12 @@ pub fn write_compact_batch_unchecked(
 
 /// bench interpreted version write
 #[inline(never)]
-pub fn bench_write_compact_batch(
+pub fn bench_write_batch(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
+    row_type: RowType,
 ) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema, RowType::Compact);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut lengths = vec![];
 
     for batch in batches.iter().flatten() {
@@ -110,14 +111,10 @@ pub struct RowWriter {
 
 impl RowWriter {
     /// new
-    pub fn new(schema: &Schema, type_: RowType) -> Self {
-        let layout = RowLayout::new(schema, type_);
-        let mut init_capacity = estimate_row_width(schema);
-        if !fixed_size(schema) {
-            // double the capacity to avoid repeated resize
-            init_capacity *= 2;
-        }
-        let varlena_offset = layout.init_varlena_offset();
+    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+        let layout = RowLayout::new(schema, row_type);
+        let init_capacity = estimate_row_width(schema, &layout);
+        let varlena_offset = layout.fixed_part_width();
         Self {
             layout,
             data: vec![0; init_capacity],
@@ -132,7 +129,7 @@ impl RowWriter {
         self.data.fill(0);
         self.row_width = 0;
         self.varlena_width = 0;
-        self.varlena_offset = self.layout.init_varlena_offset();
+        self.varlena_offset = self.layout.fixed_part_width();
     }
 
     #[inline]
@@ -234,7 +231,7 @@ impl RowWriter {
     }
 
     fn current_width(&self) -> usize {
-        self.layout.init_varlena_offset() + self.varlena_width
+        self.layout.fixed_part_width() + self.varlena_width
     }
 
     /// End each row at 8-byte word boundary.

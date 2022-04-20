@@ -34,15 +34,16 @@ use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
 
-pub fn read_compact_rows_as_batch_jit(
+pub fn read_as_batch_jit(
     data: &[u8],
     schema: Arc<Schema>,
     offsets: &[usize],
     assembler: &Assembler,
+    row_type: RowType,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema, RowType::Compact);
+    let mut row = RowReader::new(&schema, row_type);
     register_read_functions(assembler)?;
     let gen_func = gen_read_row(&schema, assembler)?;
     let mut jit = assembler.create_jit();

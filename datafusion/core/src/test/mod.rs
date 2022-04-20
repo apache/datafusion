@@ -228,7 +228,7 @@ pub fn create_vec_batches(schema: &Schema, n: usize) -> Vec<RecordBatch> {
 /// Create batch
 fn create_batch(schema: &Schema) -> RecordBatch {
     RecordBatch::try_new(
-        schema.clone(),
+        Arc::new(schema.clone()),
         vec![Arc::new(UInt32Array::from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]))],
     )
     .unwrap()
