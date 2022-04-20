@@ -176,14 +176,23 @@ impl Time {
     }
 
     /// Add duration of time to self
+    ///
+    /// Note: this will always increment the recorded time by at least 1 nanosecond
+    /// to distinguish between the scenario of no values recorded, in which
+    /// case the value will be 0, and no measurable amount of time having passed,
+    /// in which case the value will be small but not 0.
+    ///
+    /// This is based on the assumption that the timing logic in most cases is likely
+    /// to take at least a nanosecond, and so this is reasonable mechanism to avoid
+    /// ambiguity, especially on systems with low-resolution monotonic clocks
     pub fn add_duration(&self, duration: Duration) {
         let more_nanos = duration.as_nanos() as usize;
-        self.nanos.fetch_add(more_nanos, Ordering::Relaxed);
+        self.nanos.fetch_add(more_nanos.max(1), Ordering::Relaxed);
     }
 
     /// Add the number of nanoseconds of other `Time` to self
     pub fn add(&self, other: &Time) {
-        self.nanos.fetch_add(other.value(), Ordering::Relaxed);
+        self.add_duration(Duration::from_nanos(other.value() as u64))
     }
 
     /// return a scoped guard that adds the amount of time elapsed
