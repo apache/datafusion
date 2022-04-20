@@ -198,7 +198,7 @@ impl<'a, 'b> ExecutionPlanVisitor for IndentVisitor<'a, 'b> {
 impl<'a> ToStringifiedPlan for DisplayableExecutionPlan<'a> {
     fn to_stringified(
         &self,
-        plan_type: crate::logical_plan::PlanType,
+        plan_type: crate::logical_expr::logical_plan::PlanType,
     ) -> StringifiedPlan {
         StringifiedPlan::new(plan_type, self.indent().to_string())
     }

@@ -26,12 +26,12 @@ use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::logical_plan::{Limit, Values};
 use crate::logical_expr::{
     logical_plan::{
-        Aggregate, CrossJoin, EmptyRelation, Filter, Join, LogicalPlan, Operator,
+        Aggregate, CrossJoin, EmptyRelation, Filter, Join, LogicalPlan,
         Partitioning as LogicalPartitioning, PlanType, Projection, Repartition, Sort,
         SubqueryAlias, TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode,
         Window,
     },
-    Expr,
+    Expr, Operator,
 };
 use crate::logical_plan::plan::source_as_provider;
 use crate::logical_plan::{unalias, unnormalize_cols};

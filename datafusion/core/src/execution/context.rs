@@ -79,7 +79,7 @@ use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
 use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-use crate::logical_plan::LogicalPlanBuilder;
+use crate::logical_plan::{LogicalPlanBuilder, UNNAMED_TABLE};
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -87,7 +87,7 @@ use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
 use crate::sql::{
-    parser::{DFParser, FileType},
+    parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
 use crate::variable::{VarProvider, VarType};
