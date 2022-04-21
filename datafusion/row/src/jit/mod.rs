@@ -43,12 +43,12 @@ fn fn_name<T>(f: T) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use crate::error::Result;
-    use crate::row::jit::reader::read_as_batch_jit;
-    use crate::row::jit::writer::write_batch_unchecked_jit;
-    use crate::row::layout::RowType::{Compact, WordAligned};
+    use crate::jit::reader::read_as_batch_jit;
+    use crate::jit::writer::write_batch_unchecked_jit;
+    use crate::layout::RowType::{Compact, WordAligned};
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
+    use datafusion_common::Result;
     use datafusion_jit::api::Assembler;
     use std::sync::Arc;
     use DataType::*;

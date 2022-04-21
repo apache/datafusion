@@ -17,7 +17,7 @@
 
 //! Various row layout for different use case
 
-use crate::row::schema_null_free;
+use crate::schema_null_free;
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{ceil, round_upto_power_of_2};
 
@@ -41,7 +41,6 @@ pub enum RowType {
 #[derive(Debug)]
 pub(crate) struct RowLayout {
     /// Type of the layout
-    #[allow(dead_code)]
     row_type: RowType,
     /// If a row is null free according to its schema
     pub(crate) null_free: bool,

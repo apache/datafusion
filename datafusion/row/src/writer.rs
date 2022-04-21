@@ -17,12 +17,12 @@
 
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
-use crate::error::Result;
-use crate::row::layout::{estimate_row_width, RowLayout, RowType};
+use crate::layout::{estimate_row_width, RowLayout, RowType};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
+use datafusion_common::Result;
 use std::cmp::max;
 use std::sync::Arc;
 

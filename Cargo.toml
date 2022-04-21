@@ -23,6 +23,7 @@ members = [
     "datafusion/jit",
     "datafusion/physical-expr",
     "datafusion/proto",
+    "datafusion/row",
     "datafusion-examples",
     "benchmarks",
     "ballista/rust/client",

@@ -17,16 +17,16 @@
 
 //! Accessing row from raw bytes with JIT
 
-use crate::error::{DataFusionError, Result};
+use crate::jit::fn_name;
+use crate::layout::RowType;
+use crate::reader::RowReader;
+use crate::reader::*;
 use crate::reg_fn;
-use crate::row::jit::fn_name;
-use crate::row::layout::RowType;
-use crate::row::reader::RowReader;
-use crate::row::reader::*;
-use crate::row::MutableRecordBatch;
+use crate::MutableRecordBatch;
 use arrow::array::ArrayBuilder;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_jit::api::Assembler;
 use datafusion_jit::api::GeneratedFunction;
 use datafusion_jit::ast::{I64, PTR};

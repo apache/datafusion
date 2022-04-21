@@ -17,14 +17,14 @@
 
 //! Accessing row from raw bytes
 
-use crate::error::{DataFusionError, Result};
-use crate::row::layout::{RowLayout, RowType};
-use crate::row::validity::{all_valid, NullBitsFormatter};
-use crate::row::MutableRecordBatch;
+use crate::layout::{RowLayout, RowType};
+use crate::validity::{all_valid, NullBitsFormatter};
+use crate::MutableRecordBatch;
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util::get_bit_raw;
+use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
@@ -43,7 +43,7 @@ pub fn read_as_batch(
         read_row(&row, &mut output, &schema);
     }
 
-    Ok(output.output()?)
+    output.output().map_err(DataFusionError::ArrowError)
 }
 
 macro_rules! get_idx {
