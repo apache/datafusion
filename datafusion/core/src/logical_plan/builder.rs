@@ -1199,7 +1199,8 @@ pub(crate) fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-pub(crate) fn build_table_udf_schema(
+/// Build merged table udf schema from input and TableUDF experssions
+pub fn build_table_udf_schema(
     input: &LogicalPlan,
     udtf_expr: &[Expr],
 ) -> Result<DFSchemaRef> {

@@ -30,7 +30,8 @@ pub mod plan;
 mod registry;
 pub mod window_frames;
 pub use builder::{
-    build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
+    build_join_schema, build_table_udf_schema, union_with_alias, LogicalPlanBuilder,
+    UNNAMED_TABLE,
 };
 pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 pub use datafusion_expr::{expr_fn::binary_expr, Operator};
