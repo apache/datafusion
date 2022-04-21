@@ -393,7 +393,7 @@ impl CrossJoinStream {
         };
 
         if left_data.num_rows() == 0 {
-            return Poll::Ready(None)
+            return Poll::Ready(None);
         }
 
         if self.left_index > 0 && self.left_index < left_data.num_rows() {
