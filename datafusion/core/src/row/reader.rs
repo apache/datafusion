@@ -18,13 +18,13 @@
 //! Accessing row from raw bytes
 
 use crate::error::{DataFusionError, Result};
-use crate::row::layout::get_offsets;
+use crate::row::layout::{RowLayout, RowType};
 use crate::row::validity::{all_valid, NullBitsFormatter};
-use crate::row::{row_supported, schema_null_free, MutableRecordBatch};
+use crate::row::MutableRecordBatch;
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util::{ceil, get_bit_raw};
+use arrow::util::bit_util::get_bit_raw;
 use std::sync::Arc;
 
 /// Read `data` of raw-bytes rows starting at `offsets` out to a record batch
@@ -32,23 +32,24 @@ pub fn read_as_batch(
     data: &[u8],
     schema: Arc<Schema>,
     offsets: &[usize],
+    row_type: RowType,
 ) -> Result<RecordBatch> {
     let row_num = offsets.len();
     let mut output = MutableRecordBatch::new(row_num, schema.clone());
-    let mut row = RowReader::new(&schema);
+    let mut row = RowReader::new(&schema, row_type);
 
     for offset in offsets.iter().take(row_num) {
         row.point_to(*offset, data);
         read_row(&row, &mut output, &schema);
     }
 
-    output.output().map_err(DataFusionError::ArrowError)
+    Ok(output.output()?)
 }
 
 macro_rules! get_idx {
     ($NATIVE: ident, $SELF: ident, $IDX: ident, $WIDTH: literal) => {{
         $SELF.assert_index_valid($IDX);
-        let offset = $SELF.field_offsets[$IDX];
+        let offset = $SELF.field_offsets()[$IDX];
         let start = $SELF.base_offset + offset;
         let end = start + $WIDTH;
         $NATIVE::from_le_bytes($SELF.data[start..end].try_into().unwrap())
@@ -60,7 +61,7 @@ macro_rules! fn_get_idx {
         paste::item! {
             fn [<get_ $NATIVE>](&self, idx: usize) -> $NATIVE {
                 self.assert_index_valid(idx);
-                let offset = self.field_offsets[idx];
+                let offset = self.field_offsets()[idx];
                 let start = self.base_offset + offset;
                 let end = start + $WIDTH;
                 $NATIVE::from_le_bytes(self.data[start..end].try_into().unwrap())
@@ -85,32 +86,24 @@ macro_rules! fn_get_idx_opt {
 
 /// Read the tuple `data[base_offset..]` we are currently pointing to
 pub struct RowReader<'a> {
+    /// Layout on how to read each field
+    layout: RowLayout,
     /// Raw bytes slice where the tuple stores
     data: &'a [u8],
     /// Start position for the current tuple in the raw bytes slice.
     base_offset: usize,
-    /// Total number of fields for each tuple.
-    field_count: usize,
-    /// The number of bytes used to store null bits for each field.
-    null_width: usize,
-    /// Starting offset for each fields in the raw bytes.
-    /// For fixed length fields, it's where the actual data stores.
-    /// For variable length fields, it's a pack of (offset << 32 | length) if we use u64.
-    field_offsets: Vec<usize>,
-    /// If a row is null free according to its schema
-    null_free: bool,
 }
 
 impl<'a> std::fmt::Debug for RowReader<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.null_free {
+        if self.null_free() {
             write!(f, "null_free")
         } else {
             let null_bits = self.null_bits();
             write!(
                 f,
                 "{:?}",
-                NullBitsFormatter::new(null_bits, self.field_count)
+                NullBitsFormatter::new(null_bits, self.layout.field_count)
             )
         }
     }
@@ -118,19 +111,11 @@ impl<'a> std::fmt::Debug for RowReader<'a> {
 
 impl<'a> RowReader<'a> {
     /// new
-    pub fn new(schema: &Arc<Schema>) -> Self {
-        assert!(row_supported(schema));
-        let null_free = schema_null_free(schema);
-        let field_count = schema.fields().len();
-        let null_width = if null_free { 0 } else { ceil(field_count, 8) };
-        let (field_offsets, _) = get_offsets(null_width, schema);
+    pub fn new(schema: &Schema, row_type: RowType) -> Self {
         Self {
+            layout: RowLayout::new(schema, row_type),
             data: &[],
             base_offset: 0,
-            field_count,
-            null_width,
-            field_offsets,
-            null_free,
         }
     }
 
@@ -142,26 +127,36 @@ impl<'a> RowReader<'a> {
 
     #[inline]
     fn assert_index_valid(&self, idx: usize) {
-        assert!(idx < self.field_count);
+        assert!(idx < self.layout.field_count);
+    }
+
+    #[inline(always)]
+    fn field_offsets(&self) -> &[usize] {
+        &self.layout.field_offsets
+    }
+
+    #[inline(always)]
+    fn null_free(&self) -> bool {
+        self.layout.null_free
     }
 
     #[inline(always)]
     fn null_bits(&self) -> &[u8] {
-        if self.null_free {
+        if self.null_free() {
             &[]
         } else {
             let start = self.base_offset;
-            &self.data[start..start + self.null_width]
+            &self.data[start..start + self.layout.null_width]
         }
     }
 
     #[inline(always)]
     fn all_valid(&self) -> bool {
-        if self.null_free {
+        if self.null_free() {
             true
         } else {
             let null_bits = self.null_bits();
-            all_valid(null_bits, self.field_count)
+            all_valid(null_bits, self.layout.field_count)
         }
     }
 
@@ -171,14 +166,14 @@ impl<'a> RowReader<'a> {
 
     fn get_bool(&self, idx: usize) -> bool {
         self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
+        let offset = self.field_offsets()[idx];
         let value = &self.data[self.base_offset + offset..];
         value[0] != 0
     }
 
     fn get_u8(&self, idx: usize) -> u8 {
         self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
+        let offset = self.field_offsets()[idx];
         self.data[self.base_offset + offset]
     }
 
@@ -257,8 +252,8 @@ impl<'a> RowReader<'a> {
 }
 
 /// Read the row currently pointed by RowWriter to the output columnar batch buffer
-pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Arc<Schema>) {
-    if row.null_free || row.all_valid() {
+pub fn read_row(row: &RowReader, batch: &mut MutableRecordBatch, schema: &Schema) {
+    if row.all_valid() {
         for ((col_idx, to), field) in batch
             .arrays
             .iter_mut()

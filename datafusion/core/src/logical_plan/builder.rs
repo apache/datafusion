@@ -46,8 +46,9 @@ use std::{
 use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column,
-    CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values,
+    columnize_expr, normalize_col, normalize_cols, provider_as_source,
+    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
+    Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 
@@ -449,7 +450,7 @@ impl LogicalPlanBuilder {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
-            source: provider,
+            source: provider_as_source(provider),
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,

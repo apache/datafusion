@@ -31,7 +31,8 @@ use arrow::{
 };
 use datafusion_common::Result;
 
-use crate::datasource::{MemTable, TableProvider, TableType};
+use crate::datasource::{MemTable, TableProvider};
+use crate::logical_expr::TableType;
 
 use super::{
     catalog::{CatalogList, CatalogProvider},

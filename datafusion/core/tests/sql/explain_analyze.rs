@@ -16,6 +16,7 @@
 // under the License.
 
 use super::*;
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
 
 #[tokio::test]
 async fn explain_analyze_baseline_metrics() {
@@ -136,8 +137,16 @@ async fn explain_analyze_baseline_metrics() {
             }
             let metrics = plan.metrics().unwrap().aggregate_by_partition();
 
-            assert!(metrics.output_rows().unwrap() > 0);
-            assert!(metrics.elapsed_compute().unwrap() > 0);
+            assert!(
+                metrics.output_rows().unwrap() > 0,
+                "plan: {}",
+                DisplayableExecutionPlan::with_metrics(plan).one_line()
+            );
+            assert!(
+                metrics.elapsed_compute().unwrap() > 0,
+                "plan: {}",
+                DisplayableExecutionPlan::with_metrics(plan).one_line()
+            );
 
             let mut saw_start = false;
             let mut saw_end = false;
