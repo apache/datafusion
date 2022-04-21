@@ -113,7 +113,7 @@ impl CrossJoinExec {
 }
 
 /// Asynchronously collect the result of the left child
-async fn load(
+async fn load_left_input(
     left: Arc<dyn ExecutionPlan>,
     context: Arc<TaskContext>,
 ) -> Result<JoinLeftData> {
@@ -190,7 +190,7 @@ impl ExecutionPlan for CrossJoinExec {
             .left_fut
             .lock()
             .get_or_insert_with(|| {
-                load(self.left.clone(), context)
+                load_left_input(self.left.clone(), context)
                     .map(Arc::new)
                     .boxed()
                     .shared()
