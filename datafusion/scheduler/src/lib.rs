@@ -98,7 +98,8 @@ impl SchedulerBuilder {
 ///
 /// # Shutdown
 ///
-/// TBC
+/// Queries scheduled on a [`Scheduler`] will run to completion even if the
+/// [`Scheduler`] is dropped
 ///
 /// [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
 /// [rayon]: https://docs.rs/rayon/latest/rayon/
