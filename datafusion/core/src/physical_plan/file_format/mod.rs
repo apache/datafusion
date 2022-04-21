@@ -44,6 +44,7 @@ use crate::{
     scalar::ScalarValue,
 };
 use arrow::array::{new_null_array, UInt16BufferBuilder};
+use arrow::record_batch::RecordBatchOptions;
 use datafusion_data_access::object_store::ObjectStore;
 use lazy_static::lazy_static;
 use log::info;
@@ -275,9 +276,15 @@ impl SchemaAdapter {
 
         let projected_schema = Arc::new(self.table_schema.clone().project(projections)?);
 
-        let merged_batch = RecordBatch::try_new(projected_schema, cols)?;
+        // Necessary to handle empty batches
+        let mut options = RecordBatchOptions::default();
+        options.row_count = Some(batch.num_rows());
 
-        Ok(merged_batch)
+        Ok(RecordBatch::try_new_with_options(
+            projected_schema,
+            cols,
+            &options,
+        )?)
     }
 }
 
@@ -320,36 +327,6 @@ impl PartitionColumnProjector {
             key_buffer_cache: None,
             projected_schema,
         }
-    }
-
-    // Creates a RecordBatch with values from the partition_values. Used when no non-partition values are read
-    fn project_from_size(
-        &mut self,
-        batch_size: usize,
-        partition_values: &[ScalarValue],
-    ) -> ArrowResult<RecordBatch> {
-        let expected_cols = self.projected_schema.fields().len();
-        if expected_cols != self.projected_partition_indexes.len() {
-            return Err(ArrowError::SchemaError(format!(
-                "Unexepected number of partition values, expected {} but got {}",
-                expected_cols,
-                partition_values.len()
-            )));
-        }
-        //The destination index is not needed. Since there are no non-partition columns it will simply be equivalent to
-        //the index that would be provided by .enumerate()
-        let cols = self
-            .projected_partition_indexes
-            .iter()
-            .map(|(pidx, _)| {
-                create_dict_array(
-                    &mut self.key_buffer_cache,
-                    &partition_values[*pidx],
-                    batch_size,
-                )
-            })
-            .collect();
-        RecordBatch::try_new(Arc::clone(&self.projected_schema), cols)
     }
 
     // Transform the batch read from the file by inserting the partitioning columns
