@@ -32,7 +32,7 @@ use crate::physical_plan::metrics::{
 };
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::SortedStream;
-use crate::physical_plan::stream::RecordBatchReceiverStream;
+use crate::physical_plan::stream::{RecordBatchBoxStream, RecordBatchReceiverStream};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -46,9 +46,8 @@ use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
-use futures::future::BoxFuture;
 use futures::lock::Mutex;
-use futures::{ready, FutureExt, Stream, StreamExt};
+use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
 use std::cmp::min;
@@ -57,7 +56,6 @@ use std::fmt::{Debug, Formatter};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tempfile::NamedTempFile;
@@ -781,9 +779,9 @@ impl ExecutionPlan for SortExec {
 
         debug!("End SortExec's input.execute for partition: {}", partition);
 
-        Ok(Box::pin(SortExecStream {
-            schema: self.schema(),
-            state: SortStreamState::Fetch(
+        Ok(Box::pin(RecordBatchBoxStream::new(
+            self.schema(),
+            futures::stream::once(
                 do_sort(
                     input,
                     partition,
@@ -791,9 +789,11 @@ impl ExecutionPlan for SortExec {
                     self.metrics_set.clone(),
                     context,
                 )
-                .boxed(),
-            ),
-        }))
+                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
+            )
+            .try_flatten()
+            .boxed(),
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -873,60 +873,6 @@ fn sort_batch(
         sort_arrays,
         sorted_batch,
     })
-}
-
-#[derive(Debug)]
-struct SortExecStream {
-    schema: SchemaRef,
-    state: SortStreamState,
-}
-
-enum SortStreamState {
-    Fetch(BoxFuture<'static, Result<SendableRecordBatchStream>>),
-    Stream(SendableRecordBatchStream),
-    Error,
-}
-
-impl std::fmt::Debug for SortStreamState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SortStreamState::Fetch(_) => write!(f, "SortStreamState::Fetch"),
-            SortStreamState::Stream(_) => write!(f, "SortStreamState::Stream"),
-            SortStreamState::Error => write!(f, "SortStreamState::Error"),
-        }
-    }
-}
-
-impl Stream for SortExecStream {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Self::Item>> {
-        let this = &mut *self;
-        loop {
-            match &mut this.state {
-                SortStreamState::Fetch(fut) => match ready!(fut.poll_unpin(cx)) {
-                    Ok(stream) => this.state = SortStreamState::Stream(stream),
-                    Err(e) => {
-                        this.state = SortStreamState::Error;
-                        return Poll::Ready(Some(Err(ArrowError::ExternalError(
-                            Box::new(e),
-                        ))));
-                    }
-                },
-                SortStreamState::Stream(stream) => return stream.poll_next_unpin(cx),
-                SortStreamState::Error => return Poll::Pending,
-            }
-        }
-    }
-}
-
-impl RecordBatchStream for SortExecStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
 }
 
 async fn do_sort(

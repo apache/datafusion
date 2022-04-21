@@ -20,6 +20,7 @@
 use arrow::{
     datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
+use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
@@ -69,6 +70,48 @@ impl Stream for RecordBatchReceiverStream {
 }
 
 impl RecordBatchStream for RecordBatchReceiverStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
+/// Combines a [`BoxStream`] with [`SchemaRef`] implementing
+/// [`RecordBatchStream`] for the combination
+pub(crate) struct RecordBatchBoxStream {
+    schema: SchemaRef,
+    stream: BoxStream<'static, ArrowResult<RecordBatch>>,
+}
+
+impl RecordBatchBoxStream {
+    /// Creates a new [`RecordBatchBoxStream`] from the provided schema and stream
+    pub(crate) fn new(
+        schema: SchemaRef,
+        stream: BoxStream<'static, ArrowResult<RecordBatch>>,
+    ) -> Self {
+        Self { schema, stream }
+    }
+}
+
+impl std::fmt::Debug for RecordBatchBoxStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RecordBatchBoxStream")
+            .field("schema", &self.schema)
+            .finish()
+    }
+}
+
+impl Stream for RecordBatchBoxStream {
+    type Item = ArrowResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.stream.poll_next_unpin(cx)
+    }
+}
+
+impl RecordBatchStream for RecordBatchBoxStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
