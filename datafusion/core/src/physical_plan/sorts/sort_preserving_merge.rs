@@ -37,7 +37,7 @@ use arrow::{
 };
 use async_trait::async_trait;
 use futures::stream::{Fuse, FusedStream};
-use futures::{Stream, StreamExt, TryFutureExt};
+use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 
 use crate::error::{DataFusionError, Result};
@@ -189,7 +189,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
             _ => {
                 // Use tokio only if running from a tokio context (#2201)
                 let receivers = match tokio::runtime::Handle::try_current() {
-                    Ok(handle) => (0..input_partitions)
+                    Ok(_) => (0..input_partitions)
                         .into_iter()
                         .map(|part_i| {
                             let (sender, receiver) = mpsc::channel(1);
@@ -211,11 +211,17 @@ impl ExecutionPlan for SortPreservingMergeExec {
                         })
                         .collect(),
                     Err(_) => {
-                        futures::future::try_join_all((0..input_partitions).map(|x| {
-                            self.input
-                                .execute(0, context.clone())
-                                .map_ok(|stream| SortedStream::new(stream, 0))
-                        }))
+                        futures::future::try_join_all((0..input_partitions).map(
+                            |partition| {
+                                let context = context.clone();
+                                async move {
+                                    self.input
+                                        .execute(partition, context)
+                                        .await
+                                        .map(|stream| SortedStream::new(stream, 0))
+                                }
+                            },
+                        ))
                         .await?
                     }
                 };
