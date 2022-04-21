@@ -56,7 +56,7 @@ use std::sync::Arc;
 
 #[cfg(feature = "jit")]
 pub mod jit;
-mod layout;
+pub mod layout;
 pub mod reader;
 mod validity;
 pub mod writer;
@@ -108,22 +108,12 @@ fn make_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::file_format::FileFormat;
-    use crate::datasource::listing::local_unpartitioned_file;
-    use crate::error::Result;
-    use crate::physical_plan::file_format::FileScanConfig;
-    use crate::physical_plan::{collect, ExecutionPlan};
-    use crate::prelude::SessionContext;
-    use crate::row::layout::RowType::{Compact, WordAligned};
-    use crate::row::reader::read_as_batch;
-    use crate::row::writer::write_batch_unchecked;
+    use crate::layout::RowType::{Compact, WordAligned};
+    use crate::reader::read_as_batch;
+    use crate::writer::write_batch_unchecked;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
-    use datafusion_data_access::object_store::local::LocalFileSystem;
-    use datafusion_data_access::object_store::local::{
-        local_object_reader, local_object_reader_stream,
-    };
+    use datafusion_common::Result;
     use DataType::*;
 
     macro_rules! fn_test_single_type {
@@ -389,49 +379,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_with_parquet() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
-        let schema = exec.schema().clone();
-
-        let batches = collect(exec, task_ctx).await?;
-        assert_eq!(1, batches.len());
-        let batch = &batches[0];
-
-        let mut vector = vec![0; 20480];
-        let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone(), Compact) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets, Compact)? };
-        assert_eq!(*batch, output_batch);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_with_parquet_word_aligned() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
-        let schema = exec.schema().clone();
-
-        let batches = collect(exec, task_ctx).await?;
-        assert_eq!(1, batches.len());
-        let batch = &batches[0];
-
-        let mut vector = vec![0; 20480];
-        let row_offsets = {
-            write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone(), WordAligned)
-        };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets, WordAligned)? };
-        assert_eq!(*batch, output_batch);
-
-        Ok(())
-    }
-
     #[test]
     #[should_panic(expected = "row_supported(schema, row_type)")]
     fn test_unsupported_type_write() {
@@ -453,39 +400,5 @@ mod tests {
         let vector = vec![0; 1024];
         let row_offsets = vec![0];
         read_as_batch(&vector, schema, &row_offsets, Compact).unwrap();
-    }
-
-    async fn get_exec(
-        file_name: &str,
-        projection: &Option<Vec<usize>>,
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, file_name);
-        let format = ParquetFormat::default();
-        let file_schema = format
-            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
-            .await
-            .expect("Schema inference");
-        let statistics = format
-            .infer_stats(local_object_reader(filename.clone()), file_schema.clone())
-            .await
-            .expect("Stats inference");
-        let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
-        let exec = format
-            .create_physical_plan(
-                FileScanConfig {
-                    object_store: Arc::new(LocalFileSystem {}),
-                    file_schema,
-                    file_groups,
-                    statistics,
-                    projection: projection.clone(),
-                    limit,
-                    table_partition_cols: vec![],
-                },
-                &[],
-            )
-            .await?;
-        Ok(exec)
     }
 }

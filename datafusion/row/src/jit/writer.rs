@@ -17,16 +17,16 @@
 
 //! Reusable JIT version of row writer backed by Vec<u8> to stitch attributes together
 
-use crate::error::Result;
+use crate::jit::fn_name;
+use crate::layout::RowType;
 use crate::reg_fn;
-use crate::row::jit::fn_name;
-use crate::row::layout::RowType;
-use crate::row::schema_null_free;
-use crate::row::writer::RowWriter;
-use crate::row::writer::*;
+use crate::schema_null_free;
+use crate::writer::RowWriter;
+use crate::writer::*;
 use arrow::array::Array;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
+use datafusion_common::Result;
 use datafusion_jit::api::CodeBlock;
 use datafusion_jit::api::{Assembler, GeneratedFunction};
 use datafusion_jit::ast::Expr;
