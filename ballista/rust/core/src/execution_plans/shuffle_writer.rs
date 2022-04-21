@@ -34,16 +34,13 @@ use crate::serde::protobuf::ShuffleWritePartition;
 use crate::serde::scheduler::PartitionStats;
 use async_trait::async_trait;
 use datafusion::arrow::array::{
-    Array, ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder,
-    UInt64Builder,
+    ArrayBuilder, ArrayRef, StringBuilder, StructBuilder, UInt32Builder, UInt64Builder,
 };
-use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::common::IPCWriter;
-use datafusion::physical_plan::hash_utils::create_hashes;
 use datafusion::physical_plan::memory::MemoryStream;
 use datafusion::physical_plan::metrics::{
     self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -55,6 +52,7 @@ use datafusion::physical_plan::{
 use futures::StreamExt;
 
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_plan::repartition::BatchPartitioner;
 use log::{debug, info};
 
 /// ShuffleWriterExec represents a section of a query plan that has consistent partitioning and
@@ -81,6 +79,7 @@ pub struct ShuffleWriterExec {
 struct ShuffleWriteMetrics {
     /// Time spend writing batches to shuffle files
     write_time: metrics::Time,
+    repart_time: metrics::Time,
     input_rows: metrics::Count,
     output_rows: metrics::Count,
 }
@@ -88,6 +87,8 @@ struct ShuffleWriteMetrics {
 impl ShuffleWriteMetrics {
     fn new(partition: usize, metrics: &ExecutionPlanMetricsSet) -> Self {
         let write_time = MetricBuilder::new(metrics).subset_time("write_time", partition);
+        let repart_time =
+            MetricBuilder::new(metrics).subset_time("repart_time", partition);
 
         let input_rows = MetricBuilder::new(metrics).counter("input_rows", partition);
 
@@ -95,6 +96,7 @@ impl ShuffleWriteMetrics {
 
         Self {
             write_time,
+            repart_time,
             input_rows,
             output_rows,
         }
@@ -202,77 +204,48 @@ impl ShuffleWriterExec {
                     writers.push(None);
                 }
 
-                let hashes_buf = &mut vec![];
-                let random_state = ahash::RandomState::with_seeds(0, 0, 0, 0);
+                let mut partitioner = BatchPartitioner::try_new(
+                    Partitioning::Hash(exprs.clone(), *n),
+                    write_metrics.repart_time.clone(),
+                )?;
 
                 while let Some(result) = stream.next().await {
                     let input_batch = result?;
 
                     write_metrics.input_rows.add(input_batch.num_rows());
 
-                    let arrays = exprs
-                        .iter()
-                        .map(|expr| {
-                            Ok(expr
-                                .evaluate(&input_batch)?
-                                .into_array(input_batch.num_rows()))
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-                    hashes_buf.clear();
-                    hashes_buf.resize(arrays[0].len(), 0);
-                    // Hash arrays and compute buckets based on number of partitions
-                    let hashes = create_hashes(&arrays, &random_state, hashes_buf)?;
-                    let mut indices = vec![vec![]; num_output_partitions];
-                    for (index, hash) in hashes.iter().enumerate() {
-                        indices[(*hash % num_output_partitions as u64) as usize]
-                            .push(index as u64)
-                    }
-                    for (output_partition, partition_indices) in
-                        indices.into_iter().enumerate()
-                    {
-                        let indices = partition_indices.into();
+                    partitioner.partition(
+                        input_batch,
+                        |output_partition, output_batch| {
+                            // write non-empty batch out
 
-                        // Produce batches based on indices
-                        let columns = input_batch
-                            .columns()
-                            .iter()
-                            .map(|c| {
-                                take(c.as_ref(), &indices, None).map_err(|e| {
-                                    DataFusionError::Execution(e.to_string())
-                                })
-                            })
-                            .collect::<Result<Vec<Arc<dyn Array>>>>()?;
+                            // TODO optimize so we don't write or fetch empty partitions
+                            // if output_batch.num_rows() > 0 {
+                            let timer = write_metrics.write_time.timer();
+                            match &mut writers[output_partition] {
+                                Some(w) => {
+                                    w.write(&output_batch)?;
+                                }
+                                None => {
+                                    let mut path = path.clone();
+                                    path.push(&format!("{}", output_partition));
+                                    std::fs::create_dir_all(&path)?;
 
-                        let output_batch =
-                            RecordBatch::try_new(input_batch.schema(), columns)?;
+                                    path.push(format!("data-{}.arrow", input_partition));
+                                    info!("Writing results to {:?}", path);
 
-                        // write non-empty batch out
+                                    let mut writer =
+                                        IPCWriter::new(&path, stream.schema().as_ref())?;
 
-                        // TODO optimize so we don't write or fetch empty partitions
-                        // if output_batch.num_rows() > 0 {
-                        let timer = write_metrics.write_time.timer();
-                        match &mut writers[output_partition] {
-                            Some(w) => {
-                                w.write(&output_batch)?;
+                                    writer.write(&output_batch)?;
+                                    writers[output_partition] = Some(writer);
+                                }
                             }
-                            None => {
-                                let mut path = path.clone();
-                                path.push(&format!("{}", output_partition));
-                                std::fs::create_dir_all(&path)?;
-
-                                path.push(format!("data-{}.arrow", input_partition));
-                                info!("Writing results to {:?}", path);
-
-                                let mut writer =
-                                    IPCWriter::new(&path, stream.schema().as_ref())?;
-
-                                writer.write(&output_batch)?;
-                                writers[output_partition] = Some(writer);
-                            }
-                        }
-                        write_metrics.output_rows.add(output_batch.num_rows());
-                        timer.done();
-                    }
+                            write_metrics.output_rows.add(output_batch.num_rows());
+                            timer.done();
+                            Ok(())
+                        },
+                    )?;
                 }
 
                 let mut part_locs = vec![];

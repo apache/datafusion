@@ -18,12 +18,11 @@
 //! Reusable row writer backed by Vec<u8> to stitch attributes together
 
 use crate::error::Result;
-use crate::row::layout::{estimate_row_width, get_offsets};
-use crate::row::{fixed_size, row_supported, schema_null_free};
+use crate::row::layout::{estimate_row_width, RowLayout, RowType};
 use arrow::array::*;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::util::bit_util::{ceil, round_upto_power_of_2, set_bit_raw, unset_bit_raw};
+use arrow::util::bit_util::{round_upto_power_of_2, set_bit_raw, unset_bit_raw};
 use std::cmp::max;
 use std::sync::Arc;
 
@@ -37,8 +36,9 @@ pub fn write_batch_unchecked(
     batch: &RecordBatch,
     row_idx: usize,
     schema: Arc<Schema>,
+    row_type: RowType,
 ) -> Vec<usize> {
-    let mut writer = RowWriter::new(&schema);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut current_offset = offset;
     let mut offsets = vec![];
     let columns = batch.columns();
@@ -58,8 +58,9 @@ pub fn write_batch_unchecked(
 pub fn bench_write_batch(
     batches: &[Vec<RecordBatch>],
     schema: Arc<Schema>,
+    row_type: RowType,
 ) -> Result<Vec<usize>> {
-    let mut writer = RowWriter::new(&schema);
+    let mut writer = RowWriter::new(&schema, row_type);
     let mut lengths = vec![];
 
     for batch in batches.iter().flatten() {
@@ -77,7 +78,7 @@ pub fn bench_write_batch(
 macro_rules! set_idx {
     ($WIDTH: literal, $SELF: ident, $IDX: ident, $VALUE: ident) => {{
         $SELF.assert_index_valid($IDX);
-        let offset = $SELF.field_offsets[$IDX];
+        let offset = $SELF.field_offsets()[$IDX];
         $SELF.data[offset..offset + $WIDTH].copy_from_slice(&$VALUE.to_le_bytes());
     }};
 }
@@ -87,7 +88,7 @@ macro_rules! fn_set_idx {
         paste::item! {
             fn [<set_ $NATIVE>](&mut self, idx: usize, value: $NATIVE) {
                 self.assert_index_valid(idx);
-                let offset = self.field_offsets[idx];
+                let offset = self.field_offsets()[idx];
                 self.data[offset..offset + $WIDTH].copy_from_slice(&value.to_le_bytes());
             }
         }
@@ -96,51 +97,30 @@ macro_rules! fn_set_idx {
 
 /// Reusable row writer backed by Vec<u8>
 pub struct RowWriter {
+    /// Layout on how to write each field
+    layout: RowLayout,
     /// buffer for the current tuple been written.
     data: Vec<u8>,
-    /// Total number of fields for each tuple.
-    field_count: usize,
     /// Length in bytes for the current tuple, 8-bytes word aligned.
     pub(crate) row_width: usize,
-    /// The number of bytes used to store null bits for each field.
-    null_width: usize,
-    /// Length in bytes for `values` part of the current tuple.
-    values_width: usize,
     /// Length in bytes for `variable length data` part of the current tuple.
     varlena_width: usize,
     /// Current offset for the next variable length field to write to.
     varlena_offset: usize,
-    /// Starting offset for each fields in the raw bytes.
-    /// For fixed length fields, it's where the actual data stores.
-    /// For variable length fields, it's a pack of (offset << 32 | length) if we use u64.
-    field_offsets: Vec<usize>,
-    /// If a row is null free according to its schema
-    null_free: bool,
 }
 
 impl RowWriter {
     /// new
-    pub fn new(schema: &Arc<Schema>) -> Self {
-        assert!(row_supported(schema));
-        let null_free = schema_null_free(schema);
-        let field_count = schema.fields().len();
-        let null_width = if null_free { 0 } else { ceil(field_count, 8) };
-        let (field_offsets, values_width) = get_offsets(null_width, schema);
-        let mut init_capacity = estimate_row_width(schema);
-        if !fixed_size(schema) {
-            // double the capacity to avoid repeated resize
-            init_capacity *= 2;
-        }
+    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+        let layout = RowLayout::new(schema, row_type);
+        let init_capacity = estimate_row_width(schema, &layout);
+        let varlena_offset = layout.fixed_part_width();
         Self {
+            layout,
             data: vec![0; init_capacity],
-            field_count,
             row_width: 0,
-            null_width,
-            values_width,
             varlena_width: 0,
-            varlena_offset: null_width + values_width,
-            field_offsets,
-            null_free,
+            varlena_offset,
         }
     }
 
@@ -149,20 +129,30 @@ impl RowWriter {
         self.data.fill(0);
         self.row_width = 0;
         self.varlena_width = 0;
-        self.varlena_offset = self.null_width + self.values_width;
+        self.varlena_offset = self.layout.fixed_part_width();
     }
 
     #[inline]
     fn assert_index_valid(&self, idx: usize) {
-        assert!(idx < self.field_count);
+        assert!(idx < self.layout.field_count);
+    }
+
+    #[inline(always)]
+    fn field_offsets(&self) -> &[usize] {
+        &self.layout.field_offsets
+    }
+
+    #[inline(always)]
+    fn null_free(&self) -> bool {
+        self.layout.null_free
     }
 
     pub(crate) fn set_null_at(&mut self, idx: usize) {
         assert!(
-            !self.null_free,
+            !self.null_free(),
             "Unexpected call to set_null_at on null-free row writer"
         );
-        let null_bits = &mut self.data[0..self.null_width];
+        let null_bits = &mut self.data[0..self.layout.null_width];
         unsafe {
             unset_bit_raw(null_bits.as_mut_ptr(), idx);
         }
@@ -170,10 +160,10 @@ impl RowWriter {
 
     pub(crate) fn set_non_null_at(&mut self, idx: usize) {
         assert!(
-            !self.null_free,
+            !self.null_free(),
             "Unexpected call to set_non_null_at on null-free row writer"
         );
-        let null_bits = &mut self.data[0..self.null_width];
+        let null_bits = &mut self.data[0..self.layout.null_width];
         unsafe {
             set_bit_raw(null_bits.as_mut_ptr(), idx);
         }
@@ -181,13 +171,13 @@ impl RowWriter {
 
     fn set_bool(&mut self, idx: usize, value: bool) {
         self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
+        let offset = self.field_offsets()[idx];
         self.data[offset] = if value { 1 } else { 0 };
     }
 
     fn set_u8(&mut self, idx: usize, value: u8) {
         self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
+        let offset = self.field_offsets()[idx];
         self.data[offset] = value;
     }
 
@@ -202,7 +192,7 @@ impl RowWriter {
 
     fn set_i8(&mut self, idx: usize, value: i8) {
         self.assert_index_valid(idx);
-        let offset = self.field_offsets[idx];
+        let offset = self.field_offsets()[idx];
         self.data[offset] = value.to_le_bytes()[0];
     }
 
@@ -241,7 +231,7 @@ impl RowWriter {
     }
 
     fn current_width(&self) -> usize {
-        self.null_width + self.values_width + self.varlena_width
+        self.layout.fixed_part_width() + self.varlena_width
     }
 
     /// End each row at 8-byte word boundary.
@@ -263,11 +253,11 @@ impl RowWriter {
 pub fn write_row(
     row: &mut RowWriter,
     row_idx: usize,
-    schema: &Arc<Schema>,
+    schema: &Schema,
     columns: &[ArrayRef],
 ) -> usize {
     // Get the row from the batch denoted by row_idx
-    if row.null_free {
+    if row.null_free() {
         for ((i, f), col) in schema.fields().iter().enumerate().zip(columns.iter()) {
             write_field(i, row_idx, col, f.data_type(), row);
         }

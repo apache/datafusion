@@ -31,8 +31,8 @@ use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
     normalize_col, union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
-    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
-    ToDFSchema, ToStringifiedPlan,
+    DFSchemaRef, DropTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder, Operator,
+    PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -43,7 +43,7 @@ use crate::{
     physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
     physical_plan::udf::ScalarUDF,
-    sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
+    sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};

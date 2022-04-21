@@ -40,7 +40,6 @@ use parquet::arrow::{
     arrow_reader::ParquetRecordBatchReader, ArrowReader, ArrowWriter,
     ParquetFileArrowReader,
 };
-use parquet::file::reader::FileReader;
 use parquet::file::{
     metadata::RowGroupMetaData, properties::WriterProperties,
     reader::SerializedFileReader, serialized_reader::ReadOptionsBuilder,
@@ -285,19 +284,6 @@ impl ExecutionPlan for ParquetExec {
     }
 }
 
-/// Special-case empty column projection
-///
-/// This is a workaround for https://github.com/apache/arrow-rs/issues/1537
-enum ProjectedReader {
-    Reader {
-        reader: ParquetRecordBatchReader,
-    },
-    EmptyProjection {
-        remaining_rows: usize,
-        batch_size: usize,
-    },
-}
-
 /// Implements [`RecordBatchStream`] for a collection of [`PartitionedFile`]
 ///
 /// NB: This will perform blocking IO synchronously without yielding which may
@@ -313,14 +299,17 @@ struct ParquetExecStream {
     schema: SchemaRef,
     projection: Vec<usize>,
     remaining_rows: Option<usize>,
-    reader: Option<(ProjectedReader, PartitionedFile)>,
+    reader: Option<(ParquetRecordBatchReader, PartitionedFile)>,
     files: VecDeque<PartitionedFile>,
     projector: PartitionColumnProjector,
     adapter: SchemaAdapter,
 }
 
 impl ParquetExecStream {
-    fn create_reader(&mut self, file: &PartitionedFile) -> Result<ProjectedReader> {
+    fn create_reader(
+        &mut self,
+        file: &PartitionedFile,
+    ) -> Result<ParquetRecordBatchReader> {
         let file_metrics = ParquetFileMetrics::new(
             self.partition_index,
             file.file_meta.path(),
@@ -351,20 +340,6 @@ impl ParquetExecStream {
             opt.build(),
         )?;
 
-        if self.projection.is_empty() {
-            let remaining_rows = file_reader
-                .metadata()
-                .file_metadata()
-                .num_rows()
-                .try_into()
-                .expect("Row count should always be greater than or equal to 0 and less than usize::MAX");
-
-            return Ok(ProjectedReader::EmptyProjection {
-                remaining_rows,
-                batch_size: self.batch_size,
-            });
-        }
-
         let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(file_reader));
 
         let adapted_projections = self
@@ -374,7 +349,7 @@ impl ParquetExecStream {
         let reader = arrow_reader
             .get_record_reader_by_columns(adapted_projections, self.batch_size)?;
 
-        Ok(ProjectedReader::Reader { reader })
+        Ok(reader)
     }
 }
 
@@ -402,30 +377,17 @@ impl Iterator for ParquetExecStream {
                 },
             };
 
-            let result = match reader {
-                ProjectedReader::Reader { reader } => reader.next().map(|result| {
-                    result
-                        .and_then(|batch| {
-                            self.adapter
-                                .adapt_batch(batch, &self.projection)
-                                .map_err(|e| ArrowError::ExternalError(Box::new(e)))
-                        })
-                        .and_then(|batch| {
-                            self.projector.project(batch, &file.partition_values)
-                        })
-                }),
-                ProjectedReader::EmptyProjection {
-                    remaining_rows,
-                    batch_size,
-                } => {
-                    let size = *remaining_rows.min(batch_size);
-                    *remaining_rows -= size;
-                    (size != 0).then(|| {
-                        self.projector
-                            .project_from_size(size, &file.partition_values)
+            let result = reader.next().map(|result| {
+                result
+                    .and_then(|batch| {
+                        self.adapter
+                            .adapt_batch(batch, &self.projection)
+                            .map_err(|e| ArrowError::ExternalError(Box::new(e)))
                     })
-                }
-            };
+                    .and_then(|batch| {
+                        self.projector.project(batch, &file.partition_values)
+                    })
+            });
 
             let result = match result {
                 Some(result) => result,
