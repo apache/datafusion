@@ -64,8 +64,9 @@ pub struct CrossJoinExec {
     schema: SchemaRef,
     /// Build-side data
     ///
-    /// Ideally we would instantiate this in the constructor, but we need
-    /// the [`TaskContext`] provided in [`ExecutionPlan::execute`]
+    /// Ideally we would instantiate this in the constructor, avoiding the need for a
+    /// mutex and an option, but we need the [`TaskContext`] to evaluate the left
+    /// side data, which is only provided in [`ExecutionPlan::execute`]
     left_fut: Mutex<Option<JoinLeftFut>>,
 }
 
