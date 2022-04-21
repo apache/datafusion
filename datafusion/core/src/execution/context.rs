@@ -2143,13 +2143,13 @@ mod tests {
     async fn user_defined_table_function() -> Result<()> {
         let mut ctx = SessionContext::new();
 
-        let integer_serries = integer_udtf();
+        let integer_series = integer_udtf();
         ctx.register_udtf(create_udtf(
-            "integer_serries",
+            "integer_series",
             vec![DataType::Int64, DataType::Int64],
             Arc::new(DataType::Int64),
             Volatility::Immutable,
-            integer_serries,
+            integer_series,
         ));
 
         let struct_func = struct_udtf();
@@ -2179,40 +2179,51 @@ mod tests {
 
         assert_batches_eq!(expected, &result);
 
-        let result = plan_and_collect(&ctx, "SELECT integer_serries(1,5)").await?;
+        let result = plan_and_collect(&ctx, "SELECT integer_series(6,5)").await?;
 
         let expected = vec![
-            "+------------------------------------+",
-            "| integer_serries(Int64(1),Int64(5)) |",
-            "+------------------------------------+",
-            "| 1                                  |",
-            "| 2                                  |",
-            "| 3                                  |",
-            "| 4                                  |",
-            "| 5                                  |",
-            "+------------------------------------+",
+            "+-----------------------------------+",
+            "| integer_series(Int64(6),Int64(5)) |",
+            "+-----------------------------------+",
+            "+-----------------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &result);
+
+        let result = plan_and_collect(&ctx, "SELECT integer_series(1,5)").await?;
+
+        let expected = vec![
+            "+-----------------------------------+",
+            "| integer_series(Int64(1),Int64(5)) |",
+            "+-----------------------------------+",
+            "| 1                                 |",
+            "| 2                                 |",
+            "| 3                                 |",
+            "| 4                                 |",
+            "| 5                                 |",
+            "+-----------------------------------+",
         ];
 
         assert_batches_eq!(expected, &result);
 
         let result = plan_and_collect(
             &ctx,
-            "SELECT asd, struct_func(qwe), integer_serries(asd, qwe), integer_serries(1, qwe) r FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
+            "SELECT asd, struct_func(qwe), integer_series(asd, qwe), integer_series(1, qwe) r FROM (select 1 asd, 3 qwe UNION ALL select 2 asd, 4 qwe) x",
         )
         .await?;
 
         let expected = vec![
-            "+-----+-------------------------+------------------------------+---+",
-            "| asd | struct_func(x.qwe)      | integer_serries(x.asd,x.qwe) | r |",
-            "+-----+-------------------------+------------------------------+---+",
-            "| 1   | {\"f1\": \"test\", \"f2\": 3} | 1                            | 1 |",
-            "| 1   |                         | 2                            | 2 |",
-            "| 1   |                         | 3                            | 3 |",
-            "| 2   | {\"f1\": \"test\", \"f2\": 4} | 2                            | 1 |",
-            "| 2   |                         | 3                            | 2 |",
-            "| 2   |                         | 4                            | 3 |",
-            "| 2   |                         |                              | 4 |",
-            "+-----+-------------------------+------------------------------+---+",
+            "+-----+-------------------------+-----------------------------+---+",
+            "| asd | struct_func(x.qwe)      | integer_series(x.asd,x.qwe) | r |",
+            "+-----+-------------------------+-----------------------------+---+",
+            "| 1   | {\"f1\": \"test\", \"f2\": 3} | 1                           | 1 |",
+            "| 1   |                         | 2                           | 2 |",
+            "| 1   |                         | 3                           | 3 |",
+            "| 2   | {\"f1\": \"test\", \"f2\": 4} | 2                           | 1 |",
+            "| 2   |                         | 3                           | 2 |",
+            "| 2   |                         | 4                           | 3 |",
+            "| 2   |                         |                             | 4 |",
+            "+-----+-------------------------+-----------------------------+---+",
         ];
         assert_batches_eq!(expected, &result);
 
@@ -2239,7 +2250,11 @@ mod tests {
             for (start, end) in start_arr.iter().zip(end_arr.iter()) {
                 let start_number = start.unwrap();
                 let end_number = end.unwrap();
-                let count: usize = (end_number - start_number + 1).try_into().unwrap();
+                let count: usize = if end_number < start_number {
+                    0
+                } else {
+                    (end_number - start_number + 1).try_into().unwrap()
+                };
                 batch_sizes.push(count);
 
                 for i in start_number..end_number + 1 {

@@ -275,7 +275,7 @@ impl TableFunStream {
         .collect::<Result<Vec<_>>>()?;
 
         // Detect count sizes of batch sections
-        let mut max_batch_sizes: Vec<usize> = vec![1; batch.num_rows()];
+        let mut max_batch_sizes: Vec<usize> = vec![0; batch.num_rows()];
         for ((_, indexes), _) in arrays.iter() {
             for (i, batch_size) in indexes.iter().enumerate() {
                 if max_batch_sizes[i] < *batch_size {
