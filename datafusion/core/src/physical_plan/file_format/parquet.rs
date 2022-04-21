@@ -87,6 +87,8 @@ struct ParquetFileMetrics {
     pub predicate_evaluation_errors: metrics::Count,
     /// Number of row groups pruned using
     pub row_groups_pruned: metrics::Count,
+    /// Total number of bytes scanned
+    pub bytes_scanned: metrics::Count,
 }
 
 impl ParquetExec {
@@ -151,9 +153,14 @@ impl ParquetFileMetrics {
             .with_new_label("filename", filename.to_string())
             .counter("row_groups_pruned", partition);
 
+        let bytes_scanned = MetricBuilder::new(metrics)
+            .with_new_label("filename", filename.to_string())
+            .counter("bytes_scanned", partition);
+
         Self {
             predicate_evaluation_errors,
             row_groups_pruned,
+            bytes_scanned,
         }
     }
 }
@@ -315,6 +322,7 @@ impl ParquetExecStream {
             file.file_meta.path(),
             &self.metrics,
         );
+        let bytes_scanned = file_metrics.bytes_scanned.clone();
         let object_reader = self
             .object_store
             .file_reader(file.file_meta.sized_file.clone())?;
@@ -336,7 +344,10 @@ impl ParquetExecStream {
         }
 
         let file_reader = SerializedFileReader::new_with_options(
-            ChunkObjectReader(object_reader),
+            ChunkObjectReader {
+                object_reader,
+                bytes_scanned: Some(bytes_scanned),
+            },
             opt.build(),
         )?;
 
