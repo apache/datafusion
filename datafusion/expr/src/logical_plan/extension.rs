@@ -16,8 +16,8 @@
 // under the License.
 
 //! This module defines the interface for logical nodes
-use super::{Expr, LogicalPlan};
-use crate::logical_plan::DFSchemaRef;
+use crate::{Expr, LogicalPlan};
+use datafusion_common::DFSchemaRef;
 use std::{any::Any, collections::HashSet, fmt, sync::Arc};
 
 /// This defines the interface for `LogicalPlan` nodes that can be
