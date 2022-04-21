@@ -27,7 +27,6 @@ use sqlparser::{
     tokenizer::{Token, Tokenizer},
 };
 use std::collections::VecDeque;
-use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -36,20 +35,16 @@ macro_rules! parser_err {
     };
 }
 
-impl FromStr for FileType {
-    type Err = ParserError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "PARQUET" => Ok(Self::Parquet),
-            "NDJSON" => Ok(Self::NdJson),
-            "CSV" => Ok(Self::CSV),
-            "AVRO" => Ok(Self::Avro),
-            other => Err(ParserError::ParserError(format!(
-                "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
-                other
-            ))),
-        }
+fn parse_file_type(s: &str) -> Result<FileType, ParserError> {
+    match s.to_uppercase().as_str() {
+        "PARQUET" => Ok(FileType::Parquet),
+        "NDJSON" => Ok(FileType::NdJson),
+        "CSV" => Ok(FileType::CSV),
+        "AVRO" => Ok(FileType::Avro),
+        other => Err(ParserError::ParserError(format!(
+            "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
+            other
+        ))),
     }
 }
 
@@ -334,7 +329,7 @@ impl<'a> DFParser<'a> {
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<FileType, ParserError> {
         match self.parser.next_token() {
-            Token::Word(w) => w.value.parse(),
+            Token::Word(w) => parse_file_type(&w.value),
             unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
         }
     }

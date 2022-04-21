@@ -57,3 +57,5 @@ pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
+
+pub use logical_plan::{LogicalPlan, PlanVisitor};

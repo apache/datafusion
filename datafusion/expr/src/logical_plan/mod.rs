@@ -15,9 +15,18 @@
 // specific language governing permissions and limitations
 // under the License.
 
+pub mod display;
+mod extension;
 mod plan;
 
 pub use plan::{
-    CreateCatalog, CreateCatalogSchema, DropTable, EmptyRelation, JoinConstraint,
-    JoinType, Partitioning, PlanType, StringifiedPlan, ToStringifiedPlan, Values,
+    Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CreateMemoryTable, CrossJoin, DropTable, EmptyRelation, Explain, Extension, FileType,
+    Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
+    PlanVisitor, Projection, Repartition, Sort, StringifiedPlan, SubqueryAlias,
+    TableScan, ToStringifiedPlan, Union, Values, Window,
 };
+
+pub use display::display_schema;
+
+pub use extension::UserDefinedLogicalNode;
