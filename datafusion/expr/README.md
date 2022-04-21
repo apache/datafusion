@@ -17,7 +17,7 @@
   under the License.
 -->
 
-# DataFusion Expr
+# DataFusion Logical Plan and Expressions
 
 This is an internal module for fundamental expression types of [DataFusion][df].
 
