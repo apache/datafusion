@@ -187,27 +187,44 @@ impl ExecutionPlan for SortPreservingMergeExec {
                 result
             }
             _ => {
-                let receivers = (0..input_partitions)
-                    .into_iter()
-                    .map(|part_i| {
-                        let (sender, receiver) = mpsc::channel(1);
-                        let join_handle = spawn_execution(
-                            self.input.clone(),
-                            sender,
-                            part_i,
-                            context.clone(),
-                        );
+                // Use tokio only if running from a tokio context (#2201)
+                let receivers = match tokio::runtime::Handle::try_current() {
+                    Ok(_) => (0..input_partitions)
+                        .into_iter()
+                        .map(|part_i| {
+                            let (sender, receiver) = mpsc::channel(1);
+                            let join_handle = spawn_execution(
+                                self.input.clone(),
+                                sender,
+                                part_i,
+                                context.clone(),
+                            );
 
-                        SortedStream::new(
-                            RecordBatchReceiverStream::create(
-                                &schema,
-                                receiver,
-                                join_handle,
-                            ),
-                            0,
-                        )
-                    })
-                    .collect();
+                            SortedStream::new(
+                                RecordBatchReceiverStream::create(
+                                    &schema,
+                                    receiver,
+                                    join_handle,
+                                ),
+                                0,
+                            )
+                        })
+                        .collect(),
+                    Err(_) => {
+                        futures::future::try_join_all((0..input_partitions).map(
+                            |partition| {
+                                let context = context.clone();
+                                async move {
+                                    self.input
+                                        .execute(partition, context)
+                                        .await
+                                        .map(|stream| SortedStream::new(stream, 0))
+                                }
+                            },
+                        ))
+                        .await?
+                    }
+                };
 
                 debug!("Done setting up sender-receiver for SortPreservingMergeExec::execute");
 
