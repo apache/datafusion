@@ -62,7 +62,7 @@ warp = "0.3"
 
 [dev-dependencies]
 ballista-core = { path = "../core", version = "0.6.0" }
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4"] }
 
 [build-dependencies]
 configure_me_codegen = "0.4.1"
