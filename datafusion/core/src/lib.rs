@@ -190,7 +190,7 @@
 //!
 //! cargo run --example csv_sql
 //!
-//! PARQUET_TEST_DATA=./parquet-testing/data cargo run --example parquet_sql
+//! cargo run --example parquet_sql
 //!
 //! cargo run --example dataframe
 //!
