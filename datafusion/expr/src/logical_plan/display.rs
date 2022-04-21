@@ -16,7 +16,7 @@
 // under the License.
 //! This module provides logic for displaying LogicalPlans in various styles
 
-use super::{LogicalPlan, PlanVisitor};
+use crate::{LogicalPlan, PlanVisitor};
 use arrow::datatypes::Schema;
 use std::fmt;
 
@@ -82,7 +82,7 @@ impl<'a, 'b> PlanVisitor for IndentVisitor<'a, 'b> {
 ///
 /// ```
 /// use arrow::datatypes::{Field, Schema, DataType};
-/// # use datafusion::logical_plan::display_schema;
+/// # use datafusion_expr::logical_plan::display_schema;
 /// let schema = Schema::new(vec![
 ///     Field::new("id", DataType::Int32, false),
 ///     Field::new("first_name", DataType::Utf8, true),

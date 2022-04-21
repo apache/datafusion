@@ -27,6 +27,7 @@ pub mod expr_fn;
 pub mod field_util;
 pub mod function;
 mod literal;
+pub mod logical_plan;
 mod nullif;
 mod operator;
 mod signature;
@@ -56,3 +57,5 @@ pub use udaf::AggregateUDF;
 pub use udf::ScalarUDF;
 pub use window_frame::{WindowFrame, WindowFrameBound, WindowFrameUnits};
 pub use window_function::{BuiltInWindowFunction, WindowFunction};
+
+pub use logical_plan::{LogicalPlan, PlanVisitor};
