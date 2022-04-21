@@ -207,7 +207,7 @@ impl QueryBuilder {
             None => parent,
         };
 
-        let node = Box::new(RepartitionPipeline::new(input, output));
+        let node = Box::new(RepartitionPipeline::try_new(input, output)?);
         self.push_pipeline(
             RoutablePipeline {
                 pipeline: node,

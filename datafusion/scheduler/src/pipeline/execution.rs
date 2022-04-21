@@ -153,7 +153,7 @@ impl ExecutionPipeline {
 
 impl Pipeline for ExecutionPipeline {
     /// Push a [`RecordBatch`] to the given input partition
-    fn push(&self, input: RecordBatch, child: usize, partition: usize) {
+    fn push(&self, input: RecordBatch, child: usize, partition: usize) -> Result<()> {
         let mut partition = self.inputs[child][partition].lock();
         assert!(!partition.is_closed);
 
@@ -161,6 +161,7 @@ impl Pipeline for ExecutionPipeline {
         for waker in partition.wait_list.drain(..) {
             waker.wake()
         }
+        Ok(())
     }
 
     fn close(&self, child: usize, partition: usize) {
@@ -182,8 +183,11 @@ impl Pipeline for ExecutionPipeline {
         &self,
         cx: &mut Context<'_>,
         partition: usize,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>> {
-        self.outputs[partition].lock().poll_next_unpin(cx)
+    ) -> Poll<Option<Result<RecordBatch>>> {
+        self.outputs[partition]
+            .lock()
+            .poll_next_unpin(cx)
+            .map(|opt| opt.map(|r| r.map_err(Into::into)))
     }
 }
 

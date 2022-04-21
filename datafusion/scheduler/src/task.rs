@@ -16,10 +16,9 @@
 // under the License.
 
 use crate::query::Query;
-use crate::{
-    is_worker, spawn_local, spawn_local_fifo, ArrowResult, RoutablePipeline, Spawner,
-};
+use crate::{is_worker, spawn_local, spawn_local_fifo, RoutablePipeline, Spawner};
 use arrow::record_batch::RecordBatch;
+use datafusion::error::{DataFusionError, Result};
 use futures::channel::mpsc;
 use futures::task::ArcWake;
 use futures::{Stream, StreamExt};
@@ -88,6 +87,20 @@ impl std::fmt::Debug for Task {
 }
 
 impl Task {
+    fn handle_error(&self, routable: &RoutablePipeline, error: DataFusionError) {
+        self.query.send_query_output(Err(error));
+        if let Some(link) = routable.output {
+            trace!(
+                "Closing pipeline: {:?}, partition: {}, due to error",
+                link,
+                self.waker.partition,
+            );
+
+            self.query.pipelines[link.pipeline]
+                .pipeline
+                .close(link.child, self.waker.partition);
+        }
+    }
     /// Call [`Pipeline::poll_partition`] attempting to make progress on query execution
     pub fn do_work(self) {
         assert!(is_worker(), "Task::do_work called outside of worker pool");
@@ -117,9 +130,17 @@ impl Task {
                             link,
                             partition
                         );
-                        pipelines[link.pipeline]
+
+                        let r = pipelines[link.pipeline]
                             .pipeline
-                            .push(batch, link.child, partition)
+                            .push(batch, link.child, partition);
+
+                        if let Err(e) = r {
+                            self.handle_error(routable, e);
+
+                            // Return without rescheduling this output again
+                            return;
+                        }
                     }
                     None => {
                         trace!("Publishing batch to output");
@@ -139,13 +160,7 @@ impl Task {
             }
             Poll::Ready(Some(Err(e))) => {
                 trace!("Poll {:?}: Error: {:?}", self, e);
-                self.query.send_query_output(Err(e));
-                if let Some(link) = routable.output {
-                    trace!("Closing pipeline: {:?}, partition: {}", link, partition);
-                    pipelines[link.pipeline]
-                        .pipeline
-                        .close(link.child, partition)
-                }
+                self.handle_error(routable, e)
             }
             Poll::Ready(None) => {
                 trace!("Poll {:?}: None", self);
@@ -188,7 +203,7 @@ impl Task {
 ///
 /// Dropping this will cancel the inflight query
 pub struct QueryResults {
-    inner: mpsc::UnboundedReceiver<Option<ArrowResult<RecordBatch>>>,
+    inner: mpsc::UnboundedReceiver<Option<Result<RecordBatch>>>,
 
     /// Keep a reference to the [`QueryTask`] so it isn't dropped early
     #[allow(unused)]
@@ -196,7 +211,7 @@ pub struct QueryResults {
 }
 
 impl Stream for QueryResults {
-    type Item = ArrowResult<RecordBatch>;
+    type Item = Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -217,7 +232,7 @@ struct QueryTask {
     pipelines: Vec<RoutablePipeline>,
 
     /// The output stream for this query's execution
-    output: mpsc::UnboundedSender<Option<ArrowResult<RecordBatch>>>,
+    output: mpsc::UnboundedSender<Option<Result<RecordBatch>>>,
 }
 
 impl Drop for QueryTask {
@@ -234,7 +249,7 @@ impl QueryTask {
     }
 
     /// Sends `output` to this query's output stream
-    fn send_query_output(&self, output: ArrowResult<RecordBatch>) {
+    fn send_query_output(&self, output: Result<RecordBatch>) {
         let _ = self.output.unbounded_send(Some(output));
     }
 
@@ -310,8 +325,8 @@ mod tests {
     use crate::query::RoutablePipeline;
     use crate::Scheduler;
     use arrow::array::{ArrayRef, Int32Array};
-    use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
+    use datafusion::error::Result;
     use futures::{channel::oneshot, ready, FutureExt, StreamExt};
     use parking_lot::Mutex;
     use std::fmt::Debug;
@@ -327,7 +342,7 @@ mod tests {
     #[derive(Debug)]
     enum State {
         Init,
-        Wait(oneshot::Receiver<ArrowResult<RecordBatch>>),
+        Wait(oneshot::Receiver<Result<RecordBatch>>),
         Finished,
     }
 
@@ -338,7 +353,12 @@ mod tests {
     }
 
     impl Pipeline for TokioPipeline {
-        fn push(&self, _input: RecordBatch, _child: usize, _partition: usize) {
+        fn push(
+            &self,
+            _input: RecordBatch,
+            _child: usize,
+            _partition: usize,
+        ) -> Result<()> {
             unreachable!()
         }
 
@@ -352,7 +372,7 @@ mod tests {
             &self,
             cx: &mut Context<'_>,
             _partition: usize,
-        ) -> Poll<Option<ArrowResult<RecordBatch>>> {
+        ) -> Poll<Option<Result<RecordBatch>>> {
             let mut state = self.state.lock();
             loop {
                 match &mut *state {
@@ -361,10 +381,13 @@ mod tests {
                         self.handle.spawn(async move {
                             tokio::time::sleep(Duration::from_millis(10)).await;
                             let array = Int32Array::from_iter_values([1, 2, 3]);
-                            sender.send(RecordBatch::try_from_iter([(
-                                "int",
-                                Arc::new(array) as ArrayRef,
-                            )]))
+                            sender.send(
+                                RecordBatch::try_from_iter([(
+                                    "int",
+                                    Arc::new(array) as ArrayRef,
+                                )])
+                                .map_err(DataFusionError::ArrowError),
+                            )
                         });
                         *state = State::Wait(receiver)
                     }

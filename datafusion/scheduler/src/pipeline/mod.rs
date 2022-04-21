@@ -19,7 +19,7 @@ use std::task::{Context, Poll};
 
 use arrow::record_batch::RecordBatch;
 
-use crate::ArrowResult;
+use datafusion::error::Result;
 
 pub mod execution;
 pub mod repartition;
@@ -72,7 +72,7 @@ pub mod repartition;
 ///
 pub trait Pipeline: Send + Sync + std::fmt::Debug {
     /// Push a [`RecordBatch`] to the given input partition
-    fn push(&self, input: RecordBatch, child: usize, partition: usize);
+    fn push(&self, input: RecordBatch, child: usize, partition: usize) -> Result<()>;
 
     /// Mark an input partition as exhausted
     fn close(&self, child: usize, partition: usize);
@@ -106,5 +106,5 @@ pub trait Pipeline: Send + Sync + std::fmt::Debug {
         &self,
         cx: &mut Context<'_>,
         partition: usize,
-    ) -> Poll<Option<ArrowResult<RecordBatch>>>;
+    ) -> Poll<Option<Result<RecordBatch>>>;
 }

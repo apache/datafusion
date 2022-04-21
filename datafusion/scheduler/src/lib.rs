@@ -20,7 +20,6 @@ use std::sync::Arc;
 use futures::stream::BoxStream;
 use log::{debug, error};
 
-use datafusion::arrow::error::Result as ArrowResult;
 use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
