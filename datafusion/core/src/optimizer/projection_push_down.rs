@@ -196,65 +196,6 @@ fn optimize_plan(
                 }))
             }
         }
-        LogicalPlan::TableUDFs(TableUDFs {
-            input,
-            expr,
-            schema,
-        }) => {
-            // * remove any expression that is not required
-            // * construct the new set of required columns
-
-            let mut new_expr = Vec::new();
-            let mut new_fields = Vec::new();
-
-            // Gather all columns needed for expressions in this Projection
-            schema
-                .fields()
-                .iter()
-                .enumerate()
-                .try_for_each(|(i, field)| {
-                    if required_columns.contains(&field.qualified_column()) {
-                        new_expr.push(expr[i].clone());
-                        new_fields.push(field.clone());
-
-                        // gather the new set of required columns
-                        utils::expr_to_columns(&expr[i], &mut new_required_columns)
-                    } else {
-                        Ok(())
-                    }
-                })?;
-
-            let new_input = optimize_plan(
-                _optimizer,
-                input,
-                &new_required_columns,
-                true,
-                _execution_props,
-            )?;
-
-            let new_required_columns_optimized = new_input
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.qualified_column())
-                .collect::<HashSet<Column>>();
-
-            if new_fields.is_empty()
-                || (has_projection && &new_required_columns_optimized == required_columns)
-            {
-                // no need for an expression at all
-                Ok(new_input)
-            } else {
-                let metadata = new_input.schema().metadata().clone();
-                Ok(LogicalPlan::TableUDFs(TableUDFs {
-                    expr: new_expr,
-                    input: Arc::new(new_input),
-                    schema: DFSchemaRef::new(DFSchema::new_with_metadata(
-                        new_fields, metadata,
-                    )?),
-                }))
-            }
-        }
         LogicalPlan::Join(Join {
             left,
             right,
@@ -534,6 +475,7 @@ fn optimize_plan(
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
         | LogicalPlan::CrossJoin(_)
+        | LogicalPlan::TableUDFs(_)
         | LogicalPlan::Extension { .. } => {
             let expr = plan.expressions();
             // collect all required columns by this plan

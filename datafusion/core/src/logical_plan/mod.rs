@@ -51,7 +51,7 @@ pub use expr::{
     when, Column, Expr, ExprSchema, Literal,
 };
 pub use expr_rewriter::{
-    flat_exprs, normalize_col, normalize_cols, replace_col, rewrite_sort_cols_by_aggs,
+    normalize_col, normalize_cols, replace_col, rewrite_sort_cols_by_aggs,
     rewrite_udtfs_to_columns, unnormalize_col, unnormalize_cols, ExprRewritable,
     ExprRewriter, RewriteRecursion,
 };

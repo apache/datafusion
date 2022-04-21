@@ -273,24 +273,12 @@ pub fn make_table_function<F>(inner: F) -> TableFunctionImplementation
 where
     F: Fn(&[ArrayRef]) -> Result<(ArrayRef, Vec<usize>)> + Sync + Send + 'static,
 {
-    Arc::new(move |args: &[ColumnarValue]| {
-        let len = args
-            .iter()
-            .fold(Option::<usize>::None, |acc, arg| match arg {
-                ColumnarValue::Scalar(_) => acc,
-                ColumnarValue::Array(a) => Some(a.len()),
-            });
-
+    Arc::new(move |args: &[ColumnarValue], num_rows| {
         // to array
-        let args = if let Some(len) = len {
-            args.iter()
-                .map(|arg| arg.clone().into_array(len))
-                .collect::<Vec<ArrayRef>>()
-        } else {
-            args.iter()
-                .map(|arg| arg.clone().into_array(1))
-                .collect::<Vec<ArrayRef>>()
-        };
+        let args = args
+            .iter()
+            .map(|arg| arg.clone().into_array(num_rows))
+            .collect::<Vec<ArrayRef>>();
 
         let result = (inner)(&args);
 

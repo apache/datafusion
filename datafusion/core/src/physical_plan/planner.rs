@@ -64,7 +64,6 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
-use datafusion_physical_expr::TableFunctionExpr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -597,19 +596,7 @@ impl DefaultPhysicalPlanner {
                     let physical_exprs = expr
                         .iter()
                         .map(|e| {
-                            let physical_name = if let Expr::Column(col) = e {
-                                match input_schema.index_of_column(col) {
-                                    Ok(idx) => {
-                                        // index physical field using logical field index
-                                        Ok(input_exec.schema().field(idx).name().to_string())
-                                    }
-                                    // logical column is not a derived column, safe to pass along to
-                                    // physical_name
-                                    Err(_) => physical_name(e),
-                                }
-                            } else {
-                                physical_name(e)
-                            };
+                            let physical_name = physical_name(e);
 
                             tuple_err((
                                 self.create_physical_expr(

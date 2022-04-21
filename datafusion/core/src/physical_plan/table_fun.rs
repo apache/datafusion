@@ -18,7 +18,7 @@
 //! TableFun (UDTFs) Physical Node
 
 use std::any::Any;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -27,11 +27,9 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{
     ColumnStatistics, DisplayFormatType, ExecutionPlan, Partitioning, PhysicalExpr,
 };
-use arrow::array::{
-    make_array, Array, ArrayData, ArrayRef, Capacities, MutableArrayData,
-};
+use arrow::array::{new_null_array, Array, ArrayRef, NullArray};
 use arrow::compute::kernels;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use datafusion_expr::ColumnarValue;
@@ -83,14 +81,13 @@ impl TableFunExec {
             })
             .collect();
 
-        let schema = Arc::new(Schema::new_with_metadata(
-            fields?,
-            input_schema.metadata().clone(),
-        ));
+        let schema = Schema::new_with_metadata(fields?, HashMap::new());
+
+        let schema = Schema::try_merge(vec![(*input_schema).clone(), schema])?;
 
         Ok(Self {
             expr,
-            schema,
+            schema: Arc::new(schema),
             input: input.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
         })
@@ -253,85 +250,85 @@ fn stats_table_fun(
 
 impl TableFunStream {
     fn batch(&self, batch: &RecordBatch) -> ArrowResult<RecordBatch> {
-        let arrays: Vec<((ColumnarValue, Vec<usize>), bool)> = self
-            .expr
+        let arrays = (batch
+            .columns()
             .iter()
-            .map(|expr| {
-                let t_expr = expr.as_any().clone().downcast_ref::<TableFunctionExpr>();
-                if t_expr.is_some() {
-                    (t_expr.unwrap().evaluate_table(batch).unwrap(), true)
-                } else {
-                    ((expr.evaluate(batch).unwrap(), Vec::new()), false)
-                }
-            })
-            .collect();
+            // Filtering out placeholder column of EmptyRelation
+            .filter(|a| a.as_any().downcast_ref::<NullArray>().is_none())
+            .map(|a| {
+                Ok((
+                    (
+                        ColumnarValue::Array(a.clone()),
+                        (0..a.len()).into_iter().map(|_| 1).collect::<Vec<_>>(),
+                    ),
+                    false,
+                ))
+            }))
+        .chain(self.expr.iter().map(|expr| {
+            let t_expr = expr
+                .as_any()
+                .clone()
+                .downcast_ref::<TableFunctionExpr>()
+                .unwrap();
+            Ok((t_expr.evaluate_table(batch)?, true))
+        }))
+        .collect::<Result<Vec<_>>>()?;
 
         // Detect count sizes of batch sections
-        let mut batches_sizes: Vec<usize> = Vec::new();
+        let mut max_batch_sizes: Vec<usize> = vec![1; batch.num_rows()];
         for ((_, indexes), _) in arrays.iter() {
-            let mut prev_value: usize = 0;
-            for (i, end_of_batch) in indexes.iter().enumerate() {
-                let batch_size = end_of_batch - prev_value + 1;
-                if batches_sizes.len() > i {
-                    if batches_sizes[i] < batch_size {
-                        batches_sizes[i] = batch_size;
-                    }
-                } else {
-                    batches_sizes.push(batch_size);
+            for (i, batch_size) in indexes.iter().enumerate() {
+                if max_batch_sizes[i] < *batch_size {
+                    max_batch_sizes[i] = *batch_size;
                 }
-                prev_value = end_of_batch.clone();
             }
         }
 
         let mut columns: Vec<ArrayRef> = Vec::new();
 
-        // Iterate arrays to fill columns
-        for (_, ((arr, indexes), is_fun)) in arrays.iter().enumerate() {
+        for (col_i, ((arr, cur_batch_sizes), is_table_fun)) in arrays.iter().enumerate() {
             let col_arr = match arr {
                 ColumnarValue::Array(a) => a,
-                ColumnarValue::Scalar(_) => panic!(""),
+                // TODO
+                ColumnarValue::Scalar(_) => {
+                    panic!("Table function should return array only but got scalar")
+                }
             };
 
             let mut sections: Vec<ArrayRef> = Vec::new();
-            let mut lengths: Vec<usize> = Vec::new();
 
-            for (i_batch, size) in batches_sizes.iter().enumerate() {
-                let (start_i_of_batch, current_batch_size) =
-                    index_and_size_of_sec(indexes.clone(), i_batch, *is_fun);
-                if *is_fun {
-                    sections.push(col_arr.slice(start_i_of_batch, current_batch_size));
-                    lengths.push(current_batch_size);
-                } else {
-                    let mut concat: Vec<_> = Vec::new();
-                    let arr = col_arr.slice(start_i_of_batch, current_batch_size);
-                    for _ in 0..=size - 1 {
-                        concat.push(arr.as_ref());
+            let mut start_i_of_batch = 0;
+
+            for (i_batch, max_size) in max_batch_sizes.iter().enumerate() {
+                let current_batch_size = cur_batch_sizes[i_batch];
+                sections.push(col_arr.slice(start_i_of_batch, current_batch_size));
+                if *is_table_fun {
+                    if max_size - current_batch_size > 0 {
+                        sections.push(new_null_array(
+                            self.schema.field(col_i).data_type(),
+                            max_size - current_batch_size,
+                        ));
                     }
-
-                    sections.push(kernels::concat::concat(&concat).unwrap());
-                    lengths.push(size.clone());
+                } else {
+                    if max_size - current_batch_size > 0 {
+                        for _ in 0..(max_size - current_batch_size) {
+                            sections.push(
+                                col_arr.slice(start_i_of_batch, current_batch_size),
+                            );
+                        }
+                    }
                 }
+
+                start_i_of_batch += cur_batch_sizes[i_batch];
             }
 
-            let sections: Vec<&ArrayData> = sections.iter().map(|s| s.data()).collect();
-
-            let mut mutable = match sections[0].data_type() {
-                DataType::Utf8 | DataType::LargeUtf8 => {
-                    MutableArrayData::with_capacities(
-                        sections,
-                        true,
-                        Capacities::Binary(1, None),
-                    )
-                }
-                _ => MutableArrayData::new(sections, true, 1),
-            };
-
-            for (i, len) in lengths.iter().enumerate() {
-                mutable.extend(i, 0, *len);
-                mutable.extend_nulls(batches_sizes[i] - len);
-            }
-
-            columns.push(make_array(mutable.freeze()));
+            columns.push(kernels::concat::concat(
+                sections
+                    .iter()
+                    .map(|a| a.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )?);
         }
 
         RecordBatch::try_new(self.schema.clone(), columns)
@@ -372,23 +369,4 @@ impl RecordBatchStream for TableFunStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
-}
-
-fn index_and_size_of_sec(
-    batch_mark: Vec<usize>,
-    section_index: usize,
-    is_fun: bool,
-) -> (usize, usize) {
-    let start_index = if section_index > 0 && is_fun {
-        batch_mark[section_index - 1]
-    } else {
-        0
-    };
-    let section_size: usize = if is_fun {
-        batch_mark[section_index] - start_index + 1
-    } else {
-        1
-    };
-
-    (start_index, section_size)
 }

@@ -63,6 +63,14 @@ pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
     find_exprs_in_exprs(exprs, &|nested_expr| matches!(nested_expr, Expr::Column(_)))
 }
 
+/// Collect all deeply nested `Expr::TableUDF`'s. They are returned in order of
+/// appearance (depth first), with duplicates omitted.
+pub(crate) fn find_udtf_exprs(exprs: &[Expr]) -> Vec<Expr> {
+    find_exprs_in_exprs(exprs, &|nested_expr| {
+        matches!(nested_expr, Expr::TableUDF { .. })
+    })
+}
+
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
 /// pass the provided test. The returned `Expr`'s are deduplicated and returned
 /// in order of appearance (depth first).

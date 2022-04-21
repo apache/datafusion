@@ -45,7 +45,7 @@ use std::{
 
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType, };
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, provider_as_source, flat_exprs,
+    columnize_expr, normalize_col, normalize_cols, provider_as_source,
     rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
     Partitioning, Repartition, Values,
 };
@@ -1199,28 +1199,25 @@ pub(crate) fn expand_qualified_wildcard(
     expand_wildcard(&qualifier_schema, plan)
 }
 
-pub(crate) fn table_udfs(plan: LogicalPlan, expr: Vec<Expr>) -> Result<LogicalPlan> {
-    let expr = flat_exprs(expr.clone(), plan.schema().clone().as_ref().to_owned());
-    let input_schema = plan.schema();
-    let mut udtf_expr = vec![];
-    for e in expr {
-        let e = e.into();
-        match e {
-            Expr::Wildcard => udtf_expr.extend(expand_wildcard(input_schema, &plan)?),
-            Expr::QualifiedWildcard { ref qualifier } => udtf_expr
-                .extend(expand_qualified_wildcard(qualifier, input_schema, &plan)?),
-            _ => udtf_expr.push(columnize_expr(normalize_col(e, &plan)?, input_schema)),
-        }
-    }
-    validate_unique_names("TableUDFs", udtf_expr.iter(), input_schema)?;
-    let input_schema = DFSchema::new_with_metadata(
-        exprlist_to_fields(&udtf_expr, input_schema)?,
-        plan.schema().metadata().clone(),
-    )?;
+pub(crate) fn build_table_udf_schema(
+    input: &LogicalPlan,
+    udtf_expr: &[Expr],
+) -> Result<DFSchemaRef> {
+    let input_schema = input.schema();
+    let mut schema = (**input_schema).clone();
+    schema.merge(&DFSchema::new_with_metadata(
+        exprlist_to_fields(udtf_expr, input_schema)?,
+        HashMap::new(),
+    )?);
+    Ok(Arc::new(schema))
+}
+
+pub(crate) fn table_udfs(plan: LogicalPlan, udtf_expr: Vec<Expr>) -> Result<LogicalPlan> {
+    let schema = build_table_udf_schema(&plan, &udtf_expr)?;
     Ok(LogicalPlan::TableUDFs(TableUDFs {
         expr: udtf_expr,
         input: Arc::new(plan.clone()),
-        schema: DFSchemaRef::new(input_schema),
+        schema,
     }))
 }
 

@@ -40,8 +40,9 @@ pub type ScalarFunctionImplementation =
     Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
 /// Table function
-pub type TableFunctionImplementation =
-    Arc<dyn Fn(&[ColumnarValue]) -> Result<(ColumnarValue, Vec<usize>)> + Send + Sync>;
+pub type TableFunctionImplementation = Arc<
+    dyn Fn(&[ColumnarValue], usize) -> Result<(ColumnarValue, Vec<usize>)> + Send + Sync,
+>;
 
 /// A function's return type
 pub type ReturnTypeFunction =

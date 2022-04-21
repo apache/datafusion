@@ -24,6 +24,7 @@ use datafusion_expr::logical_plan::{
     SubqueryAlias, Window, TableUDFs,
 };
 
+use crate::logical_plan::builder::build_table_udf_schema;
 use crate::logical_plan::{
     build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
     Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
@@ -157,11 +158,11 @@ pub fn from_plan(
                 alias: alias.clone(),
             }))
         }
-        LogicalPlan::TableUDFs(TableUDFs { schema, .. }) => {
+        LogicalPlan::TableUDFs(TableUDFs { .. }) => {
             Ok(LogicalPlan::TableUDFs(TableUDFs {
                 expr: expr.to_vec(),
                 input: Arc::new(inputs[0].clone()),
-                schema: schema.clone(),
+                schema: build_table_udf_schema(&inputs[0], expr)?,
             }))
         }
         LogicalPlan::Values(Values { schema, .. }) => Ok(LogicalPlan::Values(Values {

@@ -463,80 +463,29 @@ pub fn unnormalize_cols(exprs: impl IntoIterator<Item = Expr>) -> Vec<Expr> {
 /// Rewrite all table udfs to columns
 /// For now it used by Projection Node (to get access to columns returning by TableUDFs Node)
 pub fn rewrite_udtfs_to_columns(exprs: Vec<Expr>, schema: DFSchema) -> Vec<Expr> {
-    let mut rewrote_exprs = Vec::new();
-    for expr in exprs.iter() {
-        if let Expr::TableUDF { .. } = expr {
-            let column = Expr::Column(Column {
-                relation: None,
-                name: expr.name(&schema).unwrap(),
-            });
-            rewrote_exprs.push(column);
-        } else if let Expr::BinaryExpr { left, op, right } = expr {
-            let left: Expr = rewrite_udtfs_to_columns(
-                [left.as_ref().clone()].to_vec(),
-                schema.clone(),
-            )[0]
-            .clone();
-            let right: Expr = rewrite_udtfs_to_columns(
-                [right.as_ref().clone()].to_vec(),
-                schema.clone(),
-            )[0]
-            .clone();
-            rewrote_exprs.push(Expr::BinaryExpr {
-                left: Box::new(left),
-                op: *op,
-                right: Box::new(right),
-            });
-        } else if let Expr::Alias(a_expr, name) = expr {
-            let a_expr: Expr = rewrite_udtfs_to_columns(
-                [a_expr.as_ref().clone()].to_vec(),
-                schema.clone(),
-            )[0]
-            .clone();
-            rewrote_exprs.push(Expr::Alias(Box::new(a_expr), name.clone()));
-        } else {
-            rewrote_exprs.push(expr.clone());
+    struct ReplaceUdtfWithColumn<'a> {
+        schema: &'a DFSchema,
+    }
+    impl<'a> ExprRewriter for ReplaceUdtfWithColumn<'a> {
+        fn mutate(&mut self, expr: Expr) -> Result<Expr> {
+            if let Expr::TableUDF { .. } = expr {
+                Ok(Expr::Column(Column {
+                    relation: None,
+                    name: expr.name(self.schema).unwrap(),
+                }))
+            } else {
+                Ok(expr)
+            }
         }
     }
 
-    rewrote_exprs
-}
-
-/// Rewrite tree of expressions to flat list
-/// For now it used by TableUDFs Node (just to pass data to projection node)
-pub fn flat_exprs(exprs: Vec<Expr>, schema: DFSchema) -> Vec<Expr> {
-    let mut rewrote_exprs = Vec::new();
-    for expr in exprs.iter() {
-        if let Expr::Alias(a_expr, ..) = expr {
-            rewrote_exprs.extend(
-                flat_exprs([a_expr.as_ref().clone()].to_vec(), schema.clone())
-                    .iter()
-                    .map(|e| e.clone()),
-            );
-        } else if let Expr::BinaryExpr { left, right, .. } = expr {
-            let b_exprs: Vec<Expr> = [*left.clone(), *right.clone()].to_vec();
-            rewrote_exprs.extend(
-                flat_exprs(b_exprs, schema.clone())
-                    .iter()
-                    .map(|e| e.clone()),
-            );
-        } else {
-            rewrote_exprs.push(expr.clone());
-        }
-    }
-
-    // TODO: Refactor
-    let mut unique_exprs: Vec<Expr> = Vec::new();
-    let mut unique_names: Vec<String> = Vec::new();
-    for e in rewrote_exprs.iter() {
-        let name = e.name(&schema).unwrap();
-        if !unique_names.contains(&name) {
-            unique_exprs.push(e.clone());
-            unique_names.push(name.clone());
-        }
-    }
-
-    unique_exprs
+    exprs
+        .into_iter()
+        .map(|expr| {
+            expr.rewrite(&mut ReplaceUdtfWithColumn { schema: &schema })
+                .unwrap()
+        })
+        .collect::<Vec<_>>()
 }
 
 #[cfg(test)]

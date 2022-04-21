@@ -220,7 +220,7 @@ impl TableFunctionExpr {
 
         // evaluate the function
         let fun = self.fun.as_ref();
-        let res = (fun)(&inputs);
+        let res = (fun)(&inputs, batch.num_rows());
 
         res
     }
