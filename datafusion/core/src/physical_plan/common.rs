@@ -28,14 +28,14 @@ use arrow::error::ArrowError;
 use arrow::error::Result as ArrowResult;
 use arrow::ipc::writer::FileWriter;
 use arrow::record_batch::RecordBatch;
-use futures::channel::mpsc;
-use futures::{Future, SinkExt, Stream, StreamExt, TryStreamExt};
+use futures::{Future, Stream, StreamExt, TryStreamExt};
 use pin_project_lite::pin_project;
 use std::fs;
 use std::fs::{metadata, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 /// Stream of record batches
@@ -174,7 +174,7 @@ fn build_file_list_recurse(
 /// Spawns a task to the tokio threadpool and writes its outputs to the provided mpsc sender
 pub(crate) fn spawn_execution(
     input: Arc<dyn ExecutionPlan>,
-    mut output: mpsc::Sender<ArrowResult<RecordBatch>>,
+    output: mpsc::Sender<ArrowResult<RecordBatch>>,
     partition: usize,
     context: Arc<TaskContext>,
 ) -> JoinHandle<()> {

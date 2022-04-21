@@ -22,19 +22,13 @@ use crate::error::{DataFusionError, Result};
 use crate::physical_plan::{PhysicalExpr, SendableRecordBatchStream};
 use arrow::array::{ArrayRef, DynComparator};
 use arrow::compute::SortOptions;
-use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use futures::channel::mpsc;
-use futures::stream::FusedStream;
-use futures::Stream;
 use hashbrown::HashMap;
 use parking_lot::RwLock;
 use std::borrow::BorrowMut;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
-use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{Context, Poll};
 
 pub mod sort;
 pub mod sort_preserving_merge;
@@ -240,46 +234,5 @@ impl Debug for SortedStream {
 impl SortedStream {
     pub(crate) fn new(stream: SendableRecordBatchStream, mem_used: usize) -> Self {
         Self { stream, mem_used }
-    }
-}
-
-#[derive(Debug)]
-enum StreamWrapper {
-    Receiver(mpsc::Receiver<ArrowResult<RecordBatch>>),
-    Stream(Option<SortedStream>),
-}
-
-impl Stream for StreamWrapper {
-    type Item = ArrowResult<RecordBatch>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.get_mut() {
-            StreamWrapper::Receiver(ref mut receiver) => Pin::new(receiver).poll_next(cx),
-            StreamWrapper::Stream(ref mut stream) => {
-                let inner = match stream {
-                    None => return Poll::Ready(None),
-                    Some(inner) => inner,
-                };
-
-                match Pin::new(&mut inner.stream).poll_next(cx) {
-                    Poll::Ready(msg) => {
-                        if msg.is_none() {
-                            *stream = None
-                        }
-                        Poll::Ready(msg)
-                    }
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-    }
-}
-
-impl FusedStream for StreamWrapper {
-    fn is_terminated(&self) -> bool {
-        match self {
-            StreamWrapper::Receiver(receiver) => receiver.is_terminated(),
-            StreamWrapper::Stream(stream) => stream.is_none(),
-        }
     }
 }
