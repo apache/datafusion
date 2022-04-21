@@ -23,9 +23,9 @@ extern crate datafusion;
 mod data_utils;
 use crate::criterion::Criterion;
 use crate::data_utils::{create_record_batches, create_schema};
-use datafusion_row::jit::writer::bench_write_batch_jit;
-use datafusion_row::writer::bench_write_batch;
-use datafusion_row::RowType;
+use datafusion::row::jit::writer::bench_write_batch_jit;
+use datafusion::row::writer::bench_write_batch;
+use datafusion::row::RowType;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
