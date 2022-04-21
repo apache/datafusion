@@ -63,6 +63,9 @@ pub struct CrossJoinExec {
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
+    ///
+    /// Ideally we would instantiate this in the constructor, but we need
+    /// the [`TaskContext`] provided in [`ExecutionPlan::execute`]
     left_fut: Mutex<Option<JoinLeftFut>>,
 }
 
