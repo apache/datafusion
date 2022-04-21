@@ -48,6 +48,8 @@ use log::debug;
 type JoinLeftData = RecordBatch;
 
 /// Type of future for collecting left data
+///
+/// [`Shared`] allows potentially multiple output streams to poll the same future to completion
 type JoinLeftFut = Shared<BoxFuture<'static, Arc<Result<RecordBatch>>>>;
 
 /// executes partitions in parallel and combines them into a set of
@@ -363,6 +365,8 @@ impl Stream for CrossJoinStream {
 }
 
 impl CrossJoinStream {
+    /// Separate implementation function that unpins the [`CrossJoinStream`] so
+    /// that partial borrows work correctly
     fn poll_next_impl(
         &mut self,
         cx: &mut std::task::Context<'_>,
