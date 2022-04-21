@@ -29,10 +29,10 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, union_with_alias, rewrite_udtfs_to_columns, Column, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
-    DFSchemaRef, DropTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder, Operator,
-    PlanType, ToDFSchema, ToStringifiedPlan,
+    normalize_col, rewrite_udtfs_to_columns, union_with_alias, Column, CreateCatalog,
+    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, FileType, LogicalPlan,
+    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -910,7 +910,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
 
         // process `where` clause
-        let mut plan = self.plan_selection(select.selection, plans, outer_query_schema)?;
+        let mut plan =
+            self.plan_selection(select.selection, plans, outer_query_schema)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let mut select_exprs = self.prepare_select_exprs(

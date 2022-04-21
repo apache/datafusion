@@ -26,7 +26,7 @@ use super::{
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
     source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
-    SubqueryAlias, TableScan, Window, TableUDFs,
+    SubqueryAlias, TableScan, TableUDFs, Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,

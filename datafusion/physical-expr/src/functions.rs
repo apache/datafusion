@@ -30,6 +30,7 @@
 //! to a function that supports f64, it is coerced to f64.
 
 use crate::PhysicalExpr;
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
@@ -201,10 +202,7 @@ impl TableFunctionExpr {
         &self.return_type
     }
 
-    pub fn evaluate_table(
-        &self,
-        batch: &RecordBatch,
-    ) -> Result<(ColumnarValue, Vec<usize>)> {
+    pub fn evaluate_table(&self, batch: &RecordBatch) -> Result<(ArrayRef, Vec<usize>)> {
         // evaluate the arguments, if there are no arguments we'll instead pass in a null array
         // indicating the batch size (as a convention)
         let inputs = match (self.args.len(), self.name.parse::<BuiltinScalarFunction>()) {

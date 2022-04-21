@@ -21,7 +21,7 @@ use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
 use datafusion_expr::logical_plan::{
     Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Subquery,
-    SubqueryAlias, Window, TableUDFs,
+    SubqueryAlias, TableUDFs, Window,
 };
 
 use crate::logical_plan::builder::build_table_udf_schema;

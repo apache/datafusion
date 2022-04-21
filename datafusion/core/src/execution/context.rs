@@ -1635,11 +1635,13 @@ mod tests {
         logical_plan::{col, create_udf, create_udtf, sum, Expr},
     };
     use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
-    use arrow::array::{ArrayRef, Int64Array, Int64Builder, StringBuilder, ArrayBuilder, StructBuilder};
+    use arrow::array::{
+        ArrayBuilder, ArrayRef, Int64Array, Int64Builder, StringBuilder, StructBuilder,
+    };
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
-    use datafusion_expr::{Volatility, TableFunctionImplementation};
+    use datafusion_expr::{TableFunctionImplementation, Volatility};
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
@@ -1953,7 +1955,7 @@ mod tests {
         let ctx = SessionContext::with_config(
             SessionConfig::new().create_default_catalog_and_schema(false),
         );
-        
+
         assert!(matches!(
             ctx.register_table("test", test::table_with_sequence(1, 1)?),
             Err(DataFusionError::Plan(_))

@@ -24,6 +24,7 @@ use crate::{
     array_expressions, conditional_expressions, Accumulator, BuiltinScalarFunction,
     Signature, TypeSignature,
 };
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
 use std::sync::Arc;
@@ -39,10 +40,9 @@ use std::sync::Arc;
 pub type ScalarFunctionImplementation =
     Arc<dyn Fn(&[ColumnarValue]) -> Result<ColumnarValue> + Send + Sync>;
 
-/// Table function
-pub type TableFunctionImplementation = Arc<
-    dyn Fn(&[ColumnarValue], usize) -> Result<(ColumnarValue, Vec<usize>)> + Send + Sync,
->;
+/// Table function. Second tuple
+pub type TableFunctionImplementation =
+    Arc<dyn Fn(&[ColumnarValue], usize) -> Result<(ArrayRef, Vec<usize>)> + Send + Sync>;
 
 /// A function's return type
 pub type ReturnTypeFunction =

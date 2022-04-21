@@ -32,7 +32,6 @@ use arrow::compute::kernels;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::TableFunctionExpr;
 
 use super::expressions::{Column, PhysicalSortExpr};
@@ -258,7 +257,7 @@ impl TableFunStream {
             .map(|a| {
                 Ok((
                     (
-                        ColumnarValue::Array(a.clone()),
+                        a.clone(),
                         (0..a.len()).into_iter().map(|_| 1).collect::<Vec<_>>(),
                     ),
                     false,
@@ -286,15 +285,9 @@ impl TableFunStream {
 
         let mut columns: Vec<ArrayRef> = Vec::new();
 
-        for (col_i, ((arr, cur_batch_sizes), is_table_fun)) in arrays.iter().enumerate() {
-            let col_arr = match arr {
-                ColumnarValue::Array(a) => a,
-                // TODO
-                ColumnarValue::Scalar(_) => {
-                    panic!("Table function should return array only but got scalar")
-                }
-            };
-
+        for (col_i, ((col_arr, cur_batch_sizes), is_table_fun)) in
+            arrays.iter().enumerate()
+        {
             let mut sections: Vec<ArrayRef> = Vec::new();
 
             let mut start_i_of_batch = 0;

@@ -36,7 +36,10 @@ use crate::physical_plan::expressions::{
 };
 use crate::{
     error::{DataFusionError, Result},
-    logical_expr::{function, BuiltinScalarFunction, ScalarFunctionImplementation, TableFunctionImplementation},
+    logical_expr::{
+        function, BuiltinScalarFunction, ScalarFunctionImplementation,
+        TableFunctionImplementation,
+    },
     scalar::ScalarValue,
 };
 use arrow::{
@@ -282,9 +285,9 @@ where
 
         let result = (inner)(&args);
 
-        let to_return: (ColumnarValue, Vec<usize>) = result
+        let to_return: (ArrayRef, Vec<usize>) = result
             .iter()
-            .map(|(r, indexes)| (ColumnarValue::Array(r.clone()), indexes.clone()))
+            .map(|(r, indexes)| (r.clone(), indexes.clone()))
             .next()
             .unwrap();
 
