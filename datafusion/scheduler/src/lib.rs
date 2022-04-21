@@ -208,13 +208,11 @@ impl Spawner {
 #[cfg(test)]
 mod tests {
     use arrow::util::pretty::pretty_format_batches;
-    use crossbeam_utils::sync::WaitGroup;
     use std::ops::Range;
     use std::panic::panic_any;
 
-    use futures::TryStreamExt;
+    use futures::{StreamExt, TryStreamExt};
     use log::info;
-    use parking_lot::Mutex;
     use rand::distributions::uniform::SampleUniform;
     use rand::{thread_rng, Rng};
 
@@ -348,42 +346,31 @@ mod tests {
         }
     }
 
-    /// Combines a function with a [`WaitGroup`]
-    fn wait_fn(wait: &WaitGroup, f: impl FnOnce()) -> impl FnOnce() {
-        let captured = wait.clone();
-        move || {
-            f();
-            std::mem::drop(captured);
-        }
-    }
-
-    #[test]
-    fn test_panic() {
+    #[tokio::test]
+    async fn test_panic() {
         init_logging();
 
         let do_test = |scheduler: Scheduler| {
-            let wait = WaitGroup::new();
-            scheduler.pool.spawn(wait_fn(&wait, || panic!("test")));
-            scheduler.pool.spawn(wait_fn(&wait, || panic!("{}", 1)));
-            scheduler.pool.spawn(wait_fn(&wait, || panic_any(21)));
-
-            wait.wait();
+            scheduler.pool.spawn(|| panic!("test"));
+            scheduler.pool.spawn(|| panic!("{}", 1));
+            scheduler.pool.spawn(|| panic_any(21));
         };
 
         // The default panic handler should log panics and not abort the process
         do_test(Scheduler::new(1));
 
         // Override panic handler and capture panics to test formatting
-        let buffer = Arc::new(Mutex::new(vec![]));
-        let captured = buffer.clone();
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
         let scheduler = SchedulerBuilder::new(1)
-            .panic_handler(move |panic| captured.lock().push(format_worker_panic(panic)))
+            .panic_handler(move |panic| {
+                let _ = sender.unbounded_send(format_worker_panic(panic));
+            })
             .build();
 
         do_test(scheduler);
 
         // Sort as order not guaranteed
-        let mut buffer = buffer.lock();
+        let mut buffer: Vec<_> = receiver.collect().await;
         buffer.sort_unstable();
 
         assert_eq!(buffer.len(), 3);
