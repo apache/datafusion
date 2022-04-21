@@ -924,7 +924,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // create proxy node to handle udtfs and rewrite udtfs to columns (returning by TableUDFs Node)
         let udtf_exprs = find_udtf_exprs(select_exprs.as_slice());
         if !udtf_exprs.is_empty() {
-            plan = table_udfs(plan, udtf_exprs.clone()).unwrap();
+            plan = table_udfs(plan, udtf_exprs).unwrap();
             select_exprs = rewrite_udtfs_to_columns(
                 select_exprs,
                 plan.schema().clone().as_ref().to_owned(),

@@ -264,11 +264,7 @@ impl TableFunStream {
                 ))
             }))
         .chain(self.expr.iter().map(|expr| {
-            let t_expr = expr
-                .as_any()
-                .clone()
-                .downcast_ref::<TableFunctionExpr>()
-                .unwrap();
+            let t_expr = expr.as_any().downcast_ref::<TableFunctionExpr>().unwrap();
             Ok((t_expr.evaluate_table(batch)?, true))
         }))
         .collect::<Result<Vec<_>>>()?;
@@ -302,13 +298,10 @@ impl TableFunStream {
                             max_size - current_batch_size,
                         ));
                     }
-                } else {
-                    if max_size - current_batch_size > 0 {
-                        for _ in 0..(max_size - current_batch_size) {
-                            sections.push(
-                                col_arr.slice(start_i_of_batch, current_batch_size),
-                            );
-                        }
+                } else if max_size - current_batch_size > 0 {
+                    for _ in 0..(max_size - current_batch_size) {
+                        sections
+                            .push(col_arr.slice(start_i_of_batch, current_batch_size));
                     }
                 }
 

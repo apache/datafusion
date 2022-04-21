@@ -1217,7 +1217,7 @@ pub(crate) fn table_udfs(plan: LogicalPlan, udtf_expr: Vec<Expr>) -> Result<Logi
     let schema = build_table_udf_schema(&plan, &udtf_expr)?;
     Ok(LogicalPlan::TableUDFs(TableUDFs {
         expr: udtf_expr,
-        input: Arc::new(plan.clone()),
+        input: Arc::new(plan),
         schema,
     }))
 }
