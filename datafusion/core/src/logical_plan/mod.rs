@@ -25,7 +25,6 @@ pub(crate) mod builder;
 mod dfschema;
 mod expr;
 mod expr_rewriter;
-mod expr_schema;
 mod expr_simplier;
 mod expr_visitor;
 mod operators;
@@ -38,6 +37,7 @@ pub use builder::{
 pub use datafusion_expr::expr_fn::binary_expr;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
 
+pub use crate::logical_expr::ExprSchemable;
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
     avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
@@ -55,7 +55,6 @@ pub use expr_rewriter::{
     normalize_col, normalize_cols, replace_col, rewrite_sort_cols_by_aggs,
     unnormalize_col, unnormalize_cols, ExprRewritable, ExprRewriter, RewriteRecursion,
 };
-pub use expr_schema::ExprSchemable;
 pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
 pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 pub use operators::Operator;

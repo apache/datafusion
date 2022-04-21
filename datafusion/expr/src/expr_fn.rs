@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Expr fn module contains the functional definitions for expressions.
+//! Functions for creating logical expressions
 
+use crate::conditional_expressions::CaseBuilder;
 use crate::{aggregate_function, built_in_function, lit, Expr, Operator};
 
 /// Create a column expression based on a qualified or unqualified column name
@@ -304,6 +305,16 @@ pub fn coalesce(args: Vec<Expr>) -> Expr {
         fun: built_in_function::BuiltinScalarFunction::Coalesce,
         args,
     }
+}
+
+/// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
+pub fn case(expr: Expr) -> CaseBuilder {
+    CaseBuilder::new(Some(Box::new(expr)), vec![], vec![], None)
+}
+
+/// Create a CASE WHEN statement with boolean WHEN expressions and no base expression.
+pub fn when(when: Expr, then: Expr) -> CaseBuilder {
+    CaseBuilder::new(None, vec![when], vec![then], None)
 }
 
 #[cfg(test)]

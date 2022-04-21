@@ -16,12 +16,12 @@
 // under the License.
 
 use super::Expr;
-use crate::logical_expr::{aggregate_function, function, window_function};
+use crate::binary_rule::binary_operator_data_type;
+use crate::field_util::get_indexed_field;
+use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFField, DFSchema, DataFusionError, ExprSchema, Result};
-use datafusion_expr::binary_rule::binary_operator_data_type;
-use datafusion_expr::field_util::get_indexed_field;
 
 /// trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
@@ -233,6 +233,67 @@ impl ExprSchemable for Expr {
                 "Cannot automatically convert {:?} to {:?}",
                 this_type, cast_to_type
             )))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{col, lit};
+    use arrow::datatypes::DataType;
+    use datafusion_common::Column;
+
+    #[test]
+    fn expr_schema_nullability() {
+        let expr = col("foo").eq(lit(1));
+        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
+        assert!(expr
+            .nullable(&MockExprSchema::new().with_nullable(true))
+            .unwrap());
+    }
+
+    #[test]
+    fn expr_schema_data_type() {
+        let expr = col("foo");
+        assert_eq!(
+            DataType::Utf8,
+            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8))
+                .unwrap()
+        );
+    }
+
+    struct MockExprSchema {
+        nullable: bool,
+        data_type: DataType,
+    }
+
+    impl MockExprSchema {
+        fn new() -> Self {
+            Self {
+                nullable: false,
+                data_type: DataType::Null,
+            }
+        }
+
+        fn with_nullable(mut self, nullable: bool) -> Self {
+            self.nullable = nullable;
+            self
+        }
+
+        fn with_data_type(mut self, data_type: DataType) -> Self {
+            self.data_type = data_type;
+            self
+        }
+    }
+
+    impl ExprSchema for MockExprSchema {
+        fn nullable(&self, _col: &Column) -> Result<bool> {
+            Ok(self.nullable)
+        }
+
+        fn data_type(&self, _col: &Column) -> Result<&DataType> {
+            Ok(&self.data_type)
         }
     }
 }

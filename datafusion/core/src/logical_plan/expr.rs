@@ -23,7 +23,6 @@ use crate::error::Result;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{DFField, DFSchema};
 use arrow::datatypes::DataType;
-use datafusion_common::DataFusionError;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
 use datafusion_expr::AccumulatorFunctionImplementation;
@@ -35,96 +34,7 @@ use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
 };
-use std::collections::HashSet;
 use std::sync::Arc;
-
-/// Helper struct for building [Expr::Case]
-pub struct CaseBuilder {
-    expr: Option<Box<Expr>>,
-    when_expr: Vec<Expr>,
-    then_expr: Vec<Expr>,
-    else_expr: Option<Box<Expr>>,
-}
-
-impl CaseBuilder {
-    pub fn when(&mut self, when: Expr, then: Expr) -> CaseBuilder {
-        self.when_expr.push(when);
-        self.then_expr.push(then);
-        CaseBuilder {
-            expr: self.expr.clone(),
-            when_expr: self.when_expr.clone(),
-            then_expr: self.then_expr.clone(),
-            else_expr: self.else_expr.clone(),
-        }
-    }
-    pub fn otherwise(&mut self, else_expr: Expr) -> Result<Expr> {
-        self.else_expr = Some(Box::new(else_expr));
-        self.build()
-    }
-
-    pub fn end(&self) -> Result<Expr> {
-        self.build()
-    }
-
-    fn build(&self) -> Result<Expr> {
-        // collect all "then" expressions
-        let mut then_expr = self.then_expr.clone();
-        if let Some(e) = &self.else_expr {
-            then_expr.push(e.as_ref().to_owned());
-        }
-
-        let then_types: Vec<DataType> = then_expr
-            .iter()
-            .map(|e| match e {
-                Expr::Literal(_) => e.get_type(&DFSchema::empty()),
-                _ => Ok(DataType::Null),
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        if then_types.contains(&DataType::Null) {
-            // cannot verify types until execution type
-        } else {
-            let unique_types: HashSet<&DataType> = then_types.iter().collect();
-            if unique_types.len() != 1 {
-                return Err(DataFusionError::Plan(format!(
-                    "CASE expression 'then' values had multiple data types: {:?}",
-                    unique_types
-                )));
-            }
-        }
-
-        Ok(Expr::Case {
-            expr: self.expr.clone(),
-            when_then_expr: self
-                .when_expr
-                .iter()
-                .zip(self.then_expr.iter())
-                .map(|(w, t)| (Box::new(w.clone()), Box::new(t.clone())))
-                .collect(),
-            else_expr: self.else_expr.clone(),
-        })
-    }
-}
-
-/// Create a CASE WHEN statement with literal WHEN expressions for comparison to the base expression.
-pub fn case(expr: Expr) -> CaseBuilder {
-    CaseBuilder {
-        expr: Some(Box::new(expr)),
-        when_expr: vec![],
-        then_expr: vec![],
-        else_expr: None,
-    }
-}
-
-/// Create a CASE WHEN statement with boolean WHEN expressions and no base expression.
-pub fn when(when: Expr, then: Expr) -> CaseBuilder {
-    CaseBuilder {
-        expr: None,
-        when_expr: vec![when],
-        then_expr: vec![then],
-        else_expr: None,
-    }
-}
 
 /// Combines an array of filter expressions into a single filter expression
 /// consisting of the input filter expressions joined with logical AND.
@@ -248,25 +158,9 @@ pub fn call_fn(name: impl AsRef<str>, args: Vec<Expr>) -> Result<Expr> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{col, lit, when};
+    use super::super::{col, lit};
     use super::*;
     use datafusion_expr::expr_fn::binary_expr;
-
-    #[test]
-    fn case_when_same_literal_then_types() -> Result<()> {
-        let _ = when(col("state").eq(lit("CO")), lit(303))
-            .when(col("state").eq(lit("NY")), lit(212))
-            .end()?;
-        Ok(())
-    }
-
-    #[test]
-    fn case_when_different_literal_then_types() {
-        let maybe_expr = when(col("state").eq(lit("CO")), lit(303))
-            .when(col("state").eq(lit("NY")), lit("212"))
-            .end();
-        assert!(maybe_expr.is_err());
-    }
 
     #[test]
     fn digest_function_definitions() {
@@ -300,58 +194,5 @@ mod tests {
         let result =
             combine_filters(&[filter1.clone(), filter2.clone(), filter3.clone()]);
         assert_eq!(result, Some(and(and(filter1, filter2), filter3)));
-    }
-
-    #[test]
-    fn expr_schema_nullability() {
-        let expr = col("foo").eq(lit(1));
-        assert!(!expr.nullable(&MockExprSchema::new()).unwrap());
-        assert!(expr
-            .nullable(&MockExprSchema::new().with_nullable(true))
-            .unwrap());
-    }
-
-    #[test]
-    fn expr_schema_data_type() {
-        let expr = col("foo");
-        assert_eq!(
-            DataType::Utf8,
-            expr.get_type(&MockExprSchema::new().with_data_type(DataType::Utf8))
-                .unwrap()
-        );
-    }
-
-    struct MockExprSchema {
-        nullable: bool,
-        data_type: DataType,
-    }
-
-    impl MockExprSchema {
-        fn new() -> Self {
-            Self {
-                nullable: false,
-                data_type: DataType::Null,
-            }
-        }
-
-        fn with_nullable(mut self, nullable: bool) -> Self {
-            self.nullable = nullable;
-            self
-        }
-
-        fn with_data_type(mut self, data_type: DataType) -> Self {
-            self.data_type = data_type;
-            self
-        }
-    }
-
-    impl ExprSchema for MockExprSchema {
-        fn nullable(&self, _col: &Column) -> Result<bool> {
-            Ok(self.nullable)
-        }
-
-        fn data_type(&self, _col: &Column) -> Result<&DataType> {
-            Ok(&self.data_type)
-        }
     }
 }
