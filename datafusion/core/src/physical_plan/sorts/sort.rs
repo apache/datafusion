@@ -32,7 +32,7 @@ use crate::physical_plan::metrics::{
 };
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::SortedStream;
-use crate::physical_plan::stream::{RecordBatchBoxStream, RecordBatchReceiverStream};
+use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -779,7 +779,7 @@ impl ExecutionPlan for SortExec {
 
         debug!("End SortExec's input.execute for partition: {}", partition);
 
-        Ok(Box::pin(RecordBatchBoxStream::new(
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             futures::stream::once(
                 do_sort(
@@ -791,8 +791,7 @@ impl ExecutionPlan for SortExec {
                 )
                 .map_err(|e| ArrowError::ExternalError(Box::new(e))),
             )
-            .try_flatten()
-            .boxed(),
+            .try_flatten(),
         )))
     }
 

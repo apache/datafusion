@@ -20,8 +20,8 @@
 use arrow::{
     datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
-use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
+use pin_project_lite::pin_project;
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -75,43 +75,50 @@ impl RecordBatchStream for RecordBatchReceiverStream {
     }
 }
 
-/// Combines a [`BoxStream`] with [`SchemaRef`] implementing
-/// [`RecordBatchStream`] for the combination
-pub(crate) struct RecordBatchBoxStream {
-    schema: SchemaRef,
-    stream: BoxStream<'static, ArrowResult<RecordBatch>>,
+pin_project! {
+    /// Combines a [`Stream`] with a [`SchemaRef`] implementing
+    /// [`RecordBatchStream`] for the combination
+    pub(crate) struct RecordBatchStreamAdapter<S> {
+        schema: SchemaRef,
+
+        #[pin]
+        stream: S,
+    }
 }
 
-impl RecordBatchBoxStream {
-    /// Creates a new [`RecordBatchBoxStream`] from the provided schema and stream
-    pub(crate) fn new(
-        schema: SchemaRef,
-        stream: BoxStream<'static, ArrowResult<RecordBatch>>,
-    ) -> Self {
+impl<S> RecordBatchStreamAdapter<S> {
+    /// Creates a new [`RecordBatchStreamAdapter`] from the provided schema and stream
+    pub(crate) fn new(schema: SchemaRef, stream: S) -> Self {
         Self { schema, stream }
     }
 }
 
-impl std::fmt::Debug for RecordBatchBoxStream {
+impl<S> std::fmt::Debug for RecordBatchStreamAdapter<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RecordBatchBoxStream")
+        f.debug_struct("RecordBatchStreamAdapter")
             .field("schema", &self.schema)
             .finish()
     }
 }
 
-impl Stream for RecordBatchBoxStream {
+impl<S> Stream for RecordBatchStreamAdapter<S>
+where
+    S: Stream<Item = ArrowResult<RecordBatch>>,
+{
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        self.stream.poll_next_unpin(cx)
+        self.project().stream.poll_next(cx)
     }
 }
 
-impl RecordBatchStream for RecordBatchBoxStream {
+impl<S> RecordBatchStream for RecordBatchStreamAdapter<S>
+where
+    S: Stream<Item = ArrowResult<RecordBatch>>,
+{
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }
