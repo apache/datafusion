@@ -22,20 +22,18 @@
 //! physical query plans and executed.
 
 pub(crate) mod builder;
-mod dfschema;
 mod expr;
 mod expr_rewriter;
 mod expr_simplier;
 mod expr_visitor;
-mod operators;
 pub mod plan;
 mod registry;
 pub mod window_frames;
 pub use builder::{
     build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
 };
-pub use datafusion_expr::expr_fn::binary_expr;
-pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
+pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
+pub use datafusion_expr::{expr_fn::binary_expr, Operator};
 
 pub use crate::logical_expr::ExprSchemable;
 pub use expr::{
@@ -57,7 +55,6 @@ pub use expr_rewriter::{
 };
 pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
 pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
-pub use operators::Operator;
 pub use plan::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
