@@ -307,54 +307,13 @@ impl ExecutionPlan for HashJoinExec {
                     context.clone(),
                 )
             }),
-            PartitionMode::Partitioned => {
-                let start = Instant::now();
-
-                // Load 1 partition of left side in memory
-                let stream = self.left.execute(partition, context.clone()).await?;
-
-                // This operation performs 2 steps at once:
-                // 1. creates a [JoinHashMap] of all batches from the stream
-                // 2. stores the batches in a vector.
-                let initial = (0, Vec::new());
-                let (num_rows, batches) = stream
-                    .try_fold(initial, |mut acc, batch| async {
-                        acc.0 += batch.num_rows();
-                        acc.1.push(batch);
-                        Ok(acc)
-                    })
-                    .await?;
-
-                let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
-                let mut hashes_buffer = Vec::new();
-                let mut offset = 0;
-                for batch in batches.iter() {
-                    hashes_buffer.clear();
-                    hashes_buffer.resize(batch.num_rows(), 0);
-                    update_hash(
-                        &on_left,
-                        batch,
-                        &mut hashmap,
-                        offset,
-                        &self.random_state,
-                        &mut hashes_buffer,
-                    )?;
-                    offset += batch.num_rows();
-                }
-                // Merge all batches into a single batch, so we
-                // can directly index into the arrays
-                let single_batch =
-                    concat_batches(&self.left.schema(), &batches, num_rows)?;
-
-                debug!(
-                    "Built build-side {} of hash join containing {} rows in {} ms",
-                    partition,
-                    num_rows,
-                    start.elapsed().as_millis()
-                );
-
-                OnceFut::ready(Ok((hashmap, single_batch)))
-            }
+            PartitionMode::Partitioned => OnceFut::new(partitioned_left_input(
+                partition,
+                self.random_state.clone(),
+                self.left.clone(),
+                on_left.clone(),
+                context.clone(),
+            )),
         };
 
         // we have the batches and the hash map with their keys. We can how create a stream
@@ -452,6 +411,62 @@ async fn collect_left_input(
 
     debug!(
         "Built build-side of hash join containing {} rows in {} ms",
+        num_rows,
+        start.elapsed().as_millis()
+    );
+
+    Ok((hashmap, single_batch))
+}
+
+async fn partitioned_left_input(
+    partition: usize,
+    random_state: RandomState,
+    left: Arc<dyn ExecutionPlan>,
+    on_left: Vec<Column>,
+    context: Arc<TaskContext>,
+) -> Result<JoinLeftData> {
+    let schema = left.schema();
+
+    let start = Instant::now();
+
+    // Load 1 partition of left side in memory
+    let stream = left.execute(partition, context.clone()).await?;
+
+    // This operation performs 2 steps at once:
+    // 1. creates a [JoinHashMap] of all batches from the stream
+    // 2. stores the batches in a vector.
+    let initial = (0, Vec::new());
+    let (num_rows, batches) = stream
+        .try_fold(initial, |mut acc, batch| async {
+            acc.0 += batch.num_rows();
+            acc.1.push(batch);
+            Ok(acc)
+        })
+        .await?;
+
+    let mut hashmap = JoinHashMap(RawTable::with_capacity(num_rows));
+    let mut hashes_buffer = Vec::new();
+    let mut offset = 0;
+    for batch in batches.iter() {
+        hashes_buffer.clear();
+        hashes_buffer.resize(batch.num_rows(), 0);
+        update_hash(
+            &on_left,
+            batch,
+            &mut hashmap,
+            offset,
+            &random_state,
+            &mut hashes_buffer,
+        )?;
+        offset += batch.num_rows();
+    }
+    // Merge all batches into a single batch, so we
+    // can directly index into the arrays
+    let single_batch = concat_batches(&schema, &batches, num_rows)?;
+
+    debug!(
+        "Built build-side {} of hash join containing {} rows in {} ms",
+        partition,
         num_rows,
         start.elapsed().as_millis()
     );
