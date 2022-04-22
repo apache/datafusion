@@ -1459,10 +1459,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // interpret names with '.' as if they were
                     // compound indenfiers, but this is not a compound
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
-                    Ok(Expr::Column(Column {
-                        relation: None,
-                        name: normalize_ident(id),
-                    }))
+                    Ok(Expr::UnresolvedColumn(normalize_ident(id)))
+                    // Ok(Expr::Column(Column {
+                    //     relation: None,
+                    //     name: normalize_ident(id),
+                    // }))
                 }
             }
 
@@ -1492,13 +1493,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         })?;
                     Ok(Expr::ScalarVariable(ty, var_names))
                 } else {
+                    //TODO this assumes there are exactly 2 items
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
                             // table.column identifier
-                            Ok(Expr::Column(Column {
-                                relation: Some(relation),
-                                name,
-                            }))
+                            Ok(Expr::UnresolvedColumn(format!("{}.{}", relation, name)))
+                            // Ok(Expr::Column(Column {
+                            //     relation: Some(relation),
+                            //     name,
+                            // }))
                         }
                         _ => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported compound identifier '{:?}'",
@@ -1819,6 +1822,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema),
+
+            SQLExpr::Exists(query) => {
+                let plan = self.query_to_plan(*query)?;
+                todo!()
+            }
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node {:?} in sqltorel",
@@ -4180,6 +4188,32 @@ mod tests {
             "Projection: #test.t_date64\
             \n  Filter: #test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalDayTime(\"128849018880\")\
             \n    TableScan: test projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn exists_uncorrelated_in_subquery() {
+        let sql = "SELECT id FROM person p WHERE last_name IN (SELECT last_name FROM person WHERE state = 'CO')";
+        let expected = "TBD";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn exists_correlated_in_subquery() {
+        let sql = "SELECT id FROM person p \
+        WHERE last_name IN (SELECT last_name FROM person \
+        WHERE first_name != p.first_name)";
+        let expected = "TBD";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn exists_subquery() {
+        let sql = "SELECT id FROM person p WHERE EXISTS \
+            (SELECT * FROM person \
+            WHERE last_name = p.last_name \
+            AND state = p.state)";
+        let expected = "TBD";
         quick_test(sql, expected);
     }
 }
