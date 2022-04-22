@@ -196,7 +196,6 @@ impl CustomExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CustomExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -225,7 +224,7 @@ impl ExecutionPlan for CustomExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
@@ -243,7 +242,7 @@ impl ExecutionPlan for CustomExec {
             account_array.append_value(user.bank_account)?;
         }
 
-        return Ok(Box::pin(MemoryStream::try_new(
+        Ok(Box::pin(MemoryStream::try_new(
             vec![RecordBatch::try_new(
                 self.projected_schema.clone(),
                 vec![
@@ -253,7 +252,7 @@ impl ExecutionPlan for CustomExec {
             )?],
             self.schema(),
             None,
-        )?));
+        )?))
     }
 
     fn statistics(&self) -> Statistics {

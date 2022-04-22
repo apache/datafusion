@@ -34,7 +34,6 @@ use arrow::compute::kernels::concat::concat;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
 use log::debug;
 
@@ -75,7 +74,6 @@ impl CoalesceBatchesExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CoalesceBatchesExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -116,13 +114,13 @@ impl ExecutionPlan for CoalesceBatchesExec {
         )))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(CoalesceBatchesStream {
-            input: self.input.execute(partition, context).await?,
+            input: self.input.execute(partition, context)?,
             schema: self.input.schema(),
             target_batch_size: self.target_batch_size,
             buffer: Vec::new(),
@@ -348,7 +346,7 @@ mod tests {
         for i in 0..output_partition_count {
             // execute this *output* partition and collect all batches
             let task_ctx = session_ctx.task_ctx();
-            let mut stream = exec.execute(i, task_ctx.clone()).await?;
+            let mut stream = exec.execute(i, task_ctx.clone())?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);

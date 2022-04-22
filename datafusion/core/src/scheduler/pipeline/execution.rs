@@ -22,9 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
-use arrow::error::ArrowError;
-use async_trait::async_trait;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
 
 use crate::arrow::datatypes::SchemaRef;
@@ -39,7 +37,6 @@ use crate::physical_plan::{
 };
 
 use crate::scheduler::pipeline::Pipeline;
-use crate::scheduler::BoxStream;
 
 /// An [`ExecutionPipeline`] wraps a portion of an [`ExecutionPlan`] and
 /// converts it to the push-based [`Pipeline`] interface
@@ -57,7 +54,7 @@ use crate::scheduler::BoxStream;
 pub struct ExecutionPipeline {
     proxied: Arc<dyn ExecutionPlan>,
     inputs: Vec<Vec<Arc<Mutex<InputPartition>>>>,
-    outputs: Vec<Mutex<BoxStream<'static, ArrowResult<RecordBatch>>>>,
+    outputs: Vec<Mutex<SendableRecordBatchStream>>,
 }
 
 impl std::fmt::Debug for ExecutionPipeline {
@@ -125,23 +122,8 @@ impl ExecutionPipeline {
         // Construct the output streams
         let output_count = proxied.output_partitioning().partition_count();
         let outputs = (0..output_count)
-            .map(|x| {
-                let proxy_captured = proxied.clone();
-                let task_captured = task_context.clone();
-                let fut = async move {
-                    proxy_captured
-                        .execute(x, task_captured)
-                        .await
-                        .map_err(|e| ArrowError::ExternalError(Box::new(e)))
-                };
-
-                // Use futures::stream::once to handle operators that perform computation
-                // within `ExecutionPlan::execute`. If we evaluated these futures here
-                // we could potentially block indefinitely waiting for inputs that will
-                // never arrive as the query isn't scheduled yet
-                Mutex::new(futures::stream::once(fut).try_flatten().boxed())
-            })
-            .collect();
+            .map(|x| proxied.execute(x, task_context.clone()).map(Mutex::new))
+            .collect::<Result<_>>()?;
 
         Ok(Self {
             proxied,
@@ -236,7 +218,6 @@ struct ProxyExecutionPlan {
     inputs: Vec<Arc<Mutex<InputPartition>>>,
 }
 
-#[async_trait]
 impl ExecutionPlan for ProxyExecutionPlan {
     fn as_any(&self) -> &dyn Any {
         self
@@ -281,7 +262,7 @@ impl ExecutionPlan for ProxyExecutionPlan {
         unimplemented!()
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,

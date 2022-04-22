@@ -1510,7 +1510,6 @@ mod tests {
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use async_trait::async_trait;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
@@ -2000,7 +1999,6 @@ mod tests {
         schema: SchemaRef,
     }
 
-    #[async_trait]
     impl ExecutionPlan for NoOpExecutionPlan {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -2034,7 +2032,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::with_new_children");
         }
 
-        async fn execute(
+        fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,

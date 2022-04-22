@@ -38,7 +38,6 @@ use crate::{
     error::Result,
     physical_plan::{expressions, metrics::BaselineMetrics},
 };
-use async_trait::async_trait;
 
 /// UNION ALL execution plan
 #[derive(Debug)]
@@ -64,7 +63,6 @@ impl UnionExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for UnionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -107,7 +105,7 @@ impl ExecutionPlan for UnionExec {
         Ok(Arc::new(UnionExec::new(children)))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         mut partition: usize,
         context: Arc<TaskContext>,
@@ -123,7 +121,7 @@ impl ExecutionPlan for UnionExec {
         for input in self.inputs.iter() {
             // Calculate whether partition belongs to the current partition
             if partition < input.output_partitioning().partition_count() {
-                let stream = input.execute(partition, context.clone()).await?;
+                let stream = input.execute(partition, context)?;
                 debug!("Found a Union partition to execute");
                 return Ok(Box::pin(ObservedStream::new(stream, baseline_metrics)));
             } else {

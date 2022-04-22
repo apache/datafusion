@@ -98,31 +98,36 @@ impl Stream for TestCustomRecordBatchStream {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CustomExecutionPlan {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
     fn schema(&self) -> SchemaRef {
         let schema = TEST_CUSTOM_SCHEMA_REF!();
         project_schema(&schema, self.projection.as_ref()).expect("projected schema")
     }
+
     fn output_partitioning(&self) -> Partitioning {
         Partitioning::UnknownPartitioning(1)
     }
+
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
         None
     }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![]
     }
+
     fn with_new_children(
         self: Arc<Self>,
         _: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         Ok(self)
     }
-    async fn execute(
+
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,

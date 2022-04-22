@@ -21,7 +21,6 @@ use std::sync::Arc;
 use crate::client::BallistaClient;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 
 use datafusion::error::{DataFusionError, Result};
@@ -64,7 +63,6 @@ impl ShuffleReaderExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ShuffleReaderExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -101,7 +99,7 @@ impl ExecutionPlan for ShuffleReaderExec {
         ))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,

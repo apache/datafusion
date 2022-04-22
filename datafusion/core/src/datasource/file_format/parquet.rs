@@ -512,7 +512,7 @@ mod tests {
         let projection = None;
         let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
         let task_ctx = ctx.task_ctx();
-        let stream = exec.execute(0, task_ctx).await?;
+        let stream = exec.execute(0, task_ctx)?;
 
         let tt_batches = stream
             .map(|batch| {
