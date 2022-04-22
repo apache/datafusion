@@ -688,6 +688,20 @@ fn build_predicate_expression(
                 return Ok(unhandled);
             }
         }
+        Expr::InList {
+            expr,
+            list,
+            negated,
+        } if !list.is_empty() && list.len() < 20 => {
+            let eq_fun = if *negated { Expr::not_eq } else { Expr::eq };
+            let re_fun = if *negated { Expr::and } else { Expr::or };
+            let change_expr = list
+                .iter()
+                .map(|e| eq_fun(*expr.clone(), e.clone()))
+                .reduce(re_fun)
+                .unwrap();
+            return build_predicate_expression(&change_expr, schema, required_columns);
+        }
         _ => {
             return Ok(unhandled);
         }
@@ -1336,6 +1350,66 @@ mod tests {
         );
         // c2 = 3 shouldn't add any new statistics fields
         assert_eq!(required_columns.columns.len(), 3);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_in_list() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // test c1 in(1, 2, 3)
+        let expr = Expr::InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit(1), lit(2), lit(3)],
+            negated: false,
+        };
+        let expected_expr = "#c1_min <= Int32(1) AND Int32(1) <= #c1_max OR #c1_min <= Int32(2) AND Int32(2) <= #c1_max OR #c1_min <= Int32(3) AND Int32(3) <= #c1_max";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_in_list_empty() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // test c1 in()
+        let expr = Expr::InList {
+            expr: Box::new(col("c1")),
+            list: vec![],
+            negated: false,
+        };
+        let expected_expr = "Boolean(true)";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_in_list_negated() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Int32, false),
+            Field::new("c2", DataType::Int32, false),
+        ]);
+        // test c1 not in(1, 2, 3)
+        let expr = Expr::InList {
+            expr: Box::new(col("c1")),
+            list: vec![lit(1), lit(2), lit(3)],
+            negated: true,
+        };
+        let expected_expr = "#c1_min != Int32(1) OR Int32(1) != #c1_max AND #c1_min != Int32(2) OR Int32(2) != #c1_max AND #c1_min != Int32(3) OR Int32(3) != #c1_max";
+        let predicate_expr =
+            build_predicate_expression(&expr, &schema, &mut RequiredStatColumns::new())?;
+        assert_eq!(format!("{:?}", predicate_expr), expected_expr);
 
         Ok(())
     }
