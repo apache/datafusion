@@ -394,6 +394,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::TryCast { .. }
             | Expr::InList { .. }
             | Expr::GetIndexedField { .. } => true,
+            Expr::Exists(_) => todo!(),
         }
     }
 

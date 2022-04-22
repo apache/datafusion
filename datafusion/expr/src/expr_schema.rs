@@ -106,6 +106,7 @@ impl ExprSchemable for Expr {
             | Expr::IsNull(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
+            | Expr::Exists(_)
             | Expr::IsNotNull(_) => Ok(DataType::Boolean),
             Expr::BinaryExpr {
                 ref left,
@@ -152,6 +153,7 @@ impl ExprSchemable for Expr {
             | Expr::Sort { expr, .. }
             | Expr::Between { expr, .. }
             | Expr::InList { expr, .. } => expr.nullable(input_schema),
+            Expr::Exists(_) => Ok(false),
             Expr::Column(c) => input_schema.nullable(c),
             Expr::Literal(value) => Ok(value.is_null()),
             Expr::Case {

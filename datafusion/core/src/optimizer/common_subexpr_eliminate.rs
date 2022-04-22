@@ -463,6 +463,7 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("InList-");
                 desc.push_str(&negated.to_string());
             }
+            Expr::Exists(_) => todo!(),
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");
             }

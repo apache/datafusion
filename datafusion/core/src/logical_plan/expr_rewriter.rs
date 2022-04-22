@@ -218,6 +218,10 @@ impl ExprRewritable for Expr {
                 list: rewrite_vec(list, rewriter)?,
                 negated,
             },
+            Expr::Exists(exists) => {
+                // TODO rewrite subquery here?
+                Expr::Exists(exists.clone())
+            }
             Expr::Wildcard => Expr::Wildcard,
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }

@@ -190,6 +190,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
+        Expr::Exists(_) => todo!(),
         Expr::Between {
             expr,
             negated,

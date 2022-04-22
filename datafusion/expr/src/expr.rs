@@ -17,7 +17,6 @@
 
 //! Expr module contains core type definition for `Expr`.
 
-use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
 use crate::window_frame;
@@ -25,6 +24,7 @@ use crate::window_function;
 use crate::AggregateUDF;
 use crate::Operator;
 use crate::ScalarUDF;
+use crate::{aggregate_function, LogicalPlan};
 use arrow::datatypes::DataType;
 use datafusion_common::Column;
 use datafusion_common::{DFSchema, Result};
@@ -228,10 +228,52 @@ pub enum Expr {
         /// Whether the expression is negated
         negated: bool,
     },
+    /// EXISTS subquery
+    Exists(Exists),
     /// Represents a reference to all fields in a schema.
     Wildcard,
     /// Represents a reference to all fields in a specific schema.
     QualifiedWildcard { qualifier: String },
+}
+
+#[derive(Clone)]
+pub struct Exists {
+    pub subquery: Arc<LogicalPlan>,
+}
+
+impl Exists {
+    pub fn new(subquery: LogicalPlan) -> Self {
+        Self {
+            subquery: Arc::new(subquery),
+        }
+    }
+}
+
+pub fn exists(subquery: LogicalPlan) -> Expr {
+    Expr::Exists(Exists::new(subquery))
+}
+
+impl Hash for Exists {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        todo!()
+    }
+
+    fn hash_slice<H: Hasher>(data: &[Self], state: &mut H)
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+}
+
+impl PartialEq for Exists {
+    fn eq(&self, other: &Self) -> bool {
+        todo!()
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        todo!()
+    }
 }
 
 /// Fixed seed for the hashing so that Ords are consistent across runs
@@ -516,6 +558,7 @@ impl fmt::Debug for Expr {
                     write!(f, "{:?} IN ({:?})", expr, list)
                 }
             }
+            Expr::Exists(exists) => write!(f, "EXISTS ({:?})", exists.subquery),
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
             Expr::GetIndexedField { ref expr, key } => {
@@ -682,6 +725,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
+        Expr::Exists(exists) => Ok(format!("EXISTS ({:?})", exists.subquery)),
         Expr::Between {
             expr,
             negated,

@@ -49,6 +49,7 @@ use arrow::datatypes::*;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
+use datafusion_expr::expr::exists;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
@@ -1823,10 +1824,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Nested(e) => self.sql_expr_to_logical_expr(*e, schema),
 
-            SQLExpr::Exists(query) => {
-                let plan = self.query_to_plan(*query)?;
-                todo!()
-            }
+            SQLExpr::Exists(query) => Ok(exists(self.query_to_plan(*query)?)),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node {:?} in sqltorel",
@@ -4213,7 +4211,16 @@ mod tests {
             (SELECT * FROM person \
             WHERE last_name = p.last_name \
             AND state = p.state)";
-        let expected = "TBD";
+
+        //TODO need to improve the way these plans are formatted
+
+        let expected = "Projection: #p.id\
+        \n  Filter: EXISTS (\
+                        Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
+                        \n  Filter: last_name? = p.last_name? AND state? = p.state?\
+                        \n    TableScan: person projection=None)\
+        \n    SubqueryAlias: p\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 }

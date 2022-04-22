@@ -171,6 +171,10 @@ impl ExprVisitable for Expr {
                 list.iter()
                     .try_fold(visitor, |visitor, arg| arg.accept(visitor))
             }
+            Expr::Exists(_) => {
+                //TODO do we need to recurse into the subquery here?
+                Ok(visitor)
+            }
         }?;
 
         visitor.post_visit(self)

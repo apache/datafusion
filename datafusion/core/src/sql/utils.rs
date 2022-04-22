@@ -284,6 +284,7 @@ where
                     .collect::<Result<Vec<Expr>>>()?,
                 negated: *negated,
             }),
+            Expr::Exists(_) => todo!(),
             Expr::BinaryExpr { left, right, op } => Ok(Expr::BinaryExpr {
                 left: Box::new(clone_with_replacement(&**left, replacement_fn)?),
                 op: *op,
