@@ -15,6 +15,65 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! A [`Scheduler`] maintains a pool of dedicated worker threads on which
+//! query execution can be scheduled. This is based on the idea of [Morsel-Driven Parallelism]
+//! and is designed to decouple the execution parallelism from the parallelism expressed in
+//! the physical plan as partitions.
+//!
+//! # Implementation
+//!
+//! When provided with an [`ExecutionPlan`] the [`Scheduler`] first breaks it up into smaller
+//! chunks called pipelines. Each pipeline may consist of one or more nodes from the
+//! [`ExecutionPlan`] tree.
+//!
+//! The scheduler then maintains a list of pending [`Task`], that identify a partition within
+//! a particular pipeline that may be able to make progress on some "morsel" of data. These
+//! [`Task`] are then scheduled on the worker pool, with a preference for scheduling work
+//! on a given "morsel" on the same thread that produced it.
+//!
+//! # Rayon
+//!
+//! Under-the-hood these [`Task`] are scheduled by [rayon], which is a lightweight, work-stealing
+//! scheduler optimised for CPU-bound workloads. Pipelines may exploit this fact, and use [rayon]'s
+//! structured concurrency primitives to express additional parallelism that may be exploited
+//! if there are idle threads available at runtime
+//!
+//! # Shutdown
+//!
+//! Queries scheduled on a [`Scheduler`] will run to completion even if the
+//! [`Scheduler`] is dropped
+//!
+//! [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
+//! [rayon]: https://docs.rs/rayon/latest/rayon/
+//!
+//! # Example
+//!
+//! ```rust
+//! # use futures::TryStreamExt;
+//! # use datafusion::prelude::{CsvReadOptions, SessionConfig, SessionContext};
+//! # use datafusion_scheduler::Scheduler;
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! let scheduler = Scheduler::new(4);
+//! let config = SessionConfig::new().with_target_partitions(4);
+//! let context = SessionContext::with_config(config);
+//!
+//! context.register_csv("example", "../core/tests/example.csv", CsvReadOptions::new()).await.unwrap();
+//! let plan = context.sql("SELECT MIN(b) FROM example")
+//!     .await
+//!    .unwrap()
+//!    .create_physical_plan()
+//!    .await
+//!    .unwrap();
+//!
+//! let task = context.task_ctx();
+//! let stream = scheduler.schedule(plan, task).unwrap();
+//! let scheduled: Vec<_> = stream.try_collect().await.unwrap();
+//! # }
+//! ```
+//!
+
 use std::sync::Arc;
 
 use futures::stream::BoxStream;
@@ -73,37 +132,7 @@ impl SchedulerBuilder {
     }
 }
 
-/// A [`Scheduler`] maintains a pool of dedicated worker threads on which
-/// query execution can be scheduled. This is based on the idea of [Morsel-Driven Parallelism]
-/// and is designed to decouple the execution parallelism from the parallelism expressed in
-/// the physical plan as partitions.
-///
-/// # Implementation
-///
-/// When provided with an [`ExecutionPlan`] the [`Scheduler`] first breaks it up into smaller
-/// chunks called pipelines. Each pipeline may consist of one or more nodes from the
-/// [`ExecutionPlan`] tree.
-///
-/// The scheduler then maintains a list of pending [`Task`], that identify a partition within
-/// a particular pipeline that may be able to make progress on some "morsel" of data. These
-/// [`Task`] are then scheduled on the worker pool, with a preference for scheduling work
-/// on a given "morsel" on the same thread that produced it.
-///
-/// # Rayon
-///
-/// Under-the-hood these [`Task`] are scheduled by [rayon], which is a lightweight, work-stealing
-/// scheduler optimised for CPU-bound workloads. Pipelines may exploit this fact, and use [rayon]'s
-/// structured concurrency primitives to express additional parallelism that may be exploited
-/// if there are idle threads available at runtime
-///
-/// # Shutdown
-///
-/// Queries scheduled on a [`Scheduler`] will run to completion even if the
-/// [`Scheduler`] is dropped
-///
-/// [Morsel-Driven Parallelism]: https://db.in.tum.de/~leis/papers/morsels.pdf
-/// [rayon]: https://docs.rs/rayon/latest/rayon/
-///
+/// A [`Scheduler`] that can be used to schedule [`ExecutionPlan`] on a dedicated thread pool
 pub struct Scheduler {
     pool: Arc<ThreadPool>,
 }
@@ -116,7 +145,8 @@ impl Scheduler {
 
     /// Schedule the provided [`ExecutionPlan`] on this [`Scheduler`].
     ///
-    /// Returns a [`BoxStream`] that can be used to receive results as they are produced
+    /// Returns a [`ExecutionResults`] that can be used to receive results as they are produced,
+    /// as a [`futures::Stream`] of [`RecordBatch`]
     pub fn schedule(
         &self,
         plan: Arc<dyn ExecutionPlan>,
