@@ -32,7 +32,7 @@ use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::sort_merge_join::SortMergeJoinExec;
 
 use datafusion::prelude::{SessionConfig, SessionContext};
-use fuzz_utils::{add_empty_batches};
+use fuzz_utils::add_empty_batches;
 
 #[tokio::test]
 async fn test_inner_join_1k() {
