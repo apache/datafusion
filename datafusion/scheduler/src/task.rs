@@ -29,7 +29,7 @@ use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
 /// Spawns a [`PipelinePlan`] using the provided [`Spawner`]
-pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> QueryResults {
+pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
     debug!("Spawning pipeline plan: {:#?}", plan);
 
     let (sender, receiver) = mpsc::unbounded();
@@ -53,7 +53,7 @@ pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> QueryResults {
         }
     }
 
-    QueryResults {
+    ExecutionResults {
         context: context,
         inner: receiver,
     }
@@ -195,12 +195,12 @@ impl Task {
     }
 }
 
-/// The result stream for a query
+/// The result stream for the execution of a query
 ///
 /// # Cancellation
 ///
 /// Dropping this will cancel the inflight query
-pub struct QueryResults {
+pub struct ExecutionResults {
     inner: mpsc::UnboundedReceiver<Option<Result<RecordBatch>>>,
 
     /// Keep a reference to the [`ExecutionContext`] so it isn't dropped early
@@ -208,7 +208,7 @@ pub struct QueryResults {
     context: Arc<ExecutionContext>,
 }
 
-impl Stream for QueryResults {
+impl Stream for ExecutionResults {
     type Item = Result<RecordBatch>;
 
     fn poll_next(

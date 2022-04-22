@@ -29,7 +29,7 @@ use crate::task::{spawn_plan, Task};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 
-pub use task::QueryResults;
+pub use task::ExecutionResults;
 
 mod pipeline;
 mod plan;
@@ -121,13 +121,13 @@ impl Scheduler {
         &self,
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
-    ) -> Result<QueryResults> {
+    ) -> Result<ExecutionResults> {
         let plan = PipelinePlanner::new(plan, context).build()?;
         Ok(self.schedule_plan(plan))
     }
 
     /// Schedule the provided [`PipelinePlan`] on this [`Scheduler`].
-    pub(crate) fn schedule_plan(&self, plan: PipelinePlan) -> QueryResults {
+    pub(crate) fn schedule_plan(&self, plan: PipelinePlan) -> ExecutionResults {
         spawn_plan(plan, self.spawner())
     }
 
