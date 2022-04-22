@@ -85,6 +85,8 @@ pub enum Expr {
     Alias(Box<Expr>, String),
     /// A named reference to a qualified filed in a schema.
     Column(Column),
+    /// A column that has not been resolved yet
+    UnresolvedColumn(String),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
@@ -401,6 +403,7 @@ impl fmt::Debug for Expr {
         match self {
             Expr::Alias(expr, alias) => write!(f, "{:?} AS {}", expr, alias),
             Expr::Column(c) => write!(f, "{}", c),
+            Expr::UnresolvedColumn(c) => write!(f, "{}?", c),
             Expr::ScalarVariable(_, var_names) => write!(f, "{}", var_names.join(".")),
             Expr::Literal(v) => write!(f, "{:?}", v),
             Expr::Case {
@@ -565,6 +568,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
+        Expr::UnresolvedColumn(name) => Ok(name.clone()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {

@@ -63,6 +63,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::Column(qc) => {
                 self.accum.insert(qc.clone());
             }
+            Expr::UnresolvedColumn(_) => todo!(),
             Expr::ScalarVariable(_, var_names) => {
                 self.accum.insert(Column::from_name(var_names.join(".")));
             }
@@ -348,7 +349,10 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
             }
             Ok(expr_list)
         }
-        Expr::Column(_) | Expr::Literal(_) | Expr::ScalarVariable(_, _) => Ok(vec![]),
+        Expr::Column(_)
+        | Expr::UnresolvedColumn(_)
+        | Expr::Literal(_)
+        | Expr::ScalarVariable(_, _) => Ok(vec![]),
         Expr::Between {
             expr, low, high, ..
         } => Ok(vec![
@@ -495,6 +499,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         Expr::Not(_) => Ok(Expr::Not(Box::new(expressions[0].clone()))),
         Expr::Negative(_) => Ok(Expr::Negative(Box::new(expressions[0].clone()))),
         Expr::Column(_)
+        | Expr::UnresolvedColumn(_)
         | Expr::Literal(_)
         | Expr::InList { .. }
         | Expr::ScalarVariable(_, _) => Ok(expr.clone()),

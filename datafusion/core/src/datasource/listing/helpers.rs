@@ -80,6 +80,10 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
                 *self.is_applicable &= self.col_names.contains(name);
                 Recursion::Stop(self) // leaf node anyway
             }
+            Expr::UnresolvedColumn(name) => {
+                *self.is_applicable &= self.col_names.contains(name);
+                Recursion::Stop(self) // leaf node anyway
+            }
             Expr::Literal(_)
             | Expr::Alias(_, _)
             | Expr::ScalarVariable(_, _)

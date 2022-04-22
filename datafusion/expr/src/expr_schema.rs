@@ -57,6 +57,10 @@ impl ExprSchemable for Expr {
                 expr.get_type(schema)
             }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
+            Expr::UnresolvedColumn(c) => Err(DataFusionError::Plan(format!(
+                "Cannot determine type for unresolved column '{}'",
+                c
+            ))),
             Expr::ScalarVariable(ty, _) => Ok(ty.clone()),
             Expr::Literal(l) => Ok(l.get_datatype()),
             Expr::Case { when_then_expr, .. } => when_then_expr[0].1.get_type(schema),
@@ -138,6 +142,10 @@ impl ExprSchemable for Expr {
     /// column that does not exist in the schema.
     fn nullable<S: ExprSchema>(&self, input_schema: &S) -> Result<bool> {
         match self {
+            Expr::UnresolvedColumn(name) => Err(DataFusionError::Plan(format!(
+                "Cannot determine type of unresolved column '{}'",
+                name
+            ))),
             Expr::Alias(expr, _)
             | Expr::Not(expr)
             | Expr::Negative(expr)

@@ -382,6 +382,10 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("Column-");
                 desc.push_str(&column.flat_name());
             }
+            Expr::UnresolvedColumn(name) => {
+                desc.push_str("UnresolvedColumn-");
+                desc.push_str(&name);
+            }
             Expr::ScalarVariable(_, var_names) => {
                 desc.push_str("ScalarVariable-");
                 desc.push_str(&var_names.join("."));

@@ -90,6 +90,10 @@ fn physical_name(e: &Expr) -> Result<String> {
 
 fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
     match e {
+        Expr::UnresolvedColumn(name) => Err(DataFusionError::Plan(format!(
+            "Cannot get physical expression name for unresolved column '{}'",
+            name
+        ))),
         Expr::Column(c) => {
             if is_first_expr {
                 Ok(c.name.clone())
@@ -917,6 +921,10 @@ pub fn create_physical_expr(
             let idx = input_dfschema.index_of_column(c)?;
             Ok(Arc::new(Column::new(&c.name, idx)))
         }
+        Expr::UnresolvedColumn(name) => Err(DataFusionError::Plan(format!(
+            "Cannot create physical expression for unresolved column '{}'",
+            name
+        ))),
         Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
         Expr::ScalarVariable(_, variable_names) => {
             if &variable_names[0][0..2] == "@@" {
