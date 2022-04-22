@@ -696,7 +696,7 @@ fn build_predicate_expression(
             let eq_fun = if *negated { Expr::not_eq } else { Expr::eq };
             let re_fun = if *negated { Expr::and } else { Expr::or };
             let change_expr = list
-                .into_iter()
+                .iter()
                 .map(|e| eq_fun(*expr.clone(), e.clone()))
                 .reduce(re_fun)
                 .unwrap();
