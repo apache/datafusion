@@ -160,7 +160,7 @@ impl DFSchema {
                 return Ok(i);
             } else {
                 // Now that `index_of` is deprecated an error is thrown if
-                // a fully qualified field name is provided. 
+                // a fully qualified field name is provided.
                 match &self.fields[i].qualifier {
                     Some(qualifier) => {
                         if (qualifier.to_owned() + "." + self.fields[i].name()) == name {
