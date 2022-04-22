@@ -80,7 +80,7 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
                 *self.is_applicable &= self.col_names.contains(name);
                 Recursion::Stop(self) // leaf node anyway
             }
-            Expr::UnresolvedColumn(name) => {
+            Expr::UnresolvedColumn(logical_plan::Column { ref name, .. }) => {
                 *self.is_applicable &= self.col_names.contains(name);
                 Recursion::Stop(self) // leaf node anyway
             }

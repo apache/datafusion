@@ -86,7 +86,7 @@ pub enum Expr {
     /// A named reference to a qualified filed in a schema.
     Column(Column),
     /// A column that has not been resolved yet
-    UnresolvedColumn(String),
+    UnresolvedColumn(Column),
     /// A named reference to a variable in a registry.
     ScalarVariable(DataType, Vec<String>),
     /// A constant value.
@@ -229,31 +229,31 @@ pub enum Expr {
         negated: bool,
     },
     /// EXISTS subquery
-    Exists(Exists),
+    Exists(Subquery),
     /// Represents a reference to all fields in a schema.
     Wildcard,
     /// Represents a reference to all fields in a specific schema.
     QualifiedWildcard { qualifier: String },
 }
 
-#[derive(Clone)]
-pub struct Exists {
-    pub subquery: Arc<LogicalPlan>,
+#[derive(Clone, Debug)]
+pub struct Subquery {
+    pub plan: Arc<LogicalPlan>,
 }
 
-impl Exists {
-    pub fn new(subquery: LogicalPlan) -> Self {
+impl Subquery {
+    pub fn new(plan: LogicalPlan) -> Self {
         Self {
-            subquery: Arc::new(subquery),
+            plan: Arc::new(plan),
         }
     }
 }
 
 pub fn exists(subquery: LogicalPlan) -> Expr {
-    Expr::Exists(Exists::new(subquery))
+    Expr::Exists(Subquery::new(subquery))
 }
 
-impl Hash for Exists {
+impl Hash for Subquery {
     fn hash<H: Hasher>(&self, state: &mut H) {
         todo!()
     }
@@ -266,7 +266,7 @@ impl Hash for Exists {
     }
 }
 
-impl PartialEq for Exists {
+impl PartialEq for Subquery {
     fn eq(&self, other: &Self) -> bool {
         todo!()
     }
@@ -558,7 +558,10 @@ impl fmt::Debug for Expr {
                     write!(f, "{:?} IN ({:?})", expr, list)
                 }
             }
-            Expr::Exists(exists) => write!(f, "EXISTS ({:?})", exists.subquery),
+            Expr::Exists(subquery) => {
+                // TODO improve formatting
+                write!(f, "EXISTS ({:?})", subquery)
+            }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
             Expr::GetIndexedField { ref expr, key } => {
@@ -611,7 +614,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
     match e {
         Expr::Alias(_, name) => Ok(name.clone()),
         Expr::Column(c) => Ok(c.flat_name()),
-        Expr::UnresolvedColumn(name) => Ok(name.clone()),
+        Expr::UnresolvedColumn(c) => Ok(c.flat_name()),
         Expr::ScalarVariable(_, variable_names) => Ok(variable_names.join(".")),
         Expr::Literal(value) => Ok(format!("{:?}", value)),
         Expr::BinaryExpr { left, op, right } => {
@@ -725,7 +728,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        Expr::Exists(exists) => Ok(format!("EXISTS ({:?})", exists.subquery)),
+        Expr::Exists(subquery) => Ok(format!("EXISTS ({:?})", subquery)),
         Expr::Between {
             expr,
             negated,

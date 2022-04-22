@@ -1460,11 +1460,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // interpret names with '.' as if they were
                     // compound indenfiers, but this is not a compound
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
-                    Ok(Expr::UnresolvedColumn(normalize_ident(id)))
-                    // Ok(Expr::Column(Column {
-                    //     relation: None,
-                    //     name: normalize_ident(id),
-                    // }))
+                    Ok(Expr::UnresolvedColumn(Column {
+                        relation: None,
+                        name: normalize_ident(id),
+                    }))
                 }
             }
 
@@ -1498,11 +1497,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
                             // table.column identifier
-                            Ok(Expr::UnresolvedColumn(format!("{}.{}", relation, name)))
-                            // Ok(Expr::Column(Column {
-                            //     relation: Some(relation),
-                            //     name,
-                            // }))
+                            Ok(Expr::UnresolvedColumn(Column {
+                                relation: Some(relation),
+                                name,
+                            }))
                         }
                         _ => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported compound identifier '{:?}'",
