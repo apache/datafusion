@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::query::Query;
+use crate::plan::PipelinePlan;
 use crate::{is_worker, spawn_local, spawn_local_fifo, RoutablePipeline, Spawner};
 use arrow::record_batch::RecordBatch;
 use datafusion::error::{DataFusionError, Result};
@@ -28,23 +28,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 
-/// Spawns a query using the provided [`Spawner`]
-pub fn spawn_query(query: Query, spawner: Spawner) -> QueryResults {
-    debug!("Spawning query: {:#?}", query);
+/// Spawns a [`PipelinePlan`] using the provided [`Spawner`]
+pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> QueryResults {
+    debug!("Spawning pipeline plan: {:#?}", plan);
 
     let (sender, receiver) = mpsc::unbounded();
-    let query = Arc::new(QueryTask {
+    let context = Arc::new(ExecutionContext {
         spawner,
-        pipelines: query.pipelines,
+        pipelines: plan.pipelines,
         output: sender,
     });
 
-    for (pipeline_idx, query_pipeline) in query.pipelines.iter().enumerate() {
+    for (pipeline_idx, query_pipeline) in context.pipelines.iter().enumerate() {
         for partition in 0..query_pipeline.pipeline.output_partitions() {
-            query.spawner.spawn(Task {
-                query: query.clone(),
+            context.spawner.spawn(Task {
+                context: context.clone(),
                 waker: Arc::new(TaskWaker {
-                    query: Arc::downgrade(&query),
+                    context: Arc::downgrade(&context),
                     wake_count: AtomicUsize::new(1),
                     pipeline: pipeline_idx,
                     partition,
@@ -54,7 +54,7 @@ pub fn spawn_query(query: Query, spawner: Spawner) -> QueryResults {
     }
 
     QueryResults {
-        query,
+        context: context,
         inner: receiver,
     }
 }
@@ -62,13 +62,10 @@ pub fn spawn_query(query: Query, spawner: Spawner) -> QueryResults {
 /// A [`Task`] identifies an output partition within a given pipeline that may be able to
 /// make progress. The [`Scheduler`][super::Scheduler] maintains a list of outstanding
 /// [`Task`] and distributes them amongst its worker threads.
-///
-/// A [`Query`] is considered completed when it has no outstanding [`Task`]
 pub struct Task {
-    /// Maintain a link to the [`QueryTask`] this is necessary to be able to
-    /// route the output of the partition to its destination, and also because
-    /// when [`QueryTask`] is dropped it signals completion of query execution
-    query: Arc<QueryTask>,
+    /// Maintain a link to the [`ExecutionContext`] this is necessary to be able to
+    /// route the output of the partition to its destination
+    context: Arc<ExecutionContext>,
 
     /// A [`ArcWake`] that can be used to re-schedule this [`Task`] for execution
     waker: Arc<TaskWaker>,
@@ -76,7 +73,7 @@ pub struct Task {
 
 impl std::fmt::Debug for Task {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let output = &self.query.pipelines[self.waker.pipeline].output;
+        let output = &self.context.pipelines[self.waker.pipeline].output;
 
         f.debug_struct("Task")
             .field("pipeline", &self.waker.pipeline)
@@ -88,7 +85,7 @@ impl std::fmt::Debug for Task {
 
 impl Task {
     fn handle_error(&self, routable: &RoutablePipeline, error: DataFusionError) {
-        self.query.send_query_output(Err(error));
+        self.context.send_query_output(Err(error));
         if let Some(link) = routable.output {
             trace!(
                 "Closing pipeline: {:?}, partition: {}, due to error",
@@ -96,15 +93,16 @@ impl Task {
                 self.waker.partition,
             );
 
-            self.query.pipelines[link.pipeline]
+            self.context.pipelines[link.pipeline]
                 .pipeline
                 .close(link.child, self.waker.partition);
         }
     }
-    /// Call [`Pipeline::poll_partition`] attempting to make progress on query execution
+
+    /// Call [`Pipeline::poll_partition`], attempting to make progress on query execution
     pub fn do_work(self) {
         assert!(is_worker(), "Task::do_work called outside of worker pool");
-        if self.query.is_cancelled() {
+        if self.context.is_cancelled() {
             return;
         }
 
@@ -118,7 +116,7 @@ impl Task {
         let waker = futures::task::waker_ref(&self.waker);
         let mut cx = Context::from_waker(&*waker);
 
-        let pipelines = &self.query.pipelines;
+        let pipelines = &self.context.pipelines;
         let routable = &pipelines[node];
         match routable.pipeline.poll_partition(&mut cx, partition) {
             Poll::Ready(Some(Ok(batch))) => {
@@ -144,7 +142,7 @@ impl Task {
                     }
                     None => {
                         trace!("Publishing batch to output");
-                        self.query.send_query_output(Ok(batch))
+                        self.context.send_query_output(Ok(batch))
                     }
                 }
 
@@ -171,7 +169,7 @@ impl Task {
                             .pipeline
                             .close(link.child, partition)
                     }
-                    None => self.query.finish(),
+                    None => self.context.finish(),
                 }
             }
             Poll::Pending => {
@@ -205,9 +203,9 @@ impl Task {
 pub struct QueryResults {
     inner: mpsc::UnboundedReceiver<Option<Result<RecordBatch>>>,
 
-    /// Keep a reference to the [`QueryTask`] so it isn't dropped early
+    /// Keep a reference to the [`ExecutionContext`] so it isn't dropped early
     #[allow(unused)]
-    query: Arc<QueryTask>,
+    context: Arc<ExecutionContext>,
 }
 
 impl Stream for QueryResults {
@@ -221,9 +219,9 @@ impl Stream for QueryResults {
     }
 }
 
-/// The shared state of all [`Task`] created from the same [`Query`]
+/// The shared state of all [`Task`] created from the same [`PipelinePlan`]
 #[derive(Debug)]
-struct QueryTask {
+struct ExecutionContext {
     /// Spawner for this query
     spawner: Spawner,
 
@@ -235,13 +233,13 @@ struct QueryTask {
     output: mpsc::UnboundedSender<Option<Result<RecordBatch>>>,
 }
 
-impl Drop for QueryTask {
+impl Drop for ExecutionContext {
     fn drop(&mut self) {
-        debug!("Query dropped");
+        debug!("ExecutionContext dropped");
     }
 }
 
-impl QueryTask {
+impl ExecutionContext {
     /// Returns `true` if this query has been dropped, specifically if the
     /// stream returned by [`super::Scheduler::schedule`] has been dropped
     fn is_cancelled(&self) -> bool {
@@ -260,9 +258,9 @@ impl QueryTask {
 }
 
 struct TaskWaker {
-    /// Store a weak reference to the query to avoid reference cycles if this
-    /// [`Waker`] is stored within a [`Pipeline`] owned by the [`QueryTask`]
-    query: Weak<QueryTask>,
+    /// Store a weak reference to the [`ExecutionContext`] to avoid reference cycles if this
+    /// [`Waker`] is stored within a [`Pipeline`] owned by the [`ExecutionContext`]
+    context: Weak<ExecutionContext>,
 
     /// A counter that stores the number of times this has been awoken
     ///
@@ -294,9 +292,9 @@ impl ArcWake for TaskWaker {
             return;
         }
 
-        if let Some(query) = self.query.upgrade() {
+        if let Some(context) = self.context.upgrade() {
             let task = Task {
-                query,
+                context,
                 waker: self.clone(),
             };
 
@@ -306,7 +304,7 @@ impl ArcWake for TaskWaker {
             // local queue, otherwise reschedule on any worker
             match crate::is_worker() {
                 true => spawn_local(task),
-                false => task.query.spawner.clone().spawn(task),
+                false => task.context.spawner.clone().spawn(task),
             }
         } else {
             trace!("Dropped wakeup");
@@ -322,7 +320,7 @@ impl ArcWake for TaskWaker {
 mod tests {
     use super::*;
     use crate::pipeline::Pipeline;
-    use crate::query::RoutablePipeline;
+    use crate::plan::RoutablePipeline;
     use crate::Scheduler;
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::record_batch::RecordBatch;
@@ -418,14 +416,14 @@ mod tests {
             state: Default::default(),
         };
 
-        let query = Query {
+        let plan = PipelinePlan {
             pipelines: vec![RoutablePipeline {
                 pipeline: Box::new(pipeline),
                 output: None,
             }],
         };
 
-        let mut receiver = scheduler.schedule_query(query);
+        let mut receiver = scheduler.schedule_plan(plan);
 
         runtime.block_on(async move {
             // Should wait for output

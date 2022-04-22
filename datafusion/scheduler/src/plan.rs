@@ -27,10 +27,10 @@ use crate::pipeline::{
     execution::ExecutionPipeline, repartition::RepartitionPipeline, Pipeline,
 };
 
-/// Identifies the [`Pipeline`] within the [`Query`] to route output to
+/// Identifies the [`Pipeline`] within the [`PipelinePlan`] to route output to
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutputLink {
-    /// The index of the [`Pipeline`] in [`Query`] to route output to
+    /// The index of the [`Pipeline`] in [`PipelinePlan`] to route output to
     pub pipeline: usize,
 
     /// The child of the [`Pipeline`] to route output to
@@ -49,11 +49,11 @@ pub struct RoutablePipeline {
     pub output: Option<OutputLink>,
 }
 
-/// [`Query`] is the scheduler's representation of the [`ExecutionPlan`] passed to
+/// [`PipelinePlan`] is the scheduler's representation of the [`ExecutionPlan`] passed to
 /// [`super::Scheduler::schedule`]. It combines the list of [Pipeline`] with the information
 /// necessary to route output from one stage to the next
 #[derive(Debug)]
-pub struct Query {
+pub struct PipelinePlan {
     pub pipelines: Vec<RoutablePipeline>,
 }
 
@@ -70,12 +70,12 @@ struct OperatorGroup {
     depth: usize,
 }
 
-/// A utility struct to assist converting from [`ExecutionPlan`] to [`Query`]
+/// A utility struct to assist converting from [`ExecutionPlan`] to [`PipelinePlan`]
 ///
 /// The [`ExecutionPlan`] is visited in a depth-first fashion, gradually building
-/// up the [`RoutablePipeline`] for the [`Query`]. As nodes are visited depth-first,
+/// up the [`RoutablePipeline`] for the [`PipelinePlan`]. As nodes are visited depth-first,
 /// a node is visited only after its parent has been.
-pub struct QueryBuilder {
+pub struct PipelinePlanner {
     task_context: Arc<TaskContext>,
 
     /// The current list of completed pipelines
@@ -90,7 +90,7 @@ pub struct QueryBuilder {
     execution_operators: Option<OperatorGroup>,
 }
 
-impl QueryBuilder {
+impl PipelinePlanner {
     pub fn new(plan: Arc<dyn ExecutionPlan>, task_context: Arc<TaskContext>) -> Self {
         Self {
             in_progress: vec![],
@@ -218,7 +218,7 @@ impl QueryBuilder {
         Ok(())
     }
 
-    /// Visit an [`ExecutionPlan`] operator and add it to the [`Query`] being built
+    /// Visit an [`ExecutionPlan`] operator and add it to the [`PipelinePlan`] being built
     fn visit_operator(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
@@ -245,7 +245,7 @@ impl QueryBuilder {
         }
     }
 
-    /// Build a [`Query`] from the [`ExecutionPlan`] provided to [`QueryBuilder::new`]
+    /// Build a [`PipelinePlan`] from the [`ExecutionPlan`] provided to [`PipelinePlanner::new`]
     ///
     /// This will group all operators possible into a single [`ExecutionPipeline`], only
     /// creating new pipelines when:
@@ -259,7 +259,7 @@ impl QueryBuilder {
     /// The above logic is liable to change, is considered an implementation detail of the
     /// scheduler, and should not be relied upon by operators
     ///
-    pub fn build(mut self) -> Result<Query> {
+    pub fn build(mut self) -> Result<PipelinePlan> {
         // We do a depth-first scan of the operator tree, extracting a list of [`QueryNode`]
         while let Some((plan, parent)) = self.to_visit.pop() {
             self.visit_operator(plan, parent)?;
@@ -269,7 +269,7 @@ impl QueryBuilder {
             self.flush_exec()?;
         }
 
-        Ok(Query {
+        Ok(PipelinePlan {
             pipelines: self.in_progress,
         })
     }

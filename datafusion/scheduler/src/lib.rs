@@ -24,15 +24,15 @@ use datafusion::error::Result;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 
-use crate::query::{Query, QueryBuilder, RoutablePipeline};
-use crate::task::{spawn_query, Task};
+use crate::plan::{PipelinePlan, PipelinePlanner, RoutablePipeline};
+use crate::task::{spawn_plan, Task};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 
 pub use task::QueryResults;
 
 mod pipeline;
-mod query;
+mod plan;
 mod task;
 
 /// Builder for a [`Scheduler`]
@@ -122,13 +122,13 @@ impl Scheduler {
         plan: Arc<dyn ExecutionPlan>,
         context: Arc<TaskContext>,
     ) -> Result<QueryResults> {
-        let query = QueryBuilder::new(plan, context).build()?;
-        Ok(self.schedule_query(query))
+        let plan = PipelinePlanner::new(plan, context).build()?;
+        Ok(self.schedule_plan(plan))
     }
 
-    /// Schedule the provided [`Query`] on this [`Scheduler`].
-    pub(crate) fn schedule_query(&self, query: Query) -> QueryResults {
-        spawn_query(query, self.spawner())
+    /// Schedule the provided [`PipelinePlan`] on this [`Scheduler`].
+    pub(crate) fn schedule_plan(&self, plan: PipelinePlan) -> QueryResults {
+        spawn_plan(plan, self.spawner())
     }
 
     fn spawner(&self) -> Spawner {
