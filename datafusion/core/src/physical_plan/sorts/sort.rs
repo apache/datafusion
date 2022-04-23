@@ -32,7 +32,7 @@ use crate::physical_plan::metrics::{
 };
 use crate::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeStream;
 use crate::physical_plan::sorts::SortedStream;
-use crate::physical_plan::stream::RecordBatchReceiverStream;
+use crate::physical_plan::stream::{RecordBatchReceiverStream, RecordBatchStreamAdapter};
 use crate::physical_plan::{
     DisplayFormatType, Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
@@ -42,12 +42,12 @@ use arrow::array::{make_array, Array, ArrayRef, MutableArrayData, UInt32Array};
 pub use arrow::compute::SortOptions;
 use arrow::compute::{concat, lexsort_to_indices, take, SortColumn, TakeOptions};
 use arrow::datatypes::SchemaRef;
-use arrow::error::Result as ArrowResult;
+use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::ipc::reader::FileReader;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::lock::Mutex;
-use futures::{Stream, StreamExt};
+use futures::{Stream, StreamExt, TryFutureExt, TryStreamExt};
 use log::{debug, error};
 use std::any::Any;
 use std::cmp::min;
@@ -753,6 +753,7 @@ impl ExecutionPlan for SortExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        debug!("Start SortExec::execute for partition {} of context session_id {} and task_id {:?}", partition, context.session_id(), context.task_id());
         if !self.preserve_partitioning {
             if 0 != partition {
                 return Err(DataFusionError::Internal(format!(
@@ -769,16 +770,29 @@ impl ExecutionPlan for SortExec {
             }
         }
 
+        debug!(
+            "Start invoking SortExec's input.execute for partition: {}",
+            partition
+        );
+
         let input = self.input.execute(partition, context.clone()).await?;
 
-        do_sort(
-            input,
-            partition,
-            self.expr.clone(),
-            self.metrics_set.clone(),
-            context,
-        )
-        .await
+        debug!("End SortExec's input.execute for partition: {}", partition);
+
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            futures::stream::once(
+                do_sort(
+                    input,
+                    partition,
+                    self.expr.clone(),
+                    self.metrics_set.clone(),
+                    context,
+                )
+                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
+            )
+            .try_flatten(),
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -867,6 +881,12 @@ async fn do_sort(
     metrics_set: CompositeMetricsSet,
     context: Arc<TaskContext>,
 ) -> Result<SendableRecordBatchStream> {
+    debug!(
+        "Start do_sort for partition {} of context session_id {} and task_id {:?}",
+        partition_id,
+        context.session_id(),
+        context.task_id()
+    );
     let schema = input.schema();
     let tracking_metrics =
         metrics_set.new_intermediate_tracking(partition_id, context.runtime_env());
@@ -883,7 +903,14 @@ async fn do_sort(
         let batch = batch?;
         sorter.insert_batch(batch, &tracking_metrics).await?;
     }
-    sorter.sort().await
+    let result = sorter.sort().await;
+    debug!(
+        "End do_sort for partition {} of context session_id {} and task_id {:?}",
+        partition_id,
+        context.session_id(),
+        context.task_id()
+    );
+    result
 }
 
 #[cfg(test)]

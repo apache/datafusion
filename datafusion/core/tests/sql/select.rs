@@ -433,37 +433,6 @@ async fn select_distinct_from_utf8() {
 }
 
 #[tokio::test]
-async fn csv_query_with_decimal_by_sql() -> Result<()> {
-    let ctx = SessionContext::new();
-    register_simple_aggregate_csv_with_decimal_by_sql(&ctx).await;
-    let sql = "SELECT c1 from aggregate_simple";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+----------+",
-        "| c1       |",
-        "+----------+",
-        "| 0.000010 |",
-        "| 0.000020 |",
-        "| 0.000020 |",
-        "| 0.000030 |",
-        "| 0.000030 |",
-        "| 0.000030 |",
-        "| 0.000040 |",
-        "| 0.000040 |",
-        "| 0.000040 |",
-        "| 0.000040 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "| 0.000050 |",
-        "+----------+",
-    ];
-    assert_batches_eq!(expected, &actual);
-    Ok(())
-}
-
-#[tokio::test]
 async fn use_between_expression_in_select_query() -> Result<()> {
     let ctx = SessionContext::new();
 
@@ -987,6 +956,44 @@ async fn parallel_query_with_filter() -> Result<()> {
     assert_batches_sorted_eq!(expected, &results);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn query_with_filter_string_type_coercion() {
+    let large_string_array = LargeStringArray::from(vec!["1", "2", "3", "4", "5"]);
+    let schema =
+        Schema::new(vec![Field::new("large_string", DataType::LargeUtf8, false)]);
+    let batch =
+        RecordBatch::try_new(Arc::new(schema), vec![Arc::new(large_string_array)])
+            .unwrap();
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(batch.schema(), vec![vec![batch]]).unwrap();
+    ctx.register_table("t", Arc::new(table)).unwrap();
+    let sql = "select * from t where large_string = '1'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| large_string |",
+        "+--------------+",
+        "| 1            |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select * from t where large_string != '1'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+",
+        "| large_string |",
+        "+--------------+",
+        "| 2            |",
+        "| 3            |",
+        "| 4            |",
+        "| 5            |",
+        "+--------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
 }
 
 #[tokio::test]

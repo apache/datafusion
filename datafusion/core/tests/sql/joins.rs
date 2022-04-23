@@ -294,6 +294,24 @@ async fn left_join_not_null_filter_on_join_column() -> Result<()> {
 }
 
 #[tokio::test]
+async fn self_join_non_equijoin() -> Result<()> {
+    let ctx = create_join_context_with_nulls()?;
+    let sql =
+        "SELECT x.t1_id, y.t1_id FROM t1 x JOIN t1 y ON x.t1_id = 11 AND y.t1_id = 44";
+    let expected = vec![
+        "+-------+-------+",
+        "| t1_id | t1_id |",
+        "+-------+-------+",
+        "| 11    | 44    |",
+        "+-------+-------+",
+    ];
+
+    let actual = execute_to_batches(&ctx, sql).await;
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn right_join_null_filter() -> Result<()> {
     let ctx = create_join_context_with_nulls()?;
     let sql = "SELECT t1_id, t1_name, t2_id FROM t1 RIGHT JOIN t2 ON t1_id = t2_id WHERE t1_name IS NULL ORDER BY t2_id";
@@ -927,6 +945,78 @@ async fn join_timestamp() -> Result<()> {
     .await;
 
     assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let t1_schema = Schema::new(vec![
+        Field::new("t1_id", DataType::Int64, true),
+        Field::new("t1_value", DataType::Utf8, false),
+    ]);
+    let t1_data = RecordBatch::try_new(
+        Arc::new(t1_schema),
+        vec![
+            Arc::new(Int64Array::from_slice(&[5247, 3821, 6321, 8821, 7748])),
+            Arc::new(StringArray::from_slice(&["a", "b", "c", "d", "e"])),
+        ],
+    )?;
+    let t1_table = MemTable::try_new(t1_data.schema(), vec![vec![t1_data]])?;
+    ctx.register_table("t1", Arc::new(t1_table))?;
+
+    let t2_schema = Schema::new(vec![
+        Field::new("t2_id", DataType::Int64, true),
+        Field::new("t2_value", DataType::Boolean, true),
+    ]);
+    let t2_data = RecordBatch::try_new(
+        Arc::new(t2_schema),
+        vec![
+            Arc::new(Int64Array::from_slice(&[358, 2820, 3804, 7748])),
+            Arc::new(BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+                None,
+                None,
+            ])),
+        ],
+    )?;
+    let t2_table = MemTable::try_new(t2_data.schema(), vec![vec![t2_data]])?;
+    ctx.register_table("t2", Arc::new(t2_table))?;
+
+    let expected_left_join = vec![
+        "+-------+----------+-------+----------+",
+        "| t1_id | t1_value | t2_id | t2_value |",
+        "+-------+----------+-------+----------+",
+        "| 5247  | a        |       |          |",
+        "| 3821  | b        |       |          |",
+        "| 6321  | c        |       |          |",
+        "| 8821  | d        |       |          |",
+        "| 7748  | e        | 7748  |          |",
+        "+-------+----------+-------+----------+",
+    ];
+
+    let results_left_join =
+        execute_to_batches(&ctx, "SELECT * FROM t1 LEFT JOIN t2 ON t1_id = t2_id").await;
+    assert_batches_sorted_eq!(expected_left_join, &results_left_join);
+
+    let expected_right_join = vec![
+        "+-------+----------+-------+----------+",
+        "| t2_id | t2_value | t1_id | t1_value |",
+        "+-------+----------+-------+----------+",
+        "|       |          | 3821  | b        |",
+        "|       |          | 5247  | a        |",
+        "|       |          | 6321  | c        |",
+        "|       |          | 8821  | d        |",
+        "| 7748  |          | 7748  | e        |",
+        "+-------+----------+-------+----------+",
+    ];
+
+    let result_right_join =
+        execute_to_batches(&ctx, "SELECT * FROM t2 RIGHT JOIN t1 ON t1_id = t2_id").await;
+    assert_batches_sorted_eq!(expected_right_join, &result_right_join);
 
     Ok(())
 }

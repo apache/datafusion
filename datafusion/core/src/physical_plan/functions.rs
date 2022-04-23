@@ -29,26 +29,22 @@
 //! This module also has a set of coercion rules to improve user experience: if an argument i32 is passed
 //! to a function that supports f64, it is coerced to f64.
 
-use super::{
-    type_coercion::{coerce, data_types},
-    ColumnarValue, PhysicalExpr,
-};
+use super::{type_coercion::coerce, ColumnarValue, PhysicalExpr};
 use crate::execution::context::ExecutionProps;
 use crate::physical_plan::expressions::{
-    cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS, SUPPORTED_NULLIF_TYPES,
+    cast_column, nullif_func, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 use crate::{
     error::{DataFusionError, Result},
+    logical_expr::{function, BuiltinScalarFunction, ScalarFunctionImplementation},
     scalar::ScalarValue,
 };
 use arrow::{
     array::ArrayRef,
     compute::kernels::length::{bit_length, length},
     datatypes::TimeUnit,
-    datatypes::{DataType, Field, Int32Type, Int64Type, Schema},
+    datatypes::{DataType, Int32Type, Int64Type, Schema},
 };
-use datafusion_expr::ScalarFunctionImplementation;
-pub use datafusion_expr::{BuiltinScalarFunction, Signature, TypeSignature, Volatility};
 use datafusion_physical_expr::array_expressions;
 use datafusion_physical_expr::conditional_expressions;
 use datafusion_physical_expr::datetime_expressions;
@@ -258,14 +254,15 @@ pub fn create_physical_expr(
     input_schema: &Schema,
     execution_props: &ExecutionProps,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let coerced_phy_exprs = coerce(input_phy_exprs, input_schema, &signature(fun))?;
+    let coerced_phy_exprs =
+        coerce(input_phy_exprs, input_schema, &function::signature(fun))?;
 
     let coerced_expr_types = coerced_phy_exprs
         .iter()
         .map(|e| e.data_type(input_schema))
         .collect::<Result<Vec<_>>>()?;
 
-    let data_type = return_type(fun, &coerced_expr_types)?;
+    let data_type = function::return_type(fun, &coerced_expr_types)?;
 
     let fun_expr: ScalarFunctionImplementation = match fun {
         // These functions need args and input schema to pick an implementation

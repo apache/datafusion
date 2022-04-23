@@ -48,61 +48,21 @@
 //!
 
 use arrow::array::{make_builder, ArrayBuilder};
-use arrow::datatypes::{DataType, Schema};
+use arrow::datatypes::Schema;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
+pub use layout::RowType;
 use std::sync::Arc;
 
 #[cfg(feature = "jit")]
-mod jit;
-mod layout;
+pub mod jit;
+pub mod layout;
 pub mod reader;
 mod validity;
 pub mod writer;
 
-fn supported_type(dt: &DataType) -> bool {
-    use DataType::*;
-    matches!(
-        dt,
-        Boolean
-            | UInt8
-            | UInt16
-            | UInt32
-            | UInt64
-            | Int8
-            | Int16
-            | Int32
-            | Int64
-            | Float32
-            | Float64
-            | Date32
-            | Date64
-            | Utf8
-            | Binary
-    )
-}
-
-/// Tell if we can create raw-bytes based rows since we currently
-/// has limited data type supports in the row format
-pub fn row_supported(schema: &Arc<Schema>) -> bool {
-    schema
-        .fields()
-        .iter()
-        .all(|f| supported_type(f.data_type()))
-}
-
-fn var_length(dt: &DataType) -> bool {
-    use DataType::*;
-    matches!(dt, Utf8 | Binary)
-}
-
-/// Tell if the row is of fixed size
-pub fn fixed_size(schema: &Arc<Schema>) -> bool {
-    schema.fields().iter().all(|f| !var_length(f.data_type()))
-}
-
 /// Tell if schema contains no nullable field
-pub fn schema_null_free(schema: &Arc<Schema>) -> bool {
+pub(crate) fn schema_null_free(schema: &Schema) -> bool {
     schema.fields().iter().all(|f| !f.is_nullable())
 }
 
@@ -126,7 +86,7 @@ impl MutableRecordBatch {
     }
 }
 
-fn new_arrays(schema: &Arc<Schema>, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
+fn new_arrays(schema: &Schema, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
     schema
         .fields()
         .iter()
@@ -148,51 +108,42 @@ fn make_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::file_format::parquet::ParquetFormat;
-    use crate::datasource::file_format::FileFormat;
-    use crate::datasource::listing::local_unpartitioned_file;
-    use crate::error::Result;
-    use crate::physical_plan::file_format::FileScanConfig;
-    use crate::physical_plan::{collect, ExecutionPlan};
-    use crate::prelude::SessionContext;
-    use crate::row::reader::read_as_batch;
-    use crate::row::writer::write_batch_unchecked;
+    use crate::layout::RowType::{Compact, WordAligned};
+    use crate::reader::read_as_batch;
+    use crate::writer::write_batch_unchecked;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
-    use datafusion_data_access::object_store::local::LocalFileSystem;
-    use datafusion_data_access::object_store::local::{
-        local_object_reader, local_object_reader_stream,
-    };
+    use datafusion_common::Result;
     use DataType::*;
 
     macro_rules! fn_test_single_type {
-        ($ARRAY: ident, $TYPE: expr, $VEC: expr) => {
+        ($ARRAY: ident, $TYPE: expr, $VEC: expr, $ROWTYPE: expr) => {
             paste::item! {
                 #[test]
                 #[allow(non_snake_case)]
-                fn [<test_single_ $TYPE>]() -> Result<()> {
+                fn [<test_ $ROWTYPE _single_ $TYPE>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, true)]));
                     let a = $ARRAY::from($VEC);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
                     let row_offsets =
-                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone(), $ROWTYPE) };
+                    let output_batch = { read_as_batch(&vector, schema, &row_offsets, $ROWTYPE)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
 
                 #[test]
                 #[allow(non_snake_case)]
-                fn [<test_single_ $TYPE _null_free>]() -> Result<()> {
+                fn [<test_ $ROWTYPE _single_ $TYPE _null_free>]() -> Result<()> {
                     let schema = Arc::new(Schema::new(vec![Field::new("a", $TYPE, false)]));
                     let v = $VEC.into_iter().filter(|o| o.is_some()).collect::<Vec<_>>();
                     let a = $ARRAY::from(v);
                     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
                     let mut vector = vec![0; 1024];
                     let row_offsets =
-                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-                    let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+                        { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone(), $ROWTYPE) };
+                    let output_batch = { read_as_batch(&vector, schema, &row_offsets, $ROWTYPE)? };
                     assert_eq!(batch, output_batch);
                     Ok(())
                 }
@@ -203,86 +154,201 @@ mod tests {
     fn_test_single_type!(
         BooleanArray,
         Boolean,
-        vec![Some(true), Some(false), None, Some(true), None]
+        vec![Some(true), Some(false), None, Some(true), None],
+        Compact
+    );
+
+    fn_test_single_type!(
+        BooleanArray,
+        Boolean,
+        vec![Some(true), Some(false), None, Some(true), None],
+        WordAligned
     );
 
     fn_test_single_type!(
         Int8Array,
         Int8,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Int8Array,
+        Int8,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Int16Array,
         Int16,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Int16Array,
+        Int16,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Int32Array,
         Int32,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Int32Array,
+        Int32,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Int64Array,
         Int64,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Int64Array,
+        Int64,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         UInt8Array,
         UInt8,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        UInt8Array,
+        UInt8,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         UInt16Array,
         UInt16,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        UInt16Array,
+        UInt16,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         UInt32Array,
         UInt32,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        UInt32Array,
+        UInt32,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         UInt64Array,
         UInt64,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        UInt64Array,
+        UInt64,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Float32Array,
         Float32,
-        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)]
+        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Float32Array,
+        Float32,
+        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Float64Array,
         Float64,
-        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)]
+        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Float64Array,
+        Float64,
+        vec![Some(5.0), Some(7.0), None, Some(0.0), Some(111.0)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Date32Array,
         Date32,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Date32Array,
+        Date32,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         Date64Array,
         Date64,
-        vec![Some(5), Some(7), None, Some(0), Some(111)]
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        Compact
+    );
+
+    fn_test_single_type!(
+        Date64Array,
+        Date64,
+        vec![Some(5), Some(7), None, Some(0), Some(111)],
+        WordAligned
     );
 
     fn_test_single_type!(
         StringArray,
         Utf8,
-        vec![Some("hello"), Some("world"), None, Some(""), Some("")]
+        vec![Some("hello"), Some("world"), None, Some(""), Some("")],
+        Compact
     );
+
+    #[test]
+    #[should_panic(expected = "row_supported(schema, row_type)")]
+    fn test_unsupported_word_aligned_type() {
+        let a: ArrayRef = Arc::new(StringArray::from(vec!["hello", "world"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
+        let schema = batch.schema();
+        let mut vector = vec![0; 1024];
+        write_batch_unchecked(&mut vector, 0, &batch, 0, schema, WordAligned);
+    }
 
     #[test]
     fn test_single_binary() -> Result<()> {
@@ -293,8 +359,8 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
         let mut vector = vec![0; 8192];
         let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone(), Compact) };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets, Compact)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
@@ -307,45 +373,24 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(a)])?;
         let mut vector = vec![0; 8192];
         let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
+            { write_batch_unchecked(&mut vector, 0, &batch, 0, schema.clone(), Compact) };
+        let output_batch = { read_as_batch(&vector, schema, &row_offsets, Compact)? };
         assert_eq!(batch, output_batch);
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_with_parquet() -> Result<()> {
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-        let projection = Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
-        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
-        let schema = exec.schema().clone();
-
-        let batches = collect(exec, task_ctx).await?;
-        assert_eq!(1, batches.len());
-        let batch = &batches[0];
-
-        let mut vector = vec![0; 20480];
-        let row_offsets =
-            { write_batch_unchecked(&mut vector, 0, batch, 0, schema.clone()) };
-        let output_batch = { read_as_batch(&vector, schema, &row_offsets)? };
-        assert_eq!(*batch, output_batch);
-
-        Ok(())
-    }
-
     #[test]
-    #[should_panic(expected = "supported(schema)")]
+    #[should_panic(expected = "row_supported(schema, row_type)")]
     fn test_unsupported_type_write() {
         let a: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![8, 7, 6, 5, 8]));
         let batch = RecordBatch::try_from_iter(vec![("a", a)]).unwrap();
         let schema = batch.schema();
         let mut vector = vec![0; 1024];
-        write_batch_unchecked(&mut vector, 0, &batch, 0, schema);
+        write_batch_unchecked(&mut vector, 0, &batch, 0, schema, Compact);
     }
 
     #[test]
-    #[should_panic(expected = "supported(schema)")]
+    #[should_panic(expected = "row_supported(schema, row_type)")]
     fn test_unsupported_type_read() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "a",
@@ -354,40 +399,6 @@ mod tests {
         )]));
         let vector = vec![0; 1024];
         let row_offsets = vec![0];
-        read_as_batch(&vector, schema, &row_offsets).unwrap();
-    }
-
-    async fn get_exec(
-        file_name: &str,
-        projection: &Option<Vec<usize>>,
-        limit: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let testdata = crate::test_util::parquet_test_data();
-        let filename = format!("{}/{}", testdata, file_name);
-        let format = ParquetFormat::default();
-        let file_schema = format
-            .infer_schema(local_object_reader_stream(vec![filename.clone()]))
-            .await
-            .expect("Schema inference");
-        let statistics = format
-            .infer_stats(local_object_reader(filename.clone()), file_schema.clone())
-            .await
-            .expect("Stats inference");
-        let file_groups = vec![vec![local_unpartitioned_file(filename.clone())]];
-        let exec = format
-            .create_physical_plan(
-                FileScanConfig {
-                    object_store: Arc::new(LocalFileSystem {}),
-                    file_schema,
-                    file_groups,
-                    statistics,
-                    projection: projection.clone(),
-                    limit,
-                    table_partition_cols: vec![],
-                },
-                &[],
-            )
-            .await?;
-        Ok(exec)
+        read_as_batch(&vector, schema, &row_offsets, Compact).unwrap();
     }
 }

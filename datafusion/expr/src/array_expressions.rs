@@ -15,7 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! DFSchema is an extended schema struct that DataFusion uses to provide support for
-//! fields with optional relation names.
+use arrow::datatypes::DataType;
 
-pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
+/// Currently supported types by the array function.
+/// The order of these types correspond to the order on which coercion applies
+/// This should thus be from least informative to most informative
+pub static SUPPORTED_ARRAY_TYPES: &[DataType] = &[
+    DataType::Boolean,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::Float32,
+    DataType::Float64,
+    DataType::Utf8,
+    DataType::LargeUtf8,
+];

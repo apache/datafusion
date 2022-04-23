@@ -31,8 +31,8 @@ use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
     normalize_col, union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
     CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
-    DFSchemaRef, DropTable, Expr, LogicalPlan, LogicalPlanBuilder, Operator, PlanType,
-    ToDFSchema, ToStringifiedPlan,
+    DFSchemaRef, DropTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder, Operator,
+    PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -40,15 +40,15 @@ use crate::scalar::ScalarValue;
 use crate::sql::utils::{make_decimal_type, normalize_ident};
 use crate::{
     error::{DataFusionError, Result},
+    physical_plan::aggregates,
     physical_plan::udaf::AggregateUDF,
-};
-use crate::{
     physical_plan::udf::ScalarUDF,
-    physical_plan::{aggregates, functions, window_functions},
-    sql::parser::{CreateExternalTable, FileType, Statement as DFStatement},
+    sql::parser::{CreateExternalTable, Statement as DFStatement},
 };
 use arrow::datatypes::*;
+use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
+
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
@@ -523,7 +523,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     keys.into_iter().unzip();
 
                 // return the logical plan representing the join
-                if filter.is_empty() {
+                if left_keys.is_empty() {
+                    // When we don't have join keys, use cross join
+                    let join = LogicalPlanBuilder::from(left).cross_join(&right)?;
+
+                    join.filter(filter.into_iter().reduce(Expr::and).unwrap())?
+                        .build()
+                } else if filter.is_empty() {
                     let join = LogicalPlanBuilder::from(left).join(
                         &right,
                         join_type,
@@ -536,13 +542,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         join_type,
                         (left_keys, right_keys),
                     )?;
-                    let join_filter_init = filter.remove(0);
-                    join.filter(
-                        filter
-                            .into_iter()
-                            .fold(join_filter_init, |acc, e| acc.and(e)),
-                    )?
-                    .build()
+                    join.filter(filter.into_iter().reduce(Expr::and).unwrap())?
+                        .build()
                 }
                 // Left join with all non-equijoin expressions from the right
                 // l left join r
@@ -644,16 +645,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         self.schema_provider.get_table_provider(name.try_into()?),
                     ) {
                         (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                        (_, Some(provider)) => LogicalPlanBuilder::scan(
-                            // take alias into account to support `JOIN table1 as table2`
-                            alias
-                                .as_ref()
-                                .map(|a| a.name.value.as_str())
-                                .unwrap_or(&table_name),
-                            provider,
-                            None,
-                        )?
-                        .build(),
+                        (_, Some(provider)) => {
+                            let scan =
+                                LogicalPlanBuilder::scan(&table_name, provider, None);
+                            let scan = match alias {
+                                Some(ref name) => scan?.alias(name.name.value.as_str()),
+                                _ => scan,
+                            };
+                            scan?.build()
+                        }
                         (None, None) => Err(DataFusionError::Plan(format!(
                             "Table or CTE with name '{}' not found",
                             name
@@ -1417,7 +1417,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
             SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Utf8(None))),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
-                fun: functions::BuiltinScalarFunction::DatePart,
+                fun: BuiltinScalarFunction::DatePart,
                 args: vec![
                     Expr::Literal(ScalarValue::Utf8(Some(format!("{}", field)))),
                     self.sql_expr_to_logical_expr(*expr, schema)?,
@@ -1437,6 +1437,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 last_field,
                 fractional_seconds_precision,
             ),
+
+            SQLExpr::Array(arr) => self.sql_array_literal(arr.elem, schema),
 
             SQLExpr::Identifier(id) => {
                 if id.value.starts_with('@') {
@@ -1669,7 +1671,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
 
                 Ok(Expr::ScalarFunction {
-                    fun: functions::BuiltinScalarFunction::Substr,
+                    fun: BuiltinScalarFunction::Substr,
                     args,
                 })
             }
@@ -1686,15 +1688,15 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Trim { expr, trim_where } => {
                 let (fun, where_expr) = match trim_where {
                     Some((TrimWhereField::Leading, expr)) => {
-                        (functions::BuiltinScalarFunction::Ltrim, Some(expr))
+                        (BuiltinScalarFunction::Ltrim, Some(expr))
                     }
                     Some((TrimWhereField::Trailing, expr)) => {
-                        (functions::BuiltinScalarFunction::Rtrim, Some(expr))
+                        (BuiltinScalarFunction::Rtrim, Some(expr))
                     }
                     Some((TrimWhereField::Both, expr)) => {
-                        (functions::BuiltinScalarFunction::Btrim, Some(expr))
+                        (BuiltinScalarFunction::Btrim, Some(expr))
                     }
-                    None => (functions::BuiltinScalarFunction::Trim, None),
+                    None => (BuiltinScalarFunction::Trim, None),
                 };
                 let arg = self.sql_expr_to_logical_expr(*expr, schema)?;
                 let args = match where_expr {
@@ -1717,7 +1719,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 };
 
                 // first, scalar built-in
-                if let Ok(fun) = functions::BuiltinScalarFunction::from_str(&name) {
+                if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
                     let args = self.function_args_to_expr(function.args, schema)?;
 
                     return Ok(Expr::ScalarFunction { fun, args });
@@ -1750,13 +1752,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             }
                         })
                         .transpose()?;
-                    let fun = window_functions::WindowFunction::from_str(&name)?;
+                    let fun = WindowFunction::from_str(&name)?;
                     match fun {
-                        window_functions::WindowFunction::AggregateFunction(
+                        WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
                             return Ok(Expr::WindowFunction {
-                                fun: window_functions::WindowFunction::AggregateFunction(
+                                fun: WindowFunction::AggregateFunction(
                                     aggregate_fun.clone(),
                                 ),
                                 args: self.aggregate_fn_to_expr(
@@ -1769,11 +1771,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 window_frame,
                             });
                         }
-                        window_functions::WindowFunction::BuiltInWindowFunction(
+                        WindowFunction::BuiltInWindowFunction(
                             window_fun,
                         ) => {
                             return Ok(Expr::WindowFunction {
-                                fun: window_functions::WindowFunction::BuiltInWindowFunction(
+                                fun: WindowFunction::BuiltInWindowFunction(
                                     window_fun,
                                 ),
                                 args: self.function_args_to_expr(function.args, schema)?,
@@ -2118,6 +2120,51 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .get_table_provider(tables_reference)
             .is_some()
     }
+
+    fn sql_array_literal(
+        &self,
+        elements: Vec<SQLExpr>,
+        schema: &DFSchema,
+    ) -> Result<Expr> {
+        let mut values = Vec::with_capacity(elements.len());
+
+        for element in elements {
+            let value = self.sql_expr_to_logical_expr(element, schema)?;
+            match value {
+                Expr::Literal(scalar) => {
+                    values.push(scalar);
+                }
+                _ => {
+                    return Err(DataFusionError::NotImplemented(format!(
+                        "Arrays with elements other than literal are not supported: {}",
+                        value
+                    )));
+                }
+            }
+        }
+
+        let data_types: HashSet<DataType> =
+            values.iter().map(|e| e.get_datatype()).collect();
+
+        if data_types.is_empty() {
+            Ok(Expr::Literal(ScalarValue::List(
+                None,
+                Box::new(DataType::Utf8),
+            )))
+        } else if data_types.len() > 1 {
+            Err(DataFusionError::NotImplemented(format!(
+                "Arrays with different types are not supported: {:?}",
+                data_types,
+            )))
+        } else {
+            let data_type = values[0].get_datatype();
+
+            Ok(Expr::Literal(ScalarValue::List(
+                Some(Box::new(values)),
+                Box::new(data_type),
+            )))
+        }
+    }
 }
 
 /// Remove join expressions from a filter expression
@@ -2260,9 +2307,8 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use crate::datasource::empty::EmptyTable;
-    use crate::physical_plan::functions::Volatility;
-    use crate::{logical_plan::create_udf, sql::parser::DFParser};
-    use datafusion_expr::ScalarFunctionImplementation;
+    use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
+    use datafusion_expr::{ScalarFunctionImplementation, Volatility};
 
     use super::*;
 
@@ -2492,7 +2538,8 @@ mod tests {
                    FROM lineitem l (a, b, c)";
         let expected = "Projection: #l.a, #l.b, #l.c\
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
-                        \n    TableScan: l projection=None";
+                        \n    SubqueryAlias: l\
+                        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -2964,6 +3011,28 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             r#"NotImplemented("Interval field value out of range: \"100000000000000000 day\"")"#,
+            format!("{:?}", err)
+        );
+    }
+
+    #[test]
+    fn select_array_no_common_type() {
+        let sql = "SELECT [1, true, null]";
+        let err = logical_plan(sql).expect_err("query should have failed");
+
+        // HashSet doesn't guarantee order
+        assert_contains!(
+            err.to_string(),
+            r#"Arrays with different types are not supported: "#
+        );
+    }
+
+    #[test]
+    fn select_array_non_literal_type() {
+        let sql = "SELECT [now()]";
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            r#"NotImplemented("Arrays with elements other than literal are not supported: now()")"#,
             format!("{:?}", err)
         );
     }
@@ -3458,7 +3527,8 @@ mod tests {
         let expected = "Projection: #person.first_name, #person.id\
         \n  Inner Join: Using #person.id = #person2.id\
         \n    TableScan: person projection=None\
-        \n    TableScan: person2 projection=None";
+        \n    SubqueryAlias: person2\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
@@ -3471,7 +3541,8 @@ mod tests {
         let expected = "Projection: #lineitem.l_item_id, #lineitem.l_description, #lineitem.price, #lineitem2.l_description, #lineitem2.price\
         \n  Inner Join: Using #lineitem.l_item_id = #lineitem2.l_item_id\
         \n    TableScan: lineitem projection=None\
-        \n    TableScan: lineitem2 projection=None";
+        \n    SubqueryAlias: lineitem2\
+        \n      TableScan: lineitem projection=None";
         quick_test(sql, expected);
     }
 
@@ -3961,6 +4032,10 @@ mod tests {
             name: TableReference,
         ) -> Option<Arc<dyn TableProvider>> {
             let schema = match name.table() {
+                "test" => Some(Schema::new(vec![
+                    Field::new("t_date32", DataType::Date32, false),
+                    Field::new("t_date64", DataType::Date64, false),
+                ])),
                 "person" => Some(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
                     Field::new("first_name", DataType::Utf8, false),
@@ -4068,10 +4143,43 @@ mod tests {
     }
 
     #[test]
+    fn join_with_aliases() {
+        let sql = "select peeps.id, folks.first_name from person as peeps join person as folks on peeps.id = folks.id";
+        let expected = "Projection: #peeps.id, #folks.first_name\
+                                    \n  Inner Join: #peeps.id = #folks.id\
+                                    \n    SubqueryAlias: peeps\
+                                    \n      TableScan: person projection=None\
+                                    \n    SubqueryAlias: folks\
+                                    \n      TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn cte_use_same_name_multiple_times() {
         let sql = "with a as (select * from person), a as (select * from orders) select * from a;";
         let expected = "SQL error: ParserError(\"WITH query name \\\"a\\\" specified more than once\")";
         let result = logical_plan(sql).err().unwrap();
         assert_eq!(expected, format!("{}", result));
+    }
+
+    #[test]
+    fn date_plus_interval_in_projection() {
+        let sql = "select t_date32 + interval '5 days' FROM test";
+        let expected = "Projection: #test.t_date32 + IntervalDayTime(\"21474836480\")\
+                            \n  TableScan: test projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
+    fn date_plus_interval_in_filter() {
+        let sql = "select t_date64 FROM test \
+                    WHERE t_date64 \
+                    BETWEEN cast('1999-12-31' as date) \
+                        AND cast('1999-12-31' as date) + interval '30 days'";
+        let expected =
+            "Projection: #test.t_date64\
+            \n  Filter: #test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalDayTime(\"128849018880\")\
+            \n    TableScan: test projection=None";
+        quick_test(sql, expected);
     }
 }

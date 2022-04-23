@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION};
+use arrow::datatypes::DataType;
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
@@ -45,48 +45,6 @@ pub struct Sum {
     data_type: DataType,
     expr: Arc<dyn PhysicalExpr>,
     nullable: bool,
-}
-
-/// function return type of a sum
-pub fn sum_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => {
-            Ok(DataType::Int64)
-        }
-        DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64 => {
-            Ok(DataType::UInt64)
-        }
-        // In the https://www.postgresql.org/docs/current/functions-aggregate.html doc,
-        // the result type of floating-point is FLOAT64 with the double precision.
-        DataType::Float64 | DataType::Float32 => Ok(DataType::Float64),
-        DataType::Decimal(precision, scale) => {
-            // in the spark, the result type is DECIMAL(min(38,precision+10), s)
-            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Sum.scala#L66
-            let new_precision = DECIMAL_MAX_PRECISION.min(*precision + 10);
-            Ok(DataType::Decimal(new_precision, *scale))
-        }
-        other => Err(DataFusionError::Plan(format!(
-            "SUM does not support type \"{:?}\"",
-            other
-        ))),
-    }
-}
-
-pub fn is_sum_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal(_, _)
-    )
 }
 
 impl Sum {
@@ -379,18 +337,6 @@ mod tests {
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;
-
-    #[test]
-    fn test_sum_return_data_type() -> Result<()> {
-        let data_type = DataType::Decimal(10, 5);
-        let result_type = sum_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(20, 5), result_type);
-
-        let data_type = DataType::Decimal(36, 10);
-        let result_type = sum_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(38, 10), result_type);
-        Ok(())
-    }
 
     #[test]
     fn sum_decimal() -> Result<()> {

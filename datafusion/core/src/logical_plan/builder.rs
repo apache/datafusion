@@ -23,10 +23,10 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::expr_schema::ExprSchemable;
+use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
-    TableScan, ToStringifiedPlan, Union, Window,
+    SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
 };
 use crate::optimizer::utils;
 use crate::prelude::*;
@@ -43,13 +43,14 @@ use std::{
     sync::Arc,
 };
 
-use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
-    columnize_expr, normalize_col, normalize_cols, rewrite_sort_cols_by_aggs, Column,
-    CrossJoin, DFField, DFSchema, DFSchemaRef, Limit, Partitioning, Repartition, Values,
+    columnize_expr, normalize_col, normalize_cols, provider_as_source,
+    rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
+    Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
+use datafusion_common::ToDFSchema;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -449,7 +450,7 @@ impl LogicalPlanBuilder {
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name,
-            source: provider,
+            source: provider_as_source(provider),
             projected_schema: Arc::new(projected_schema),
             projection,
             filters,
@@ -515,6 +516,18 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
+        })))
+    }
+
+    /// Apply an alias
+    pub fn alias(&self, alias: &str) -> Result<Self> {
+        let schema: Schema = self.schema().as_ref().clone().into();
+        let schema =
+            DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
+        Ok(Self::from(LogicalPlan::SubqueryAlias(SubqueryAlias {
+            input: Arc::new(self.plan.clone()),
+            alias: alias.to_string(),
+            schema,
         })))
     }
 

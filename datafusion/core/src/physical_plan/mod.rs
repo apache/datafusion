@@ -318,6 +318,9 @@ pub fn with_new_children_if_necessary(
 ///              \n      RepartitionExec: partitioning=RoundRobinBatch(3)\
 ///              \n        CsvExec: files=[tests/example.csv], has_header=true, limit=None, projection=[a]",
 ///               plan_string.trim());
+///
+///   let one_line = format!("{}", displayable_plan.one_line());
+///   assert_eq!("ProjectionExec: expr=[a@0 as a]", one_line.trim());
 /// }
 /// ```
 ///
@@ -563,6 +566,7 @@ pub mod metrics;
 pub mod planner;
 pub mod projection;
 pub mod repartition;
+pub mod sort_merge_join;
 pub mod sorts;
 pub mod stream;
 pub mod type_coercion;
@@ -570,5 +574,4 @@ pub mod udaf;
 pub mod udf;
 pub mod union;
 pub mod values;
-pub mod window_functions;
 pub mod windows;

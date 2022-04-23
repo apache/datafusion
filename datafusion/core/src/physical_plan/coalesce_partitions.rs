@@ -22,8 +22,8 @@ use std::any::Any;
 use std::sync::Arc;
 use std::task::Poll;
 
-use futures::channel::mpsc;
 use futures::Stream;
+use tokio::sync::mpsc;
 
 use async_trait::async_trait;
 
@@ -40,7 +40,6 @@ use crate::physical_plan::{DisplayFormatType, ExecutionPlan, Partitioning};
 use super::SendableRecordBatchStream;
 use crate::execution::context::TaskContext;
 use crate::physical_plan::common::spawn_execution;
-use pin_project_lite::pin_project;
 
 /// Merge execution plan executes partitions in parallel and combines them into a single
 /// partition. No guarantees are made about the order of the resulting partition.
@@ -180,26 +179,23 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 }
 
-pin_project! {
-    struct MergeStream {
-        schema: SchemaRef,
-        #[pin]
-        input: mpsc::Receiver<ArrowResult<RecordBatch>>,
-        baseline_metrics: BaselineMetrics,
-        drop_helper: AbortOnDropMany<()>,
-    }
+struct MergeStream {
+    schema: SchemaRef,
+    input: mpsc::Receiver<ArrowResult<RecordBatch>>,
+    baseline_metrics: BaselineMetrics,
+    #[allow(unused)]
+    drop_helper: AbortOnDropMany<()>,
 }
 
 impl Stream for MergeStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
-        self: std::pin::Pin<&mut Self>,
+        mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-        let poll = this.input.poll_next(cx);
-        this.baseline_metrics.record_poll(poll)
+        let poll = self.input.poll_recv(cx);
+        self.baseline_metrics.record_poll(poll)
     }
 }
 

@@ -38,6 +38,7 @@ pub struct ApproxPercentileContWithWeight {
     approx_percentile_cont: ApproxPercentileCont,
     column_expr: Arc<dyn PhysicalExpr>,
     weight_expr: Arc<dyn PhysicalExpr>,
+    percentile_expr: Arc<dyn PhysicalExpr>,
 }
 
 impl ApproxPercentileContWithWeight {
@@ -58,6 +59,7 @@ impl ApproxPercentileContWithWeight {
             approx_percentile_cont,
             column_expr: expr[0].clone(),
             weight_expr: expr[1].clone(),
+            percentile_expr: expr[2].clone(),
         })
     }
 }
@@ -79,7 +81,11 @@ impl AggregateExpr for ApproxPercentileContWithWeight {
     }
 
     fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.column_expr.clone(), self.weight_expr.clone()]
+        vec![
+            self.column_expr.clone(),
+            self.weight_expr.clone(),
+            self.percentile_expr.clone(),
+        ]
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
@@ -115,11 +121,6 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        debug_assert_eq!(
-            values.len(),
-            2,
-            "invalid number of values in batch percentile update"
-        );
         let means = &values[0];
         let weights = &values[1];
         debug_assert_eq!(

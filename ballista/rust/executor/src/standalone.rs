@@ -34,6 +34,7 @@ use tokio::net::TcpListener;
 use tonic::transport::{Channel, Server};
 use uuid::Uuid;
 
+use crate::metrics::LoggingMetricsCollector;
 use crate::{execution_loop, executor::Executor, flight_service::BallistaFlightService};
 
 pub async fn new_standalone_executor<
@@ -78,6 +79,7 @@ pub async fn new_standalone_executor<
         executor_meta,
         &work_dir,
         Arc::new(RuntimeEnv::new(config).unwrap()),
+        Arc::new(LoggingMetricsCollector::default()),
     ));
 
     let service = BallistaFlightService::new(executor.clone());

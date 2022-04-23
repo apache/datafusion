@@ -54,14 +54,12 @@ use arrow::datatypes::{ArrowNumericType, DataType, Schema, TimeUnit};
 use arrow::error::ArrowError::DivideByZero;
 use arrow::record_batch::RecordBatch;
 
-use crate::coercion_rule::binary_rule::coerce_types;
 use crate::expressions::try_cast;
-use crate::string_expressions;
 use crate::PhysicalExpr;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
-use datafusion_expr::ColumnarValue;
-use datafusion_expr::Operator;
+use datafusion_expr::binary_rule::binary_operator_data_type;
+use datafusion_expr::{binary_rule::coerce_types, ColumnarValue, Operator};
 
 // TODO move to arrow_rs
 // https://github.com/apache/arrow-rs/issues/1312
@@ -281,14 +279,45 @@ where
         .collect()
 }
 
+fn arith_decimal_scalar<F>(
+    left: &DecimalArray,
+    right: i128,
+    op: F,
+) -> Result<DecimalArray>
+where
+    F: Fn(i128, i128) -> Result<i128>,
+{
+    left.iter()
+        .map(|left| {
+            if let Some(left) = left {
+                Some(op(left, right)).transpose()
+            } else {
+                Ok(None)
+            }
+        })
+        .collect()
+}
+
 fn add_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let array = arith_decimal(left, right, |left, right| Ok(left + right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
+fn add_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left + right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
 fn subtract_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let array = arith_decimal(left, right, |left, right| Ok(left - right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn subtract_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left - right))?
         .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
@@ -300,9 +329,29 @@ fn multiply_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<Decimal
     Ok(array)
 }
 
+fn multiply_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let divide = 10_i128.pow(left.scale() as u32);
+    let array =
+        arith_decimal_scalar(left, right, |left, right| Ok(left * right / divide))?
+            .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
 fn divide_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalArray> {
     let mul = 10_f64.powi(left.scale() as i32);
     let array = arith_decimal(left, right, |left, right| {
+        let l_value = left as f64;
+        let r_value = right as f64;
+        let result = ((l_value / r_value) * mul) as i128;
+        Ok(result)
+    })?
+    .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn divide_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    let mul = 10_f64.powi(left.scale() as i32);
+    let array = arith_decimal_scalar(left, right, |left, right| {
         let l_value = left as f64;
         let r_value = right as f64;
         let result = ((l_value / r_value) * mul) as i128;
@@ -321,6 +370,15 @@ fn modulus_decimal(left: &DecimalArray, right: &DecimalArray) -> Result<DecimalA
         }
     })?
     .with_precision_and_scale(left.precision(), left.scale())?;
+    Ok(array)
+}
+
+fn modulus_decimal_scalar(left: &DecimalArray, right: i128) -> Result<DecimalArray> {
+    if right == 0 {
+        return Err(DataFusionError::ArrowError(DivideByZero));
+    }
+    let array = arith_decimal_scalar(left, right, |left, right| Ok(left % right))?
+        .with_precision_and_scale(left.precision(), left.scale())?;
     Ok(array)
 }
 
@@ -417,30 +475,25 @@ fn bitwise_or(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-/// Use datafusion build-in expression `concat` to evaluate `StringConcat` operator.
-/// Besides, any `NULL` exists on lhs or rhs will come out result `NULL`
+/// Concat lhs and rhs String Array, any `NULL` exists on lhs or rhs will come out result `NULL`
 /// 1. 'a' || 'b' || 32 = 'ab32'
 /// 2. 'a' || NULL = NULL
 fn string_concat(left: ArrayRef, right: ArrayRef) -> Result<ArrayRef> {
-    let ignore_null = match string_expressions::concat(&[
-        ColumnarValue::Array(left.clone()),
-        ColumnarValue::Array(right.clone()),
-    ])? {
-        ColumnarValue::Array(array_ref) => array_ref,
-        scalar_value => scalar_value.into_array(left.clone().len()),
-    };
-    let ignore_null_array = ignore_null.as_any().downcast_ref::<StringArray>().unwrap();
-    let result = (0..ignore_null_array.len())
+    let left_array = left.as_any().downcast_ref::<StringArray>().unwrap();
+    let right_array = right.as_any().downcast_ref::<StringArray>().unwrap();
+    let result = (0..left.len())
         .into_iter()
-        .map(|index| {
-            if left.is_null(index) || right.is_null(index) {
+        .map(|i| {
+            if left.is_null(i) || right.is_null(i) {
                 None
             } else {
-                Some(ignore_null_array.value(index))
+                let mut owned_string: String = "".to_owned();
+                owned_string.push_str(left_array.value(i));
+                owned_string.push_str(right_array.value(i));
+                Some(owned_string)
             }
         })
         .collect::<StringArray>();
-
     Ok(Arc::new(result) as ArrayRef)
 }
 
@@ -784,6 +837,7 @@ macro_rules! binary_primitive_array_op {
 macro_rules! binary_primitive_array_op_scalar {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         let result: Result<Arc<dyn Array>> = match $LEFT.data_type() {
+            DataType::Decimal(_,_) => compute_decimal_op_scalar!($LEFT, $RIGHT, $OP, DecimalArray),
             DataType::Int8 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int16Array),
             DataType::Int32 => compute_op_scalar!($LEFT, $RIGHT, $OP, Int32Array),
@@ -992,50 +1046,6 @@ macro_rules! compute_utf8_flag_op_scalar {
             )))
         }
     }};
-}
-
-/// Returns the return type of a binary operator or an error when the binary operator cannot
-/// perform the computation between the argument's types, even after type coercion.
-///
-/// This function makes some assumptions about the underlying available computations.
-pub fn binary_operator_data_type(
-    lhs_type: &DataType,
-    op: &Operator,
-    rhs_type: &DataType,
-) -> Result<DataType> {
-    // validate that it is possible to perform the operation on incoming types.
-    // (or the return datatype cannot be inferred)
-    let result_type = coerce_types(lhs_type, op, rhs_type)?;
-
-    match op {
-        // operators that return a boolean
-        Operator::Eq
-        | Operator::NotEq
-        | Operator::And
-        | Operator::Or
-        | Operator::Like
-        | Operator::NotLike
-        | Operator::Lt
-        | Operator::Gt
-        | Operator::GtEq
-        | Operator::LtEq
-        | Operator::RegexMatch
-        | Operator::RegexIMatch
-        | Operator::RegexNotMatch
-        | Operator::RegexNotIMatch
-        | Operator::IsDistinctFrom
-        | Operator::IsNotDistinctFrom => Ok(DataType::Boolean),
-        // bitwise operations return the common coerced type
-        Operator::BitwiseAnd | Operator::BitwiseOr => Ok(result_type),
-        // math operations return the same value as the common coerced type
-        Operator::Plus
-        | Operator::Minus
-        | Operator::Divide
-        | Operator::Multiply
-        | Operator::Modulo => Ok(result_type),
-        // string operations return the same values as the common coerced type
-        Operator::StringConcat => Ok(result_type),
-    }
 }
 
 impl PhysicalExpr for BinaryExpr {
@@ -2967,13 +2977,24 @@ mod tests {
         let expect =
             create_decimal_array(&[Some(246), None, Some(245), Some(247)], 25, 3)?;
         assert_eq!(expect, result);
+        let result = add_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(133), None, Some(132), Some(134)], 25, 3)?;
+        assert_eq!(expect, result);
         // subtract
         let result = subtract_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(0), None, Some(-1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
+        let result = subtract_decimal_scalar(&left_decimal_array, 10)?;
+        let expect =
+            create_decimal_array(&[Some(113), None, Some(112), Some(114)], 25, 3)?;
+        assert_eq!(expect, result);
         // multiply
         let result = multiply_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(15), None, Some(15), Some(15)], 25, 3)?;
+        assert_eq!(expect, result);
+        let result = multiply_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(1), None, Some(1), Some(1)], 25, 3)?;
         assert_eq!(expect, result);
         // divide
         let left_decimal_array = create_decimal_array(
@@ -2990,9 +3011,19 @@ mod tests {
             3,
         )?;
         assert_eq!(expect, result);
+        let result = divide_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(
+            &[Some(123456700), None, Some(123456700), Some(123456700)],
+            25,
+            3,
+        )?;
+        assert_eq!(expect, result);
         // modulus
         let result = modulus_decimal(&left_decimal_array, &right_decimal_array)?;
         let expect = create_decimal_array(&[Some(7), None, Some(37), Some(16)], 25, 3)?;
+        assert_eq!(expect, result);
+        let result = modulus_decimal_scalar(&left_decimal_array, 10)?;
+        let expect = create_decimal_array(&[Some(7), None, Some(7), Some(7)], 25, 3)?;
         assert_eq!(expect, result);
 
         Ok(())

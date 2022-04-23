@@ -23,6 +23,14 @@ use arrow::datatypes::{Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use futures::StreamExt;
 
+use crate::datasource::{
+    file_format::{
+        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
+        FileFormat,
+    },
+    get_statistics_with_limit, TableProvider,
+};
+use crate::logical_expr::TableProviderFilterPushDown;
 use crate::{
     error::{DataFusionError, Result},
     logical_plan::Expr,
@@ -31,15 +39,6 @@ use crate::{
         file_format::{FileScanConfig, DEFAULT_PARTITION_COLUMN_DATATYPE},
         project_schema, ExecutionPlan, Statistics,
     },
-};
-
-use crate::datasource::{
-    datasource::TableProviderFilterPushDown,
-    file_format::{
-        avro::AvroFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat,
-        FileFormat,
-    },
-    get_statistics_with_limit, TableProvider,
 };
 
 use super::PartitionedFile;

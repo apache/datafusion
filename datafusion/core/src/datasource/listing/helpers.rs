@@ -41,12 +41,12 @@ use crate::{
     error::Result,
     execution::context::SessionContext,
     logical_plan::{self, Expr, ExprVisitable, ExpressionVisitor, Recursion},
-    physical_plan::functions::Volatility,
     scalar::ScalarValue,
 };
 
 use super::{PartitionedFile, PartitionedFileStream};
 use datafusion_data_access::{object_store::ObjectStore, FileMeta, SizedFile};
+use datafusion_expr::Volatility;
 
 const FILE_SIZE_COLUMN_NAME: &str = "_df_part_file_size_";
 const FILE_PATH_COLUMN_NAME: &str = "_df_part_file_path_";
@@ -174,6 +174,7 @@ pub async fn pruned_partition_list(
                     Ok(PartitionedFile {
                         partition_values: vec![],
                         file_meta: f?,
+                        range: None,
                     })
                 }),
         ));
@@ -217,6 +218,7 @@ pub async fn pruned_partition_list(
                             Ok(PartitionedFile {
                                 partition_values,
                                 file_meta,
+                                range: None,
                             })
                         })
                     }
@@ -358,6 +360,7 @@ fn batches_to_paths(batches: &[RecordBatch]) -> Vec<PartitionedFile> {
                         ScalarValue::try_from_array(batch.column(col), row).unwrap()
                     })
                     .collect(),
+                range: None,
             })
         })
         .collect()

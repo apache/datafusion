@@ -22,24 +22,20 @@
 //! physical query plans and executed.
 
 pub(crate) mod builder;
-mod dfschema;
-mod display;
 mod expr;
 mod expr_rewriter;
-mod expr_schema;
 mod expr_simplier;
 mod expr_visitor;
-mod extension;
-mod operators;
 pub mod plan;
 mod registry;
 pub mod window_frames;
 pub use builder::{
     build_join_schema, union_with_alias, LogicalPlanBuilder, UNNAMED_TABLE,
 };
-pub use datafusion_expr::expr_fn::binary_expr;
-pub use dfschema::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
-pub use display::display_schema;
+pub use datafusion_common::{DFField, DFSchema, DFSchemaRef, ToDFSchema};
+pub use datafusion_expr::{expr_fn::binary_expr, Operator};
+
+pub use crate::logical_expr::ExprSchemable;
 pub use expr::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
     avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
@@ -57,15 +53,13 @@ pub use expr_rewriter::{
     normalize_col, normalize_cols, replace_col, rewrite_sort_cols_by_aggs,
     unnormalize_col, unnormalize_cols, ExprRewritable, ExprRewriter, RewriteRecursion,
 };
-pub use expr_schema::ExprSchemable;
 pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
 pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
-pub use extension::UserDefinedLogicalNode;
-pub use operators::Operator;
+pub use plan::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CrossJoin, DropTable, EmptyRelation, JoinConstraint, JoinType, Limit, LogicalPlan,
-    Partitioning, PlanType, PlanVisitor, Repartition, TableScan, Union, Values,
+    CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType, Limit,
+    LogicalPlan, Partitioning, PlanType, PlanVisitor, Repartition, StringifiedPlan,
+    TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode, Values,
 };
-pub(crate) use plan::{StringifiedPlan, ToStringifiedPlan};
 pub use registry::FunctionRegistry;

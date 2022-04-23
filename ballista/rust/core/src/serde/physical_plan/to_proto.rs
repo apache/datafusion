@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     Statistics,
 };
 
-use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::listing::{FileRange, PartitionedFile};
 use datafusion::physical_plan::file_format::FileScanConfig;
 
 use datafusion::physical_plan::expressions::{Count, Literal};
@@ -45,7 +45,8 @@ use datafusion::physical_plan::{AggregateExpr, PhysicalExpr};
 
 use crate::serde::{protobuf, BallistaError};
 
-use datafusion::physical_plan::functions::{BuiltinScalarFunction, ScalarFunctionExpr};
+use datafusion::logical_expr::BuiltinScalarFunction;
+use datafusion::physical_plan::functions::ScalarFunctionExpr;
 
 impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
     type Error = BallistaError;
@@ -123,6 +124,12 @@ impl TryInto<protobuf::PhysicalExprNode> for Arc<dyn AggregateExpr> {
             .is_some()
         {
             Ok(AggregateFunction::ApproxPercentileCont.into())
+        } else if self
+            .as_any()
+            .downcast_ref::<expressions::ApproxPercentileContWithWeight>()
+            .is_some()
+        {
+            Ok(AggregateFunction::ApproxPercentileContWithWeight.into())
         } else if self
             .as_any()
             .downcast_ref::<expressions::ApproxMedian>()
@@ -354,6 +361,18 @@ impl TryFrom<&PartitionedFile> for protobuf::PartitionedFile {
                 .iter()
                 .map(|v| v.try_into())
                 .collect::<Result<Vec<_>, _>>()?,
+            range: pf.range.as_ref().map(|r| r.try_into()).transpose()?,
+        })
+    }
+}
+
+impl TryFrom<&FileRange> for protobuf::FileRange {
+    type Error = BallistaError;
+
+    fn try_from(value: &FileRange) -> Result<Self, Self::Error> {
+        Ok(protobuf::FileRange {
+            start: value.start,
+            end: value.end,
         })
     }
 }

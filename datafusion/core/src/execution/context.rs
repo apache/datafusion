@@ -42,9 +42,12 @@ use crate::{
 };
 use log::{debug, trace};
 use parking_lot::RwLock;
-use std::collections::{HashMap, HashSet};
 use std::string::String;
 use std::sync::Arc;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+};
 
 use arrow::datatypes::{DataType, SchemaRef};
 
@@ -59,7 +62,8 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    DropTable, FunctionRegistry, LogicalPlan, LogicalPlanBuilder, UNNAMED_TABLE,
+    DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
+    UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::optimizer::filter_push_down::FilterPushDown;
@@ -83,7 +87,7 @@ use crate::physical_plan::udf::ScalarUDF;
 use crate::physical_plan::ExecutionPlan;
 use crate::physical_plan::PhysicalPlanner;
 use crate::sql::{
-    parser::{DFParser, FileType},
+    parser::DFParser,
     planner::{ContextProvider, SqlToRel},
 };
 use crate::variable::{VarProvider, VarType};
@@ -1148,6 +1152,15 @@ pub struct SessionState {
     pub runtime_env: Arc<RuntimeEnv>,
 }
 
+impl Debug for SessionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionState")
+            .field("session_id", &self.session_id)
+            // TODO should we print out more?
+            .finish()
+    }
+}
+
 /// Default session builder using the provided configuration
 pub fn default_session_builder(config: SessionConfig) -> SessionState {
     SessionState::with_config_rt(
@@ -1591,7 +1604,7 @@ mod tests {
     use crate::execution::context::QueryPlanner;
     use crate::from_slice::FromSlice;
     use crate::logical_plan::{binary_expr, lit, Operator};
-    use crate::physical_plan::functions::{make_scalar_function, Volatility};
+    use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::variable::VarType;
     use crate::{
@@ -1610,6 +1623,7 @@ mod tests {
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
+    use datafusion_expr::Volatility;
     use std::fs::File;
     use std::sync::Weak;
     use std::thread::{self, JoinHandle};
@@ -3320,173 +3334,6 @@ mod tests {
 
         assert_eq!(results[0].num_rows(), 1);
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn normalized_column_identifiers() {
-        // create local execution context
-        let ctx = SessionContext::new();
-
-        // register csv file with the execution context
-        ctx.register_csv(
-            "case_insensitive_test",
-            "tests/example.csv",
-            CsvReadOptions::new(),
-        )
-        .await
-        .unwrap();
-
-        let sql = "SELECT A, b FROM case_insensitive_test";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        let sql = "SELECT t.A, b FROM case_insensitive_test AS t";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        // Aliases
-
-        let sql = "SELECT t.A as x, b FROM case_insensitive_test AS t";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| x | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        let sql = "SELECT t.A AS X, b FROM case_insensitive_test AS t";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| x | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        let sql = r#"SELECT t.A AS "X", b FROM case_insensitive_test AS t"#;
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| X | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        // Order by
-
-        let sql = "SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY x";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| x | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        let sql = "SELECT t.A AS x, b FROM case_insensitive_test AS t ORDER BY X";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| x | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        let sql = r#"SELECT t.A AS "X", b FROM case_insensitive_test AS t ORDER BY "X""#;
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| X | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        // Where
-
-        let sql = "SELECT a, b FROM case_insensitive_test where A IS NOT null";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| a | b |",
-            "+---+---+",
-            "| 1 | 2 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        // Group by
-
-        let sql = "SELECT a as x, count(*) as c FROM case_insensitive_test GROUP BY X";
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| x | c |",
-            "+---+---+",
-            "| 1 | 1 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
-
-        let sql =
-            r#"SELECT a as "X", count(*) as c FROM case_insensitive_test GROUP BY "X""#;
-        let result = plan_and_collect(&ctx, sql)
-            .await
-            .expect("ran plan correctly");
-        let expected = vec![
-            "+---+---+",
-            "| X | c |",
-            "+---+---+",
-            "| 1 | 1 |",
-            "+---+---+",
-        ];
-        assert_batches_sorted_eq!(expected, &result);
     }
 
     struct MyPhysicalPlanner {}

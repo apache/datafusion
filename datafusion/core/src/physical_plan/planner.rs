@@ -24,7 +24,8 @@ use super::{
 };
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, TableScan, Window,
+    source_as_provider, Aggregate, EmptyRelation, Filter, Join, Projection, Sort,
+    SubqueryAlias, TableScan, Window,
 };
 use crate::logical_plan::{
     unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
@@ -338,6 +339,7 @@ impl DefaultPhysicalPlanner {
                     limit,
                     ..
                 }) => {
+                    let source = source_as_provider(source)?;
                     // Remove all qualifiers from the scan as the provider
                     // doesn't know (nor should care) how the relation was
                     // referred to in the query
@@ -785,6 +787,16 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
+                LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                    match input.as_ref() {
+                        LogicalPlan::TableScan(scan) => {
+                            let mut scan = scan.clone();
+                            scan.table_name = alias.clone();
+                            self.create_initial_plan(input, session_state).await
+                        }
+                        _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
+                    }
+                }
                 LogicalPlan::Limit(Limit { input, n, .. }) => {
                     let limit = *n;
                     let input = self.create_initial_plan(input, session_state).await?;

@@ -19,6 +19,7 @@
 //!
 //! Declares a SQL parser based on sqlparser that handles custom formats that we need.
 
+use crate::logical_plan::FileType;
 use sqlparser::{
     ast::{ColumnDef, ColumnOptionDef, Statement as SQLStatement, TableConstraint},
     dialect::{keywords::Keyword, Dialect, GenericDialect},
@@ -26,7 +27,6 @@ use sqlparser::{
     tokenizer::{Token, Tokenizer},
 };
 use std::collections::VecDeque;
-use std::str::FromStr;
 
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
@@ -35,33 +35,16 @@ macro_rules! parser_err {
     };
 }
 
-/// Types of files to parse as DataFrames
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FileType {
-    /// Newline-delimited JSON
-    NdJson,
-    /// Apache Parquet columnar storage
-    Parquet,
-    /// Comma separated values
-    CSV,
-    /// Avro binary records
-    Avro,
-}
-
-impl FromStr for FileType {
-    type Err = ParserError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "PARQUET" => Ok(Self::Parquet),
-            "NDJSON" => Ok(Self::NdJson),
-            "CSV" => Ok(Self::CSV),
-            "AVRO" => Ok(Self::Avro),
-            other => Err(ParserError::ParserError(format!(
-                "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
-                other
-            ))),
-        }
+fn parse_file_type(s: &str) -> Result<FileType, ParserError> {
+    match s.to_uppercase().as_str() {
+        "PARQUET" => Ok(FileType::Parquet),
+        "NDJSON" => Ok(FileType::NdJson),
+        "CSV" => Ok(FileType::CSV),
+        "AVRO" => Ok(FileType::Avro),
+        other => Err(ParserError::ParserError(format!(
+            "expect one of PARQUET, AVRO, NDJSON, or CSV, found: {}",
+            other
+        ))),
     }
 }
 
@@ -346,7 +329,7 @@ impl<'a> DFParser<'a> {
     /// Parses the set of valid formats
     fn parse_file_format(&mut self) -> Result<FileType, ParserError> {
         match self.parser.next_token() {
-            Token::Word(w) => w.value.parse(),
+            Token::Word(w) => parse_file_type(&w.value),
             unexpected => self.expected("one of PARQUET, NDJSON, or CSV", unexpected),
         }
     }

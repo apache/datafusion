@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
-use arrow::datatypes::{DataType, DECIMAL_MAX_PRECISION, DECIMAL_MAX_SCALE};
+use arrow::datatypes::DataType;
 use arrow::{
     array::{ArrayRef, UInt64Array},
     datatypes::Field,
@@ -40,50 +40,6 @@ pub struct Avg {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
     data_type: DataType,
-}
-
-/// function return type of an average
-pub fn avg_return_type(arg_type: &DataType) -> Result<DataType> {
-    match arg_type {
-        DataType::Decimal(precision, scale) => {
-            // in the spark, the result type is DECIMAL(min(38,precision+4), min(38,scale+4)).
-            // ref: https://github.com/apache/spark/blob/fcf636d9eb8d645c24be3db2d599aba2d7e2955a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L66
-            let new_precision = DECIMAL_MAX_PRECISION.min(*precision + 4);
-            let new_scale = DECIMAL_MAX_SCALE.min(*scale + 4);
-            Ok(DataType::Decimal(new_precision, new_scale))
-        }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32
-        | DataType::UInt64
-        | DataType::Float32
-        | DataType::Float64 => Ok(DataType::Float64),
-        other => Err(DataFusionError::Plan(format!(
-            "AVG does not support {:?}",
-            other
-        ))),
-    }
-}
-
-pub fn is_avg_support_arg_type(arg_type: &DataType) -> bool {
-    matches!(
-        arg_type,
-        DataType::UInt8
-            | DataType::UInt16
-            | DataType::UInt32
-            | DataType::UInt64
-            | DataType::Int8
-            | DataType::Int16
-            | DataType::Int32
-            | DataType::Int64
-            | DataType::Float32
-            | DataType::Float64
-            | DataType::Decimal(_, _)
-    )
 }
 
 impl Avg {
@@ -219,18 +175,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
     use datafusion_common::Result;
-
-    #[test]
-    fn test_avg_return_data_type() -> Result<()> {
-        let data_type = DataType::Decimal(10, 5);
-        let result_type = avg_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(14, 9), result_type);
-
-        let data_type = DataType::Decimal(36, 10);
-        let result_type = avg_return_type(&data_type)?;
-        assert_eq!(DataType::Decimal(38, 14), result_type);
-        Ok(())
-    }
 
     #[test]
     fn avg_decimal() -> Result<()> {

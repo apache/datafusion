@@ -17,14 +17,14 @@
 
 [package]
 name = "datafusion-expr"
-description = "Logical expression representation for DataFusion query engine"
+description = "Logical plan and expression representation for DataFusion query engine"
 version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
+keywords = [ "datafusion", "logical", "plan", "expressions" ]
 edition = "2021"
 rust-version = "1.59"
 
@@ -36,6 +36,6 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-arrow = { version = "11.1", features = ["prettyprint"] }
+arrow = { version = "12", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "7.0.0" }
 sqlparser = "0.16"

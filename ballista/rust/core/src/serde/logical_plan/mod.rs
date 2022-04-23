@@ -28,14 +28,13 @@ use datafusion::datasource::file_format::csv::CsvFormat;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableConfig};
-
 use datafusion::logical_plan::plan::{
-    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, Window,
+    Aggregate, EmptyRelation, Filter, Join, Projection, Sort, SubqueryAlias, Window,
 };
 use datafusion::logical_plan::{
-    Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable, CrossJoin, Expr,
-    JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition, TableScan,
-    Values,
+    source_as_provider, Column, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
+    CrossJoin, Expr, JoinConstraint, Limit, LogicalPlan, LogicalPlanBuilder, Repartition,
+    TableScan, Values,
 };
 use datafusion::prelude::SessionContext;
 
@@ -377,6 +376,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .build()
                     .map_err(|e| e.into())
             }
+            LogicalPlanType::SubqueryAlias(aliased_relation) => {
+                let input: LogicalPlan =
+                    into_logical_plan!(aliased_relation.input, ctx, extension_codec)?;
+                LogicalPlanBuilder::from(input)
+                    .alias(&aliased_relation.alias)?
+                    .build()
+                    .map_err(|e| e.into())
+            }
             LogicalPlanType::Limit(limit) => {
                 let input: LogicalPlan =
                     into_logical_plan!(limit.input, ctx, extension_codec)?;
@@ -503,6 +510,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 projection,
                 ..
             }) => {
+                let source = source_as_provider(source)?;
                 let schema = source.schema();
                 let source = source.as_any();
 
@@ -700,6 +708,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                let input: protobuf::LogicalPlanNode =
+                    protobuf::LogicalPlanNode::try_from_logical_plan(
+                        input.as_ref(),
+                        extension_codec,
+                    )?;
+                Ok(protobuf::LogicalPlanNode {
+                    logical_plan_type: Some(LogicalPlanType::SubqueryAlias(Box::new(
+                        protobuf::SubqueryAliasNode {
+                            input: Some(Box::new(input)),
+                            alias: alias.clone(),
+                        },
+                    ))),
+                })
+            }
             LogicalPlan::Limit(Limit { input, n }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
@@ -796,7 +819,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 table_partition_cols,
                 if_not_exists,
             }) => {
-                use datafusion::sql::parser::FileType;
+                use datafusion::logical_plan::FileType;
 
                 let pb_file_type: protobuf::FileType = match file_type {
                     FileType::NdJson => protobuf::FileType::NdJson,
@@ -960,6 +983,7 @@ mod roundtrip_tests {
     use crate::serde::{AsLogicalPlan, BallistaCodec};
     use async_trait::async_trait;
     use core::panic;
+    use datafusion::logical_plan::source_as_provider;
     use datafusion::{
         arrow::datatypes::{DataType, Field, Schema},
         datafusion_data_access::{
@@ -972,11 +996,10 @@ mod roundtrip_tests {
         },
         datasource::listing::ListingTable,
         logical_plan::{
-            col, CreateExternalTable, Expr, LogicalPlan, LogicalPlanBuilder, Repartition,
-            ToDFSchema,
+            col, CreateExternalTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder,
+            Repartition, ToDFSchema,
         },
         prelude::*,
-        sql::parser::FileType,
     };
     use std::io;
     use std::sync::Arc;
@@ -1413,7 +1436,8 @@ mod roundtrip_tests {
 
         let round_trip_store = match round_trip {
             LogicalPlan::TableScan(scan) => {
-                match scan.source.as_ref().as_any().downcast_ref::<ListingTable>() {
+                let source = source_as_provider(&scan.source)?;
+                match source.as_ref().as_any().downcast_ref::<ListingTable>() {
                     Some(listing_table) => {
                         format!("{:?}", listing_table.object_store())
                     }
