@@ -357,3 +357,80 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn test_power() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i32", DataType::Int32, true),
+        Field::new("i64", DataType::Int64, true),
+        Field::new("f32", DataType::Float32, true),
+        Field::new("f64", DataType::Float64, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(2),
+                Some(5),
+                Some(0),
+                Some(-14),
+                None,
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(2),
+                Some(5),
+                Some(0),
+                Some(-14),
+                None,
+            ])),
+            Arc::new(Float32Array::from(vec![
+                Some(1.0),
+                Some(2.5),
+                Some(0.0),
+                Some(-14.5),
+                None,
+            ])),
+            Arc::new(Float64Array::from(vec![
+                Some(1.0),
+                Some(2.5),
+                Some(0.0),
+                Some(-14.5),
+                None,
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = 
+        r"SELECT power(i32, 3) as power_i32,
+                 power(i64, 3) as power_i64,
+                 power(f32, 3) as power_f32,
+                 power(f64, 3) as power_f64,
+                 power(2, 3) as power_int_scalar,
+                 power(2.5, 3) as power_float_scalar
+          FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+-----------+-----------+-----------+------------------+--------------------+",
+        "| power_i32 | power_i64 | power_f32 | power_f64 | power_int_scalar | power_float_scalar |",
+        "+-----------+-----------+-----------+-----------+------------------+--------------------+",
+        "| 8         | 8         | 1         | 1         | 8                | 15.625             |",
+        "| 125       | 125       | 15.625    | 15.625    | 8                | 15.625             |",
+        "| 0         | 0         | 0         | 0         | 8                | 15.625             |",
+        "| -2744     | -2744     | -3048.625 | -3048.625 | 8                | 15.625             |",
+        "|           |           |           |           | 8                | 15.625             |",
+        "+-----------+-----------+-----------+-----------+------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    //dbg!(actual[0].schema().fields());
+    assert_eq!(actual[0].schema().field_with_name("power_i32").unwrap().data_type().to_owned(), DataType::Int64);
+    assert_eq!(actual[0].schema().field_with_name("power_i64").unwrap().data_type().to_owned(), DataType::Int64);
+    assert_eq!(actual[0].schema().field_with_name("power_f32").unwrap().data_type().to_owned(), DataType::Float64);
+    assert_eq!(actual[0].schema().field_with_name("power_f64").unwrap().data_type().to_owned(), DataType::Float64);
+    
+    Ok(())
+}

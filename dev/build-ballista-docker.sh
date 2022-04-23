@@ -21,4 +21,4 @@ set -e
 
 . ./dev/build-set-env.sh
 docker build -t ballista-base:$BALLISTA_VERSION -f dev/docker/ballista-base.dockerfile .
-docker build -t ballista:$BALLISTA_VERSION -f dev/docker/ballista.dockerfile .
+DOCKER_BUILDKIT=0 docker build --progress=plain -t ballista:$BALLISTA_VERSION -f dev/docker/ballista.dockerfile .

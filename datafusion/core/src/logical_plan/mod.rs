@@ -47,7 +47,7 @@ pub use expr::{
     count, count_distinct, create_udaf, create_udf, date_part, date_trunc, digest, exp,
     exprlist_to_fields, floor, in_list, initcap, left, length, lit, lit_timestamp_nano,
     ln, log10, log2, lower, lpad, ltrim, max, md5, min, now, now_expr, nullif,
-    octet_length, or, random, regexp_match, regexp_replace, repeat, replace, reverse,
+    octet_length, or, power, random, regexp_match, regexp_replace, repeat, replace, reverse,
     right, round, rpad, rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part,
     sqrt, starts_with, strpos, substr, sum, tan, to_hex, to_timestamp_micros,
     to_timestamp_millis, to_timestamp_seconds, translate, trim, trunc, unalias, upper,

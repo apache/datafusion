@@ -25,7 +25,7 @@ ARG RELEASE_FLAG=--release
 FROM ballista-base:0.6.0 AS base
 WORKDIR /tmp/ballista
 RUN apt-get -y install cmake
-RUN cargo install cargo-chef --version 0.1.23
+RUN cargo install cargo-chef --version 0.1.34
 
 FROM base as planner
 ADD Cargo.toml .
@@ -75,6 +75,7 @@ ARG RELEASE_FLAG=--release
 
 # force build.rs to run to generate configure_me code.
 ENV FORCE_REBUILD='true'
+RUN echo $(rustc --version)
 RUN cargo build $RELEASE_FLAG
 
 # put the executor on /executor (need to be copied from different places depending on FLAG)

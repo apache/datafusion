@@ -30,7 +30,7 @@ use datafusion::{
     logical_plan::{
         abs, acos, ascii, asin, atan, ceil, character_length, chr, concat_expr,
         concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, nullif,
-        random, regexp_replace, repeat, replace, reverse, right, round, signum, sin,
+        power, random, regexp_replace, repeat, replace, reverse, right, round, signum, sin,
         split_part, sqrt, starts_with, strpos, substr, tan, to_hex, to_timestamp_micros,
         to_timestamp_millis, to_timestamp_seconds, translate, trunc,
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
@@ -468,6 +468,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
+            ScalarFunction::Power => Self::Power,
         }
     }
 }
