@@ -100,6 +100,22 @@ macro_rules! downcast_arg {
     }};
 }
 
+macro_rules! make_function_inputs2 {
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
+        
+        arg1
+        .iter()
+        .zip(arg2.iter())
+        .map(|(a1, a2)| match (a1, a2) {
+            (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().unwrap())),
+            _ => None,
+        })
+        .collect::<$ARRAY_TYPE>()    
+    }};
+}
+
 math_unary_function!("sqrt", sqrt);
 math_unary_function!("sin", sin);
 math_unary_function!("cos", cos);
@@ -134,22 +150,6 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(ColumnarValue::Array(Arc::new(array)))
 }
 
-macro_rules! make_function_inputs2 {
-    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
-        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
-        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
-        
-        arg1
-        .iter()
-        .zip(arg2.iter())
-        .map(|(a1, a2)| match (a1, a2) {
-            (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().unwrap())),
-            _ => None,
-        })
-        .collect::<$ARRAY_TYPE>()    
-    }};
-}
-
 pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
         DataType::Float32 | DataType::Float64 =>  
@@ -164,7 +164,6 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
         )))
     }
 }
-
 
 #[cfg(test)]
 mod tests {
