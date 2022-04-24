@@ -405,8 +405,7 @@ async fn test_power() -> Result<()> {
 
     let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
-    let sql = 
-        r"SELECT power(i32, 3) as power_i32,
+    let sql = r"SELECT power(i32, 3) as power_i32,
                  power(i64, 3) as power_i64,
                  power(f32, 3) as power_f32,
                  power(f64, 3) as power_f64,
@@ -427,10 +426,42 @@ async fn test_power() -> Result<()> {
     ];
     assert_batches_eq!(expected, &actual);
     //dbg!(actual[0].schema().fields());
-    assert_eq!(actual[0].schema().field_with_name("power_i32").unwrap().data_type().to_owned(), DataType::Int64);
-    assert_eq!(actual[0].schema().field_with_name("power_i64").unwrap().data_type().to_owned(), DataType::Int64);
-    assert_eq!(actual[0].schema().field_with_name("power_f32").unwrap().data_type().to_owned(), DataType::Float64);
-    assert_eq!(actual[0].schema().field_with_name("power_f64").unwrap().data_type().to_owned(), DataType::Float64);
-    
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_i32")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Int64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_i64")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Int64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_f32")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_f64")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+
     Ok(())
 }

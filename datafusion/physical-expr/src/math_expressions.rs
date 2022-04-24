@@ -17,16 +17,16 @@
 
 //! Math expressions
 
+use arrow::array::ArrayRef;
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::ColumnarValue;
 use rand::{thread_rng, Rng};
+use std::any::type_name;
 use std::iter;
 use std::sync::Arc;
-use arrow::array::ArrayRef;
-use std::any::type_name;
 
 macro_rules! downcast_compute_op {
     ($ARRAY:expr, $NAME:expr, $FUNC:ident, $TYPE:ident) => {{
@@ -104,15 +104,14 @@ macro_rules! make_function_inputs2 {
     ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
         let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
         let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
-        
-        arg1
-        .iter()
-        .zip(arg2.iter())
-        .map(|(a1, a2)| match (a1, a2) {
-            (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().unwrap())),
-            _ => None,
-        })
-        .collect::<$ARRAY_TYPE>()    
+
+        arg1.iter()
+            .zip(arg2.iter())
+            .map(|(a1, a2)| match (a1, a2) {
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().unwrap())),
+                _ => None,
+            })
+            .collect::<$ARRAY_TYPE>()
     }};
 }
 
@@ -152,16 +151,28 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Float32 | DataType::Float64 =>  
-            Ok(Arc::new(make_function_inputs2!(&args[0], &args[1], "base", "exponent", Float64Array, {f64::powf})) as ArrayRef),
-        
-        DataType::Int32 | DataType::Int64 =>  
-            Ok(Arc::new(make_function_inputs2!(&args[0], &args[1], "base", "exponent", Int64Array, {i64::pow})) as ArrayRef),
-        
+        DataType::Float32 | DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
+            &args[0],
+            &args[1],
+            "base",
+            "exponent",
+            Float64Array,
+            { f64::powf }
+        )) as ArrayRef),
+
+        DataType::Int32 | DataType::Int64 => Ok(Arc::new(make_function_inputs2!(
+            &args[0],
+            &args[1],
+            "base",
+            "exponent",
+            Int64Array,
+            { i64::pow }
+        )) as ArrayRef),
+
         other => Err(DataFusionError::Internal(format!(
             "Unsupported data type {:?} for function power",
             other
-        )))
+        ))),
     }
 }
 

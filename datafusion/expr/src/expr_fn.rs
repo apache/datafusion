@@ -243,7 +243,6 @@ unary_scalar_expr!(Ln, ln);
 unary_scalar_expr!(NullIf, nullif);
 scalar_expr!(Power, power, base, exponent);
 
-
 // string functions
 scalar_expr!(Ascii, ascii, string);
 scalar_expr!(BitLength, bit_length, string);
