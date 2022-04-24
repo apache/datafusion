@@ -1602,7 +1602,6 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
-    use crate::from_slice::FromSlice;
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
@@ -1612,14 +1611,10 @@ mod tests {
         logical_plan::{col, create_udf, sum, Expr},
     };
     use crate::{
-        datasource::MemTable, logical_plan::create_udaf,
+        logical_plan::create_udaf,
         physical_plan::expressions::AvgAccumulator,
     };
-    use arrow::array::{
-        Array, ArrayRef, DictionaryArray, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int64Array, Int8Array, LargeStringArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
-    };
+    use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
     use async_trait::async_trait;
@@ -2170,13 +2165,6 @@ mod tests {
         sql: &str,
     ) -> Result<Vec<RecordBatch>> {
         ctx.sql(sql).await?.collect().await
-    }
-
-    /// Execute SQL and return results
-    async fn execute(sql: &str, partition_count: usize) -> Result<Vec<RecordBatch>> {
-        let tmp_dir = TempDir::new()?;
-        let ctx = create_ctx(&tmp_dir, partition_count).await?;
-        plan_and_collect(&ctx, sql).await
     }
 
     /// Generate CSV partitions within the supplied directory
