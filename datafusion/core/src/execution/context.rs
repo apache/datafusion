@@ -1610,10 +1610,7 @@ mod tests {
         assert_batches_eq, assert_batches_sorted_eq,
         logical_plan::{col, create_udf, sum, Expr},
     };
-    use crate::{
-        logical_plan::create_udaf,
-        physical_plan::expressions::AvgAccumulator,
-    };
+    use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
