@@ -357,3 +357,240 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn count_basic() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT COUNT(c1), COUNT(c2) FROM test", 1).await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----------------+----------------+",
+        "| COUNT(test.c1) | COUNT(test.c2) |",
+        "+----------------+----------------+",
+        "| 10             | 10             |",
+        "+----------------+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn count_partitioned() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT COUNT(c1), COUNT(c2) FROM test", 4).await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----------------+----------------+",
+        "| COUNT(test.c1) | COUNT(test.c2) |",
+        "+----------------+----------------+",
+        "| 40             | 40             |",
+        "+----------------+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn count_aggregated() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT c1, COUNT(c2) FROM test GROUP BY c1", 4).await?;
+
+    let expected = vec![
+        "+----+----------------+",
+        "| c1 | COUNT(test.c2) |",
+        "+----+----------------+",
+        "| 0  | 10             |",
+        "| 1  | 10             |",
+        "| 2  | 10             |",
+        "| 3  | 10             |",
+        "+----+----------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn simple_avg() -> Result<()> {
+    let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+
+    let batch1 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from_slice(&[1, 2, 3]))],
+    )?;
+    let batch2 = RecordBatch::try_new(
+        Arc::new(schema.clone()),
+        vec![Arc::new(Int32Array::from_slice(&[4, 5]))],
+    )?;
+
+    let ctx = SessionContext::new();
+
+    let provider = MemTable::try_new(Arc::new(schema), vec![vec![batch1], vec![batch2]])?;
+    ctx.register_table("t", Arc::new(provider))?;
+
+    let result = plan_and_collect(&ctx, "SELECT AVG(a) FROM t").await?;
+
+    let batch = &result[0];
+    assert_eq!(1, batch.num_columns());
+    assert_eq!(1, batch.num_rows());
+
+    let values = batch
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .expect("failed to cast version");
+    assert_eq!(values.len(), 1);
+    // avg(1,2,3,4,5) = 3.0
+    assert_eq!(values.value(0), 3.0_f64);
+    Ok(())
+}
+
+#[tokio::test]
+async fn case_sensitive_identifiers_functions() {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
+        .unwrap();
+
+    let expected = vec![
+        "+-----------+",
+        "| sqrt(t.i) |",
+        "+-----------+",
+        "| 1         |",
+        "+-----------+",
+    ];
+
+    let results = plan_and_collect(&ctx, "SELECT sqrt(i) FROM t")
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    let results = plan_and_collect(&ctx, "SELECT SQRT(i) FROM t")
+        .await
+        .unwrap();
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Using double quotes allows specifying the function name with capitalization
+    let err = plan_and_collect(&ctx, "SELECT \"SQRT\"(i) FROM t")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Invalid function 'SQRT'"
+    );
+
+    let results = plan_and_collect(&ctx, "SELECT \"sqrt\"(i) FROM t")
+        .await
+        .unwrap();
+    assert_batches_sorted_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn case_builtin_math_expression() {
+    let ctx = SessionContext::new();
+
+    let type_values = vec![
+        (
+            DataType::Int8,
+            Arc::new(Int8Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Int16,
+            Arc::new(Int16Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Int32,
+            Arc::new(Int32Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Int64,
+            Arc::new(Int64Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt8,
+            Arc::new(UInt8Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt16,
+            Arc::new(UInt16Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt32,
+            Arc::new(UInt32Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt64,
+            Arc::new(UInt64Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Float32,
+            Arc::new(Float32Array::from_slice(&[1.0_f32])) as ArrayRef,
+        ),
+        (
+            DataType::Float64,
+            Arc::new(Float64Array::from_slice(&[1.0_f64])) as ArrayRef,
+        ),
+    ];
+
+    for (data_type, array) in type_values.iter() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("v", data_type.clone(), false)]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+        let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+        ctx.deregister_table("t").unwrap();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+        let expected = vec![
+            "+-----------+",
+            "| sqrt(t.v) |",
+            "+-----------+",
+            "| 1         |",
+            "+-----------+",
+        ];
+        let results = plan_and_collect(&ctx, "SELECT sqrt(v) FROM t")
+            .await
+            .unwrap();
+
+        assert_batches_sorted_eq!(expected, &results);
+    }
+}
+
+#[tokio::test]
+async fn case_sensitive_identifiers_aggregates() {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
+        .unwrap();
+
+    let expected = vec![
+        "+----------+",
+        "| MAX(t.i) |",
+        "+----------+",
+        "| 1        |",
+        "+----------+",
+    ];
+
+    let results = plan_and_collect(&ctx, "SELECT max(i) FROM t")
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    let results = plan_and_collect(&ctx, "SELECT MAX(i) FROM t")
+        .await
+        .unwrap();
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Using double quotes allows specifying the function name with capitalization
+    let err = plan_and_collect(&ctx, "SELECT \"MAX\"(i) FROM t")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Invalid function 'MAX'"
+    );
+
+    let results = plan_and_collect(&ctx, "SELECT \"max\"(i) FROM t")
+        .await
+        .unwrap();
+    assert_batches_sorted_eq!(expected, &results);
+}
