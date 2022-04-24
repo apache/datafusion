@@ -733,6 +733,7 @@ mod tests {
         Ok(())
     }
 
+    #[allow(clippy::pedantic)]
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
@@ -754,7 +755,6 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains(expected_help));
-        let mess = schema.index_of("t1.c0").unwrap_err().to_string();
         assert!(schema
             .index_of("t1.c0")
             .unwrap_err()
