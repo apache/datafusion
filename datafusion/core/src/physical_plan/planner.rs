@@ -187,7 +187,7 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             }
         }
         Expr::Exists(_) => Err(DataFusionError::NotImplemented(
-            "EXISTS is not supported in the physical plan".to_string(),
+            "EXISTS is not yet supported in the physical plan".to_string(),
         )),
         Expr::Between {
             expr,
