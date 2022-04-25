@@ -18,6 +18,7 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use crate::aggregate::covariance::CovarianceAccumulator;
+use crate::aggregate::stats::StatsType;
 use crate::aggregate::stddev::StddevAccumulator;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
