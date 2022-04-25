@@ -361,7 +361,7 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
 #[tokio::test]
 async fn test_power() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
-        Field::new("i32", DataType::Int32, true),
+        Field::new("i32", DataType::Int16, true),
         Field::new("i64", DataType::Int64, true),
         Field::new("f32", DataType::Float32, true),
         Field::new("f64", DataType::Float64, true),
@@ -370,7 +370,7 @@ async fn test_power() -> Result<()> {
     let data = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(Int32Array::from(vec![
+            Arc::new(Int16Array::from(vec![
                 Some(2),
                 Some(5),
                 Some(0),
@@ -457,6 +457,24 @@ async fn test_power() -> Result<()> {
         actual[0]
             .schema()
             .field_with_name("power_f64")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_int_scalar")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Int64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_float_scalar")
             .unwrap()
             .data_type()
             .to_owned(),

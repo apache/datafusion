@@ -151,7 +151,7 @@ pub fn random(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args[0].data_type() {
-        DataType::Float32 | DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
+        DataType::Float64 => Ok(Arc::new(make_function_inputs2!(
             &args[0],
             &args[1],
             "base",
@@ -160,7 +160,7 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
             { f64::powf }
         )) as ArrayRef),
 
-        DataType::Int32 | DataType::Int64 => Ok(Arc::new(make_function_inputs2!(
+        DataType::Int64 => Ok(Arc::new(make_function_inputs2!(
             &args[0],
             &args[1],
             "base",
