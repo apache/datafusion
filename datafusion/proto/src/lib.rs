@@ -22,6 +22,8 @@ pub mod protobuf {
 }
 
 pub mod from_proto;
+/// Serialization / Deserialization API
+pub mod serde;
 pub mod to_proto;
 
 #[cfg(test)]
