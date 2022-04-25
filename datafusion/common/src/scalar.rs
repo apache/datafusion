@@ -1395,11 +1395,7 @@ impl ScalarValue {
                 let list_array = array
                     .as_any()
                     .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Failed to downcast FixedSizeListArray".to_string(),
-                        )
-                    })?;
+                    .unwrap();
                 let value = match list_array.is_null(index) {
                     true => None,
                     false => {
