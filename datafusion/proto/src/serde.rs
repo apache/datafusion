@@ -1,8 +1,9 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use crate::{from_proto::parse_expr, protobuf};
 use datafusion::{
     common::{DataFusionError, Result},
+    logical_expr::{AggregateUDF, ScalarUDF},
     logical_plan::{Expr, FunctionRegistry},
 };
 use prost::{bytes::BytesMut, Message};
@@ -87,21 +88,15 @@ impl FunctionRegistry for NoRegistry {
         HashSet::new()
     }
 
-    fn udf(
-        &self,
-        name: &str,
-    ) -> Result<std::sync::Arc<datafusion::logical_expr::ScalarUDF>> {
+    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
         Err(DataFusionError::Plan(
             format!("No function registry provided to deserialize, so can not deserialize User Defined Function '{}'", name))
         )
     }
 
-    fn udaf(
-        &self,
-        name: &str,
-    ) -> Result<std::sync::Arc<datafusion::logical_expr::AggregateUDF>> {
+    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
         Err(DataFusionError::Plan(
             format!("No function registry provided to deserialize, so can not deserialize User Defined Aggregate Function '{}'", name))
-            )
+        )
     }
 }
