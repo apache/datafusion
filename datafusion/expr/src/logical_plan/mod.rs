@@ -23,7 +23,7 @@ pub use plan::{
     Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
     CreateMemoryTable, CrossJoin, DropTable, EmptyRelation, Explain, Extension, FileType,
     Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType,
-    PlanVisitor, Projection, Repartition, Sort, StringifiedPlan, SubqueryAlias,
+    PlanVisitor, Projection, Repartition, Sort, StringifiedPlan, Subquery, SubqueryAlias,
     TableScan, ToStringifiedPlan, Union, Values, Window,
 };
 

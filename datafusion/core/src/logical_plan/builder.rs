@@ -51,6 +51,7 @@ use crate::logical_plan::{
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 use datafusion_common::ToDFSchema;
+use datafusion_expr::logical_plan::Subquery;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -528,6 +529,13 @@ impl LogicalPlanBuilder {
             input: Arc::new(self.plan.clone()),
             alias: alias.to_string(),
             schema,
+        })))
+    }
+
+    /// Apply an EXISTS subquery expression
+    pub fn exists(&self, subquery: &LogicalPlan) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Subquery(Subquery {
+            subquery: Arc::new(subquery.clone()),
         })))
     }
 
@@ -1204,6 +1212,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field};
 
     use crate::logical_plan::StringifiedPlan;
+    use crate::test::test_table_scan_with_name;
 
     use super::super::{col, lit, sum};
     use super::*;
@@ -1335,6 +1344,33 @@ mod tests {
         \n  TableScan: employee_csv projection=Some([3, 4])";
 
         assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn exists_subquery() -> Result<()> {
+        let foo = test_table_scan_with_name("foo")?;
+        let bar = test_table_scan_with_name("bar")?;
+
+        let subquery = LogicalPlanBuilder::from(foo)
+            .project(vec![col("a")])?
+            .filter(col("a").eq(col("bar.a")))?
+            .build()?;
+
+        let outer_query = LogicalPlanBuilder::from(bar)
+            .project(vec![col("a")])?
+            .filter(Expr::Exists(Subquery {
+                subquery: Arc::new(subquery),
+            }))?
+            .build()?;
+
+        let expected = "Filter: EXISTS (\
+            Subquery: Filter: #foo.a = #bar.a\
+            \n  Projection: #foo.a\
+            \n    TableScan: foo projection=None)\
+        \n  Projection: #bar.a\n    TableScan: bar projection=None";
+        assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
     }

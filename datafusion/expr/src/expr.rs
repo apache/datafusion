@@ -20,6 +20,7 @@
 use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
+use crate::logical_plan::Subquery;
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -226,6 +227,8 @@ pub enum Expr {
         /// Whether the expression is negated
         negated: bool,
     },
+    /// EXISTS subquery
+    Exists(Subquery),
     /// Represents a reference to all fields in a schema.
     Wildcard,
     /// Represents a reference to all fields in a specific schema.
@@ -431,6 +434,7 @@ impl fmt::Debug for Expr {
             Expr::Negative(expr) => write!(f, "(- {:?})", expr),
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
+            Expr::Exists(subquery) => write!(f, "EXISTS ({:?})", subquery),
             Expr::BinaryExpr { left, op, right } => {
                 write!(f, "{:?} {} {:?}", left, op, right)
             }
@@ -618,6 +622,7 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
+        Expr::Exists(_) => Ok("EXISTS".to_string()),
         Expr::GetIndexedField { expr, key } => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{}[{}]", expr, key))

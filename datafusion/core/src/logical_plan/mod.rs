@@ -60,6 +60,6 @@ pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType, Limit,
     LogicalPlan, Partitioning, PlanType, PlanVisitor, Repartition, StringifiedPlan,
-    TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode, Values,
+    Subquery, TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode, Values,
 };
 pub use registry::FunctionRegistry;

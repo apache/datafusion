@@ -708,6 +708,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))),
                 })
             }
+            LogicalPlan::Subquery(_) => {
+                // note that the ballista and datafusion proto files need refactoring to allow
+                // LogicalExprNode to reference a LogicalPlanNode
+                // see https://github.com/apache/arrow-datafusion/issues/2338
+                Err(BallistaError::NotImplemented(
+                    "Ballista does not support subqueries".to_string(),
+                ))
+            }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                 let input: protobuf::LogicalPlanNode =
                     protobuf::LogicalPlanNode::try_from_logical_plan(
