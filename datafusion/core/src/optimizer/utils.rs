@@ -63,7 +63,12 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             Expr::Column(qc) => {
                 self.accum.insert(qc.clone());
             }
-            Expr::UnresolvedColumn(_) => todo!(),
+            Expr::UnresolvedColumn(col) => {
+                return Err(DataFusionError::Plan(format!(
+                    "Plan contains unresolved column '{}'",
+                    col
+                )))
+            }
             Expr::ScalarVariable(_, var_names) => {
                 self.accum.insert(Column::from_name(var_names.join(".")));
             }

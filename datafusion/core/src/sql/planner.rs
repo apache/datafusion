@@ -1460,10 +1460,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // interpret names with '.' as if they were
                     // compound indenfiers, but this is not a compound
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
-                    Ok(Expr::UnresolvedColumn(Column {
-                        relation: None,
-                        name: normalize_ident(id),
-                    }))
+                    let name = normalize_ident(id);
+                    if schema.index_of_column_by_name(None, &name).is_ok() {
+                        Ok(Expr::Column(Column {
+                            relation: None,
+                            name,
+                        }))
+                    } else {
+                        Ok(Expr::UnresolvedColumn(Column {
+                            relation: None,
+                            name,
+                        }))
+
+                    }
                 }
             }
 
@@ -1497,10 +1506,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
                             // table.column identifier
-                            Ok(Expr::UnresolvedColumn(Column {
-                                relation: Some(relation),
-                                name,
-                            }))
+                            if schema.index_of_column_by_name(Some(&relation), &name).is_ok() {
+                                Ok(Expr::Column(Column {
+                                    relation: Some(relation),
+                                    name,
+                                }))
+                            } else {
+                                Ok(Expr::UnresolvedColumn(Column {
+                                    relation: Some(relation),
+                                    name,
+                                }))
+                            }
                         }
                         _ => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported compound identifier '{:?}'",
@@ -2311,6 +2327,10 @@ fn parse_sql_number(n: &str) -> Result<Expr> {
 #[cfg(test)]
 mod tests {
     use crate::datasource::empty::EmptyTable;
+    use crate::execution::context::ExecutionProps;
+    use crate::optimizer::check_analysis::CheckAnalysis;
+    use crate::optimizer::optimizer::OptimizerRule;
+    use crate::optimizer::resolve_columns::ResolveColumns;
     use crate::{assert_contains, logical_plan::create_udf, sql::parser::DFParser};
     use datafusion_expr::{ScalarFunctionImplementation, Volatility};
 
@@ -2338,6 +2358,7 @@ mod tests {
     fn select_column_does_not_exist() {
         let sql = "SELECT doesnotexist FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
+        println!("{:?}", err);
         assert!(matches!(
             err,
             DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
@@ -4019,7 +4040,16 @@ mod tests {
         let planner = SqlToRel::new(&MockContextProvider {});
         let result = DFParser::parse_sql(sql);
         let mut ast = result.unwrap();
-        planner.statement_to_plan(ast.pop_front().unwrap())
+        let plan = planner.statement_to_plan(ast.pop_front().unwrap())?;
+        println!("SQL:\n\n{:?}", plan);
+        // The SQL planner now allows UnresolvedColumn expressions so we need to resolve
+        // those by applying some optimizer rules
+        let execution_props = ExecutionProps::default();
+        let plan = ResolveColumns::new().optimize(&plan, &execution_props)?;
+        println!("RESOLVED:\n\n{:?}", plan);
+        let plan = CheckAnalysis::new().optimize(&plan, &execution_props)?;
+        println!("CHECKED:\n\n{:?}", plan);
+        Ok(plan)
     }
 
     /// Create logical plan, write with formatter, compare to expected output
@@ -4188,22 +4218,6 @@ mod tests {
     }
 
     #[test]
-    fn exists_uncorrelated_in_subquery() {
-        let sql = "SELECT id FROM person p WHERE last_name IN (SELECT last_name FROM person WHERE state = 'CO')";
-        let expected = "TBD";
-        quick_test(sql, expected);
-    }
-
-    #[test]
-    fn exists_correlated_in_subquery() {
-        let sql = "SELECT id FROM person p \
-        WHERE last_name IN (SELECT last_name FROM person \
-        WHERE first_name != p.first_name)";
-        let expected = "TBD";
-        quick_test(sql, expected);
-    }
-
-    #[test]
     fn exists_subquery() {
         let sql = "SELECT id FROM person p WHERE EXISTS \
             (SELECT * FROM person \
@@ -4213,10 +4227,9 @@ mod tests {
         //TODO need to improve the way these plans are formatted
 
         let expected = "Projection: #p.id\
-        \n  Filter: EXISTS (\
-                        Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
-                        \n  Filter: last_name? = p.last_name? AND state? = p.state?\
-                        \n    TableScan: person projection=None)\
+        \n  Filter: EXISTS (Subquery { plan: Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
+        \n  Filter: #person.last_name = #p.last_name? AND #person.state = #p.state?\
+        \n    TableScan: person projection=None })\
         \n    SubqueryAlias: p\
         \n      TableScan: person projection=None";
         quick_test(sql, expected);

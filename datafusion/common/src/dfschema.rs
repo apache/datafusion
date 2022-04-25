@@ -166,7 +166,7 @@ impl DFSchema {
         )))
     }
 
-    fn index_of_column_by_name(
+    pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&str>,
         name: &str,

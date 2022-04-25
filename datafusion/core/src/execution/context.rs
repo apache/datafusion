@@ -80,6 +80,8 @@ use crate::physical_optimizer::repartition::Repartition;
 
 use crate::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use crate::logical_plan::plan::Explain;
+use crate::optimizer::check_analysis::CheckAnalysis;
+use crate::optimizer::resolve_columns::ResolveColumns;
 use crate::physical_plan::file_format::{plan_to_csv, plan_to_json, plan_to_parquet};
 use crate::physical_plan::planner::DefaultPhysicalPlanner;
 use crate::physical_plan::udaf::AggregateUDF;
@@ -1200,7 +1202,10 @@ impl SessionState {
         SessionState {
             session_id,
             optimizers: vec![
-                // Simplify expressions first to maximize the chance
+                // resolve unresolved columns first
+                Arc::new(ResolveColumns::new()),
+                Arc::new(CheckAnalysis::new()),
+                // Simplify expressions early to maximize the chance
                 // of applying other optimizations
                 Arc::new(SimplifyExpressions::new()),
                 Arc::new(EliminateFilter::new()),
