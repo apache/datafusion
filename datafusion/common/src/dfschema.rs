@@ -733,7 +733,7 @@ mod tests {
         Ok(())
     }
 
-    #[allow(clippy::pedantic)]
+    #[allow(deprecated)]
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
