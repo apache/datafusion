@@ -1055,6 +1055,7 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
+    let union_schema = left_plan.schema().clone();
     let inputs = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
@@ -1063,11 +1064,11 @@ pub fn union_with_alias(
         })
         .map(|p| match p {
             LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-                alias,
-            }) => project_with_column_index_alias(expr, input, schema, alias).unwrap(),
+                expr, input, alias, ..
+            }) => {
+                project_with_column_index_alias(expr, input, union_schema.clone(), alias)
+                    .unwrap()
+            }
             x => x,
         })
         .collect::<Vec<_>>();

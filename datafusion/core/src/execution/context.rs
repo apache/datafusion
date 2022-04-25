@@ -3243,7 +3243,7 @@ mod tests {
             "SELECT cat, SUM(i) AS total FROM (
                     SELECT i, 'a' AS cat FROM catalog_a.schema_a.table_a
                     UNION ALL
-                    SELECT i, 'b' AS cat FROM catalog_b.schema_b.table_b
+                    SELECT i, 'b' FROM catalog_b.schema_b.table_b
                 ) AS all
                 GROUP BY cat
                 ORDER BY cat
