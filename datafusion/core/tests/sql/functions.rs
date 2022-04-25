@@ -144,6 +144,17 @@ async fn query_array() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_array_scalar() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT array(1, 2, 3);";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["[1, 2, 3]"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_count_distinct() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
