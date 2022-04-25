@@ -1392,14 +1392,8 @@ impl ScalarValue {
                 Self::Struct(Some(Box::new(field_values)), Box::new(fields.clone()))
             }
             DataType::FixedSizeList(nested_type, _len) => {
-                let list_array = array
-                    .as_any()
-                    .downcast_ref::<FixedSizeListArray>()
-                    .ok_or_else(|| {
-                        DataFusionError::Internal(
-                            "Failed to downcast FixedSizeListArray".to_string(),
-                        )
-                    })?;
+                let list_array =
+                    array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
                 let value = match list_array.is_null(index) {
                     true => None,
                     false => {

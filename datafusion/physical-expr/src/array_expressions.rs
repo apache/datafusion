@@ -90,12 +90,12 @@ fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// put values in an array.
 pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let mut arrays: Vec<ArrayRef> = vec![];
-    for x in values {
-        match x {
-            ColumnarValue::Array(array) => arrays.push(array.clone()),
-            ColumnarValue::Scalar(scalar) => arrays.push(scalar.to_array().clone()),
-        }
-    }
+    let arrays: Vec<ArrayRef> = values
+        .iter()
+        .map(|x| match x {
+            ColumnarValue::Array(array) => array.clone(),
+            ColumnarValue::Scalar(scalar) => scalar.to_array().clone(),
+        })
+        .collect();
     Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
 }
