@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support the coercion rule for aggregate function.
+//! Define coercion rules for Aggregate function.
 
 use crate::expressions::try_cast;
 use crate::PhysicalExpr;

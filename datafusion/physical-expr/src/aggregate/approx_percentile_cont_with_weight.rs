@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expressions::approx_percentile_cont::ApproxPercentileAccumulator;
+use crate::aggregate::approx_percentile_cont::ApproxPercentileAccumulator;
+use crate::aggregate::tdigest::{Centroid, TDigest, DEFAULT_MAX_SIZE};
 use crate::expressions::ApproxPercentileCont;
-use crate::{
-    tdigest::{Centroid, TDigest, DEFAULT_MAX_SIZE},
-    AggregateExpr, PhysicalExpr,
-};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
     array::ArrayRef,
     datatypes::{DataType, Field},

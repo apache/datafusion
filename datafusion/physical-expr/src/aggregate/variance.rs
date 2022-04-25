@@ -20,36 +20,42 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::{expressions::variance::VarianceAccumulator, AggregateExpr, PhysicalExpr};
-use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
+use crate::aggregate::stats::StatsType;
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
+use arrow::array::Float64Array;
+use arrow::{
+    array::{ArrayRef, UInt64Array},
+    compute::cast,
+    datatypes::DataType,
+    datatypes::Field,
+};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
-use super::{format_state_name, StatsType};
-
-/// STDDEV and STDDEV_SAMP (standard deviation) aggregate expression
+/// VAR and VAR_SAMP aggregate expression
 #[derive(Debug)]
-pub struct Stddev {
+pub struct Variance {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
 }
 
-/// STDDEV_POP population aggregate expression
+/// VAR_POP aggregate expression
 #[derive(Debug)]
-pub struct StddevPop {
+pub struct VariancePop {
     name: String,
     expr: Arc<dyn PhysicalExpr>,
 }
 
-impl Stddev {
-    /// Create a new STDDEV aggregate function
+impl Variance {
+    /// Create a new VARIANCE aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        // the result of stddev just support FLOAT64 and Decimal data type.
+        // the result of variance just support FLOAT64 data type.
         assert!(matches!(data_type, DataType::Float64));
         Self {
             name: name.into(),
@@ -58,7 +64,7 @@ impl Stddev {
     }
 }
 
-impl AggregateExpr for Stddev {
+impl AggregateExpr for Variance {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -69,7 +75,7 @@ impl AggregateExpr for Stddev {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(StddevAccumulator::try_new(StatsType::Sample)?))
+        Ok(Box::new(VarianceAccumulator::try_new(StatsType::Sample)?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -101,14 +107,14 @@ impl AggregateExpr for Stddev {
     }
 }
 
-impl StddevPop {
-    /// Create a new STDDEV aggregate function
+impl VariancePop {
+    /// Create a new VAR_POP aggregate function
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         name: impl Into<String>,
         data_type: DataType,
     ) -> Self {
-        // the result of stddev just support FLOAT64 and Decimal data type.
+        // the result of variance just support FLOAT64 data type.
         assert!(matches!(data_type, DataType::Float64));
         Self {
             name: name.into(),
@@ -117,7 +123,7 @@ impl StddevPop {
     }
 }
 
-impl AggregateExpr for StddevPop {
+impl AggregateExpr for VariancePop {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
         self
@@ -128,7 +134,9 @@ impl AggregateExpr for StddevPop {
     }
 
     fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(StddevAccumulator::try_new(StatsType::Population)?))
+        Ok(Box::new(VarianceAccumulator::try_new(
+            StatsType::Population,
+        )?))
     }
 
     fn state_fields(&self) -> Result<Vec<Field>> {
@@ -159,55 +167,128 @@ impl AggregateExpr for StddevPop {
         &self.name
     }
 }
-/// An accumulator to compute the average
+
+/// An accumulator to compute variance
+/// The algrithm used is an online implementation and numerically stable. It is based on this paper:
+/// Welford, B. P. (1962). "Note on a method for calculating corrected sums of squares and products".
+/// Technometrics. 4 (3): 419–420. doi:10.2307/1266577. JSTOR 1266577.
+///
+/// The algorithm has been analyzed here:
+/// Ling, Robert F. (1974). "Comparison of Several Algorithms for Computing Sample Means and Variances".
+/// Journal of the American Statistical Association. 69 (348): 859–866. doi:10.2307/2286154. JSTOR 2286154.
+
 #[derive(Debug)]
-pub struct StddevAccumulator {
-    variance: VarianceAccumulator,
+pub struct VarianceAccumulator {
+    m2: f64,
+    mean: f64,
+    count: u64,
+    stats_type: StatsType,
 }
 
-impl StddevAccumulator {
-    /// Creates a new `StddevAccumulator`
+impl VarianceAccumulator {
+    /// Creates a new `VarianceAccumulator`
     pub fn try_new(s_type: StatsType) -> Result<Self> {
         Ok(Self {
-            variance: VarianceAccumulator::try_new(s_type)?,
+            m2: 0_f64,
+            mean: 0_f64,
+            count: 0_u64,
+            stats_type: s_type,
         })
     }
 
+    pub fn get_count(&self) -> u64 {
+        self.count
+    }
+
+    pub fn get_mean(&self) -> f64 {
+        self.mean
+    }
+
     pub fn get_m2(&self) -> f64 {
-        self.variance.get_m2()
+        self.m2
     }
 }
 
-impl Accumulator for StddevAccumulator {
+impl Accumulator for VarianceAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
-            ScalarValue::from(self.variance.get_count()),
-            ScalarValue::from(self.variance.get_mean()),
-            ScalarValue::from(self.variance.get_m2()),
+            ScalarValue::from(self.count),
+            ScalarValue::from(self.mean),
+            ScalarValue::from(self.m2),
         ])
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        self.variance.update_batch(values)
+        let values = &cast(&values[0], &DataType::Float64)?;
+        let arr = values
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .iter()
+            .flatten();
+
+        for value in arr {
+            let new_count = self.count + 1;
+            let delta1 = value - self.mean;
+            let new_mean = delta1 / new_count as f64 + self.mean;
+            let delta2 = value - new_mean;
+            let new_m2 = self.m2 + delta1 * delta2;
+
+            self.count += 1;
+            self.mean = new_mean;
+            self.m2 = new_m2;
+        }
+
+        Ok(())
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        self.variance.merge_batch(states)
+        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let means = states[1].as_any().downcast_ref::<Float64Array>().unwrap();
+        let m2s = states[2].as_any().downcast_ref::<Float64Array>().unwrap();
+
+        for i in 0..counts.len() {
+            let c = counts.value(i);
+            if c == 0_u64 {
+                continue;
+            }
+            let new_count = self.count + c;
+            let new_mean = self.mean * self.count as f64 / new_count as f64
+                + means.value(i) * c as f64 / new_count as f64;
+            let delta = self.mean - means.value(i);
+            let new_m2 = self.m2
+                + m2s.value(i)
+                + delta * delta * self.count as f64 * c as f64 / new_count as f64;
+
+            self.count = new_count;
+            self.mean = new_mean;
+            self.m2 = new_m2;
+        }
+        Ok(())
     }
 
     fn evaluate(&self) -> Result<ScalarValue> {
-        let variance = self.variance.evaluate()?;
-        match variance {
-            ScalarValue::Float64(e) => {
-                if e == None {
-                    Ok(ScalarValue::Float64(None))
+        let count = match self.stats_type {
+            StatsType::Population => self.count,
+            StatsType::Sample => {
+                if self.count > 0 {
+                    self.count - 1
                 } else {
-                    Ok(ScalarValue::Float64(e.map(|f| f.sqrt())))
+                    self.count
                 }
             }
-            _ => Err(DataFusionError::Internal(
-                "Variance should be f64".to_string(),
-            )),
+        };
+
+        if count <= 1 {
+            return Err(DataFusionError::Internal(
+                "At least two values are needed to calculate variance".to_string(),
+            ));
+        }
+
+        if self.count == 0 {
+            Ok(ScalarValue::Float64(None))
+        } else {
+            Ok(ScalarValue::Float64(Some(self.m2 / count as f64)))
         }
     }
 }
@@ -222,99 +303,100 @@ mod tests {
     use datafusion_common::Result;
 
     #[test]
-    fn stddev_f64_1() -> Result<()> {
+    fn variance_f64_1() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64, 2_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
-            StddevPop,
-            ScalarValue::from(0.5_f64),
+            VariancePop,
+            ScalarValue::from(0.25_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_f64_2() -> Result<()> {
-        let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
-        generic_test_op!(
-            a,
-            DataType::Float64,
-            StddevPop,
-            ScalarValue::from(0.7760297817881877),
-            DataType::Float64
-        )
-    }
-
-    #[test]
-    fn stddev_f64_3() -> Result<()> {
+    fn variance_f64_2() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
-            StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
+            VariancePop,
+            ScalarValue::from(2_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_f64_4() -> Result<()> {
+    fn variance_f64_3() -> Result<()> {
+        let a: ArrayRef =
+            Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
+        generic_test_op!(
+            a,
+            DataType::Float64,
+            Variance,
+            ScalarValue::from(2.5_f64),
+            DataType::Float64
+        )
+    }
+
+    #[test]
+    fn variance_f64_4() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from(vec![1.1_f64, 2_f64, 3_f64]));
         generic_test_op!(
             a,
             DataType::Float64,
-            Stddev,
-            ScalarValue::from(0.9504384952922168),
+            Variance,
+            ScalarValue::from(0.9033333333333333_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_i32() -> Result<()> {
+    fn variance_i32() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5]));
         generic_test_op!(
             a,
             DataType::Int32,
-            StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
+            VariancePop,
+            ScalarValue::from(2_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_u32() -> Result<()> {
+    fn variance_u32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
         generic_test_op!(
             a,
             DataType::UInt32,
-            StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
+            VariancePop,
+            ScalarValue::from(2.0f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_f32() -> Result<()> {
+    fn variance_f32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
         generic_test_op!(
             a,
             DataType::Float32,
-            StddevPop,
-            ScalarValue::from(std::f64::consts::SQRT_2),
+            VariancePop,
+            ScalarValue::from(2_f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn test_stddev_1_input() -> Result<()> {
+    fn test_variance_1_input() -> Result<()> {
         let a: ArrayRef = Arc::new(Float64Array::from(vec![1_f64]));
         let schema = Schema::new(vec![Field::new("a", DataType::Float64, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
-        let agg = Arc::new(Stddev::new(
+        let agg = Arc::new(Variance::new(
             col("a", &schema)?,
             "bla".to_string(),
             DataType::Float64,
@@ -326,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn stddev_i32_with_nulls() -> Result<()> {
+    fn variance_i32_with_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![
             Some(1),
             None,
@@ -337,19 +419,19 @@ mod tests {
         generic_test_op!(
             a,
             DataType::Int32,
-            StddevPop,
-            ScalarValue::from(1.479019945774904),
+            VariancePop,
+            ScalarValue::from(2.1875f64),
             DataType::Float64
         )
     }
 
     #[test]
-    fn stddev_i32_all_nulls() -> Result<()> {
+    fn variance_i32_all_nulls() -> Result<()> {
         let a: ArrayRef = Arc::new(Int32Array::from(vec![None, None]));
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
 
-        let agg = Arc::new(Stddev::new(
+        let agg = Arc::new(Variance::new(
             col("a", &schema)?,
             "bla".to_string(),
             DataType::Float64,
@@ -361,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn stddev_f64_merge_1() -> Result<()> {
+    fn variance_f64_merge_1() -> Result<()> {
         let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64]));
         let b = Arc::new(Float64Array::from(vec![4_f64, 5_f64]));
 
@@ -370,26 +452,26 @@ mod tests {
         let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
         let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
 
-        let agg1 = Arc::new(StddevPop::new(
+        let agg1 = Arc::new(VariancePop::new(
             col("a", &schema)?,
             "bla".to_string(),
             DataType::Float64,
         ));
 
-        let agg2 = Arc::new(StddevPop::new(
+        let agg2 = Arc::new(VariancePop::new(
             col("a", &schema)?,
             "bla".to_string(),
             DataType::Float64,
         ));
 
         let actual = merge(&batch1, &batch2, agg1, agg2)?;
-        assert!(actual == ScalarValue::from(std::f64::consts::SQRT_2));
+        assert!(actual == ScalarValue::from(2_f64));
 
         Ok(())
     }
 
     #[test]
-    fn stddev_f64_merge_2() -> Result<()> {
+    fn variance_f64_merge_2() -> Result<()> {
         let a = Arc::new(Float64Array::from(vec![1_f64, 2_f64, 3_f64, 4_f64, 5_f64]));
         let b = Arc::new(Float64Array::from(vec![None]));
 
@@ -398,20 +480,20 @@ mod tests {
         let batch1 = RecordBatch::try_new(Arc::new(schema.clone()), vec![a])?;
         let batch2 = RecordBatch::try_new(Arc::new(schema.clone()), vec![b])?;
 
-        let agg1 = Arc::new(StddevPop::new(
+        let agg1 = Arc::new(VariancePop::new(
             col("a", &schema)?,
             "bla".to_string(),
             DataType::Float64,
         ));
 
-        let agg2 = Arc::new(StddevPop::new(
+        let agg2 = Arc::new(VariancePop::new(
             col("a", &schema)?,
             "bla".to_string(),
             DataType::Float64,
         ));
 
         let actual = merge(&batch1, &batch2, agg1, agg2)?;
-        assert!(actual == ScalarValue::from(std::f64::consts::SQRT_2));
+        assert!(actual == ScalarValue::from(2_f64));
 
         Ok(())
     }

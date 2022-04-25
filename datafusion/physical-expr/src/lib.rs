@@ -15,28 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 
-mod aggregate_expr;
+pub mod aggregate;
 pub mod array_expressions;
-pub mod coercion_rule;
 pub mod conditional_expressions;
 #[cfg(feature = "crypto_expressions")]
 pub mod crypto_expressions;
 pub mod datetime_expressions;
 pub mod expressions;
 mod functions;
-mod hyperloglog;
 pub mod math_expressions;
 mod physical_expr;
 #[cfg(feature = "regex_expressions")]
 pub mod regex_expressions;
 mod sort_expr;
 pub mod string_expressions;
-mod tdigest;
 #[cfg(feature = "unicode_expressions")]
 pub mod unicode_expressions;
 pub mod window;
 
-pub use aggregate_expr::AggregateExpr;
+pub use aggregate::AggregateExpr;
 pub use functions::ScalarFunctionExpr;
 pub use physical_expr::PhysicalExpr;
 pub use sort_expr::PhysicalSortExpr;
