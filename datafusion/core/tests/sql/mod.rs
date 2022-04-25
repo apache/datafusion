@@ -46,6 +46,9 @@ use datafusion::{
 };
 use datafusion::{execution::context::SessionContext, physical_plan::displayable};
 use datafusion_expr::Volatility;
+use std::fs::File;
+use std::io::Write;
+use tempfile::TempDir;
 
 /// A macro to assert that some particular line contains two substrings
 ///
@@ -554,6 +557,98 @@ async fn execute_to_batches(ctx: &SessionContext, sql: &str) -> Vec<RecordBatch>
 /// `result[row][column]`
 async fn execute(ctx: &SessionContext, sql: &str) -> Vec<Vec<String>> {
     result_vec(&execute_to_batches(ctx, sql).await)
+}
+
+/// Execute SQL and return results
+async fn execute_with_partition(
+    sql: &str,
+    partition_count: usize,
+) -> Result<Vec<RecordBatch>> {
+    let tmp_dir = TempDir::new()?;
+    let ctx = create_ctx_with_partition(&tmp_dir, partition_count).await?;
+    plan_and_collect(&ctx, sql).await
+}
+
+/// Generate a partitioned CSV file and register it with an execution context
+async fn create_ctx_with_partition(
+    tmp_dir: &TempDir,
+    partition_count: usize,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::with_config(SessionConfig::new().with_target_partitions(8));
+
+    let schema = populate_csv_partitions(tmp_dir, partition_count, ".csv")?;
+
+    // register csv file with the execution context
+    ctx.register_csv(
+        "test",
+        tmp_dir.path().to_str().unwrap(),
+        CsvReadOptions::new().schema(&schema),
+    )
+    .await?;
+
+    Ok(ctx)
+}
+
+/// Generate CSV partitions within the supplied directory
+fn populate_csv_partitions(
+    tmp_dir: &TempDir,
+    partition_count: usize,
+    file_extension: &str,
+) -> Result<SchemaRef> {
+    // define schema for data source (csv file)
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::UInt32, false),
+        Field::new("c2", DataType::UInt64, false),
+        Field::new("c3", DataType::Boolean, false),
+    ]));
+
+    // generate a partitioned file
+    for partition in 0..partition_count {
+        let filename = format!("partition-{}.{}", partition, file_extension);
+        let file_path = tmp_dir.path().join(&filename);
+        let mut file = File::create(file_path)?;
+
+        // generate some data
+        for i in 0..=10 {
+            let data = format!("{},{},{}\n", partition, i, i % 2 == 0);
+            file.write_all(data.as_bytes())?;
+        }
+    }
+
+    Ok(schema)
+}
+
+/// Return a new table which provide this decimal column
+pub fn table_with_decimal() -> Arc<dyn TableProvider> {
+    let batch_decimal = make_decimal();
+    let schema = batch_decimal.schema();
+    let partitions = vec![vec![batch_decimal]];
+    Arc::new(MemTable::try_new(schema, partitions).unwrap())
+}
+
+fn make_decimal() -> RecordBatch {
+    let mut decimal_builder = DecimalBuilder::new(20, 10, 3);
+    for i in 110000..110010 {
+        decimal_builder.append_value(i as i128).unwrap();
+    }
+    for i in 100000..100010 {
+        decimal_builder.append_value(-i as i128).unwrap();
+    }
+    let array = decimal_builder.finish();
+    let schema = Schema::new(vec![Field::new("c1", array.data_type().clone(), true)]);
+    RecordBatch::try_new(Arc::new(schema), vec![Arc::new(array)]).unwrap()
+}
+
+/// Return a RecordBatch with a single Int32 array with values (0..sz)
+pub fn make_partition(sz: i32) -> RecordBatch {
+    let seq_start = 0;
+    let seq_end = sz;
+    let values = (seq_start..seq_end).collect::<Vec<_>>();
+    let schema = Arc::new(Schema::new(vec![Field::new("i", DataType::Int32, true)]));
+    let arr = Arc::new(Int32Array::from(values));
+    let arr = arr as ArrayRef;
+
+    RecordBatch::try_new(schema, vec![arr]).unwrap()
 }
 
 /// Specialised String representation
