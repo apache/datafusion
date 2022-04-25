@@ -51,7 +51,6 @@ use crate::logical_plan::{
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 use datafusion_common::ToDFSchema;
-use datafusion_expr::logical_plan::Subquery;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -529,13 +528,6 @@ impl LogicalPlanBuilder {
             input: Arc::new(self.plan.clone()),
             alias: alias.to_string(),
             schema,
-        })))
-    }
-
-    /// Apply an EXISTS subquery expression
-    pub fn exists(&self, subquery: &LogicalPlan) -> Result<Self> {
-        Ok(Self::from(LogicalPlan::Subquery(Subquery {
-            subquery: Arc::new(subquery.clone()),
         })))
     }
 
@@ -1210,6 +1202,7 @@ pub(crate) fn expand_qualified_wildcard(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
     use crate::test::test_table_scan_with_name;
@@ -1360,9 +1353,7 @@ mod tests {
 
         let outer_query = LogicalPlanBuilder::from(bar)
             .project(vec![col("a")])?
-            .filter(Expr::Exists(Subquery {
-                subquery: Arc::new(subquery),
-            }))?
+            .filter(exists(subquery))?
             .build()?;
 
         let expected = "Filter: EXISTS (\
