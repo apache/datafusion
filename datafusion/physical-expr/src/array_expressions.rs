@@ -59,7 +59,7 @@ macro_rules! array {
     }};
 }
 
-fn array_array(args: &[&dyn Array]) -> Result<ArrayRef> {
+fn array_array(args: &[ArrayRef]) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return Err(DataFusionError::Internal(
@@ -90,18 +90,12 @@ fn array_array(args: &[&dyn Array]) -> Result<ArrayRef> {
 
 /// put values in an array.
 pub fn array(values: &[ColumnarValue]) -> Result<ColumnarValue> {
-    let arrays: Vec<&dyn Array> = values
-        .iter()
-        .map(|value| {
-            if let ColumnarValue::Array(value) = value {
-                Ok(value.as_ref())
-            } else {
-                Err(DataFusionError::NotImplemented(
-                    "Array is not implemented for scalar values.".to_string(),
-                ))
-            }
-        })
-        .collect::<Result<_>>()?;
-
-    Ok(ColumnarValue::Array(array_array(&arrays)?))
+    let mut arrays: Vec<ArrayRef> = vec![];
+    for x in values {
+        match x {
+            ColumnarValue::Array(array) => arrays.push(array.clone()),
+            ColumnarValue::Scalar(scalar) => arrays.push(scalar.to_array().clone()),
+        }
+    }
+    Ok(ColumnarValue::Array(array_array(arrays.as_slice())?))
 }
