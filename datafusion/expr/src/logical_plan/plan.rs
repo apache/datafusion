@@ -1181,12 +1181,8 @@ impl Hash for Subquery {
 }
 
 impl PartialEq for Subquery {
-    fn eq(&self, _other: &Self) -> bool {
+    fn eq(&self, other: &Self) -> bool {
         false
-    }
-
-    fn ne(&self, _other: &Self) -> bool {
-        true
     }
 }
 
