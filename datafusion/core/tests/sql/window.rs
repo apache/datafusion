@@ -142,3 +142,159 @@ async fn csv_query_window_with_partition_by_order_by() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn window() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT \
+        c1, \
+        c2, \
+        SUM(c2) OVER (), \
+        COUNT(c2) OVER (), \
+        MAX(c2) OVER (), \
+        MIN(c2) OVER (), \
+        AVG(c2) OVER () \
+        FROM test \
+        ORDER BY c1, c2 \
+        LIMIT 5",
+        4,
+    )
+    .await?;
+    // result in one batch, although e.g. having 2 batches do not change
+    // result semantics, having a len=1 assertion upfront keeps surprises
+    // at bay
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        "| c1 | c2 | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
+        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        "| 0  | 1  | 220          | 40             | 10           | 1            | 5.5          |",
+        "| 0  | 2  | 220          | 40             | 10           | 1            | 5.5          |",
+        "| 0  | 3  | 220          | 40             | 10           | 1            | 5.5          |",
+        "| 0  | 4  | 220          | 40             | 10           | 1            | 5.5          |",
+        "| 0  | 5  | 220          | 40             | 10           | 1            | 5.5          |",
+        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+    ];
+
+    // window function shall respect ordering
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_order_by() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT \
+        c1, \
+        c2, \
+        ROW_NUMBER() OVER (ORDER BY c1, c2), \
+        FIRST_VALUE(c2) OVER (ORDER BY c1, c2), \
+        LAST_VALUE(c2) OVER (ORDER BY c1, c2), \
+        NTH_VALUE(c2, 2) OVER (ORDER BY c1, c2), \
+        SUM(c2) OVER (ORDER BY c1, c2), \
+        COUNT(c2) OVER (ORDER BY c1, c2), \
+        MAX(c2) OVER (ORDER BY c1, c2), \
+        MIN(c2) OVER (ORDER BY c1, c2), \
+        AVG(c2) OVER (ORDER BY c1, c2) \
+        FROM test \
+        ORDER BY c1, c2 \
+        LIMIT 5",
+        4,
+    )
+    .await?;
+    // result in one batch, although e.g. having 2 batches do not change
+    // result semantics, having a len=1 assertion upfront keeps surprises
+    // at bay
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----+----+--------------+----------------------+---------------------+-----------------------------+--------------+----------------+--------------+--------------+--------------+",
+        "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(test.c2) | LAST_VALUE(test.c2) | NTH_VALUE(test.c2,Int64(2)) | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
+        "+----+----+--------------+----------------------+---------------------+-----------------------------+--------------+----------------+--------------+--------------+--------------+",
+        "| 0  | 1  | 1            | 1                    | 1                   |                             | 1            | 1              | 1            | 1            | 1            |",
+        "| 0  | 2  | 2            | 1                    | 2                   | 2                           | 3            | 2              | 2            | 1            | 1.5          |",
+        "| 0  | 3  | 3            | 1                    | 3                   | 2                           | 6            | 3              | 3            | 1            | 2            |",
+        "| 0  | 4  | 4            | 1                    | 4                   | 2                           | 10           | 4              | 4            | 1            | 2.5          |",
+        "| 0  | 5  | 5            | 1                    | 5                   | 2                           | 15           | 5              | 5            | 1            | 3            |",
+        "+----+----+--------------+----------------------+---------------------+-----------------------------+--------------+----------------+--------------+--------------+--------------+",
+    ];
+
+    // window function shall respect ordering
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_partition_by() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT \
+        c1, \
+        c2, \
+        SUM(c2) OVER (PARTITION BY c2), \
+        COUNT(c2) OVER (PARTITION BY c2), \
+        MAX(c2) OVER (PARTITION BY c2), \
+        MIN(c2) OVER (PARTITION BY c2), \
+        AVG(c2) OVER (PARTITION BY c2) \
+        FROM test \
+        ORDER BY c1, c2 \
+        LIMIT 5",
+        4,
+    )
+    .await?;
+
+    let expected = vec![
+        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        "| c1 | c2 | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
+        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+        "| 0  | 1  | 4            | 4              | 1            | 1            | 1            |",
+        "| 0  | 2  | 8            | 4              | 2            | 2            | 2            |",
+        "| 0  | 3  | 12           | 4              | 3            | 3            | 3            |",
+        "| 0  | 4  | 16           | 4              | 4            | 4            | 4            |",
+        "| 0  | 5  | 20           | 4              | 5            | 5            | 5            |",
+        "+----+----+--------------+----------------+--------------+--------------+--------------+",
+    ];
+
+    // window function shall respect ordering
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn window_partition_by_order_by() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT \
+        c1, \
+        c2, \
+        ROW_NUMBER() OVER (PARTITION BY c2 ORDER BY c1), \
+        FIRST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+        LAST_VALUE(c2 + c1) OVER (PARTITION BY c2 ORDER BY c1), \
+        NTH_VALUE(c2 + c1, 1) OVER (PARTITION BY c2 ORDER BY c1), \
+        SUM(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+        COUNT(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+        MAX(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+        MIN(c2) OVER (PARTITION BY c2 ORDER BY c1), \
+        AVG(c2) OVER (PARTITION BY c2 ORDER BY c1) \
+        FROM test \
+        ORDER BY c1, c2 \
+        LIMIT 5",
+        4,
+    )
+    .await?;
+
+    let expected = vec![
+        "+----+----+--------------+--------------------------------+-------------------------------+---------------------------------------+--------------+----------------+--------------+--------------+--------------+",
+        "| c1 | c2 | ROW_NUMBER() | FIRST_VALUE(test.c2 + test.c1) | LAST_VALUE(test.c2 + test.c1) | NTH_VALUE(test.c2 + test.c1,Int64(1)) | SUM(test.c2) | COUNT(test.c2) | MAX(test.c2) | MIN(test.c2) | AVG(test.c2) |",
+        "+----+----+--------------+--------------------------------+-------------------------------+---------------------------------------+--------------+----------------+--------------+--------------+--------------+",
+        "| 0  | 1  | 1            | 1                              | 1                             | 1                                     | 1            | 1              | 1            | 1            | 1            |",
+        "| 0  | 2  | 1            | 2                              | 2                             | 2                                     | 2            | 1              | 2            | 2            | 2            |",
+        "| 0  | 3  | 1            | 3                              | 3                             | 3                                     | 3            | 1              | 3            | 3            | 3            |",
+        "| 0  | 4  | 1            | 4                              | 4                             | 4                                     | 4            | 1              | 4            | 4            | 4            |",
+        "| 0  | 5  | 1            | 5                              | 5                             | 5                                     | 5            | 1              | 5            | 5            | 5            |",
+        "+----+----+--------------+--------------------------------+-------------------------------+---------------------------------------+--------------+----------------+--------------+--------------+--------------+",
+    ];
+
+    // window function shall respect ordering
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
