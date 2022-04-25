@@ -15,9 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Define coercion rules for different Expr type.
-//!
-//! Aggregate function rule
-//! Binary operation rule
+//! Aggregates functionalities
 
-pub mod aggregate_rule;
+pub use datafusion_expr::AggregateFunction;
+pub use datafusion_physical_expr::expressions::create_aggregate_expr;
