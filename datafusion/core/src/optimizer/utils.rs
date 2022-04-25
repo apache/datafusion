@@ -225,16 +225,12 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::Subquery(Subquery { .. }) => {
-            // let schema = inputs[0].schema().as_ref().clone().into();
-            // let schema =
-            //     DFSchemaRef::new(DFSchema::try_from_qualified_schema(alias, &schema)?);
-            // Ok(LogicalPlan::Subquery(Subquery {
-            //     subquery
-            //     input: Arc::new(inputs[0].clone()),
-            //     schema,
-            // }))
-            Err(DataFusionError::Plan("not implemented".to_string()))
+        LogicalPlan::Subquery(Subquery { subquery }) => {
+            let subquery =
+                LogicalPlanBuilder::from(inputs[0].as_ref().clone()).build()?;
+            Ok(LogicalPlan::Subquery(Subquery {
+                subquery: Arc::new(subquery),
+            }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
             let schema = inputs[0].schema().as_ref().clone().into();
