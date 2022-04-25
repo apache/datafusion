@@ -1115,43 +1115,7 @@ fn compare_join_arrays(
                 TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
                 TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
             },
-            DataType::Date32 => {
-                let left_array =
-                    left_array.as_any().downcast_ref::<Date32Array>().unwrap();
-                let right_array =
-                    right_array.as_any().downcast_ref::<Date32Array>().unwrap();
-                match (left_array.is_null(left), right_array.is_null(right)) {
-                    (false, false) => {
-                        let left_value = &left_array.value(left);
-                        let right_value = &right_array.value(right);
-                        res = left_value.partial_cmp(right_value).unwrap();
-                        if sort_options.descending {
-                            res = res.reverse();
-                        }
-                    }
-                    (true, false) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Less
-                        } else {
-                            Ordering::Greater
-                        };
-                    }
-                    (false, true) => {
-                        res = if sort_options.nulls_first {
-                            Ordering::Greater
-                        } else {
-                            Ordering::Less
-                        };
-                    }
-                    _ => {
-                        res = if null_equals_null {
-                            Ordering::Equal
-                        } else {
-                            Ordering::Less
-                        };
-                    }
-                }
-            }
+            DataType::Date32 => compare_value!(Date32Array),
             DataType::Date64 => compare_value!(Date64Array),
             _ => {
                 return Err(ArrowError::NotYetImplemented(
