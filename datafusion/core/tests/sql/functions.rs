@@ -144,6 +144,17 @@ async fn query_array() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_array_scalar() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let sql = "SELECT array(1, 2, 3);";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["[1, 2, 3]"]];
+    assert_eq!(expected, actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn coalesce_static_empty_value() -> Result<()> {
     let ctx = SessionContext::new();
     let sql = "SELECT COALESCE('', 'test')";

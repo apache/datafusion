@@ -1391,6 +1391,23 @@ impl ScalarValue {
                 }
                 Self::Struct(Some(Box::new(field_values)), Box::new(fields.clone()))
             }
+            DataType::FixedSizeList(nested_type, _len) => {
+                let list_array =
+                    array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                let value = match list_array.is_null(index) {
+                    true => None,
+                    false => {
+                        let nested_array = list_array.value(index);
+                        let scalar_vec = (0..nested_array.len())
+                            .map(|i| ScalarValue::try_from_array(&nested_array, i))
+                            .collect::<Result<Vec<_>>>()?;
+                        Some(scalar_vec)
+                    }
+                };
+                let value = value.map(Box::new);
+                let data_type = Box::new(nested_type.data_type().clone());
+                ScalarValue::List(value, data_type)
+            }
             other => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a scalar from array of type \"{:?}\"",
