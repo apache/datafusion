@@ -1020,3 +1020,110 @@ async fn left_join_should_not_panic_with_empty_side() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn left_join_using_2() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT t1.c1, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+        1,
+    )
+    .await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 0  | 1  |",
+        "| 0  | 2  |",
+        "| 0  | 3  |",
+        "| 0  | 4  |",
+        "| 0  | 5  |",
+        "| 0  | 6  |",
+        "| 0  | 7  |",
+        "| 0  | 8  |",
+        "| 0  | 9  |",
+        "| 0  | 10 |",
+        "+----+----+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_using_join_key_projection() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 USING (c2) ORDER BY t2.c2",
+        1,
+    )
+    .await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----+----+----+",
+        "| c1 | c2 | c2 |",
+        "+----+----+----+",
+        "| 0  | 1  | 1  |",
+        "| 0  | 2  | 2  |",
+        "| 0  | 3  | 3  |",
+        "| 0  | 4  | 4  |",
+        "| 0  | 5  | 5  |",
+        "| 0  | 6  | 6  |",
+        "| 0  | 7  | 7  |",
+        "| 0  | 8  | 8  |",
+        "| 0  | 9  | 9  |",
+        "| 0  | 10 | 10 |",
+        "+----+----+----+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn left_join_2() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT t1.c1, t1.c2, t2.c2 FROM test t1 JOIN test t2 ON t1.c2 = t2.c2 ORDER BY t1.c2",
+        1,
+    )
+        .await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+----+----+----+",
+        "| c1 | c2 | c2 |",
+        "+----+----+----+",
+        "| 0  | 1  | 1  |",
+        "| 0  | 2  | 2  |",
+        "| 0  | 3  | 3  |",
+        "| 0  | 4  | 4  |",
+        "| 0  | 5  | 5  |",
+        "| 0  | 6  | 6  |",
+        "| 0  | 7  | 7  |",
+        "| 0  | 8  | 8  |",
+        "| 0  | 9  | 9  |",
+        "| 0  | 10 | 10 |",
+        "+----+----+----+",
+    ];
+
+    assert_batches_eq!(expected, &results);
+    Ok(())
+}
+
+#[tokio::test]
+async fn join_partitioned() -> Result<()> {
+    // self join on partition id (workaround for duplicate column name)
+    let results = execute_with_partition(
+        "SELECT 1 FROM test JOIN (SELECT c1 AS id1 FROM test) AS a ON c1=id1",
+        4,
+    )
+    .await?;
+
+    assert_eq!(
+        results.iter().map(|b| b.num_rows()).sum::<usize>(),
+        4 * 10 * 10
+    );
+
+    Ok(())
+}
