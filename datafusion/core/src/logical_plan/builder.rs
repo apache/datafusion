@@ -1353,7 +1353,7 @@ mod tests {
 
         let outer_query = LogicalPlanBuilder::from(bar)
             .project(vec![col("a")])?
-            .filter(exists(subquery))?
+            .filter(exists(Arc::new(subquery)))?
             .build()?;
 
         let expected = "Filter: EXISTS (\

@@ -225,9 +225,8 @@ pub fn from_plan(
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
         }
-        LogicalPlan::Subquery(Subquery { subquery }) => {
-            let subquery =
-                LogicalPlanBuilder::from(inputs[0].as_ref().clone()).build()?;
+        LogicalPlan::Subquery(_) => {
+            let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
             Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(subquery),
             }))

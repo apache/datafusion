@@ -183,10 +183,8 @@ pub fn approx_percentile_cont_with_weight(
 }
 
 /// Create an EXISTS subquery expression
-pub fn exists(subquery: LogicalPlan) -> Expr {
-    Expr::Exists(Subquery {
-        subquery: Arc::new(subquery),
-    })
+pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
+    Expr::Exists(Subquery { subquery })
 }
 
 // TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
