@@ -804,3 +804,306 @@ async fn aggregate_timestamps_avg() -> Result<()> {
     assert_eq!(results.to_string(), "Error during planning: The function Avg does not support inputs of type Timestamp(Nanosecond, None).");
     Ok(())
 }
+
+#[tokio::test]
+async fn aggregate_decimal_min() -> Result<()> {
+    let ctx = SessionContext::new();
+    // the data type of c1 is decimal(10,3)
+    ctx.register_table("d_table", table_with_decimal()).unwrap();
+    let result = plan_and_collect(&ctx, "select min(c1) from d_table")
+        .await
+        .unwrap();
+    let expected = vec![
+        "+-----------------+",
+        "| MIN(d_table.c1) |",
+        "+-----------------+",
+        "| -100.009        |",
+        "+-----------------+",
+    ];
+    assert_eq!(
+        &DataType::Decimal(10, 3),
+        result[0].schema().field(0).data_type()
+    );
+    assert_batches_sorted_eq!(expected, &result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_decimal_max() -> Result<()> {
+    let ctx = SessionContext::new();
+    // the data type of c1 is decimal(10,3)
+    ctx.register_table("d_table", table_with_decimal()).unwrap();
+
+    let result = plan_and_collect(&ctx, "select max(c1) from d_table")
+        .await
+        .unwrap();
+    let expected = vec![
+        "+-----------------+",
+        "| MAX(d_table.c1) |",
+        "+-----------------+",
+        "| 110.009         |",
+        "+-----------------+",
+    ];
+    assert_eq!(
+        &DataType::Decimal(10, 3),
+        result[0].schema().field(0).data_type()
+    );
+    assert_batches_sorted_eq!(expected, &result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_decimal_sum() -> Result<()> {
+    let ctx = SessionContext::new();
+    // the data type of c1 is decimal(10,3)
+    ctx.register_table("d_table", table_with_decimal()).unwrap();
+    let result = plan_and_collect(&ctx, "select sum(c1) from d_table")
+        .await
+        .unwrap();
+    let expected = vec![
+        "+-----------------+",
+        "| SUM(d_table.c1) |",
+        "+-----------------+",
+        "| 100.000         |",
+        "+-----------------+",
+    ];
+    assert_eq!(
+        &DataType::Decimal(20, 3),
+        result[0].schema().field(0).data_type()
+    );
+    assert_batches_sorted_eq!(expected, &result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_decimal_avg() -> Result<()> {
+    let ctx = SessionContext::new();
+    // the data type of c1 is decimal(10,3)
+    ctx.register_table("d_table", table_with_decimal()).unwrap();
+    let result = plan_and_collect(&ctx, "select avg(c1) from d_table")
+        .await
+        .unwrap();
+    let expected = vec![
+        "+-----------------+",
+        "| AVG(d_table.c1) |",
+        "+-----------------+",
+        "| 5.0000000       |",
+        "+-----------------+",
+    ];
+    assert_eq!(
+        &DataType::Decimal(14, 7),
+        result[0].schema().field(0).data_type()
+    );
+    assert_batches_sorted_eq!(expected, &result);
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate() -> Result<()> {
+    let results = execute_with_partition("SELECT SUM(c1), SUM(c2) FROM test", 4).await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+--------------+--------------+",
+        "| SUM(test.c1) | SUM(test.c2) |",
+        "+--------------+--------------+",
+        "| 60           | 220          |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_empty() -> Result<()> {
+    // The predicate on this query purposely generates no results
+    let results =
+        execute_with_partition("SELECT SUM(c1), SUM(c2) FROM test where c1 > 100000", 4)
+            .await
+            .unwrap();
+
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+--------------+--------------+",
+        "| SUM(test.c1) | SUM(test.c2) |",
+        "+--------------+--------------+",
+        "|              |              |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_avg() -> Result<()> {
+    let results = execute_with_partition("SELECT AVG(c1), AVG(c2) FROM test", 4).await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+--------------+--------------+",
+        "| AVG(test.c1) | AVG(test.c2) |",
+        "+--------------+--------------+",
+        "| 1.5          | 5.5          |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_max() -> Result<()> {
+    let results = execute_with_partition("SELECT MAX(c1), MAX(c2) FROM test", 4).await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+--------------+--------------+",
+        "| MAX(test.c1) | MAX(test.c2) |",
+        "+--------------+--------------+",
+        "| 3            | 10           |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_min() -> Result<()> {
+    let results = execute_with_partition("SELECT MIN(c1), MIN(c2) FROM test", 4).await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+--------------+--------------+",
+        "| MIN(test.c1) | MIN(test.c2) |",
+        "+--------------+--------------+",
+        "| 0            | 1            |",
+        "+--------------+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_grouped() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT c1, SUM(c2) FROM test GROUP BY c1", 4).await?;
+
+    let expected = vec![
+        "+----+--------------+",
+        "| c1 | SUM(test.c2) |",
+        "+----+--------------+",
+        "| 0  | 55           |",
+        "| 1  | 55           |",
+        "| 2  | 55           |",
+        "| 3  | 55           |",
+        "+----+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_grouped_avg() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT c1, AVG(c2) FROM test GROUP BY c1", 4).await?;
+
+    let expected = vec![
+        "+----+--------------+",
+        "| c1 | AVG(test.c2) |",
+        "+----+--------------+",
+        "| 0  | 5.5          |",
+        "| 1  | 5.5          |",
+        "| 2  | 5.5          |",
+        "| 3  | 5.5          |",
+        "+----+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_grouped_empty() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT c1, AVG(c2) FROM test WHERE c1 = 123 GROUP BY c1",
+        4,
+    )
+    .await?;
+
+    let expected = vec![
+        "+----+--------------+",
+        "| c1 | AVG(test.c2) |",
+        "+----+--------------+",
+        "+----+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_grouped_max() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT c1, MAX(c2) FROM test GROUP BY c1", 4).await?;
+
+    let expected = vec![
+        "+----+--------------+",
+        "| c1 | MAX(test.c2) |",
+        "+----+--------------+",
+        "| 0  | 10           |",
+        "| 1  | 10           |",
+        "| 2  | 10           |",
+        "| 3  | 10           |",
+        "+----+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_grouped_min() -> Result<()> {
+    let results =
+        execute_with_partition("SELECT c1, MIN(c2) FROM test GROUP BY c1", 4).await?;
+
+    let expected = vec![
+        "+----+--------------+",
+        "| c1 | MIN(test.c2) |",
+        "+----+--------------+",
+        "| 0  | 1            |",
+        "| 1  | 1            |",
+        "| 2  | 1            |",
+        "| 3  | 1            |",
+        "+----+--------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_avg_add() -> Result<()> {
+    let results = execute_with_partition(
+        "SELECT AVG(c1), AVG(c1) + 1, AVG(c1) + 2, 1 + AVG(c1) FROM test",
+        4,
+    )
+    .await?;
+    assert_eq!(results.len(), 1);
+
+    let expected = vec![
+        "+--------------+----------------------------+----------------------------+----------------------------+",
+        "| AVG(test.c1) | AVG(test.c1) Plus Int64(1) | AVG(test.c1) Plus Int64(2) | Int64(1) Plus AVG(test.c1) |",
+        "+--------------+----------------------------+----------------------------+----------------------------+",
+        "| 1.5          | 2.5                        | 3.5                        | 2.5                        |",
+        "+--------------+----------------------------+----------------------------+----------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}

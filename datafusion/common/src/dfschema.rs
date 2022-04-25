@@ -152,13 +152,30 @@ impl DFSchema {
         &self.fields[i]
     }
 
+    #[deprecated(since = "8.0.0", note = "please use `index_of_column_by_name` instead")]
     /// Find the index of the column with the given unqualified name
     pub fn index_of(&self, name: &str) -> Result<usize> {
         for i in 0..self.fields.len() {
             if self.fields[i].name() == name {
                 return Ok(i);
+            } else {
+                // Now that `index_of` is deprecated an error is thrown if
+                // a fully qualified field name is provided.
+                match &self.fields[i].qualifier {
+                    Some(qualifier) => {
+                        if (qualifier.to_owned() + "." + self.fields[i].name()) == name {
+                            return Err(DataFusionError::Plan(format!(
+                                "Fully qualified field name '{}' was supplied to `index_of` \
+                                which is deprecated. Please use `index_of_column_by_name` instead",
+                                name
+                            )));
+                        }
+                    }
+                    None => (),
+                }
             }
         }
+
         Err(DataFusionError::Plan(format!(
             "No field named '{}'. Valid fields are {}.",
             name,
@@ -166,7 +183,7 @@ impl DFSchema {
         )))
     }
 
-    fn index_of_column_by_name(
+    pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&str>,
         name: &str,
@@ -716,10 +733,13 @@ mod tests {
         Ok(())
     }
 
+    #[allow(deprecated)]
     #[test]
     fn helpful_error_messages() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let expected_help = "Valid fields are \'t1.c0\', \'t1.c1\'.";
+        // Pertinent message parts
+        let expected_err_msg = "Fully qualified field name \'t1.c0\'";
         assert!(schema
             .field_with_qualified_name("x", "y")
             .unwrap_err()
@@ -735,6 +755,11 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains(expected_help));
+        assert!(schema
+            .index_of("t1.c0")
+            .unwrap_err()
+            .to_string()
+            .contains(expected_err_msg));
         Ok(())
     }
 
