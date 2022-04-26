@@ -48,9 +48,9 @@ use datafusion::physical_plan::common::batch_byte_size;
 use datafusion::physical_plan::empty::EmptyExec;
 
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::file_format::{CsvExec, ParquetExec};
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::hash_aggregate::HashAggregateExec;
 use datafusion::physical_plan::hash_join::HashJoinExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
@@ -151,7 +151,7 @@ fn build_exec_plan_diagram(
     id: &mut AtomicUsize,
     draw_entity: bool,
 ) -> Result<usize> {
-    let operator_str = if plan.as_any().downcast_ref::<HashAggregateExec>().is_some() {
+    let operator_str = if plan.as_any().downcast_ref::<AggregateExec>().is_some() {
         "HashAggregateExec"
     } else if plan.as_any().downcast_ref::<SortExec>().is_some() {
         "SortExec"

@@ -241,10 +241,10 @@ mod tests {
 
     use super::*;
     use crate::datasource::listing::PartitionedFile;
+    use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use crate::physical_plan::expressions::{col, PhysicalSortExpr};
     use crate::physical_plan::file_format::{FileScanConfig, ParquetExec};
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use crate::physical_plan::projection::ProjectionExec;
     use crate::physical_plan::sorts::sort::SortExec;
@@ -303,12 +303,12 @@ mod tests {
     fn hash_aggregate(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         let schema = schema();
         Arc::new(
-            HashAggregateExec::try_new(
+            AggregateExec::try_new(
                 AggregateMode::Final,
                 vec![],
                 vec![],
                 Arc::new(
-                    HashAggregateExec::try_new(
+                    AggregateExec::try_new(
                         AggregateMode::Partial,
                         vec![],
                         vec![],

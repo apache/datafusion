@@ -34,6 +34,7 @@ use crate::logical_plan::{
 };
 use crate::logical_plan::{Limit, Values};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
@@ -41,7 +42,6 @@ use crate::physical_plan::expressions::{
     CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
 };
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
@@ -524,7 +524,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let initial_aggr = Arc::new(HashAggregateExec::try_new(
+                    let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
@@ -566,7 +566,7 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    Ok(Arc::new(HashAggregateExec::try_new(
+                    Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_group
                             .iter()
@@ -1839,7 +1839,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
             .as_any()
-            .downcast_ref::<HashAggregateExec>()
+            .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
             "SUM(aggregate_test_100.c2)",

@@ -276,8 +276,8 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::{protobuf, AsExecutionPlan, BallistaCodec};
+    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::hash_join::HashJoinExec;
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::physical_plan::{
@@ -346,14 +346,14 @@ mod test {
 
         // verify stage 0
         let stage0 = stages[0].children()[0].clone();
-        let partial_hash = downcast_exec!(stage0, HashAggregateExec);
+        let partial_hash = downcast_exec!(stage0, AggregateExec);
         assert!(*partial_hash.mode() == AggregateMode::Partial);
 
         // verify stage 1
         let stage1 = stages[1].children()[0].clone();
         let projection = downcast_exec!(stage1, ProjectionExec);
         let final_hash = projection.children()[0].clone();
-        let final_hash = downcast_exec!(final_hash, HashAggregateExec);
+        let final_hash = downcast_exec!(final_hash, AggregateExec);
         assert!(*final_hash.mode() == AggregateMode::FinalPartitioned);
         let coalesce = final_hash.children()[0].clone();
         let coalesce = downcast_exec!(coalesce, CoalesceBatchesExec);
@@ -514,7 +514,7 @@ order by
                 .partition_count()
         );
 
-        let hash_agg = downcast_exec!(input, HashAggregateExec);
+        let hash_agg = downcast_exec!(input, AggregateExec);
 
         let coalesce_batches = hash_agg.children()[0].clone();
         let coalesce_batches = downcast_exec!(coalesce_batches, CoalesceBatchesExec);
@@ -586,8 +586,8 @@ order by
         let partial_hash = stages[0].children()[0].clone();
         let partial_hash_serde = roundtrip_operator(partial_hash.clone())?;
 
-        let partial_hash = downcast_exec!(partial_hash, HashAggregateExec);
-        let partial_hash_serde = downcast_exec!(partial_hash_serde, HashAggregateExec);
+        let partial_hash = downcast_exec!(partial_hash, AggregateExec);
+        let partial_hash_serde = downcast_exec!(partial_hash_serde, AggregateExec);
 
         assert_eq!(
             format!("{:?}", partial_hash),

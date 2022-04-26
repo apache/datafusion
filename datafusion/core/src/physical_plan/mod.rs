@@ -555,7 +555,6 @@ pub use datafusion_physical_expr::expressions;
 pub mod file_format;
 pub mod filter;
 pub mod functions;
-pub mod hash_aggregate;
 pub mod hash_join;
 pub mod hash_utils;
 pub mod join_utils;

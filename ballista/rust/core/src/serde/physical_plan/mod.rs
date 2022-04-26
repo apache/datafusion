@@ -28,7 +28,8 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::logical_plan::FunctionRegistry;
-use datafusion::physical_plan::aggregates::create_aggregate_expr;
+use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::cross_join::CrossJoinExec;
@@ -39,7 +40,6 @@ use datafusion::physical_plan::file_format::{
     AvroExec, CsvExec, FileScanConfig, ParquetExec,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -391,7 +391,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(Arc::new(HashAggregateExec::try_new(
+                Ok(Arc::new(AggregateExec::try_new(
                     agg_mode,
                     group,
                     physical_aggr_expr,
@@ -730,7 +730,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 ))),
             })
-        } else if let Some(exec) = plan.downcast_ref::<HashAggregateExec>() {
+        } else if let Some(exec) = plan.downcast_ref::<AggregateExec>() {
             let groups = exec
                 .group_expr()
                 .iter()
@@ -1080,12 +1080,12 @@ mod roundtrip_tests {
         datasource::listing::PartitionedFile,
         logical_plan::{JoinType, Operator},
         physical_plan::{
+            aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
             expressions::{binary, col, lit, InListExpr, NotExpr},
             expressions::{Avg, Column, PhysicalSortExpr},
             file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
-            hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
             sorts::sort::SortExec,
@@ -1226,7 +1226,7 @@ mod roundtrip_tests {
             DataType::Float64,
         ))];
 
-        roundtrip_test(Arc::new(HashAggregateExec::try_new(
+        roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups.clone(),
             aggregates.clone(),
