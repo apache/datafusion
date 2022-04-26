@@ -216,6 +216,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::TableScan { .. }
         | LogicalPlan::Values(_)
         | LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::Subquery(_)
         | LogicalPlan::SubqueryAlias(_)
         | LogicalPlan::Limit(_)
         | LogicalPlan::CreateExternalTable(_)
@@ -458,6 +459,9 @@ impl ExprIdentifierVisitor<'_> {
             Expr::InList { negated, .. } => {
                 desc.push_str("InList-");
                 desc.push_str(&negated.to_string());
+            }
+            Expr::Exists(_) => {
+                desc.push_str("Exists-");
             }
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");

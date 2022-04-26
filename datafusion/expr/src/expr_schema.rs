@@ -100,6 +100,7 @@ impl ExprSchemable for Expr {
             }
             Expr::Not(_)
             | Expr::IsNull(_)
+            | Expr::Exists(_)
             | Expr::Between { .. }
             | Expr::InList { .. }
             | Expr::IsNotNull(_) => Ok(DataType::Boolean),
@@ -172,7 +173,7 @@ impl ExprSchemable for Expr {
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. } => Ok(true),
-            Expr::IsNull(_) | Expr::IsNotNull(_) => Ok(false),
+            Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::Exists(_) => Ok(false),
             Expr::BinaryExpr {
                 ref left,
                 ref right,
