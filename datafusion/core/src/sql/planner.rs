@@ -222,12 +222,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         }
     }
 
-    /// Generate a logic plan from an SQL query
+    /// Generate a logical plan from an SQL query
     pub fn query_to_plan(&self, query: Query) -> Result<LogicalPlan> {
         self.query_to_plan_with_alias(query, None, &mut HashMap::new(), None)
     }
 
-    /// Generate a logic plan from an SQL query
+    /// Generate a logical plan from a SQL subquery
     pub fn subquery_to_plan(
         &self,
         query: Query,
