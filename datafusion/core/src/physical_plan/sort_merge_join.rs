@@ -1115,6 +1115,8 @@ fn compare_join_arrays(
                 TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
                 TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
             },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
             _ => {
                 return Err(ArrowError::NotYetImplemented(
                     "Unsupported data type in sort merge join comparator".to_owned(),
@@ -1179,6 +1181,8 @@ fn is_join_arrays_equal(
                 TimeUnit::Microsecond => compare_value!(TimestampMicrosecondArray),
                 TimeUnit::Nanosecond => compare_value!(TimestampNanosecondArray),
             },
+            DataType::Date32 => compare_value!(Date32Array),
+            DataType::Date64 => compare_value!(Date64Array),
             _ => {
                 return Err(ArrowError::NotYetImplemented(
                     "Unsupported data type in sort merge join comparator".to_owned(),
@@ -1196,7 +1200,7 @@ fn is_join_arrays_equal(
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::Int32Array;
+    use arrow::array::{Date32Array, Date64Array, Int32Array};
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
@@ -1218,6 +1222,56 @@ mod tests {
         c: (&str, &Vec<i32>),
     ) -> Arc<dyn ExecutionPlan> {
         let batch = build_table_i32(a, b, c);
+        let schema = batch.schema();
+        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+    }
+
+    fn build_date_table(
+        a: (&str, &Vec<i32>),
+        b: (&str, &Vec<i32>),
+        c: (&str, &Vec<i32>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Date32, false),
+            Field::new(b.0, DataType::Date32, false),
+            Field::new(c.0, DataType::Date32, false),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Date32Array::from(a.1.clone())),
+                Arc::new(Date32Array::from(b.1.clone())),
+                Arc::new(Date32Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap();
+
+        let schema = batch.schema();
+        Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
+    }
+
+    fn build_date64_table(
+        a: (&str, &Vec<i64>),
+        b: (&str, &Vec<i64>),
+        c: (&str, &Vec<i64>),
+    ) -> Arc<dyn ExecutionPlan> {
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Date64, false),
+            Field::new(b.0, DataType::Date64, false),
+            Field::new(c.0, DataType::Date64, false),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Date64Array::from(a.1.clone())),
+                Arc::new(Date64Array::from(b.1.clone())),
+                Arc::new(Date64Array::from(c.1.clone())),
+            ],
+        )
+        .unwrap();
+
         let schema = batch.schema();
         Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap())
     }
@@ -1521,6 +1575,7 @@ mod tests {
         assert_batches_sorted_eq!(expected, &batches);
         Ok(())
     }
+
     #[tokio::test]
     async fn join_inner_output_two_batches() -> Result<()> {
         let left = build_table(
@@ -1743,6 +1798,72 @@ mod tests {
             "| 1 | 4 | 7 | 10 | 1 | 70 |",
             "| 2 | 5 | 8 | 20 | 2 | 80 |",
             "+---+---+---+----+---+----+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_date32() -> Result<()> {
+        let left = build_date_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![19107, 19108, 19108]), // this has a repetition
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_date_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![19107, 19108, 19109]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+
+        let expected = vec![
+            "+------------+------------+------------+------------+------------+------------+",
+            "| a1         | b1         | c1         | a2         | b1         | c2         |",
+            "+------------+------------+------------+------------+------------+------------+",
+            "| 1970-01-02 | 2022-04-25 | 1970-01-08 | 1970-01-11 | 2022-04-25 | 1970-03-12 |",
+            "| 1970-01-03 | 2022-04-26 | 1970-01-09 | 1970-01-21 | 2022-04-26 | 1970-03-22 |",
+            "| 1970-01-04 | 2022-04-26 | 1970-01-10 | 1970-01-21 | 2022-04-26 | 1970-03-22 |",
+            "+------------+------------+------------+------------+------------+------------+",
+        ];
+        assert_batches_sorted_eq!(expected, &batches);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_date64() -> Result<()> {
+        let left = build_date64_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![1650703441000, 1650903441000, 1650903441000]), // this has a repetition
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_date64_table(
+            ("a2", &vec![10, 20, 30]),
+            ("b1", &vec![1650703441000, 1650503441000, 1650903441000]),
+            ("c2", &vec![70, 80, 90]),
+        );
+
+        let on = vec![(
+            Column::new_with_schema("b1", &left.schema())?,
+            Column::new_with_schema("b1", &right.schema())?,
+        )];
+
+        let (_, batches) = join_collect(left, right, on, JoinType::Inner).await?;
+
+        let expected = vec![
+            "+------------+------------+------------+------------+------------+------------+",
+            "| a1         | b1         | c1         | a2         | b1         | c2         |",
+            "+------------+------------+------------+------------+------------+------------+",
+            "| 1970-01-01 | 2022-04-23 | 1970-01-01 | 1970-01-01 | 2022-04-23 | 1970-01-01 |",
+            "| 1970-01-01 | 2022-04-25 | 1970-01-01 | 1970-01-01 | 2022-04-25 | 1970-01-01 |",
+            "| 1970-01-01 | 2022-04-25 | 1970-01-01 | 1970-01-01 | 2022-04-25 | 1970-01-01 |",
+            "+------------+------------+------------+------------+------------+------------+",
         ];
         assert_batches_sorted_eq!(expected, &batches);
         Ok(())
