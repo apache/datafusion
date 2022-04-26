@@ -375,6 +375,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::AggregateUDF { .. }
             | Expr::ScalarVariable(_, _)
             | Expr::Column(_)
+            | Expr::Exists(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
             | Expr::Wildcard

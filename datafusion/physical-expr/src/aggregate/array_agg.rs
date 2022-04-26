@@ -17,7 +17,7 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use super::format_state_name;
+use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Field};

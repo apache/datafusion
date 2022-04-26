@@ -23,6 +23,27 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+pub(crate) mod approx_distinct;
+pub(crate) mod approx_median;
+pub(crate) mod approx_percentile_cont;
+pub(crate) mod approx_percentile_cont_with_weight;
+pub(crate) mod array_agg;
+pub(crate) mod average;
+pub(crate) mod coercion_rule;
+pub(crate) mod correlation;
+pub(crate) mod count;
+pub(crate) mod covariance;
+pub(crate) mod distinct_expressions;
+#[macro_use]
+pub(crate) mod min_max;
+pub mod build_in;
+mod hyperloglog;
+pub(crate) mod stats;
+pub(crate) mod stddev;
+pub(crate) mod sum;
+mod tdigest;
+pub(crate) mod variance;
+
 /// An aggregate expression that:
 /// * knows its resulting field
 /// * knows how to create its accumulator

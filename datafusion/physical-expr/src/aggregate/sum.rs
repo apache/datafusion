@@ -34,7 +34,7 @@ use arrow::{
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use super::format_state_name;
+use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::DecimalArray;
 
@@ -144,7 +144,7 @@ fn sum_decimal_batch(
 }
 
 // sums the array and returns a ScalarValue of its corresponding type.
-pub(super) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
+pub(crate) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
     Ok(match values.data_type() {
         DataType::Decimal(precision, scale) => {
             sum_decimal_batch(values, precision, scale)?
@@ -221,7 +221,7 @@ fn sum_decimal_with_diff_scale(
     }
 }
 
-pub(super) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     Ok(match (lhs, rhs) {
         (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
             let max_precision = p1.max(p2);

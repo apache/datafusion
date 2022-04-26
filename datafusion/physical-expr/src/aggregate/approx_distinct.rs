@@ -17,8 +17,9 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use super::format_state_name;
-use crate::{hyperloglog::HyperLogLog, AggregateExpr, PhysicalExpr};
+use super::hyperloglog::HyperLogLog;
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryOffsetSizeTrait, GenericBinaryArray, GenericStringArray,
     PrimitiveArray, StringOffsetSizeTrait,

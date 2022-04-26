@@ -106,6 +106,7 @@ impl ExprVisitable for Expr {
             Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
+            | Expr::Exists(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. } => Ok(visitor),
             Expr::BinaryExpr { left, right, .. } => {

@@ -1202,8 +1202,10 @@ pub(crate) fn expand_qualified_wildcard(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
+    use crate::test::test_table_scan_with_name;
 
     use super::super::{col, lit, sum};
     use super::*;
@@ -1335,6 +1337,31 @@ mod tests {
         \n  TableScan: employee_csv projection=Some([3, 4])";
 
         assert_eq!(expected, format!("{:?}", plan));
+
+        Ok(())
+    }
+
+    #[test]
+    fn exists_subquery() -> Result<()> {
+        let foo = test_table_scan_with_name("foo")?;
+        let bar = test_table_scan_with_name("bar")?;
+
+        let subquery = LogicalPlanBuilder::from(foo)
+            .project(vec![col("a")])?
+            .filter(col("a").eq(col("bar.a")))?
+            .build()?;
+
+        let outer_query = LogicalPlanBuilder::from(bar)
+            .project(vec![col("a")])?
+            .filter(exists(Arc::new(subquery)))?
+            .build()?;
+
+        let expected = "Filter: EXISTS (\
+            Subquery: Filter: #foo.a = #bar.a\
+            \n  Projection: #foo.a\
+            \n    TableScan: foo projection=None)\
+        \n  Projection: #bar.a\n    TableScan: bar projection=None";
+        assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
     }

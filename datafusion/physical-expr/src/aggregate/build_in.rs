@@ -26,11 +26,10 @@
 //! * Signature: see `Signature`
 //! * Return type: a function `(arg_types) -> return_type`. E.g. for min, ([f32]) -> f32, ([f64]) -> f64.
 
-use super::aggregate_rule::coerce_exprs;
-use super::{AggregateExpr, PhysicalExpr};
-use crate::error::{DataFusionError, Result};
-use crate::physical_plan::expressions;
+use crate::aggregate::coercion_rule::coerce_exprs;
+use crate::{expressions, AggregateExpr, PhysicalExpr};
 use arrow::datatypes::Schema;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::aggregate_function;
 use datafusion_expr::aggregate_function::return_type;
 pub use datafusion_expr::AggregateFunction;
@@ -257,13 +256,13 @@ pub fn create_aggregate_expr(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::physical_plan::expressions::{
+    use crate::expressions::{
         ApproxDistinct, ApproxMedian, ApproxPercentileCont, ArrayAgg, Avg, Correlation,
         Count, Covariance, DistinctArrayAgg, DistinctCount, Max, Min, Stddev, Sum,
         Variance,
     };
-    use crate::{error::Result, scalar::ScalarValue};
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::aggregate_function::NUMERICS;
 
     #[test]
