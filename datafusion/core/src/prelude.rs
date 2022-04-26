@@ -36,5 +36,5 @@ pub use crate::logical_plan::{
     exists, in_list, initcap, left, length, lit, lower, lpad, ltrim, max, md5, min, now,
     octet_length, random, regexp_match, regexp_replace, repeat, replace, reverse, right,
     rpad, rtrim, sha224, sha256, sha384, sha512, split_part, starts_with, strpos, substr,
-    sum, to_hex, translate, trim, upper, Column, JoinType, Partitioning,
+    sum, to_hex, translate, trim, upper, Column, Expr, JoinType, Partitioning,
 };
