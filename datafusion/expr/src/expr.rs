@@ -450,8 +450,14 @@ impl fmt::Debug for Expr {
             Expr::Negative(expr) => write!(f, "(- {:?})", expr),
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
-            Expr::Exists { subquery, negated: true } => write!(f, "NOT EXISTS ({:?})", subquery),
-            Expr::Exists { subquery, negated: false } => write!(f, "EXISTS ({:?})", subquery),
+            Expr::Exists {
+                subquery,
+                negated: true,
+            } => write!(f, "NOT EXISTS ({:?})", subquery),
+            Expr::Exists {
+                subquery,
+                negated: false,
+            } => write!(f, "EXISTS ({:?})", subquery),
             Expr::InSubquery {
                 expr,
                 subquery,
