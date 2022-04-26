@@ -371,7 +371,17 @@ where
             Expr::Column { .. }
             | Expr::Literal(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Exists(_) => Ok(expr.clone()),
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_) => Ok(expr.clone()),
+            Expr::InSubquery {
+                expr: nested_expr,
+                subquery,
+                negated,
+            } => Ok(Expr::InSubquery {
+                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                subquery: subquery.clone(),
+                negated: *negated,
+            }),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
             Expr::GetIndexedField { expr, key } => Ok(Expr::GetIndexedField {
