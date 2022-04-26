@@ -4276,13 +4276,18 @@ mod tests {
             WHERE last_name = p.last_name \
             AND state = p.state)";
 
-        let expected = "Projection: #p.id\
-        \n  Filter: EXISTS (Subquery: Projection: #person.first_name\
+        let subquery_expected = "Subquery: Projection: #person.first_name\
         \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
-        \n    TableScan: person projection=None)\
+        \n    TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #p.id\
+        \n  Filter: EXISTS ({})\
         \n    SubqueryAlias: p\
-        \n      TableScan: person projection=None";
-        quick_test(sql, expected);
+        \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
     }
 
     #[test]
