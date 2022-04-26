@@ -17,84 +17,65 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-mod approx_distinct;
-mod approx_percentile_cont;
-mod approx_percentile_cont_with_weight;
-mod array_agg;
-mod average;
 #[macro_use]
 mod binary;
 mod case;
 mod cast;
 mod column;
-mod count;
-mod cume_dist;
 mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
-mod lead_lag;
 mod literal;
-#[macro_use]
-mod min_max;
-mod approx_median;
-mod correlation;
-mod covariance;
-mod distinct_expressions;
 mod negative;
 mod not;
-mod nth_value;
 mod nullif;
-mod rank;
-mod row_number;
-mod stats;
-mod stddev;
-mod sum;
 mod try_cast;
-mod variance;
 
 /// Module with some convenient methods used in expression building
 pub mod helpers {
-    pub use super::min_max::{max, min};
+    pub use crate::aggregate::min_max::{max, min};
 }
 
-pub use approx_distinct::ApproxDistinct;
-pub use approx_median::ApproxMedian;
-pub use approx_percentile_cont::ApproxPercentileCont;
-pub use approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
-pub use array_agg::ArrayAgg;
-pub use average::{Avg, AvgAccumulator};
+pub use crate::aggregate::approx_distinct::ApproxDistinct;
+pub use crate::aggregate::approx_median::ApproxMedian;
+pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
+pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
+pub use crate::aggregate::array_agg::ArrayAgg;
+pub use crate::aggregate::average::{Avg, AvgAccumulator};
+pub use crate::aggregate::build_in::create_aggregate_expr;
+pub use crate::aggregate::correlation::Correlation;
+pub use crate::aggregate::count::Count;
+pub use crate::aggregate::covariance::{Covariance, CovariancePop};
+pub use crate::aggregate::distinct_expressions::{DistinctArrayAgg, DistinctCount};
+pub use crate::aggregate::min_max::{Max, Min};
+pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
+pub use crate::aggregate::stats::StatsType;
+pub use crate::aggregate::stddev::{Stddev, StddevPop};
+pub use crate::aggregate::sum::Sum;
+pub use crate::aggregate::variance::{Variance, VariancePop};
+
+pub use crate::window::cume_dist::cume_dist;
+pub use crate::window::lead_lag::{lag, lead};
+pub use crate::window::nth_value::NthValue;
+pub use crate::window::rank::{dense_rank, percent_rank, rank};
+pub use crate::window::row_number::RowNumber;
+
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 pub use column::{col, Column};
-pub use correlation::Correlation;
-pub use count::Count;
-pub use covariance::{Covariance, CovariancePop};
-pub use cume_dist::cume_dist;
-
-pub use distinct_expressions::{DistinctArrayAgg, DistinctCount};
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
-pub use lead_lag::{lag, lead};
 pub use literal::{lit, Literal};
-pub use min_max::{Max, Min};
-pub use min_max::{MaxAccumulator, MinAccumulator};
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
-pub use nth_value::NthValue;
 pub use nullif::nullif_func;
-pub use rank::{dense_rank, percent_rank, rank};
-pub use row_number::RowNumber;
-pub use stats::StatsType;
-pub use stddev::{Stddev, StddevPop};
-pub use sum::Sum;
 pub use try_cast::{try_cast, TryCastExpr};
-pub use variance::{Variance, VariancePop};
 
 /// returns the name of the state
 pub fn format_state_name(name: &str, state_name: &str) -> String {
@@ -103,7 +84,7 @@ pub fn format_state_name(name: &str, state_name: &str) -> String {
 pub use crate::PhysicalSortExpr;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::AggregateExpr;
     use arrow::record_batch::RecordBatch;
     use datafusion_common::Result;

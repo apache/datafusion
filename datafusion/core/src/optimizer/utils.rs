@@ -19,8 +19,9 @@
 
 use super::optimizer::OptimizerRule;
 use crate::execution::context::ExecutionProps;
-use crate::logical_plan::plan::{
-    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, SubqueryAlias, Window,
+use datafusion_expr::logical_plan::{
+    Aggregate, Analyze, Extension, Filter, Join, Projection, Sort, Subquery,
+    SubqueryAlias, Window,
 };
 
 use crate::logical_plan::{
@@ -84,6 +85,7 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. }
             | Expr::InList { .. }
+            | Expr::Exists(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
             | Expr::GetIndexedField { .. } => {}
@@ -222,6 +224,12 @@ pub fn from_plan(
             let left = inputs[0].clone();
             let right = &inputs[1];
             LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        }
+        LogicalPlan::Subquery(_) => {
+            let subquery = LogicalPlanBuilder::from(inputs[0].clone()).build()?;
+            Ok(LogicalPlan::Subquery(Subquery {
+                subquery: Arc::new(subquery),
+            }))
         }
         LogicalPlan::SubqueryAlias(SubqueryAlias { alias, .. }) => {
             let schema = inputs[0].schema().as_ref().clone().into();
@@ -363,6 +371,7 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
             }
             Ok(expr_list)
         }
+        Expr::Exists(_) => Ok(vec![]),
         Expr::Wildcard { .. } => Err(DataFusionError::Internal(
             "Wildcard expressions are not valid in a logical query plan".to_owned(),
         )),
@@ -497,6 +506,7 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
         Expr::Column(_)
         | Expr::Literal(_)
         | Expr::InList { .. }
+        | Expr::Exists(_)
         | Expr::ScalarVariable(_, _) => Ok(expr.clone()),
         Expr::Sort {
             asc, nulls_first, ..

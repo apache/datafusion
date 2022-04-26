@@ -368,9 +368,10 @@ where
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
-            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_, _) => {
-                Ok(expr.clone())
-            }
+            Expr::Column { .. }
+            | Expr::Literal(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Exists(_) => Ok(expr.clone()),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
             Expr::GetIndexedField { expr, key } => Ok(Expr::GetIndexedField {

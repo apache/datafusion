@@ -18,7 +18,9 @@
 //! Functions for creating logical expressions
 
 use crate::conditional_expressions::CaseBuilder;
-use crate::{aggregate_function, built_in_function, lit, Expr, Operator};
+use crate::logical_plan::Subquery;
+use crate::{aggregate_function, built_in_function, lit, Expr, LogicalPlan, Operator};
+use std::sync::Arc;
 
 /// Create a column expression based on a qualified or unqualified column name
 pub fn col(ident: &str) -> Expr {
@@ -178,6 +180,11 @@ pub fn approx_percentile_cont_with_weight(
         distinct: false,
         args: vec![expr, weight_expr, percentile],
     }
+}
+
+/// Create an EXISTS subquery expression
+pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
+    Expr::Exists(Subquery { subquery })
 }
 
 // TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
