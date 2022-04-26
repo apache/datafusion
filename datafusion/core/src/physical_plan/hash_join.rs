@@ -954,7 +954,7 @@ fn produce_from_matched(
 }
 
 impl HashJoinStream {
-    /// Separate implementation function that unpins the [`CrossJoinStream`] so
+    /// Separate implementation function that unpins the [`HashJoinStream`] so
     /// that partial borrows work correctly
     fn poll_next_impl(
         &mut self,
