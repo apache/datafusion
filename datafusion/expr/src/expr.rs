@@ -461,14 +461,13 @@ impl fmt::Debug for Expr {
             Expr::InSubquery {
                 expr,
                 subquery,
-                negated,
-            } => {
-                if *negated {
-                    write!(f, "{:?} NOT IN ({:?})", expr, subquery)
-                } else {
-                    write!(f, "{:?} IN ({:?})", expr, subquery)
-                }
-            }
+                negated: true,
+            } => write!(f, "{:?} NOT IN ({:?})", expr, subquery),
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated: false,
+            } => write!(f, "{:?} IN ({:?})", expr, subquery),
             Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
             Expr::BinaryExpr { left, op, right } => {
                 write!(f, "{:?} {} {:?}", left, op, right)
