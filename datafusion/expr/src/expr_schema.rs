@@ -177,10 +177,8 @@ impl ExprSchemable for Expr {
             | Expr::WindowFunction { .. }
             | Expr::AggregateFunction { .. }
             | Expr::AggregateUDF { .. } => Ok(true),
-            Expr::IsNull(_)
-            | Expr::IsNotNull(_)
-            | Expr::Exists { .. }
-            | Expr::InSubquery { .. } => Ok(false),
+            Expr::IsNull(_) | Expr::IsNotNull(_) | Expr::Exists { .. } => Ok(false),
+            Expr::InSubquery { expr, .. } => expr.nullable(input_schema),
             Expr::ScalarSubquery(subquery) => {
                 Ok(subquery.subquery.schema().field(0).is_nullable())
             }
