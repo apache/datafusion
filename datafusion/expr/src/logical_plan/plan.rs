@@ -22,7 +22,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::{Column, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
 ///! Logical plan types
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// A LogicalPlan represents the different types of relational
@@ -66,6 +67,8 @@ pub enum LogicalPlan {
     TableScan(TableScan),
     /// Produces no rows: An empty relation with an empty schema
     EmptyRelation(EmptyRelation),
+    /// Subquery
+    Subquery(Subquery),
     /// Aliased relation provides, or changes, the name of a relation.
     SubqueryAlias(SubqueryAlias),
     /// Produces the first `n` tuples from its input and discards the rest.
@@ -112,6 +115,7 @@ impl LogicalPlan {
             LogicalPlan::CrossJoin(CrossJoin { schema, .. }) => schema,
             LogicalPlan::Repartition(Repartition { input, .. }) => input.schema(),
             LogicalPlan::Limit(Limit { input, .. }) => input.schema(),
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.schema(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => schema,
             LogicalPlan::CreateExternalTable(CreateExternalTable { schema, .. }) => {
                 schema
@@ -161,6 +165,7 @@ impl LogicalPlan {
                 schemas.insert(0, schema);
                 schemas
             }
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => subquery.all_schemas(),
             LogicalPlan::SubqueryAlias(SubqueryAlias { schema, .. }) => {
                 vec![schema]
             }
@@ -225,6 +230,7 @@ impl LogicalPlan {
             // plans without expressions
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::Subquery(_)
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::Limit(_)
             | LogicalPlan::CreateExternalTable(_)
@@ -254,6 +260,7 @@ impl LogicalPlan {
             LogicalPlan::Join(Join { left, right, .. }) => vec![left, right],
             LogicalPlan::CrossJoin(CrossJoin { left, right, .. }) => vec![left, right],
             LogicalPlan::Limit(Limit { input, .. }) => vec![input],
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
             LogicalPlan::Union(Union { inputs, .. }) => inputs.iter().collect(),
@@ -392,6 +399,9 @@ impl LogicalPlan {
                 true
             }
             LogicalPlan::Limit(Limit { input, .. }) => input.accept(visitor)?,
+            LogicalPlan::Subquery(Subquery { subquery, .. }) => {
+                subquery.accept(visitor)?
+            }
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
                 input.accept(visitor)?
             }
@@ -766,6 +776,9 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
+                    LogicalPlan::Subquery(Subquery { subquery, .. }) => {
+                        write!(f, "Subquery: {:?}", subquery)
+                    }
                     LogicalPlan::SubqueryAlias(SubqueryAlias { ref alias, .. }) => {
                         write!(f, "SubqueryAlias: {}", alias)
                     }
@@ -1139,6 +1152,38 @@ pub struct Join {
     pub schema: DFSchemaRef,
     /// If null_equals_null is true, null == null else null != null
     pub null_equals_null: bool,
+}
+
+/// Subquery
+#[derive(Clone)]
+pub struct Subquery {
+    /// The subquery
+    pub subquery: Arc<LogicalPlan>,
+}
+
+impl Debug for Subquery {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Subquery: {:?}", self.subquery)
+    }
+}
+
+impl Hash for Subquery {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.finish();
+    }
+
+    fn hash_slice<H: Hasher>(_data: &[Self], state: &mut H)
+    where
+        Self: Sized,
+    {
+        state.finish();
+    }
+}
+
+impl PartialEq for Subquery {
+    fn eq(&self, _other: &Self) -> bool {
+        false
+    }
 }
 
 /// Logical partitioning schemes supported by the repartition operator.
