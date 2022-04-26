@@ -18,13 +18,12 @@
 //! Defines the cross join plan for loading the left side of the cross join
 //! and producing batches in parallel for the right partitions
 
-use futures::{ready, FutureExt, StreamExt};
+use futures::{ready, StreamExt};
 use futures::{Stream, TryStreamExt};
-use parking_lot::Mutex;
 use std::{any::Any, sync::Arc, task::Poll};
 
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::error::{ArrowError, Result as ArrowResult};
+use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 
 use super::expressions::PhysicalSortExpr;
@@ -34,7 +33,6 @@ use super::{
 };
 use crate::{error::Result, scalar::ScalarValue};
 use async_trait::async_trait;
-use futures::future::{BoxFuture, Shared};
 use std::time::Instant;
 
 use super::{
@@ -42,15 +40,11 @@ use super::{
     RecordBatchStream, SendableRecordBatchStream,
 };
 use crate::execution::context::TaskContext;
+use crate::physical_plan::join_utils::{OnceAsync, OnceFut};
 use log::debug;
 
 /// Data of the left side
 type JoinLeftData = RecordBatch;
-
-/// Type of future for collecting left data
-///
-/// [`Shared`] allows potentially multiple output streams to poll the same future to completion
-type JoinLeftFut = Shared<BoxFuture<'static, Arc<Result<RecordBatch>>>>;
 
 /// executes partitions in parallel and combines them into a set of
 /// partitions by combining all values from the left with all values on the right
@@ -63,11 +57,7 @@ pub struct CrossJoinExec {
     /// The schema once the join is applied
     schema: SchemaRef,
     /// Build-side data
-    ///
-    /// Ideally we would instantiate this in the constructor, avoiding the need for a
-    /// mutex and an option, but we need the [`TaskContext`] to evaluate the left
-    /// side data, which is only provided in [`ExecutionPlan::execute`]
-    left_fut: Mutex<Option<JoinLeftFut>>,
+    left_fut: OnceAsync<JoinLeftData>,
 }
 
 impl CrossJoinExec {
@@ -97,7 +87,7 @@ impl CrossJoinExec {
             left,
             right,
             schema,
-            left_fut: Mutex::new(None),
+            left_fut: Default::default(),
         })
     }
 
@@ -188,19 +178,11 @@ impl ExecutionPlan for CrossJoinExec {
 
         let left_fut = self
             .left_fut
-            .lock()
-            .get_or_insert_with(|| {
-                load_left_input(self.left.clone(), context)
-                    .map(Arc::new)
-                    .boxed()
-                    .shared()
-            })
-            .clone();
+            .once(|| load_left_input(self.left.clone(), context));
 
         Ok(Box::pin(CrossJoinStream {
             schema: self.schema.clone(),
             left_fut,
-            left_result: None,
             right: stream,
             right_batch: Arc::new(parking_lot::Mutex::new(None)),
             left_index: 0,
@@ -303,9 +285,7 @@ struct CrossJoinStream {
     /// Input schema
     schema: Arc<Schema>,
     /// future for data from left side
-    left_fut: JoinLeftFut,
-    /// data from the left side
-    left_result: Option<Arc<Result<RecordBatch>>>,
+    left_fut: OnceFut<JoinLeftData>,
     /// right
     right: SendableRecordBatchStream,
     /// Current value on the left
@@ -375,21 +355,9 @@ impl CrossJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<ArrowResult<RecordBatch>>> {
-        let left_result = match &self.left_result {
-            Some(data) => data,
-            None => {
-                let result = ready!(self.left_fut.poll_unpin(cx));
-                self.left_result.insert(result)
-            }
-        };
-
-        let left_data = match left_result.as_ref() {
+        let left_data = match ready!(self.left_fut.get(cx)) {
             Ok(left_data) => left_data,
-            Err(e) => {
-                return Poll::Ready(Some(Err(ArrowError::ExternalError(
-                    e.to_string().into(),
-                ))))
-            }
+            Err(e) => return Poll::Ready(Some(Err(e))),
         };
 
         if left_data.num_rows() == 0 {

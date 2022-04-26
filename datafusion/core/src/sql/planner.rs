@@ -1903,16 +1903,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         negated: bool,
         input_schema: &DFSchema,
     ) -> Result<Expr> {
-        let exists = Expr::Exists(Subquery {
-            subquery: Arc::new(self.subquery_to_plan(subquery.clone(), input_schema)?),
-        });
-        if negated {
-            Err(DataFusionError::NotImplemented(
-                "NOT EXISTS is not supported yet".to_owned(),
-            ))
-        } else {
-            Ok(exists)
-        }
+        Ok(Expr::Exists {
+            subquery: Subquery {
+                subquery: Arc::new(
+                    self.subquery_to_plan(subquery.clone(), input_schema)?,
+                ),
+            },
+            negated,
+        })
     }
 
     fn function_args_to_expr(
