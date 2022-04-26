@@ -1398,7 +1398,7 @@ mod tests {
         let bar = test_table_scan_with_name("bar")?;
 
         let subquery = LogicalPlanBuilder::from(foo)
-            .project(vec![col("a")])?
+            .project(vec![col("b")])?
             .filter(col("a").eq(col("bar.a")))?
             .build()?;
 
@@ -1407,8 +1407,10 @@ mod tests {
             .project(vec![scalar_subquery(Arc::new(subquery))])?
             .build()?;
 
-        let expected =
-            "Projection: (ScalarSubquery TBD )\n  TableScan: bar projection=None";
+        let expected = "Projection: (Subquery: Filter: #foo.a = #bar.a\
+                \n  Projection: #foo.b\
+                \n    TableScan: foo projection=None)\
+            \n  TableScan: bar projection=None";
         assert_eq!(expected, format!("{:?}", outer_query));
 
         Ok(())
