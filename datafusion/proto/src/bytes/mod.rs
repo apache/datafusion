@@ -16,18 +16,17 @@
 // under the License.
 
 //! Serialization / Deserialization to Bytes
-use std::{collections::HashSet, sync::Arc};
-
 use crate::{from_proto::parse_expr, protobuf};
 use datafusion::{
     common::{DataFusionError, Result},
-    logical_expr::{AggregateUDF, ScalarUDF},
     logical_plan::{Expr, FunctionRegistry},
 };
 use prost::{bytes::BytesMut, Message};
 
 // Reexport Bytes which appears in the API
 pub use prost::bytes::Bytes;
+
+mod registry;
 
 /// Encodes an [`Expr`] into a stream of bytes. See
 /// [`deserialize_expr`] to convert a stream of bytes back to an Expr
@@ -61,7 +60,7 @@ pub trait Serializeable: Sized {
     /// back into an [`Expr']. This will error if there are any user
     /// defined functions, in which case use [`from_bytes_with_registry`]
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        Self::from_bytes_with_registry(bytes, &NoRegistry {})
+        Self::from_bytes_with_registry(bytes, &registry::NoRegistry {})
     }
 
     /// convert the output of serialize back into an Expr, given the
@@ -97,28 +96,5 @@ impl Serializeable for Expr {
         parse_expr(&protobuf, registry).map_err(|e| {
             DataFusionError::Plan(format!("Error parsing protobuf into Expr: {}", e))
         })
-    }
-}
-
-/// TODO Move this function registry into its own module
-///
-/// A default registry that does not have any user defined functions supplied
-struct NoRegistry {}
-
-impl FunctionRegistry for NoRegistry {
-    fn udfs(&self) -> HashSet<String> {
-        HashSet::new()
-    }
-
-    fn udf(&self, name: &str) -> Result<Arc<ScalarUDF>> {
-        Err(DataFusionError::Plan(
-            format!("No function registry provided to deserialize, so can not deserialize User Defined Function '{}'", name))
-        )
-    }
-
-    fn udaf(&self, name: &str) -> Result<Arc<AggregateUDF>> {
-        Err(DataFusionError::Plan(
-            format!("No function registry provided to deserialize, so can not deserialize User Defined Aggregate Function '{}'", name))
-        )
     }
 }
