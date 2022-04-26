@@ -48,12 +48,13 @@ pub use expr_fn::{
     abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
     avg, bit_length, btrim, case, ceil, character_length, chr, coalesce, col, concat,
     concat_expr, concat_ws, concat_ws_expr, cos, count, count_distinct, date_part,
-    date_trunc, digest, exists, exp, floor, in_list, initcap, left, length, ln, log10,
-    log2, lower, lpad, ltrim, max, md5, min, now, now_expr, nullif, octet_length, or,
-    random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
-    rtrim, sha224, sha256, sha384, sha512, signum, sin, split_part, sqrt, starts_with,
-    strpos, substr, sum, tan, to_hex, to_timestamp_micros, to_timestamp_millis,
-    to_timestamp_seconds, translate, trim, trunc, upper, when,
+    date_trunc, digest, exists, exp, floor, in_list, in_subquery, initcap, left, length,
+    ln, log10, log2, lower, lpad, ltrim, max, md5, min, not_exists, not_in_subquery, now,
+    now_expr, nullif, octet_length, or, random, regexp_match, regexp_replace, repeat,
+    replace, reverse, right, round, rpad, rtrim, scalar_subquery, sha224, sha256, sha384,
+    sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, sum, tan, to_hex,
+    to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate, trim,
+    trunc, upper, when,
 };
 pub use expr_schema::ExprSchemable;
 pub use function::{
