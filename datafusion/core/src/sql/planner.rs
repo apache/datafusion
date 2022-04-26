@@ -231,13 +231,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn subquery_to_plan(
         &self,
         query: Query,
-        outer_schema: &DFSchema,
+        outer_query_schema: &DFSchema,
     ) -> Result<LogicalPlan> {
         self.query_to_plan_with_alias(
             query,
             None,
             &mut HashMap::new(),
-            Some(outer_schema),
+            Some(outer_query_schema),
         )
     }
 
@@ -247,7 +247,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         query: Query,
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let set_expr = query.body;
         if let Some(with) = query.with {
@@ -267,12 +267,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     cte.query,
                     Some(cte.alias.name.value.clone()),
                     &mut ctes.clone(),
-                    outer_schema,
+                    outer_query_schema,
                 )?;
                 ctes.insert(cte.alias.name.value, logical_plan);
             }
         }
-        let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_schema)?;
+        let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_query_schema)?;
 
         let plan = self.order_by(plan, query.order_by)?;
 
@@ -284,10 +284,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         set_expr: SetExpr,
         alias: Option<String>,
         ctes: &mut HashMap<String, LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match set_expr {
-            SetExpr::Select(s) => self.select_to_plan(*s, ctes, alias, outer_schema),
+            SetExpr::Select(s) => {
+                self.select_to_plan(*s, ctes, alias, outer_query_schema)
+            }
             SetExpr::Values(v) => self.sql_values_to_plan(v),
             SetExpr::SetOperation {
                 op,
@@ -295,9 +297,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 right,
                 all,
             } => {
-                let left_plan = self.set_expr_to_plan(*left, None, ctes, outer_schema)?;
+                let left_plan =
+                    self.set_expr_to_plan(*left, None, ctes, outer_query_schema)?;
                 let right_plan =
-                    self.set_expr_to_plan(*right, None, ctes, outer_schema)?;
+                    self.set_expr_to_plan(*right, None, ctes, outer_query_schema)?;
                 match (op, all) {
                     (SetOperator::Union, true) => {
                         union_with_alias(left_plan, right_plan, alias)
@@ -448,13 +451,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         from: Vec<TableWithJoins>,
         ctes: &mut HashMap<String, LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<Vec<LogicalPlan>> {
         match from.len() {
             0 => Ok(vec![LogicalPlanBuilder::empty(true).build()?]),
             _ => from
                 .into_iter()
-                .map(|t| self.plan_table_with_joins(t, ctes, outer_schema))
+                .map(|t| self.plan_table_with_joins(t, ctes, outer_query_schema))
                 .collect::<Result<Vec<_>>>(),
         }
     }
@@ -463,9 +466,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         t: TableWithJoins,
         ctes: &mut HashMap<String, LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let left = self.create_relation(t.relation, ctes, outer_schema)?;
+        let left = self.create_relation(t.relation, ctes, outer_query_schema)?;
         match t.joins.len() {
             0 => Ok(left),
             _ => {
@@ -474,10 +477,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     left,
                     joins.next().unwrap(),
                     ctes,
-                    outer_schema,
+                    outer_query_schema,
                 )?;
                 for join in joins {
-                    left = self.parse_relation_join(left, join, ctes, outer_schema)?;
+                    left =
+                        self.parse_relation_join(left, join, ctes, outer_query_schema)?;
                 }
                 Ok(left)
             }
@@ -489,9 +493,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         left: LogicalPlan,
         join: Join,
         ctes: &mut HashMap<String, LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
-        let right = self.create_relation(join.relation, ctes, outer_schema)?;
+        let right = self.create_relation(join.relation, ctes, outer_query_schema)?;
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left)
@@ -658,7 +662,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         relation: TableFactor,
         ctes: &mut HashMap<String, LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table {
@@ -702,7 +706,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     *subquery,
                     alias.as_ref().map(|a| a.name.value.to_string()),
                     ctes,
-                    outer_schema,
+                    outer_query_schema,
                 )?;
                 (
                     project_with_alias(
@@ -718,7 +722,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 )
             }
             TableFactor::NestedJoin(table_with_joins) => (
-                self.plan_table_with_joins(*table_with_joins, ctes, outer_schema)?,
+                self.plan_table_with_joins(*table_with_joins, ctes, outer_query_schema)?,
                 None,
             ),
             // @todo Support TableFactory::TableFunction?
@@ -763,7 +767,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         selection: Option<SQLExpr>,
         plans: Vec<LogicalPlan>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         match selection {
             Some(predicate_expr) => {
@@ -774,7 +778,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
                 }
-                if let Some(outer) = outer_schema {
+                if let Some(outer) = outer_query_schema {
                     fields.extend_from_slice(outer.fields());
                     metadata.extend(outer.metadata().clone());
                 }
@@ -896,21 +900,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         select: Select,
         ctes: &mut HashMap<String, LogicalPlan>,
         alias: Option<String>,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<LogicalPlan> {
         // process `from` clause
-        let plans = self.plan_from_tables(select.from, ctes, outer_schema)?;
+        let plans = self.plan_from_tables(select.from, ctes, outer_query_schema)?;
         let empty_from = matches!(plans.first(), Some(LogicalPlan::EmptyRelation(_)));
 
         // process `where` clause
-        let plan = self.plan_selection(select.selection, plans, outer_schema)?;
+        let plan = self.plan_selection(select.selection, plans, outer_query_schema)?;
 
         // process the SELECT expressions, with wildcards expanded.
         let select_exprs = self.prepare_select_exprs(
             &plan,
             select.projection,
             empty_from,
-            outer_schema,
+            outer_query_schema,
         )?;
 
         // having and group by clause may reference aliases defined in select projection
@@ -1048,11 +1052,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         plan: &LogicalPlan,
         projection: Vec<SelectItem>,
         empty_from: bool,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<Vec<Expr>> {
         projection
             .into_iter()
-            .map(|expr| self.sql_select_to_rex(expr, plan, empty_from, outer_schema))
+            .map(|expr| {
+                self.sql_select_to_rex(expr, plan, empty_from, outer_query_schema)
+            })
             .flat_map(|result| match result {
                 Ok(vec) => vec.into_iter().map(Ok).collect(),
                 Err(err) => vec![Err(err)],
@@ -1247,9 +1253,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         sql: SelectItem,
         plan: &LogicalPlan,
         empty_from: bool,
-        outer_schema: Option<&DFSchema>,
+        outer_query_schema: Option<&DFSchema>,
     ) -> Result<Vec<Expr>> {
-        let input_schema = match outer_schema {
+        let input_schema = match outer_query_schema {
             Some(x) => {
                 let mut input_schema = plan.schema().as_ref().clone();
                 input_schema.merge(x);
@@ -4288,12 +4294,18 @@ mod tests {
             WHERE last_name = p.last_name \
             AND state = p.state)";
 
-        let expected = "Projection: #p.id\
-        \n  Filter: EXISTS (Subquery: Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
-        \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
-        \n    TableScan: person projection=None)\
-        \n    SubqueryAlias: p\
-        \n      TableScan: person projection=None";
-        quick_test(sql, expected);
+        let subquery_expected = "Subquery: Projection: #person.id, #person.first_name, \
+        #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
+            \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+            \n    TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #p.id\
+            \n  Filter: EXISTS ({})\
+            \n    SubqueryAlias: p\
+            \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
     }
 }
