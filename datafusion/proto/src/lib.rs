@@ -21,9 +21,8 @@ pub mod protobuf {
     include!(concat!(env!("OUT_DIR"), "/datafusion.rs"));
 }
 
+pub mod bytes;
 pub mod from_proto;
-/// Serialization / Deserialization API
-pub mod serde;
 pub mod to_proto;
 
 #[cfg(test)]

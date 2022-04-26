@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Serialization / Deserialization to Bytes
 use std::{collections::HashSet, sync::Arc};
 
 use crate::{from_proto::parse_expr, protobuf};
@@ -40,16 +41,16 @@ pub use prost::bytes::Bytes;
 /// ```
 /// use datafusion::prelude::*;
 /// use datafusion::logical_plan::Expr;
-/// use datafusion_proto::serde::Serializeable;
+/// use datafusion_proto::bytes::Serializeable;
 ///
 /// // Create a new `Expr` a < 32
 /// let expr = col("a").lt(lit(5i32));
 ///
 /// // Convert it to an opaque form
-/// let bytes = expr.serialize().unwrap();
+/// let bytes = expr.to_bytes().unwrap();
 ///
 /// // Decode bytes from somewhere (over network, etc.
-/// let decoded_expr = Expr::deserialize(&bytes).unwrap();
+/// let decoded_expr = Expr::from_bytes(&bytes).unwrap();
 /// assert_eq!(expr, decoded_expr);
 /// ```
 pub trait Serializeable: Sized {
