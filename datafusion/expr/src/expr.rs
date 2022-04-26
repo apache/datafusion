@@ -656,8 +656,10 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
-        Expr::Exists { .. } => Ok("EXISTS".to_string()),
-        Expr::InSubquery { .. } => Ok("IN".to_string()),
+        Expr::Exists { negated: true, .. } => Ok("NOT EXISTS".to_string()),
+        Expr::Exists { negated: false, .. } => Ok("EXISTS".to_string()),
+        Expr::InSubquery { negated: true, .. } => Ok("NOT IN".to_string()),
+        Expr::InSubquery { negated: false, .. } => Ok("IN".to_string()),
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
