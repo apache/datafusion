@@ -101,7 +101,15 @@ pub trait ObjectStore: Sync + Send + Debug {
     }
 
     /// Returns all the files in `prefix` if the `prefix` is already a leaf dir,
-    /// or all paths between the `prefix` and the first occurrence of the `delimiter` if it is provided.
+    /// or all paths between the `prefix` and the first occurrence of the `delimiter`
+    /// if it is provided.
+    ///
+    /// # Arguments
+    ///
+    ///  * `prefix` -
+    ///  * `delimiter` -
+    ///
+    /// # Example
     async fn list_dir(
         &self,
         prefix: &str,
@@ -116,7 +124,10 @@ pub trait ObjectStore: Sync + Send + Debug {
 
     /// Create directory, recursively if requested
     ///
-    /// If directory already exists, will return Ok
+    /// If directory already exists, will return Ok.
+    /// In many cases, object stores don't have a notion of directories, so this
+    /// might do nothing except check that a file with the same path doesn't
+    /// already exist.
     async fn create_dir(&self, path: &str, recursive: bool) -> Result<()>;
 
     /// Delete directory and its contents, recursively
@@ -138,7 +149,18 @@ pub trait ObjectStore: Sync + Send + Debug {
     /// If dest exists, source will replace it unless dest is a non-empty directory,
     /// in which case an [std::io::ErrorKind::AlreadyExists] or
     /// [std::io::ErrorKind::DirectoryNotEmpty] error will be returned
-    async fn rename(&self, source: &str, dest: &str) -> Result<()>;
+    ///
+    /// In many implementations, this will simply perform a copy and then delete
+    /// source.
+    async fn rename(&self, source: &str, dest: &str) -> Result<()> {
+        self.copy(source, dest).await?;
+        // if is_file {
+        //     self.remove_file(source).await
+        // } else {
+        //     self.remove_dir_all(source).await
+        // }
+        todo!();
+    }
 
     /// Copy a file or directory
     ///

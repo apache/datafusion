@@ -15,7 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Object store that represents the Local File System.
+//! Provides object store implementation [LocalFileSystem], which wraps 
+//! file system operations in tokio.
+//! 
+//! ```
+//! use tempfile::tempdir;
+//! use tokio::io::{AsyncRead, AsyncWrite};
+//! use future::StreamExt;
+//! use datafusion_data_access::object_store::ObjectStore;
+//! use datafusion_data_access::object_store::local::LocalFileSystem;
+//! 
+//! async {
+//!   let fs = LocalFileSystem;
+//!   let tmp_dir = tempdir()?.path();
+//!   let dir_path = tmp_dir.join("x");
+//!   let file_path = tmp_dir.join("a.txt");
+//! 
+//!   // Create dir
+//!   fs.create_dir(dir_path.to_str().unwrap(), true).await?;
+//!
+//!   // Write a file
+//!   let writer = fs.file_writer(file_path.to_str().unwrap())?.writer().await?;
+//!   writer.write_all("test").await?;
+//!   writer.shutdown();
+//! 
+//!   // List files
+//!   let files = fs.list_file(dir_path.to_str().unwrap()).await?;
+//!   let Some(file) = files.next();
+//!   assert_eq!(file.path, file_path.to_str().unwrap());
+//! 
+//!   // Read data back
+//!   let reader = fs.file_reader(file)?.chunk_reader().await?;
+//!   let data = reader.read_all().await?;
+//!   assert_eq!(data, "test");
+//! 
+//!   // Clear dir
+//!   fs.remove_dir_all(dir_path.to_str().unwrap()).await?;
+//! };
+//! ```
 
 use std::fs::{self, File, Metadata};
 use std::io::{self, BufReader, Read, Seek, SeekFrom, Write};

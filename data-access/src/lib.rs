@@ -15,6 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Datafusion Data Access provides general traits and structs
+//! for data access abstractions. The main trait is the 
+//! [object_store::ObjectStore] traits, which defines a filesystem-like
+//! interfaces that can be implemented by a variety of systems. This 
+//! create provides local filesystem implementation for ObjectStore 
+//! as [object_store::local::LocalFileSystem].
+//! 
+//! Alternative object stores are provided by separate crates, including:
+//!  * [S3FileSystem](https://docs.rs/datafusion-objectstore-s3/latest/datafusion_objectstore_s3/)
+
 pub mod object_store;
 
 use chrono::{DateTime, Utc};
