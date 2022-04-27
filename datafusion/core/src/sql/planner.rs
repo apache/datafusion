@@ -778,11 +778,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
                 }
+                let mut join_schema = DFSchema::new_with_metadata(fields, metadata)?;
                 if let Some(outer) = outer_query_schema {
-                    fields.extend_from_slice(outer.fields());
-                    metadata.extend(outer.metadata().clone());
+                    join_schema.merge(outer);
                 }
-                let join_schema = DFSchema::new_with_metadata(fields, metadata)?;
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema)?;
 
@@ -4318,13 +4317,18 @@ mod tests {
 
         let subquery_expected = "Subquery: Projection: #person.first_name\
         \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
-        \n    TableScan: person projection=None";
+        \n    Inner Join: #person.id = #p2.id\
+        \n      TableScan: person projection=None\
+        \n      SubqueryAlias: p2\
+        \n        TableScan: person projection=None";
 
         let expected = format!(
-            "Projection: #p.id\
-        \n  Filter: EXISTS ({})\
-        \n    SubqueryAlias: p\
-        \n      TableScan: person projection=None",
+            "Projection: #person.id\
+            \n  Filter: EXISTS ({})\
+            \n    Inner Join: #person.id = #p.id\
+            \n      TableScan: person projection=None\
+            \n      SubqueryAlias: p\
+            \n        TableScan: person projection=None",
             subquery_expected
         );
         quick_test(sql, &expected);
