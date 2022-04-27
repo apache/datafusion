@@ -17,7 +17,7 @@
 
 //! Math expressions
 
-use arrow::array::{ArrayRef, UInt32Array};
+use arrow::array::ArrayRef;
 use arrow::array::{Float32Array, Float64Array, Int64Array};
 use arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
@@ -101,17 +101,17 @@ macro_rules! downcast_arg {
 }
 
 macro_rules! make_function_inputs2 {
-    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE1:ident, $ARRAY_TYPE2:ident, $FUNC: block) => {{
-        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE1);
-        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE2);
+    ($ARG1: expr, $ARG2: expr, $NAME1:expr, $NAME2: expr, $ARRAY_TYPE:ident, $FUNC: block) => {{
+        let arg1 = downcast_arg!($ARG1, $NAME1, $ARRAY_TYPE);
+        let arg2 = downcast_arg!($ARG2, $NAME2, $ARRAY_TYPE);
 
         arg1.iter()
             .zip(arg2.iter())
             .map(|(a1, a2)| match (a1, a2) {
-                (Some(a1), Some(a2)) => Some($FUNC(a1, a2)),
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
                 _ => None,
             })
-            .collect::<$ARRAY_TYPE1>()
+            .collect::<$ARRAY_TYPE>()
     }};
 }
 
@@ -157,7 +157,6 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
             "base",
             "exponent",
             Float64Array,
-            Float64Array,
             { f64::powf }
         )) as ArrayRef),
 
@@ -167,7 +166,6 @@ pub fn power(args: &[ArrayRef]) -> Result<ArrayRef> {
             "base",
             "exponent",
             Int64Array,
-            UInt32Array,
             { i64::pow }
         )) as ArrayRef),
 
