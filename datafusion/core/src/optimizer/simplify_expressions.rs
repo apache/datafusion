@@ -317,8 +317,10 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         if self.can_evaluate.pop().unwrap() {
-            let scalar = self.evaluate_to_scalar(expr)?;
-            Ok(Expr::Literal(scalar))
+            match self.evaluate_to_scalar(&expr) {
+                Ok(scalar) => Ok(Expr::Literal(scalar)),
+                Err(_) => Ok(expr),
+            }
         } else {
             Ok(expr)
         }
@@ -400,9 +402,9 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&self, expr: &Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
-            return Ok(s);
+            return Ok(s.clone());
         }
 
         let phys_expr = create_physical_expr(
@@ -738,7 +740,7 @@ mod tests {
 
     use arrow::array::{ArrayRef, Int32Array};
     use chrono::{DateTime, TimeZone, Utc};
-    use datafusion_expr::BuiltinScalarFunction;
+    use datafusion_expr::{BuiltinScalarFunction, ExprSchemable};
 
     use super::*;
     use crate::assert_contains;
@@ -1903,6 +1905,36 @@ mod tests {
         // expression down to a single constant (true)
         let expected = "Filter: Boolean(true) AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Int64) + Int32(50000)\
                         \n  TableScan: test projection=None";
+        let actual = get_optimized_plan_formatted(&plan, &time);
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn now_less_than_date_plus_interval() {
+        let table_scan = test_table_scan();
+
+        let ts_string = "2020-09-08T12:05:00+00:00";
+        let time = chrono::Utc.timestamp_nanos(1599566400000000000i64);
+
+        //  now() < cast(to_timestamp(...) as int) + 5000000000
+        let schema = table_scan.schema();
+        let plan = LogicalPlanBuilder::from(table_scan.clone())
+            .filter(
+                cast_to_int64_expr(now_expr()).lt(to_timestamp_expr(ts_string)
+                    .cast_to(&DataType::Date32, schema)
+                    .unwrap()
+                    + Expr::Literal(ScalarValue::IntervalDayTime(Some(123)))),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Note that constant folder runs and folds the entire
+        // expression down to a single constant (true)
+        let expected = "Filter: Int64(1599566400000000000) < Date32(\"18513\") + IntervalDayTime(\"123\") \
+        AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Date32) + IntervalDayTime(\"123\")\
+        \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);
