@@ -69,12 +69,12 @@ use crate::{FileMeta, Result, SizedFile};
 
 use super::{
     path_without_scheme, FileMetaStream, ListEntryStream, ObjectReader,
-    ObjectReaderStream, ObjectStore, ObjectWriter,
+    ObjectReaderStream, ObjectStore, ObjectWriter
 };
 
 pub static LOCAL_SCHEME: &str = "file";
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 /// Local File System as Object Store.
 pub struct LocalFileSystem;
 
@@ -326,6 +326,7 @@ pub fn local_object_reader(file: String) -> Arc<dyn ObjectReader> {
         .expect("File not found")
 }
 
+// TODO: Why would a user want this function that unwraps? unless we said it's unsafe?
 /// Helper method to fetch the file size and date at given path and create a `FileMeta`
 pub fn local_unpartitioned_file(file: String) -> FileMeta {
     let metadata = fs::metadata(&file).expect("Local file metadata");
@@ -364,6 +365,7 @@ impl ObjectWriter for LocalFileWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_object_store;
     use futures::StreamExt;
     use std::collections::HashSet;
     use std::fs::File;
@@ -638,4 +640,6 @@ mod tests {
 
         Ok(())
     }
+
+    test_object_store!(LocalFileSystem::default, tempdir);
 }

@@ -135,13 +135,14 @@ pub trait ObjectStore: Sync + Send + Debug {
 
     /// Delete directory contents recursively
     ///
-    /// Unlike [delete_dir], will not delete directory itself
+    /// Unlike [delete_dir](#method.delete_dir), will not delete directory itself
     async fn remove_dir_contents(&self, path: &str) -> Result<()>;
 
     /// Delete a file
     ///
     /// If file does not exist, will return error kind [std::io::ErrorKind::NotFound]
     /// If attempted on a directory, will return error kind [std::io::ErrorKind::InvalidInput]
+    ///
     async fn remove_file(&self, path: &str) -> Result<()>;
 
     /// Rename a file or directory
@@ -184,5 +185,54 @@ pub fn path_without_scheme(full_path: &str) -> &str {
         path
     } else {
         full_path
+    }
+}
+
+pub mod testing {
+    use super::*;
+
+    pub async fn list_dir_suite(store: impl ObjectStore, base_path: &str) -> Result<()> {
+        // base/a.txt
+        // base/x/b.txt
+        // base/y/c.txt
+        store.create_dir("x", false).await?;
+        store.create_dir("y", false).await?;
+
+        // TODO
+
+        Ok(())
+    }
+
+    pub async fn read_write_suite(store: impl ObjectStore, base_path: &str) -> Result<()> {
+        // TODO
+        Ok(())
+    }
+
+    #[macro_export]
+    macro_rules! store_test {
+        ($test_name:ident, $store_factory:expr, $base_path_factory:expr) => {
+            #[tokio::test]
+            async fn $test_name() -> Result<()> {
+                let object_store = $store_factory();
+                let base_path = $base_path_factory()?;
+                let base_path_str = base_path.path().to_str().unwrap();
+                crate::object_store::testing::$test_name(object_store, base_path_str).await
+            }
+        }
+    }
+
+    /// Run the standard ObjectStore test suite
+    ///
+    ///
+    #[macro_export]
+    macro_rules! test_object_store {
+        ($store_factory:expr, $base_path_factory:expr) => {
+            mod object_store_test {
+                use super::*;
+                use crate::store_test;
+                store_test!(list_dir_suite, $store_factory, $base_path_factory);
+                store_test!(read_write_suite, $store_factory, $base_path_factory);
+            }
+        };
     }
 }
