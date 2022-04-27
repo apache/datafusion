@@ -1882,9 +1882,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Exists(subquery) => self.parse_exists_subquery(&subquery, false, schema),
 
-            SQLExpr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
-                "IN subqueries are not supported yet".to_owned(),
-            )),
+            SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema),
 
             SQLExpr::Subquery(_) => Err(DataFusionError::NotImplemented(
                 "Scalar subqueries are not supported yet".to_owned(),
@@ -1904,6 +1902,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         input_schema: &DFSchema,
     ) -> Result<Expr> {
         Ok(Expr::Exists {
+            subquery: Subquery {
+                subquery: Arc::new(
+                    self.subquery_to_plan(subquery.clone(), input_schema)?,
+                ),
+            },
+            negated,
+        })
+    }
+
+    fn parse_in_subquery(
+        &self,
+        expr: &SQLExpr,
+        subquery: &Query,
+        negated: bool,
+        input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        Ok(Expr::InSubquery {
+            expr: Box::new(self.sql_to_rex(expr.clone(), input_schema)?),
             subquery: Subquery {
                 subquery: Arc::new(
                     self.subquery_to_plan(subquery.clone(), input_schema)?,
@@ -4305,6 +4321,43 @@ mod tests {
         let expected = format!(
             "Projection: #p.id\
             \n  Filter: EXISTS ({})\
+            \n    SubqueryAlias: p\
+            \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
+    fn in_subquery_uncorrelated() {
+        let sql = "SELECT id FROM person p WHERE id IN \
+            (SELECT id FROM person)";
+
+        let subquery_expected = "Subquery: Projection: #person.id\
+        \n  TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #p.id\
+            \n  Filter: #p.id IN ({})\
+            \n    SubqueryAlias: p\
+            \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
+    fn not_in_subquery_correlated() {
+        let sql = "SELECT id FROM person p WHERE id NOT IN \
+            (SELECT id FROM person WHERE last_name = p.last_name AND state = 'CO')";
+
+        let subquery_expected = "Subquery: Projection: #person.id\
+        \n  Filter: #person.last_name = #p.last_name AND #person.state = Utf8(\"CO\")\
+        \n    TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #p.id\
+            \n  Filter: #p.id NOT IN ({})\
             \n    SubqueryAlias: p\
             \n      TableScan: person projection=None",
             subquery_expected
