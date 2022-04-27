@@ -533,13 +533,13 @@ async fn test_power() -> Result<()> {
 
     let ctx = SessionContext::new();
     ctx.register_table("test", Arc::new(table))?;
-    let sql = r"SELECT power(i32, 3) as power_i32,
-                 power(i64, 3) as power_i64,
-                 power(f32, 3) as power_f32,
-                 power(f64, 3) as power_f64,
+    let sql = r"SELECT power(i32, exp_i) as power_i32,
+                 power(i64, exp_f) as power_i64,
+                 power(f32, exp_i) as power_f32,
+                 power(f64, exp_f) as power_f64,
                  power(2, 3) as power_int_scalar,
-                 power(2.5, 3) as power_float_scalar
-          FROM test";
+                 power(2.5, 3.0) as power_float_scalar
+          FROM (select test.*, 3 as exp_i, 3.0 as exp_f from test) a";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
         "+-----------+-----------+-----------+-----------+------------------+--------------------+",
@@ -570,7 +570,7 @@ async fn test_power() -> Result<()> {
             .unwrap()
             .data_type()
             .to_owned(),
-        DataType::Int64
+        DataType::Float64
     );
     assert_eq!(
         actual[0]
