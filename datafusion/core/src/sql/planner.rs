@@ -1882,7 +1882,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Exists(subquery) => self.parse_exists_subquery(&subquery, false, schema),
 
-            SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(expr, &subquery, negated, schema),
+            SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema),
 
             SQLExpr::Subquery(_) => Err(DataFusionError::NotImplemented(
                 "Scalar subqueries are not supported yet".to_owned(),
@@ -1913,13 +1913,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     fn parse_in_subquery(
         &self,
-        expr: Box<SQLExpr>,
+        expr: &SQLExpr,
         subquery: &Query,
         negated: bool,
         input_schema: &DFSchema,
     ) -> Result<Expr> {
         Ok(Expr::InSubquery {
-            expr: Box::new(self.sql_to_rex(*expr.to_owned(), input_schema)?),
+            expr: Box::new(self.sql_to_rex(expr.clone(), input_schema)?),
             subquery: Subquery {
                 subquery: Arc::new(
                     self.subquery_to_plan(subquery.clone(), input_schema)?,
