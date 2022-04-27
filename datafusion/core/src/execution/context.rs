@@ -2310,8 +2310,8 @@ mod tests {
                 let start_number = start.unwrap();
                 batch_sizes.push(1);
 
-                string_builder.append_value("test".to_string()).unwrap();
-                int_builder.append_value(start_number.clone()).unwrap();
+                string_builder.append_value("test").unwrap();
+                int_builder.append_value(start_number).unwrap();
             }
 
             let mut fields = Vec::new();

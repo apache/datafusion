@@ -723,7 +723,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                                 let alias = alias.unwrap();
 
-                                if alias.columns.len() > 0 {
+                                if !alias.columns.is_empty() {
                                     select_exprs = select_exprs
                                         .iter()
                                         .enumerate()
@@ -743,7 +743,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                                 return project_with_alias(
                                     udtf_plan,
                                     select_exprs,
-                                    Some(alias.name.value.to_string()),
+                                    Some(alias.name.value),
                                 );
                             }
 
