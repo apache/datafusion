@@ -4307,6 +4307,30 @@ mod tests {
     }
 
     #[test]
+    fn exists_subquery_schema_outer_schema_overlap() {
+        // both the outer query and the schema select from unaliased "person"
+        let sql = "SELECT person.id FROM person, person p \
+            WHERE person.id = p.id AND EXISTS \
+            (SELECT person.first_name FROM person, person p2 \
+            WHERE person.id = p2.id \
+            AND person.last_name = p.last_name \
+            AND person.state = p.state)";
+
+        let subquery_expected = "Subquery: Projection: #person.first_name\
+        \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+        \n    TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #p.id\
+        \n  Filter: EXISTS ({})\
+        \n    SubqueryAlias: p\
+        \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
     fn exists_subquery_wildcard() {
         let sql = "SELECT id FROM person p WHERE EXISTS \
             (SELECT * FROM person \
