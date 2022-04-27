@@ -447,46 +447,6 @@ async fn case_builtin_math_expression() {
 }
 
 #[tokio::test]
-async fn case_sensitive_identifiers_aggregates() {
-    let ctx = SessionContext::new();
-    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
-        .unwrap();
-
-    let expected = vec![
-        "+----------+",
-        "| MAX(t.i) |",
-        "+----------+",
-        "| 1        |",
-        "+----------+",
-    ];
-
-    let results = plan_and_collect(&ctx, "SELECT max(i) FROM t")
-        .await
-        .unwrap();
-
-    assert_batches_sorted_eq!(expected, &results);
-
-    let results = plan_and_collect(&ctx, "SELECT MAX(i) FROM t")
-        .await
-        .unwrap();
-    assert_batches_sorted_eq!(expected, &results);
-
-    // Using double quotes allows specifying the function name with capitalization
-    let err = plan_and_collect(&ctx, "SELECT \"MAX\"(i) FROM t")
-        .await
-        .unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Error during planning: Invalid function 'MAX'"
-    );
-
-    let results = plan_and_collect(&ctx, "SELECT \"max\"(i) FROM t")
-        .await
-        .unwrap();
-    assert_batches_sorted_eq!(expected, &results);
-}
-
-#[tokio::test]
 async fn test_power() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("i32", DataType::Int16, true),
