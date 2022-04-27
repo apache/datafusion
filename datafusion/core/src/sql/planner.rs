@@ -716,7 +716,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .fields()
                             .iter()
                             .map(|field| col(field.name())),
-                        alias.as_ref().map(|a| a.name.value.to_string()),
+                        alias.as_ref().map(|a| normalize_ident(a.name.clone())),
                     )?,
                     alias,
                 )
