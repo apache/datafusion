@@ -438,6 +438,28 @@ async fn timestamp_minmax() -> Result<()> {
 }
 
 #[tokio::test]
+async fn timestamp_date_literal_plus_interval() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table_a = make_timestamp_tz_table::<TimestampMillisecondType>(None)?;
+    ctx.register_table("table_a", table_a)?;
+
+    let sql = "SELECT * FROM table_a WHERE CAST(ts AS DATE) \
+        BETWEEN CAST('2022-02-22' AS DATE) \
+            AND CAST('2022-02-22' AS DATE) + INTERVAL '30 DAYS'";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------------------------+----------------------------+",
+        "| MIN(table_a.ts)         | MAX(table_b.ts)            |",
+        "+-------------------------+----------------------------+",
+        "| 2020-09-08 11:42:29.190 | 2020-09-08 13:42:29.190855 |",
+        "+-------------------------+----------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn timestamp_coercion() -> Result<()> {
     {
         let ctx = SessionContext::new();
