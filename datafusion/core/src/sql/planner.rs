@@ -26,6 +26,7 @@ use std::{convert::TryInto, vec};
 use crate::catalog::TableReference;
 use crate::datasource::TableProvider;
 use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
+use crate::logical_plan::EmptyRelation;
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
@@ -669,7 +670,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table {
-                ref name, alias, ..
+                ref name,
+                alias,
+                args,
+                ..
             } => {
                 let table_name = name.to_string();
                 let cte = ctes.get(&table_name);
@@ -688,10 +692,66 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             };
                             scan?.build()
                         }
-                        (None, None) => Err(DataFusionError::Plan(format!(
-                            "Table or CTE with name '{}' not found",
-                            name
-                        ))),
+                        (None, None) => {
+                            let table_udf =
+                                self.schema_provider.get_table_function_meta(&table_name);
+                            if table_udf.is_some() {
+                                let udtf = Expr::TableUDF {
+                                    fun: table_udf.unwrap(),
+                                    args: self
+                                        .function_args_to_expr(args, &DFSchema::empty())
+                                        .unwrap(),
+                                };
+
+                                let udtf_plan = table_udfs(
+                                    LogicalPlan::EmptyRelation(EmptyRelation {
+                                        produce_one_row: true,
+                                        schema: Arc::new(DFSchema::empty()),
+                                    }),
+                                    vec![udtf.clone()],
+                                )
+                                .unwrap();
+
+                                if alias.is_none() {
+                                    return Ok(udtf_plan);
+                                }
+
+                                let mut select_exprs = rewrite_udtfs_to_columns(
+                                    vec![udtf],
+                                    udtf_plan.schema().clone().as_ref().to_owned(),
+                                );
+
+                                let alias = alias.unwrap();
+
+                                if alias.columns.len() > 0 {
+                                    select_exprs = select_exprs
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(i, e)| {
+                                            if alias.columns.len() > i {
+                                                Expr::Alias(
+                                                    Box::new(e.clone()),
+                                                    alias.columns[i].to_string(),
+                                                )
+                                            } else {
+                                                e.clone()
+                                            }
+                                        })
+                                        .collect();
+                                }
+
+                                return project_with_alias(
+                                    udtf_plan,
+                                    select_exprs,
+                                    Some(alias.name.value.to_string()),
+                                );
+                            }
+
+                            Err(DataFusionError::Plan(format!(
+                                "Table or CTE with name '{}' not found",
+                                name
+                            )))
+                        }
                     }?,
                     alias,
                 )
@@ -2392,7 +2452,9 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
-        SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
+        SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
+            Ok(DataType::Utf8)
+        }
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),

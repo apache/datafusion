@@ -2227,6 +2227,33 @@ mod tests {
             "| 2   |                         |                             | 4 |",
             "+-----+-------------------------+-----------------------------+---+",
         ];
+
+        assert_batches_eq!(expected, &result);
+
+        let result =
+            plan_and_collect(&ctx, "SELECT * from integer_series(1,5) pos(n)").await?;
+
+        let expected = vec![
+            "+---+", "| n |", "+---+", "| 1 |", "| 2 |", "| 3 |", "| 4 |", "| 5 |",
+            "+---+",
+        ];
+
+        assert_batches_eq!(expected, &result);
+
+        let result = plan_and_collect(&ctx, "SELECT * from integer_series(1,5)").await?;
+
+        let expected = vec![
+            "+-----------------------------------+",
+            "| integer_series(Int64(1),Int64(5)) |",
+            "+-----------------------------------+",
+            "| 1                                 |",
+            "| 2                                 |",
+            "| 3                                 |",
+            "| 4                                 |",
+            "| 5                                 |",
+            "+-----------------------------------+",
+        ];
+
         assert_batches_eq!(expected, &result);
 
         Ok(())

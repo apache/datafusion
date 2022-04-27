@@ -80,9 +80,10 @@ impl TableFunExec {
             })
             .collect();
 
-        let schema = Schema::new_with_metadata(fields?, HashMap::new());
+        let mut total_fields = input_schema.fields().clone();
+        total_fields.append(&mut fields.unwrap());
 
-        let schema = Schema::try_merge(vec![(*input_schema).clone(), schema])?;
+        let schema = Schema::new_with_metadata(total_fields, HashMap::new());
 
         Ok(Self {
             expr,
