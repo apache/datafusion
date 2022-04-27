@@ -1884,9 +1884,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::InSubquery {  expr, subquery, negated } => self.parse_in_subquery(&expr, &subquery, negated, schema),
 
-            SQLExpr::Subquery(_) => Err(DataFusionError::NotImplemented(
-                "Scalar subqueries are not supported yet".to_owned(),
-            )),
+            SQLExpr::Subquery(subquery) => self.parse_scalar_subquery(&subquery, schema),
 
             _ => Err(DataFusionError::NotImplemented(format!(
                 "Unsupported ast node {:?} in sqltorel",
@@ -1927,6 +1925,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             },
             negated,
         })
+    }
+
+    fn parse_scalar_subquery(
+        &self,
+        subquery: &Query,
+        input_schema: &DFSchema,
+    ) -> Result<Expr> {
+        Ok(Expr::ScalarSubquery(Subquery {
+            subquery: Arc::new(self.subquery_to_plan(subquery.clone(), input_schema)?),
+        }))
     }
 
     fn function_args_to_expr(
@@ -4360,6 +4368,24 @@ mod tests {
             \n  Filter: #p.id NOT IN ({})\
             \n    SubqueryAlias: p\
             \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
+    fn scalar_subquery() {
+        let sql = "SELECT p.id, (SELECT MAX(id) FROM person WHERE last_name = p.last_name) FROM person p";
+
+        let subquery_expected = "Subquery: Projection: #MAX(person.id)\
+        \n  Aggregate: groupBy=[[]], aggr=[[MAX(#person.id)]]\
+        \n    Filter: #person.last_name = #p.last_name\
+        \n      TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #p.id, ({})\
+            \n  SubqueryAlias: p\
+            \n    TableScan: person projection=None",
             subquery_expected
         );
         quick_test(sql, &expected);
