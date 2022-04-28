@@ -32,7 +32,8 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
-use super::{format_state_name, StatsType};
+use crate::aggregate::stats::StatsType;
+use crate::expressions::format_state_name;
 
 /// COVAR and COVAR_SAMP aggregate expression
 #[derive(Debug)]

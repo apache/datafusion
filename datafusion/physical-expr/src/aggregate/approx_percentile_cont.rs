@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::{format_state_name, Literal};
-use crate::tdigest::TryIntoOrderedF64;
-use crate::{
-    tdigest::{TDigest, DEFAULT_MAX_SIZE},
-    AggregateExpr, PhysicalExpr,
-};
+use crate::aggregate::tdigest::TryIntoOrderedF64;
+use crate::aggregate::tdigest::{TDigest, DEFAULT_MAX_SIZE};
+use crate::expressions::{format_state_name, Literal};
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{
     array::{
         ArrayRef, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,

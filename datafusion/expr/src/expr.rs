@@ -20,6 +20,7 @@
 use crate::aggregate_function;
 use crate::built_in_function;
 use crate::expr_fn::binary_expr;
+use crate::logical_plan::Subquery;
 use crate::window_frame;
 use crate::window_function;
 use crate::AggregateUDF;
@@ -226,6 +227,24 @@ pub enum Expr {
         /// Whether the expression is negated
         negated: bool,
     },
+    /// EXISTS subquery
+    Exists {
+        /// subquery that will produce a single column of data
+        subquery: Subquery,
+        /// Whether the expression is negated
+        negated: bool,
+    },
+    /// IN subquery
+    InSubquery {
+        /// The expression to compare
+        expr: Box<Expr>,
+        /// subquery that will produce a single column of data to compare against
+        subquery: Subquery,
+        /// Whether the expression is negated
+        negated: bool,
+    },
+    /// Scalar subquery
+    ScalarSubquery(Subquery),
     /// Represents a reference to all fields in a schema.
     Wildcard,
     /// Represents a reference to all fields in a specific schema.
@@ -431,6 +450,25 @@ impl fmt::Debug for Expr {
             Expr::Negative(expr) => write!(f, "(- {:?})", expr),
             Expr::IsNull(expr) => write!(f, "{:?} IS NULL", expr),
             Expr::IsNotNull(expr) => write!(f, "{:?} IS NOT NULL", expr),
+            Expr::Exists {
+                subquery,
+                negated: true,
+            } => write!(f, "NOT EXISTS ({:?})", subquery),
+            Expr::Exists {
+                subquery,
+                negated: false,
+            } => write!(f, "EXISTS ({:?})", subquery),
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated: true,
+            } => write!(f, "{:?} NOT IN ({:?})", expr, subquery),
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated: false,
+            } => write!(f, "{:?} IN ({:?})", expr, subquery),
+            Expr::ScalarSubquery(subquery) => write!(f, "({:?})", subquery),
             Expr::BinaryExpr { left, op, right } => {
                 write!(f, "{:?} {} {:?}", left, op, right)
             }
@@ -617,6 +655,13 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::IsNotNull(expr) => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{} IS NOT NULL", expr))
+        }
+        Expr::Exists { negated: true, .. } => Ok("NOT EXISTS".to_string()),
+        Expr::Exists { negated: false, .. } => Ok("EXISTS".to_string()),
+        Expr::InSubquery { negated: true, .. } => Ok("NOT IN".to_string()),
+        Expr::InSubquery { negated: false, .. } => Ok("IN".to_string()),
+        Expr::ScalarSubquery(subquery) => {
+            Ok(subquery.subquery.schema().field(0).name().clone())
         }
         Expr::GetIndexedField { expr, key } => {
             let expr = create_name(expr, input_schema)?;

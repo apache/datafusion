@@ -17,18 +17,17 @@
 
 //! Defines physical expressions that can evaluated at runtime during query execution
 
-use crate::{
-    expressions::{covariance::CovarianceAccumulator, stddev::StddevAccumulator},
-    AggregateExpr, PhysicalExpr,
-};
+use crate::aggregate::covariance::CovarianceAccumulator;
+use crate::aggregate::stats::StatsType;
+use crate::aggregate::stddev::StddevAccumulator;
+use crate::expressions::format_state_name;
+use crate::{AggregateExpr, PhysicalExpr};
 use arrow::{array::ArrayRef, datatypes::DataType, datatypes::Field};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::sync::Arc;
-
-use super::{format_state_name, StatsType};
 
 /// CORR aggregate expression
 #[derive(Debug)]

@@ -108,7 +108,7 @@ macro_rules! make_function_inputs2 {
         arg1.iter()
             .zip(arg2.iter())
             .map(|(a1, a2)| match (a1, a2) {
-                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().unwrap())),
+                (Some(a1), Some(a2)) => Some($FUNC(a1, a2.try_into().ok()?)),
                 _ => None,
             })
             .collect::<$ARRAY_TYPE>()

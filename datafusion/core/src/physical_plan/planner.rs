@@ -186,6 +186,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
+        Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
+            "EXISTS is not yet supported in the physical plan".to_string(),
+        )),
+        Expr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
+            "IN subquery is not yet supported in the physical plan".to_string(),
+        )),
+        Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
+            "Scalar subqueries are not yet supported in the physical plan".to_string(),
+        )),
         Expr::Between {
             expr,
             negated,
@@ -780,6 +789,7 @@ impl DefaultPhysicalPlanner {
                     let right = self.create_initial_plan(right, session_state).await?;
                     Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
                 }
+                LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row,
                     schema,
