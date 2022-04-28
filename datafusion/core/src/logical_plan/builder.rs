@@ -1202,6 +1202,7 @@ pub(crate) fn expand_qualified_wildcard(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::SchemaError;
     use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
@@ -1428,16 +1429,16 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!(
-                    e,
-                    "Schema contains qualified field name 'employee_csv.id' \
-                    and unqualified field name 'id' which would be ambiguous"
-                );
+            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
+                qualifier,
+                name,
+            })) => {
+                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("id", &name);
                 Ok(())
             }
             _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::Plan".to_string(),
+                "Plan should have returned an DataFusionError::SchemaError".to_string(),
             )),
         }
     }
@@ -1454,16 +1455,16 @@ mod tests {
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!(
-                    e,
-                    "Schema contains qualified field name 'employee_csv.state' and \
-                    unqualified field name 'state' which would be ambiguous"
-                );
+            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
+                qualifier,
+                name,
+            })) => {
+                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("state", &name);
                 Ok(())
             }
             _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::Plan".to_string(),
+                "Plan should have returned an DataFusionError::SchemaError".to_string(),
             )),
         }
     }
