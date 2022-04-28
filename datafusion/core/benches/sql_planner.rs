@@ -77,16 +77,6 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
-
-    c.bench_function("trivial join late columns", |b| {
-        b.iter(|| {
-            plan(
-                ctx.clone(),
-                "SELECT t1.a99, t2.b99  \
-                 FROM t1, t2 WHERE a199 = b199",
-            )
-        })
-    });
 }
 
 criterion_group!(benches, criterion_benchmark);
