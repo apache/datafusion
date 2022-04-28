@@ -84,7 +84,7 @@ pub enum DataFusionError {
 /// Schema-related errors
 #[derive(Debug)]
 pub enum SchemaError {
-    /// Schema contains qualified and unqualified field with same unqualified name
+    /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
     AmbiguousReference {
         qualifier: Option<String>,
         name: String,
