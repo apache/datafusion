@@ -135,6 +135,24 @@ async fn parallel_projection() -> Result<()> {
 }
 
 #[tokio::test]
+async fn subquery_alias_case_insensitive() -> Result<()> {
+    let partition_count = 1;
+    let results =
+        partitioned_csv::execute("SELECT V1.c1, v1.C2 FROM (SELECT test.C1, TEST.c2 FROM test) V1 ORDER BY v1.c1, V1.C2 LIMIT 1", partition_count).await?;
+
+    let expected = vec![
+        "+----+----+",
+        "| c1 | c2 |",
+        "+----+----+",
+        "| 0  | 1  |",
+        "+----+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn projection_on_table_scan() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;

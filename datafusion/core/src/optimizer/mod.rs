@@ -28,5 +28,4 @@ pub mod optimizer;
 pub mod projection_push_down;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
-pub mod to_approx_perc;
 pub mod utils;

@@ -460,8 +460,16 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("InList-");
                 desc.push_str(&negated.to_string());
             }
-            Expr::Exists(_) => {
+            Expr::Exists { negated, .. } => {
                 desc.push_str("Exists-");
+                desc.push_str(&negated.to_string());
+            }
+            Expr::InSubquery { negated, .. } => {
+                desc.push_str("InSubquery-");
+                desc.push_str(&negated.to_string());
+            }
+            Expr::ScalarSubquery(_) => {
+                desc.push_str("ScalarSubquery-");
             }
             Expr::Wildcard => {
                 desc.push_str("Wildcard-");

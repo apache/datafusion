@@ -217,6 +217,11 @@ pub fn return_type(
             }
         }),
 
+        BuiltinScalarFunction::Power => match &input_expr_types[0] {
+            DataType::Int64 => Ok(DataType::Int64),
+            _ => Ok(DataType::Float64),
+        },
+
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
@@ -505,6 +510,13 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             fun.volatility(),
         ),
         BuiltinScalarFunction::Random => Signature::exact(vec![], fun.volatility()),
+        BuiltinScalarFunction::Power => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Int64, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::Float64, DataType::Float64]),
+            ],
+            fun.volatility(),
+        ),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).

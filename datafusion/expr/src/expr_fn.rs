@@ -184,7 +184,41 @@ pub fn approx_percentile_cont_with_weight(
 
 /// Create an EXISTS subquery expression
 pub fn exists(subquery: Arc<LogicalPlan>) -> Expr {
-    Expr::Exists(Subquery { subquery })
+    Expr::Exists {
+        subquery: Subquery { subquery },
+        negated: false,
+    }
+}
+
+/// Create a NOT EXISTS subquery expression
+pub fn not_exists(subquery: Arc<LogicalPlan>) -> Expr {
+    Expr::Exists {
+        subquery: Subquery { subquery },
+        negated: true,
+    }
+}
+
+/// Create an IN subquery expression
+pub fn in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
+    Expr::InSubquery {
+        expr: Box::new(expr),
+        subquery: Subquery { subquery },
+        negated: false,
+    }
+}
+
+/// Create a NOT IN subquery expression
+pub fn not_in_subquery(expr: Expr, subquery: Arc<LogicalPlan>) -> Expr {
+    Expr::InSubquery {
+        expr: Box::new(expr),
+        subquery: Subquery { subquery },
+        negated: true,
+    }
+}
+
+/// Create a scalar subquery expression
+pub fn scalar_subquery(subquery: Arc<LogicalPlan>) -> Expr {
+    Expr::ScalarSubquery(Subquery { subquery })
 }
 
 // TODO(kszucs): this seems buggy, unary_scalar_expr! is used for many
@@ -248,6 +282,7 @@ unary_scalar_expr!(Log2, log2);
 unary_scalar_expr!(Log10, log10);
 unary_scalar_expr!(Ln, ln);
 unary_scalar_expr!(NullIf, nullif);
+scalar_expr!(Power, power, base, exponent);
 
 // string functions
 scalar_expr!(Ascii, ascii, string);
