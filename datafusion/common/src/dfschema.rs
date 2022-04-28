@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::error::{DataFusionError, Result};
+use crate::error::{DataFusionError, Result, SchemaError};
 use crate::Column;
 
 use arrow::compute::can_cast_types;
@@ -67,16 +67,19 @@ impl DFSchema {
         for field in &fields {
             if let Some(qualifier) = field.qualifier() {
                 if !qualified_names.insert((qualifier, field.name())) {
-                    return Err(DataFusionError::Plan(format!(
-                        "Schema contains duplicate qualified field name '{}'",
-                        field.qualified_name()
-                    )));
+                    return Err(DataFusionError::SchemaError(
+                        SchemaError::DuplicateQualifiedField {
+                            qualifier: qualifier.to_string(),
+                            name: field.name().to_string(),
+                        },
+                    ));
                 }
             } else if !unqualified_names.insert(field.name()) {
-                return Err(DataFusionError::Plan(format!(
-                    "Schema contains duplicate unqualified field name '{}'",
-                    field.name()
-                )));
+                return Err(DataFusionError::SchemaError(
+                    SchemaError::DuplicateUnqualifiedField {
+                        name: field.name().to_string(),
+                    },
+                ));
             }
         }
 
@@ -94,11 +97,12 @@ impl DFSchema {
         });
         for (qualifier, name) in &qualified_names {
             if unqualified_names.contains(name) {
-                return Err(DataFusionError::Plan(format!(
-                    "Schema contains qualified field name '{}.{}' \
-                    and unqualified field name '{}' which would be ambiguous",
-                    qualifier, name, name
-                )));
+                return Err(DataFusionError::SchemaError(
+                    SchemaError::AmbiguousReference {
+                        qualifier: Some(qualifier.to_string()),
+                        name: name.to_string(),
+                    },
+                ));
             }
         }
         Ok(Self { fields, metadata })
@@ -178,11 +182,11 @@ impl DFSchema {
             }
         }
 
-        Err(DataFusionError::Plan(format!(
-            "No field named '{}'. Valid fields are {}.",
-            name,
-            self.get_field_names()
-        )))
+        Err(DataFusionError::SchemaError(SchemaError::FieldNotExist {
+            qualifier: None,
+            name: name.to_string(),
+            valid_fields: Some(self.get_field_names()),
+        }))
     }
 
     pub fn index_of_column_by_name(
@@ -206,12 +210,11 @@ impl DFSchema {
             })
             .map(|(idx, _)| idx);
         match matches.next() {
-            None => Err(DataFusionError::Plan(format!(
-                "No field named '{}.{}'. Valid fields are {}.",
-                qualifier.unwrap_or("<unqualified>"),
-                name,
-                self.get_field_names()
-            ))),
+            None => Err(DataFusionError::SchemaError(SchemaError::FieldNotExist {
+                qualifier: qualifier.map(|s| s.to_string()),
+                name: name.to_string(),
+                valid_fields: Some(self.get_field_names()),
+            })),
             Some(idx) => match matches.next() {
                 None => Ok(idx),
                 // found more than one matches
@@ -262,16 +265,18 @@ impl DFSchema {
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
-            0 => Err(DataFusionError::Plan(format!(
-                "No field with unqualified name '{}'. Valid fields are {}.",
-                name,
-                self.get_field_names()
-            ))),
+            0 => Err(DataFusionError::SchemaError(SchemaError::FieldNotExist {
+                qualifier: None,
+                name: name.to_string(),
+                valid_fields: Some(self.get_field_names()),
+            })),
             1 => Ok(matches[0]),
-            _ => Err(DataFusionError::Plan(format!(
-                "Ambiguous reference to field named '{}'",
-                name
-            ))),
+            _ => Err(DataFusionError::SchemaError(
+                SchemaError::AmbiguousReference {
+                    qualifier: None,
+                    name: name.to_string(),
+                },
+            )),
         }
     }
 
@@ -314,7 +319,7 @@ impl DFSchema {
             .try_for_each(|(l_field, r_field)| {
                 if !can_cast_types(r_field.data_type(), l_field.data_type()) {
                     Err(DataFusionError::Plan(
-                        format!("Column {} (type: {}) is not compatible wiht column {} (type: {})",
+                        format!("Column {} (type: {}) is not compatible with column {} (type: {})",
                             r_field.name(),
                             r_field.data_type(),
                             l_field.name(),
@@ -350,7 +355,7 @@ impl DFSchema {
     }
 
     /// Get comma-separated list of field names for use in error messages
-    fn get_field_names(&self) -> String {
+    fn get_field_names(&self) -> Vec<String> {
         self.fields
             .iter()
             .map(|f| match f.qualifier() {
@@ -358,7 +363,6 @@ impl DFSchema {
                 None => format!("'{}'", f.name()),
             })
             .collect::<Vec<_>>()
-            .join(", ")
     }
 
     /// Get metadata of this schema
@@ -679,7 +683,7 @@ mod tests {
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
-            "Error during planning: Schema contains duplicate \
+            "Schema error: Schema contains duplicate \
         qualified field name \'t1.c0\'",
             &format!("{}", join.err().unwrap())
         );
@@ -693,7 +697,7 @@ mod tests {
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
-            "Error during planning: Schema contains duplicate \
+            "Schema error: Schema contains duplicate \
         unqualified field name \'c0\'",
             &format!("{}", join.err().unwrap())
         );
@@ -728,7 +732,7 @@ mod tests {
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
-            "Error during planning: Schema contains qualified \
+            "Schema error: Schema contains qualified \
         field name \'t1.c0\' and unqualified field name \'c0\' which would be ambiguous",
             &format!("{}", join.err().unwrap())
         );
