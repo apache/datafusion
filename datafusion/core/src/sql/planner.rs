@@ -778,11 +778,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
                 }
+                let mut join_schema = DFSchema::new_with_metadata(fields, metadata)?;
                 if let Some(outer) = outer_query_schema {
-                    fields.extend_from_slice(outer.fields());
-                    metadata.extend(outer.metadata().clone());
+                    join_schema.merge(outer);
                 }
-                let join_schema = DFSchema::new_with_metadata(fields, metadata)?;
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema)?;
 
@@ -1817,15 +1816,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         WindowFunction::AggregateFunction(
                             aggregate_fun,
                         ) => {
+                            let (aggregate_fun, args) = self.aggregate_fn_to_expr(
+                                aggregate_fun,
+                                function,
+                                schema,
+                            )?;
+
                             return Ok(Expr::WindowFunction {
                                 fun: WindowFunction::AggregateFunction(
-                                    aggregate_fun.clone(),
-                                ),
-                                args: self.aggregate_fn_to_expr(
                                     aggregate_fun,
-                                    function,
-                                    schema,
-                                )?,
+                                ),
+                                args,
                                 partition_by,
                                 order_by,
                                 window_frame,
@@ -1850,7 +1851,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // next, aggregate built-ins
                 if let Ok(fun) = aggregates::AggregateFunction::from_str(&name) {
                     let distinct = function.distinct;
-                    let args = self.aggregate_fn_to_expr(fun.clone(), function, schema)?;
+                    let (fun, args) = self.aggregate_fn_to_expr(fun, function, schema)?;
                     return Ok(Expr::AggregateFunction {
                         fun,
                         distinct,
@@ -1952,9 +1953,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         fun: aggregates::AggregateFunction,
         function: sqlparser::ast::Function,
         schema: &DFSchema,
-    ) -> Result<Vec<Expr>> {
-        if fun == aggregates::AggregateFunction::Count {
-            function
+    ) -> Result<(aggregates::AggregateFunction, Vec<Expr>)> {
+        let args = match fun {
+            aggregates::AggregateFunction::Count => function
                 .args
                 .into_iter()
                 .map(|a| match a {
@@ -1964,10 +1965,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => Ok(lit(1_u8)),
                     _ => self.sql_fn_arg_to_logical_expr(a, schema),
                 })
-                .collect::<Result<Vec<Expr>>>()
-        } else {
-            self.function_args_to_expr(function.args, schema)
-        }
+                .collect::<Result<Vec<Expr>>>()?,
+            aggregates::AggregateFunction::ApproxMedian => function
+                .args
+                .into_iter()
+                .map(|a| self.sql_fn_arg_to_logical_expr(a, schema))
+                .chain(iter::once(Ok(lit(0.5_f64))))
+                .collect::<Result<Vec<Expr>>>()?,
+            _ => self.function_args_to_expr(function.args, schema)?,
+        };
+
+        let fun = match fun {
+            aggregates::AggregateFunction::ApproxMedian => {
+                aggregates::AggregateFunction::ApproxPercentileCont
+            }
+            _ => fun,
+        };
+
+        Ok((fun, args))
     }
 
     fn sql_interval_to_literal(
@@ -3350,6 +3365,15 @@ mod tests {
     }
 
     #[test]
+    fn select_approx_median() {
+        let sql = "SELECT approx_median(age) FROM person";
+        let expected = "Projection: #APPROXPERCENTILECONT(person.age,Float64(0.5))\
+                        \n  Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#person.age, Float64(0.5))]]\
+                        \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn select_scalar_func() {
         let sql = "SELECT sqrt(age) FROM person";
         let expected = "Projection: sqrt(#person.age)\
@@ -4106,6 +4130,17 @@ mod tests {
     }
 
     #[test]
+    fn approx_median_window() {
+        let sql =
+            "SELECT order_id, APPROX_MEDIAN(qty) OVER(PARTITION BY order_id) from orders";
+        let expected = "\
+        Projection: #orders.order_id, #APPROXPERCENTILECONT(orders.qty,Float64(0.5)) PARTITION BY [#orders.order_id]\
+        \n  WindowAggr: windowExpr=[[APPROXPERCENTILECONT(#orders.qty, Float64(0.5)) PARTITION BY [#orders.order_id]]]\
+        \n    TableScan: orders projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[test]
     fn select_typedstring() {
         let sql = "SELECT date '2020-12-10' AS date FROM person";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
@@ -4309,6 +4344,35 @@ mod tests {
         \n  Filter: EXISTS ({})\
         \n    SubqueryAlias: p\
         \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
+    fn exists_subquery_schema_outer_schema_overlap() {
+        // both the outer query and the schema select from unaliased "person"
+        let sql = "SELECT person.id FROM person, person p \
+            WHERE person.id = p.id AND EXISTS \
+            (SELECT person.first_name FROM person, person p2 \
+            WHERE person.id = p2.id \
+            AND person.last_name = p.last_name \
+            AND person.state = p.state)";
+
+        let subquery_expected = "Subquery: Projection: #person.first_name\
+        \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+        \n    Inner Join: #person.id = #p2.id\
+        \n      TableScan: person projection=None\
+        \n      SubqueryAlias: p2\
+        \n        TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #person.id\
+            \n  Filter: EXISTS ({})\
+            \n    Inner Join: #person.id = #p.id\
+            \n      TableScan: person projection=None\
+            \n      SubqueryAlias: p\
+            \n        TableScan: person projection=None",
             subquery_expected
         );
         quick_test(sql, &expected);
