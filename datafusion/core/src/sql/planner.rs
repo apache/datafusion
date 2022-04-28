@@ -778,11 +778,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     fields.extend_from_slice(plan.schema().fields());
                     metadata.extend(plan.schema().metadata().clone());
                 }
+                let mut join_schema = DFSchema::new_with_metadata(fields, metadata)?;
                 if let Some(outer) = outer_query_schema {
-                    fields.extend_from_slice(outer.fields());
-                    metadata.extend(outer.metadata().clone());
+                    join_schema.merge(outer);
                 }
-                let join_schema = DFSchema::new_with_metadata(fields, metadata)?;
 
                 let filter_expr = self.sql_to_rex(predicate_expr, &join_schema)?;
 
@@ -4345,6 +4344,35 @@ mod tests {
         \n  Filter: EXISTS ({})\
         \n    SubqueryAlias: p\
         \n      TableScan: person projection=None",
+            subquery_expected
+        );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
+    fn exists_subquery_schema_outer_schema_overlap() {
+        // both the outer query and the schema select from unaliased "person"
+        let sql = "SELECT person.id FROM person, person p \
+            WHERE person.id = p.id AND EXISTS \
+            (SELECT person.first_name FROM person, person p2 \
+            WHERE person.id = p2.id \
+            AND person.last_name = p.last_name \
+            AND person.state = p.state)";
+
+        let subquery_expected = "Subquery: Projection: #person.first_name\
+        \n  Filter: #person.last_name = #p.last_name AND #person.state = #p.state\
+        \n    Inner Join: #person.id = #p2.id\
+        \n      TableScan: person projection=None\
+        \n      SubqueryAlias: p2\
+        \n        TableScan: person projection=None";
+
+        let expected = format!(
+            "Projection: #person.id\
+            \n  Filter: EXISTS ({})\
+            \n    Inner Join: #person.id = #p.id\
+            \n      TableScan: person projection=None\
+            \n      SubqueryAlias: p\
+            \n        TableScan: person projection=None",
             subquery_expected
         );
         quick_test(sql, &expected);
