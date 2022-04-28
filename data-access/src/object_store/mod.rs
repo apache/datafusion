@@ -71,6 +71,8 @@ pub trait ObjectReader: Send + Sync {
 /// Object Writer for one file in an object store.
 #[async_trait]
 pub trait ObjectWriter: Send + Sync {
+    // TODO: Should async writer be Send + Sync as well?
+    // TODO: writer always overwrites not append (but we can add append_writer() later)
     async fn writer(&self) -> Result<Pin<Box<dyn AsyncWrite>>>;
 
     fn sync_writer(&self) -> Result<Box<dyn Write + Send + Sync>>;
@@ -190,20 +192,70 @@ pub fn path_without_scheme(full_path: &str) -> &str {
 
 pub mod testing {
     use super::*;
+    use futures::stream::TryStreamExt;
+    use std::collections::HashSet;
+    use std::path::Path;
+    use tokio::io::AsyncWriteExt;
 
-    pub async fn list_dir_suite(store: impl ObjectStore, base_path: &str) -> Result<()> {
+    pub async fn simple_write_file(
+        path: &Path,
+        content: &str,
+        store: &impl ObjectStore,
+    ) -> Result<()> {
+        dbg!(path.to_str().unwrap());
+        let mut writer = store.file_writer(path.to_str().unwrap())?.writer().await?;
+        writer.write_all(content.as_bytes()).await?;
+        writer.flush().await?;
+        Ok(())
+    }
+
+    pub async fn list_dir_suite(store: impl ObjectStore, base_path: &Path) -> Result<()> {
         // base/a.txt
         // base/x/b.txt
         // base/y/c.txt
-        store.create_dir("x", false).await?;
-        store.create_dir("y", false).await?;
+        store.create_dir(base_path.to_str().unwrap(), false).await?;
+        store
+            .create_dir(base_path.join("x").to_str().unwrap(), false)
+            .await?;
+        store
+            .create_dir(base_path.join("y").to_str().unwrap(), false)
+            .await?;
+        simple_write_file(&base_path.join("a.txt"), "test", &store).await?;
+        simple_write_file(&base_path.join("x").join("b.txt"), "", &store).await?;
+        simple_write_file(&base_path.join("y").join("c.txt"), "", &store).await?;
 
-        // TODO
+        // list_file() will return all files recursively, but no directories.
+        let files = store.list_file(base_path.to_str().unwrap()).await?;
+        let expected = HashSet::from([
+            base_path
+                .join("a.txt")
+                .into_os_string()
+                .into_string()
+                .unwrap(),
+            base_path
+                .join("x")
+                .join("b.txt")
+                .into_os_string()
+                .into_string()
+                .unwrap(),
+            base_path
+                .join("y")
+                .join("c.txt")
+                .into_os_string()
+                .into_string()
+                .unwrap(),
+        ]);
+        let actual: HashSet<String> =
+            files.map_ok(|f| f.sized_file.path).try_collect().await?;
+        assert_eq!(expected, actual);
 
         Ok(())
     }
 
-    pub async fn read_write_suite(store: impl ObjectStore, base_path: &str) -> Result<()> {
+    pub async fn read_write_suite(
+        store: impl ObjectStore,
+        base_path: &Path,
+    ) -> Result<()> {
         // TODO
         Ok(())
     }
@@ -215,10 +267,13 @@ pub mod testing {
             async fn $test_name() -> Result<()> {
                 let object_store = $store_factory();
                 let base_path = $base_path_factory()?;
-                let base_path_str = base_path.path().to_str().unwrap();
-                crate::object_store::testing::$test_name(object_store, base_path_str).await
+                dbg!(&base_path);
+                crate::object_store::testing::$test_name(object_store, base_path.path())
+                    .await?;
+                dbg!(&base_path);
+                Ok(())
             }
-        }
+        };
     }
 
     /// Run the standard ObjectStore test suite
@@ -230,6 +285,7 @@ pub mod testing {
             mod object_store_test {
                 use super::*;
                 use crate::store_test;
+                use crate::Result;
                 store_test!(list_dir_suite, $store_factory, $base_path_factory);
                 store_test!(read_write_suite, $store_factory, $base_path_factory);
             }
