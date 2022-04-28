@@ -72,7 +72,6 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::optimizer::to_approx_perc::ToApproxPerc;
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -1210,10 +1209,6 @@ impl SessionState {
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
-                // ToApproxPerc must be applied last because
-                // it rewrites only the function and may interfere with
-                // other rules
-                Arc::new(ToApproxPerc::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
