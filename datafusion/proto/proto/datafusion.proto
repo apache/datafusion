@@ -184,6 +184,7 @@ enum ScalarFunction {
   Trim=61;
   Upper=62;
   Coalesce=63;
+  Power=64;
 }
 
 message ScalarFunctionNode {
