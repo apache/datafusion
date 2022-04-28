@@ -86,8 +86,7 @@ impl DataFrame {
     /// Create a physical plan
     pub async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let state = self.session_state.read().clone();
-        let optimized_plan = state.optimize(&self.plan)?;
-        state.create_physical_plan(&optimized_plan).await
+        state.create_physical_plan(&self.plan).await
     }
 
     /// Filter the DataFrame by column. Returns a new DataFrame only containing the
