@@ -116,7 +116,8 @@ impl DFSchema {
         )
     }
 
-    /// Combine two schemas
+    /// Create a new schema that contains the fields from this schema followed by the fields
+    /// from the supplied schema. An error will be returned if there are duplicate field names.
     pub fn join(&self, schema: &DFSchema) -> Result<Self> {
         let mut fields = self.fields.clone();
         let mut metadata = self.metadata.clone();
@@ -125,7 +126,8 @@ impl DFSchema {
         Self::new_with_metadata(fields, metadata)
     }
 
-    /// Merge a schema into self
+    /// Modify this schema by appending the fields from the supplied schema, ignoring any
+    /// duplicate fields.
     pub fn merge(&mut self, other_schema: &DFSchema) {
         for field in other_schema.fields() {
             // skip duplicate columns
