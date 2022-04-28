@@ -681,7 +681,7 @@ mod tests {
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
-            "Error during planning: Schema contains duplicate \
+            "Schema error: Schema contains duplicate \
         qualified field name \'t1.c0\'",
             &format!("{}", join.err().unwrap())
         );
@@ -695,7 +695,7 @@ mod tests {
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
-            "Error during planning: Schema contains duplicate \
+            "Schema error: Schema contains duplicate \
         unqualified field name \'c0\'",
             &format!("{}", join.err().unwrap())
         );
@@ -730,7 +730,7 @@ mod tests {
         let join = left.join(&right);
         assert!(join.is_err());
         assert_eq!(
-            "Error during planning: Schema contains qualified \
+            "Schema error: Schema contains qualified \
         field name \'t1.c0\' and unqualified field name \'c0\' which would be ambiguous",
             &format!("{}", join.err().unwrap())
         );

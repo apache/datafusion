@@ -81,6 +81,7 @@ pub enum DataFusionError {
     JITError(ModuleError),
 }
 
+/// Schema-related errors
 #[derive(Debug)]
 pub enum SchemaError {
     /// Schema contains qualified and unqualified field with same unqualified name
@@ -115,10 +116,9 @@ impl Display for SchemaError {
                     write!(f, "'{}'", name)?;
                 }
                 if let Some(field_names) = valid_fields {
-                    write!(f, ". Valid fields are {}", field_names.join(", "))
-                } else {
-                    write!(f, "")
+                    write!(f, ". Valid fields are {}", field_names.join(", "))?;
                 }
+                write!(f, ".")
             }
             Self::DuplicateQualifiedField { qualifier, name } => {
                 write!(
@@ -136,7 +136,7 @@ impl Display for SchemaError {
             }
             Self::AmbiguousReference { qualifier, name } => {
                 if let Some(q) = qualifier {
-                    write!(f, "Ambiguous reference to qualified field '{}.{}'", q, name)
+                    write!(f, "Schema contains qualified field name '{}.{}' and unqualified field name '{}' which would be ambiguous", q, name, name)
                 } else {
                     write!(f, "Ambiguous reference to unqualified field '{}'", name)
                 }
