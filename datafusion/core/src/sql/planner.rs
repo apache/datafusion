@@ -3764,7 +3764,7 @@ mod tests {
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
             "Plan(\"Column Int64(1) (type: Int64) is \
-            not compatible wiht column IntervalMonthDayNano\
+            not compatible with column IntervalMonthDayNano\
             (\\\"950737950189618795196236955648\\\") \
             (type: Interval(MonthDayNano))\")",
             format!("{:?}", err)

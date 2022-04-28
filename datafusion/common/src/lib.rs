@@ -24,5 +24,5 @@ mod scalar;
 
 pub use column::Column;
 pub use dfschema::{DFField, DFSchema, DFSchemaRef, ExprSchema, ToDFSchema};
-pub use error::{DataFusionError, Result};
+pub use error::{DataFusionError, Result, SchemaError};
 pub use scalar::{ScalarType, ScalarValue};
