@@ -1429,7 +1429,10 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference { qualifier, name })) => {
+            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
+                qualifier,
+                name,
+            })) => {
                 assert_eq!("employee_csv", qualifier.unwrap().as_str());
                 assert_eq!("id", &name);
                 Ok(())
@@ -1452,7 +1455,10 @@ mod tests {
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
-            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference { qualifier, name })) => {
+            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
+                qualifier,
+                name,
+            })) => {
                 assert_eq!("employee_csv", qualifier.unwrap().as_str());
                 assert_eq!("state", &name);
                 Ok(())
