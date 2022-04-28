@@ -2400,8 +2400,8 @@ fn extract_possible_join_keys(
     }
 }
 
-/// Convert SQL data type to relational representation of data type
-pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
+/// Convert SQL simple data type to relational representation of data type
+pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
     match sql_type {
         SQLDataType::Boolean => Ok(DataType::Boolean),
         SQLDataType::SmallInt(_) => Ok(DataType::Int16),
@@ -2410,7 +2410,10 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
-        SQLDataType::Char(_) | SQLDataType::Varchar(_) => Ok(DataType::Utf8),
+        SQLDataType::Char(_)
+        | SQLDataType::Varchar(_)
+        | SQLDataType::Text
+        | SQLDataType::String => Ok(DataType::Utf8),
         SQLDataType::Timestamp => Ok(DataType::Timestamp(TimeUnit::Nanosecond, None)),
         SQLDataType::Date => Ok(DataType::Date32),
         SQLDataType::Decimal(precision, scale) => make_decimal_type(*precision, *scale),
@@ -2418,6 +2421,20 @@ pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
             "Unsupported SQL type {:?}",
             other
         ))),
+    }
+}
+
+/// Convert SQL data type to relational representation of data type
+pub fn convert_data_type(sql_type: &SQLDataType) -> Result<DataType> {
+    match sql_type {
+        SQLDataType::Array(inner_sql_type) => {
+            let data_type = convert_simple_data_type(inner_sql_type)?;
+
+            Ok(DataType::List(Box::new(Field::new(
+                "field", data_type, true,
+            ))))
+        }
+        other => convert_simple_data_type(other),
     }
 }
 
