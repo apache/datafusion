@@ -254,9 +254,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             for cte in with.cte_tables {
-                // A `WITH` block can't use the same name for many times
-                let cte_name: &str = cte.alias.name.value.as_ref();
-                if ctes.contains_key(cte_name) {
+                // A `WITH` block can't use the same name more than once
+                let cte_name = normalize_ident(cte.alias.name);
+                if ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
                         cte_name
@@ -265,11 +265,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // create logical plan & pass backreferencing CTEs
                 let logical_plan = self.query_to_plan_with_alias(
                     cte.query,
-                    Some(cte.alias.name.value.clone()),
+                    Some(cte_name.clone()),
                     &mut ctes.clone(),
                     outer_query_schema,
                 )?;
-                ctes.insert(cte.alias.name.value, logical_plan);
+                ctes.insert(cte_name, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_query_schema)?;
@@ -668,19 +668,34 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Table {
                 ref name, alias, ..
             } => {
-                let table_name = name.to_string();
+                // normalize name and alias
+                let table_name = name
+                    .0
+                    .iter()
+                    .map(|id| normalize_ident(id.clone()))
+                    .collect::<Vec<String>>()
+                    .join(".");
+                let normalized_alias =
+                    alias.as_ref().map(|a| normalize_ident(a.to_owned().name));
                 let cte = ctes.get(&table_name);
                 (
                     match (
                         cte,
                         self.schema_provider.get_table_provider(name.try_into()?),
                     ) {
-                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                        (Some(cte_plan), _) => match normalized_alias {
+                            Some(cte_alias) => project_with_alias(
+                                cte_plan.clone(),
+                                vec![Expr::Wildcard],
+                                Some(cte_alias),
+                            ),
+                            _ => Ok(cte_plan.clone()),
+                        },
                         (_, Some(provider)) => {
                             let scan =
                                 LogicalPlanBuilder::scan(&table_name, provider, None);
-                            let scan = match alias {
-                                Some(ref name) => scan?.alias(name.name.value.as_str()),
+                            let scan = match normalized_alias.as_ref() {
+                                Some(ref name) => scan?.alias(name.to_owned().as_str()),
                                 _ => scan,
                             };
                             scan?.build()
@@ -696,15 +711,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
+                let normalized_alias =
+                    alias.as_ref().map(|a| normalize_ident(a.to_owned().name));
                 // if alias is None, return Err
-                if alias.is_none() {
+                if normalized_alias.is_none() {
                     return Err(DataFusionError::Plan(
                         "subquery in FROM must have an alias".to_string(),
                     ));
                 }
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
-                    alias.as_ref().map(|a| a.name.value.to_string()),
+                    normalized_alias.clone(),
                     ctes,
                     outer_query_schema,
                 )?;
@@ -716,7 +733,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .fields()
                             .iter()
                             .map(|field| col(field.name())),
-                        alias.as_ref().map(|a| normalize_ident(a.name.clone())),
+                        normalized_alias,
                     )?,
                     alias,
                 )
