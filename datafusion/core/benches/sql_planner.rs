@@ -58,7 +58,7 @@ fn create_context() -> Result<Arc<Mutex<SessionContext>>> {
 fn criterion_benchmark(c: &mut Criterion) {
     let ctx = create_context().unwrap();
 
-    c.bench_function("trivial join early columns", |b| {
+    c.bench_function("trivial join low numbered columns", |b| {
         b.iter(|| {
             plan(
                 ctx.clone(),
@@ -68,12 +68,22 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("trivial join late columns", |b| {
+    c.bench_function("trivial join high numbered columns", |b| {
         b.iter(|| {
             plan(
                 ctx.clone(),
                 "SELECT t1.a99, t2.b99  \
                  FROM t1, t2 WHERE a199 = b199",
+            )
+        })
+    });
+
+    c.bench_function("aggregate with join", |b| {
+        b.iter(|| {
+            plan(
+                ctx.clone(),
+                "SELECT t1.a99, MIN(t2.b1), MAX(t2.b199), AVG(t2.b123), COUNT(t2.b73)  \
+                 FROM t1 JOIN t2 ON t1.a199 = t2.b199 GROUP BY t1.a99",
             )
         })
     });
