@@ -557,7 +557,13 @@ impl ContextWithParquet {
     /// rows and normalized execution metrics
     async fn query(&mut self, sql: &str) -> TestOutput {
         println!("Planning sql {}", sql);
-        let logical_plan = self.ctx.sql(sql).await.expect("planning").to_logical_plan();
+        let logical_plan = self
+            .ctx
+            .sql(sql)
+            .await
+            .expect("planning")
+            .to_logical_plan()
+            .unwrap();
         self.run_test(logical_plan, sql).await
     }
 
