@@ -339,7 +339,7 @@ async fn parquet_statistics() -> Result<()> {
     .await;
 
     //// NO PROJECTION ////
-    let logical_plan = ctx.sql("SELECT * FROM t").await?.to_logical_plan();
+    let logical_plan = ctx.sql("SELECT * FROM t").await?.to_logical_plan()?;
 
     let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
     assert_eq!(physical_plan.schema().fields().len(), 4);
@@ -360,7 +360,7 @@ async fn parquet_statistics() -> Result<()> {
     let logical_plan = ctx
         .sql("SELECT mycol, day FROM t WHERE day='28'")
         .await?
-        .to_logical_plan();
+        .to_logical_plan()?;
 
     let physical_plan = ctx.create_physical_plan(&logical_plan).await?;
     assert_eq!(physical_plan.schema().fields().len(), 2);

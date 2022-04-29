@@ -655,7 +655,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         }
 
         // create the physical plan
-        let csv = csv.to_logical_plan();
+        let csv = csv.to_logical_plan()?;
         let csv = ctx.optimize(&csv)?;
         let csv = ctx.create_physical_plan(&csv).await?;
 
