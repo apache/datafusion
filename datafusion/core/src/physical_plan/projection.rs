@@ -212,7 +212,7 @@ fn get_field_metadata(
     input_schema
         .field_with_name(name)
         .ok()
-        .and_then(|f| f.metadata().as_ref().cloned())
+        .and_then(|f| f.metadata().cloned())
 }
 
 fn stats_projection(
