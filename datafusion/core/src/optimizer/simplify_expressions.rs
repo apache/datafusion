@@ -294,7 +294,7 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
 
         // if this expr is not ok to evaluate, mark entire parent
         // stack as not ok (as all parents have at least one child or
-        // descendant that is non evaluateable
+        // descendant that can not be evaluated
 
         if !Self::can_evaluate(expr) {
             // walk back up stack, marking first parent that is not mutable
@@ -317,10 +317,8 @@ impl<'a> ExprRewriter for ConstEvaluator<'a> {
 
     fn mutate(&mut self, expr: Expr) -> Result<Expr> {
         if self.can_evaluate.pop().unwrap() {
-            match self.evaluate_to_scalar(&expr) {
-                Ok(scalar) => Ok(Expr::Literal(scalar)),
-                Err(_) => Ok(expr),
-            }
+            let scalar = self.evaluate_to_scalar(expr)?;
+            Ok(Expr::Literal(scalar))
         } else {
             Ok(expr)
         }
@@ -402,9 +400,9 @@ impl<'a> ConstEvaluator<'a> {
     }
 
     /// Internal helper to evaluates an Expr
-    pub(crate) fn evaluate_to_scalar(&self, expr: &Expr) -> Result<ScalarValue> {
+    pub(crate) fn evaluate_to_scalar(&self, expr: Expr) -> Result<ScalarValue> {
         if let Expr::Literal(s) = expr {
-            return Ok(s.clone());
+            return Ok(s);
         }
 
         let phys_expr = create_physical_expr(
