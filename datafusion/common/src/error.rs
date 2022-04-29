@@ -62,8 +62,11 @@ pub enum DataFusionError {
     // This error is raised when one of those invariants is not verified during execution.
     Internal(String),
     /// This error happens whenever a plan is not valid. Examples include
-    /// impossible casts, schema inference not possible and non-unique column names.
+    /// impossible casts.
     Plan(String),
+    /// This error happens with schema-related errors, such as schema inference not possible
+    /// and non-unique column names.
+    SchemaError(SchemaError),
     /// Error returned during execution of the query.
     /// Examples include files not found, errors in parsing certain types.
     Execution(String),
@@ -76,6 +79,70 @@ pub enum DataFusionError {
     #[cfg(feature = "jit")]
     /// Error occurs during code generation
     JITError(ModuleError),
+}
+
+/// Schema-related errors
+#[derive(Debug)]
+pub enum SchemaError {
+    /// Schema contains a (possibly) qualified and unqualified field with same unqualified name
+    AmbiguousReference {
+        qualifier: Option<String>,
+        name: String,
+    },
+    /// Schema contains duplicate qualified field name
+    DuplicateQualifiedField { qualifier: String, name: String },
+    /// Schema contains duplicate unqualified field name
+    DuplicateUnqualifiedField { name: String },
+    /// No field with this name
+    FieldNotExist {
+        qualifier: Option<String>,
+        name: String,
+        valid_fields: Option<Vec<String>>,
+    },
+}
+
+impl Display for SchemaError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::FieldNotExist {
+                qualifier,
+                name,
+                valid_fields,
+            } => {
+                write!(f, "No field named ")?;
+                if let Some(q) = qualifier {
+                    write!(f, "'{}.{}'", q, name)?;
+                } else {
+                    write!(f, "'{}'", name)?;
+                }
+                if let Some(field_names) = valid_fields {
+                    write!(f, ". Valid fields are {}", field_names.join(", "))?;
+                }
+                write!(f, ".")
+            }
+            Self::DuplicateQualifiedField { qualifier, name } => {
+                write!(
+                    f,
+                    "Schema contains duplicate qualified field name '{}.{}'",
+                    qualifier, name
+                )
+            }
+            Self::DuplicateUnqualifiedField { name } => {
+                write!(
+                    f,
+                    "Schema contains duplicate unqualified field name '{}'",
+                    name
+                )
+            }
+            Self::AmbiguousReference { qualifier, name } => {
+                if let Some(q) = qualifier {
+                    write!(f, "Schema contains qualified field name '{}.{}' and unqualified field name '{}' which would be ambiguous", q, name, name)
+                } else {
+                    write!(f, "Ambiguous reference to unqualified field '{}'", name)
+                }
+            }
+        }
+    }
 }
 
 impl From<io::Error> for DataFusionError {
@@ -158,6 +225,9 @@ impl Display for DataFusionError {
             }
             DataFusionError::Plan(ref desc) => {
                 write!(f, "Error during planning: {}", desc)
+            }
+            DataFusionError::SchemaError(ref desc) => {
+                write!(f, "Schema error: {}", desc)
             }
             DataFusionError::Execution(ref desc) => {
                 write!(f, "Execution error: {}", desc)
