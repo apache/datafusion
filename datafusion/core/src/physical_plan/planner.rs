@@ -38,7 +38,7 @@ use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
 use crate::physical_plan::expressions::{
-    BinaryExpr, CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
+    CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
 };
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
@@ -59,7 +59,7 @@ use crate::{
     physical_plan::displayable,
 };
 use arrow::compute::SortOptions;
-use arrow::datatypes::{IntervalUnit, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
 use datafusion_physical_expr::expressions::DateIntervalExpr;
@@ -966,12 +966,12 @@ pub fn create_physical_expr(
                 execution_props,
             )?;
             match (lhs.data_type(input_schema)?, rhs.data_type(input_schema)?) {
-                (DataType::Date32, DataType::Interval(_)) => {
-                    Ok(Arc::new(DateIntervalExpr::new()))
-                }
-                (DataType::Date64, DataType::Interval(_)) => {
-                    Ok(Arc::new(DateIntervalExpr::new()))
-                }
+                (DataType::Date32, DataType::Interval(_)) => Ok(Arc::new(
+                    DateIntervalExpr::try_new(lhs, *op, rhs, input_schema)?,
+                )),
+                (DataType::Date64, DataType::Interval(_)) => Ok(Arc::new(
+                    DateIntervalExpr::try_new(lhs, *op, rhs, input_schema)?,
+                )),
                 _ => {
                     // assume that we can coerce both sides into a common type
                     // and then perform a binary operation

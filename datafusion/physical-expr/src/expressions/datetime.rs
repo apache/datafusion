@@ -18,36 +18,68 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_expr::ColumnarValue;
+use datafusion_common::DataFusionError;
+use datafusion_common::Result;
+use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
+use std::sync::Arc;
 
+/// Perform DATE +/ INTERVAL math
 #[derive(Debug)]
-pub struct DateIntervalExpr {}
+pub struct DateIntervalExpr {
+    lhs: Arc<dyn PhysicalExpr>,
+    op: Operator,
+    rhs: Arc<dyn PhysicalExpr>,
+}
 
 impl DateIntervalExpr {
-    pub fn new() -> Self {
-        Self {}
+    /// Create a new instance of DateIntervalExpr
+    pub fn try_new(
+        lhs: Arc<dyn PhysicalExpr>,
+        op: Operator,
+        rhs: Arc<dyn PhysicalExpr>,
+        input_schema: &Schema,
+    ) -> Result<Self> {
+        match lhs.data_type(input_schema)? {
+            DataType::Date32 | DataType::Date64 => match rhs.data_type(input_schema)? {
+                DataType::Interval(_) => match &op {
+                    Operator::Plus | Operator::Minus => Ok(Self { lhs, op, rhs }),
+                    _ => Err(DataFusionError::Execution(format!(
+                        "Invalid operator '{}' for DateIntervalExpr",
+                        op
+                    ))),
+                },
+                other => Err(DataFusionError::Execution(format!(
+                    "Invalid rhs type '{}' for DateIntervalExpr",
+                    other
+                ))),
+            },
+            other => Err(DataFusionError::Execution(format!(
+                "Invalid lhs type '{}' for DateIntervalExpr",
+                other
+            ))),
+        }
     }
 }
 
 impl Display for DateIntervalExpr {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TBD")
+        write!(f, "{} {} {}", self.lhs, self.op, self.rhs)
     }
 }
 
 impl PhysicalExpr for DateIntervalExpr {
     fn as_any(&self) -> &dyn Any {
-        todo!()
+        self
     }
 
     fn data_type(&self, input_schema: &Schema) -> datafusion_common::Result<DataType> {
-        todo!()
+        self.lhs.data_type(input_schema)
     }
 
     fn nullable(&self, input_schema: &Schema) -> datafusion_common::Result<bool> {
-        todo!()
+        self.lhs.nullable(input_schema)
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> datafusion_common::Result<ColumnarValue> {
