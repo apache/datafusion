@@ -99,6 +99,10 @@ impl AggregateExpr for Count {
     fn row_state_supported(&self) -> bool {
         true
     }
+
+    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(CountRowAccumulator::new(start_index)))
+    }
 }
 
 #[derive(Debug)]

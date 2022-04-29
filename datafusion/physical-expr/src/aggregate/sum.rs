@@ -114,6 +114,10 @@ impl AggregateExpr for Sum {
                 | DataType::Float64
         )
     }
+
+    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(SumRowAccumulator::new(start_index, self.data_type.clone())))
+    }
 }
 
 #[derive(Debug)]

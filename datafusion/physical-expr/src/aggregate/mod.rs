@@ -22,6 +22,7 @@ use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
+use crate::aggregate::row_accumulator::RowAccumulator;
 
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;
@@ -80,5 +81,9 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// If the aggregate expression is supported by row format
     fn row_state_supported(&self) -> bool {
         false
+    }
+
+    fn create_accumulator_v2(&self, _start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+        unreachable!()
     }
 }

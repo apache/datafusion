@@ -119,6 +119,13 @@ impl AggregateExpr for Avg {
                 | DataType::Float64
         )
     }
+
+    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(AvgRowAccumulator::new(
+            start_index,
+            self.data_type.clone(),
+        )))
+    }
 }
 
 /// An accumulator to compute the average

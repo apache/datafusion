@@ -129,6 +129,10 @@ impl AggregateExpr for Max {
                 | DataType::Float64
         )
     }
+
+    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(MaxRowAccumulator::new(start_index)))
+    }
 }
 
 // Statically-typed version of min/max(array) -> ScalarValue for string types.
@@ -641,6 +645,10 @@ impl AggregateExpr for Min {
                 | DataType::Float32
                 | DataType::Float64
         )
+    }
+
+    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(MinRowAccumulator::new(start_index)))
     }
 }
 

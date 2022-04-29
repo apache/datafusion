@@ -28,7 +28,7 @@ use futures::{
 };
 
 use crate::error::Result;
-use crate::physical_plan::aggregates::{evaluate, evaluate_many, AggregateMode};
+use crate::physical_plan::aggregates::{evaluate, evaluate_many, AggregateMode, AccumulatorItemV2};
 use crate::physical_plan::hash_utils::create_row_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
@@ -45,6 +45,7 @@ use datafusion_row::layout::RowLayout;
 use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::RowType;
 use hashbrown::raw::RawTable;
+use datafusion_row::accessor::RowAccessor;
 
 /*
 The architecture is the following:
@@ -80,6 +81,7 @@ pub(crate) struct GroupedRowHashAggregateStream {
 
     aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     group_expr: Vec<Arc<dyn PhysicalExpr>>,
+    accs_v2: Vec<AccumulatorItemV2>,
 
     group_schema: SchemaRef,
     aggr_schema: SchemaRef,
@@ -117,6 +119,8 @@ impl GroupedRowHashAggregateStream {
         let aggregate_expressions =
             aggregates::aggregate_expressions(&aggr_expr, &mode, group_expr.len())?;
 
+        let accs_v2 = aggregates::create_accumulators_v2(&aggr_expr)?;
+
         let (group_schema, aggr_schema) =
             create_separate_schema(&schema, group_expr.len());
         let aggr_layout = RowLayout::new(&aggr_schema, RowType::WordAligned);
@@ -129,6 +133,7 @@ impl GroupedRowHashAggregateStream {
             input,
             aggr_expr,
             group_expr,
+            accs_v2,
             group_schema,
             aggr_schema,
             aggr_layout,
@@ -165,6 +170,7 @@ impl Stream for GroupedRowHashAggregateStream {
                         &this.random_state,
                         &this.group_expr,
                         &this.aggr_expr,
+                        &mut this.accs_v2,
                         &this.group_schema,
                         &this.aggr_schema,
                         &this.aggr_layout,
@@ -216,6 +222,7 @@ fn group_aggregate_batch(
     random_state: &RandomState,
     group_expr: &[Arc<dyn PhysicalExpr>],
     aggr_expr: &[Arc<dyn AggregateExpr>],
+    accs_v2: &mut [AccumulatorItemV2],
     group_schema: &Schema,
     aggr_schema: &Schema,
     aggr_row_layout: &RowLayout,
@@ -232,6 +239,7 @@ fn group_aggregate_batch(
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
+    let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
 
     // 1.1 construct the key from the group values
     // 1.2 construct the mapping key if it does not exist
@@ -325,8 +333,7 @@ fn group_aggregate_batch(
         .try_for_each(|(group_idx, offsets)| {
             let group_state = &mut accumulators.group_states[*group_idx];
             // 2.2
-            group_state
-                .accumulator_set
+            accs_v2
                 .iter_mut()
                 .zip(values.iter())
                 .map(|(accumulator, aggr_array)| {
@@ -341,11 +348,14 @@ fn group_aggregate_batch(
                             .collect::<Vec<ArrayRef>>(),
                     )
                 })
-                .try_for_each(|(accumulator, values)| match mode {
-                    AggregateMode::Partial => accumulator.update_batch(&values),
-                    AggregateMode::FinalPartitioned | AggregateMode::Final => {
-                        // note: the aggregation here is over states, not values, thus the merge
-                        accumulator.merge_batch(&values)
+                .try_for_each(|(accumulator, values)| {
+                    state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+                    match mode {
+                        AggregateMode::Partial => accumulator.update_batch(&values, &mut state_accessor),
+                        AggregateMode::FinalPartitioned | AggregateMode::Final => {
+                            // note: the aggregation here is over states, not values, thus the merge
+                            accumulator.merge_batch(&values, &mut state_accessor)
+                        }
                     }
                 })
                 // 2.5
@@ -409,4 +419,8 @@ fn create_group_rows(arrays: Vec<ArrayRef>, schema: &Schema) -> Vec<Vec<u8>> {
         writer.reset()
     }
     results
+}
+
+fn create_state_accessor(schema: &Schema) -> RowAccessor {
+    RowAccessor::
 }
