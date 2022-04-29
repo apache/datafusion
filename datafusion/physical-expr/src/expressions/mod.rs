@@ -55,6 +55,7 @@ pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
 pub use crate::aggregate::sum::Sum;
+pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
 
 pub use crate::window::cume_dist::cume_dist;
