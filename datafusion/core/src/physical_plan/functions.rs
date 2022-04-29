@@ -50,6 +50,7 @@ use datafusion_physical_expr::conditional_expressions;
 use datafusion_physical_expr::datetime_expressions;
 use datafusion_physical_expr::math_expressions;
 use datafusion_physical_expr::string_expressions;
+use datafusion_physical_expr::struct_expressions;
 use std::sync::Arc;
 
 /// Create a physical (function) expression.
@@ -299,6 +300,7 @@ pub fn create_physical_fun(
 
         // string functions
         BuiltinScalarFunction::Array => Arc::new(array_expressions::array),
+        BuiltinScalarFunction::Struct => Arc::new(struct_expressions::struct_expr),
         BuiltinScalarFunction::Ascii => Arc::new(|args| match args[0].data_type() {
             DataType::Utf8 => {
                 make_scalar_function(string_expressions::ascii::<i32>)(args)

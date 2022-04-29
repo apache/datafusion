@@ -1070,6 +1070,7 @@ impl TryFrom<&BuiltinScalarFunction> for protobuf::ScalarFunction {
             BuiltinScalarFunction::RegexpMatch => Self::RegexpMatch,
             BuiltinScalarFunction::Coalesce => Self::Coalesce,
             BuiltinScalarFunction::Power => Self::Power,
+            BuiltinScalarFunction::Struct => Self::StructFun,
         };
 
         Ok(scalar_function)
