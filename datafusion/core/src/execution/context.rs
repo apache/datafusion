@@ -400,10 +400,7 @@ impl SessionContext {
                 }
             }
 
-            plan => Ok(Arc::new(DataFrame::new(
-                self.state.clone(),
-                &self.optimize(&plan)?,
-            ))),
+            plan => Ok(Arc::new(DataFrame::new(self.state.clone(), &plan))),
         }
     }
 
@@ -1361,7 +1358,8 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = self.query_planner.clone();
-        planner.create_physical_plan(logical_plan, self).await
+        let logical_plan = self.optimize(logical_plan)?;
+        planner.create_physical_plan(&logical_plan, self).await
     }
 }
 
@@ -1884,26 +1882,6 @@ mod tests {
         for thread in threads {
             thread.join().expect("Failed to join thread")?;
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn ctx_sql_should_optimize_plan() -> Result<()> {
-        let ctx = SessionContext::new();
-        let plan1 = ctx
-            .create_logical_plan("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
-
-        let opt_plan1 = ctx.optimize(&plan1)?;
-
-        let plan2 = ctx
-            .sql("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")
-            .await?;
-
-        assert_eq!(
-            format!("{:?}", opt_plan1),
-            format!("{:?}", plan2.to_logical_plan())
-        );
-
         Ok(())
     }
 

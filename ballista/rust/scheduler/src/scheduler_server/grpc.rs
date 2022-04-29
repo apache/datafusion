@@ -380,14 +380,15 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                         error!("{}", msg);
                         tonic::Status::internal(msg)
                     })?,
-                Query::Sql(sql) => {
-                    let df = df_session.sql(&sql).await.map_err(|e| {
+                Query::Sql(sql) => df_session
+                    .sql(&sql)
+                    .await
+                    .and_then(|df| df.to_logical_plan())
+                    .map_err(|e| {
                         let msg = format!("Error parsing SQL: {}", e);
                         error!("{}", msg);
                         tonic::Status::internal(msg)
-                    })?;
-                    df.to_logical_plan()
-                }
+                    })?,
             };
             debug!("Received plan for execution: {:?}", plan);
 

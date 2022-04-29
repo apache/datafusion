@@ -124,6 +124,10 @@ name = "parquet_query_sql"
 
 [[bench]]
 harness = false
+name = "sql_planner"
+
+[[bench]]
+harness = false
 name = "jit"
 required-features = ["row", "jit"]
 
