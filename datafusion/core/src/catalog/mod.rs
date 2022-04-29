@@ -23,9 +23,6 @@ pub mod catalog;
 pub mod information_schema;
 pub mod schema;
 
-use crate::error::DataFusionError;
-use std::convert::TryFrom;
-
 /// Represents a resolved path to a table of the form "catalog.schema.table"
 #[derive(Clone, Copy)]
 pub struct ResolvedTableReference<'a> {
@@ -129,33 +126,6 @@ impl<'a> From<ResolvedTableReference<'a>> for TableReference<'a> {
             catalog: resolved.catalog,
             schema: resolved.schema,
             table: resolved.table,
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a sqlparser::ast::ObjectName> for TableReference<'a> {
-    type Error = DataFusionError;
-
-    fn try_from(value: &'a sqlparser::ast::ObjectName) -> Result<Self, Self::Error> {
-        let idents = &value.0;
-
-        match idents.len() {
-            1 => Ok(Self::Bare {
-                table: &idents[0].value,
-            }),
-            2 => Ok(Self::Partial {
-                schema: &idents[0].value,
-                table: &idents[1].value,
-            }),
-            3 => Ok(Self::Full {
-                catalog: &idents[0].value,
-                schema: &idents[1].value,
-                table: &idents[2].value,
-            }),
-            _ => Err(DataFusionError::Plan(format!(
-                "invalid table reference: {}",
-                value
-            ))),
         }
     }
 }

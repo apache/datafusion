@@ -666,24 +666,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table {
-                ref name, alias, ..
+                name: ref sql_object_name,
+                alias,
+                ..
             } => {
                 // normalize name and alias
-                let table_name = name
-                    .0
-                    .iter()
-                    .map(|id| normalize_ident(id.clone()))
-                    .collect::<Vec<String>>()
-                    .join(".");
-                let normalized_alias =
-                    alias.as_ref().map(|a| normalize_ident(a.to_owned().name));
+                let table_name = normalize_sql_object_name(sql_object_name);
+                let table_ref: TableReference = table_name.as_str().into();
+                let table_alias =
+                    alias.as_ref().map(|a| normalize_ident(a.name.to_owned()));
                 let cte = ctes.get(&table_name);
                 (
-                    match (
-                        cte,
-                        self.schema_provider.get_table_provider(name.try_into()?),
-                    ) {
-                        (Some(cte_plan), _) => match normalized_alias {
+                    match (cte, self.schema_provider.get_table_provider(table_ref)) {
+                        (Some(cte_plan), _) => match table_alias {
                             Some(cte_alias) => project_with_alias(
                                 cte_plan.clone(),
                                 vec![Expr::Wildcard],
@@ -694,7 +689,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         (_, Some(provider)) => {
                             let scan =
                                 LogicalPlanBuilder::scan(&table_name, provider, None);
-                            let scan = match normalized_alias.as_ref() {
+                            let scan = match table_alias.as_ref() {
                                 Some(ref name) => scan?.alias(name.to_owned().as_str()),
                                 _ => scan,
                             };
@@ -702,7 +697,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         }
                         (None, None) => Err(DataFusionError::Plan(format!(
                             "Table or CTE with name '{}' not found",
-                            name
+                            sql_object_name
                         ))),
                     }?,
                     alias,
@@ -2200,7 +2195,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         extended: bool,
         full: bool,
-        table_name: &ObjectName,
+        sql_table_name: &ObjectName,
         filter: Option<&ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if filter.is_some() {
@@ -2215,26 +2210,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_string(),
             ));
         }
+        let table_name = normalize_sql_object_name(sql_table_name);
+        let table_ref: TableReference = table_name.as_str().into();
 
-        if self
-            .schema_provider
-            .get_table_provider(table_name.try_into()?)
-            .is_none()
-        {
+        if self.schema_provider.get_table_provider(table_ref).is_none() {
             return Err(DataFusionError::Plan(format!(
                 "Unknown relation for SHOW COLUMNS: {}",
-                table_name
+                sql_table_name
             )));
         }
 
         // Figure out the where clause
         let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
-        let where_clause = table_name
+        let where_clause = sql_table_name
             .0
             .iter()
             .rev()
             .zip(columns)
-            .map(|(ident, column_name)| format!(r#"{} = '{}'"#, column_name, ident))
+            .map(|(ident, column_name)| {
+                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident.clone()))
+            })
             .collect::<Vec<_>>()
             .join(" AND ");
 
@@ -2307,6 +2302,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )))
         }
     }
+}
+
+/// Normalize a SQL object name
+fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
+    sql_object_name
+        .0
+        .iter()
+        .map(|id| normalize_ident(id.clone()))
+        .collect::<Vec<String>>()
+        .join(".")
 }
 
 /// Remove join expressions from a filter expression
