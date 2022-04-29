@@ -28,7 +28,6 @@ use datafusion::datasource::MemTable;
 
 use datafusion::error::Result;
 
-// use datafusion::logical_plan::Expr;
 use datafusion::prelude::*;
 
 use datafusion::execution::context::SessionContext;
