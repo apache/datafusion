@@ -307,13 +307,13 @@ async fn information_schema_show_columns() {
     let result = plan_and_collect(&ctx, "SHOW columns from t").await.unwrap();
     assert_batches_sorted_eq!(expected, &result);
 
-    // This isn't ideal but it is consistent behavior for `SELECT * from T`
-    let err = plan_and_collect(&ctx, "SHOW columns from T")
+    // This isn't ideal but it is consistent behavior for `SELECT * from "T"`
+    let err = plan_and_collect(&ctx, "SHOW columns from \"T\"")
         .await
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Unknown relation for SHOW COLUMNS: T"
+        "Error during planning: Unknown relation for SHOW COLUMNS: \"T\""
     );
 }
 

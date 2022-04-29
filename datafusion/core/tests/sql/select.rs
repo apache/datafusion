@@ -831,6 +831,29 @@ async fn query_on_string_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_cte_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int16, false),
+        Field::new("a", DataType::Int16, false),
+    ]);
+    let empty_table = Arc::new(EmptyTable::new(Arc::new(schema)));
+    ctx.register_table("t1", empty_table)?;
+    let sql = "WITH \
+        v1 AS (SELECT * FROM t1), \
+        v2 AS (SELECT v1.id AS id, v1a.id AS id_a, v1b.id AS id_b \
+        FROM v1, v1 v1a, v1 v1b \
+        WHERE v1a.id = v1.id - 1 \
+        AND v1b.id = v1.id + 1) \
+        SELECT * FROM v2";
+    let actual = execute_to_batches(&ctx, sql).await;
+    // the purpose of this test is just to make sure the query produces a valid plan
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_cte() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
