@@ -18,10 +18,11 @@
 //! Setter/Getter for row with all fixed-sized fields.
 
 use crate::layout::{RowLayout, RowType};
-use crate::validity::{all_valid, NullBitsFormatter};
-use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx, get_idx, set_idx};
-use arrow::datatypes::Schema;
-use arrow::util::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
+use crate::validity::NullBitsFormatter;
+use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx};
+use arrow::datatypes::{DataType, Schema};
+use arrow::util::bit_util::{get_bit_raw, set_bit_raw};
+use datafusion_common::ScalarValue;
 
 //TODO: DRY with reader and writer
 
@@ -84,11 +85,33 @@ macro_rules! fn_max_min_idx {
     };
 }
 
+macro_rules! fn_get_idx_scalar {
+    ($NATIVE: ident, $SCALAR:ident) => {
+        paste::item! {
+            pub fn [<get_ $NATIVE _scalar>](&self, idx: usize) -> ScalarValue {
+                if self.is_valid_at(idx) {
+                    ScalarValue::$SCALAR(Some(self.[<get_ $NATIVE>](idx)))
+                } else {
+                    ScalarValue::$SCALAR(None)
+                }
+            }
+        }
+    };
+}
+
 impl<'a> RowAccessor<'a> {
     /// new
     pub fn new(schema: &Schema, row_type: RowType) -> Self {
         Self {
             layout: RowLayout::new(schema, row_type),
+            data: &mut [],
+            base_offset: 0,
+        }
+    }
+
+    pub fn new_from_layout(layout: RowLayout) -> Self {
+        Self {
+            layout,
             data: &mut [],
             base_offset: 0,
         }
@@ -125,16 +148,6 @@ impl<'a> RowAccessor<'a> {
         }
     }
 
-    #[inline(always)]
-    fn all_valid(&self) -> bool {
-        if self.null_free() {
-            true
-        } else {
-            let null_bits = self.null_bits();
-            all_valid(null_bits, self.layout.field_count)
-        }
-    }
-
     fn is_valid_at(&self, idx: usize) -> bool {
         unsafe { get_bit_raw(self.null_bits().as_ptr(), idx) }
     }
@@ -166,14 +179,6 @@ impl<'a> RowAccessor<'a> {
     fn_get_idx!(f32, 4);
     fn_get_idx!(f64, 8);
 
-    fn get_date32(&self, idx: usize) -> i32 {
-        get_idx!(i32, self, idx, 4)
-    }
-
-    fn get_date64(&self, idx: usize) -> i64 {
-        get_idx!(i64, self, idx, 8)
-    }
-
     fn_get_idx_opt!(bool);
     fn_get_idx_opt!(u8);
     fn_get_idx_opt!(u16);
@@ -186,36 +191,38 @@ impl<'a> RowAccessor<'a> {
     fn_get_idx_opt!(f32);
     fn_get_idx_opt!(f64);
 
-    fn get_date32_opt(&self, idx: usize) -> Option<i32> {
-        if self.is_valid_at(idx) {
-            Some(self.get_date32(idx))
-        } else {
-            None
-        }
-    }
+    fn_get_idx_scalar!(bool, Boolean);
+    fn_get_idx_scalar!(u8, UInt8);
+    fn_get_idx_scalar!(u16, UInt16);
+    fn_get_idx_scalar!(u32, UInt32);
+    fn_get_idx_scalar!(u64, UInt64);
+    fn_get_idx_scalar!(i8, Int8);
+    fn_get_idx_scalar!(i16, Int16);
+    fn_get_idx_scalar!(i32, Int32);
+    fn_get_idx_scalar!(i64, Int64);
+    fn_get_idx_scalar!(f32, Float32);
+    fn_get_idx_scalar!(f64, Float64);
 
-    fn get_date64_opt(&self, idx: usize) -> Option<i64> {
-        if self.is_valid_at(idx) {
-            Some(self.get_date64(idx))
-        } else {
-            None
+    pub fn get_as_scalar(&self, dt: &DataType, index: usize) -> ScalarValue {
+        match dt {
+            DataType::Boolean => self.get_bool_scalar(index),
+            DataType::Int8 => self.get_i8_scalar(index),
+            DataType::Int16 => self.get_i16_scalar(index),
+            DataType::Int32 => self.get_i32_scalar(index),
+            DataType::Int64 => self.get_i64_scalar(index),
+            DataType::UInt8 => self.get_u8_scalar(index),
+            DataType::UInt16 => self.get_u16_scalar(index),
+            DataType::UInt32 => self.get_u32_scalar(index),
+            DataType::UInt64 => self.get_u64_scalar(index),
+            DataType::Float32 => self.get_f32_scalar(index),
+            DataType::Float64 => self.get_f64_scalar(index),
+            _ => unreachable!(),
         }
     }
 
     // ------------------------------
     // ----- Fixed Sized setters ----
     // ------------------------------
-
-    pub(crate) fn set_null_at(&mut self, idx: usize) {
-        assert!(
-            !self.null_free(),
-            "Unexpected call to set_null_at on null-free row writer"
-        );
-        let null_bits = &mut self.data[0..self.layout.null_width];
-        unsafe {
-            unset_bit_raw(null_bits.as_mut_ptr(), idx);
-        }
-    }
 
     pub(crate) fn set_non_null_at(&mut self, idx: usize) {
         assert!(
@@ -226,12 +233,6 @@ impl<'a> RowAccessor<'a> {
         unsafe {
             set_bit_raw(null_bits.as_mut_ptr(), idx);
         }
-    }
-
-    fn set_bool(&mut self, idx: usize, value: bool) {
-        self.assert_index_valid(idx);
-        let offset = self.field_offsets()[idx];
-        self.data[offset] = if value { 1 } else { 0 };
     }
 
     fn set_u8(&mut self, idx: usize, value: u8) {
@@ -253,14 +254,6 @@ impl<'a> RowAccessor<'a> {
         self.assert_index_valid(idx);
         let offset = self.field_offsets()[idx];
         self.data[offset] = value.to_le_bytes()[0];
-    }
-
-    fn set_date32(&mut self, idx: usize, value: i32) {
-        set_idx!(4, self, idx, value)
-    }
-
-    fn set_date64(&mut self, idx: usize, value: i64) {
-        set_idx!(8, self, idx, value)
     }
 
     // ------------------------------

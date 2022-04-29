@@ -28,12 +28,15 @@ use futures::{
 };
 
 use crate::error::Result;
-use crate::physical_plan::aggregates::{evaluate, evaluate_many, AggregateMode, AccumulatorItemV2};
+use crate::physical_plan::aggregates::{
+    evaluate, evaluate_many, AccumulatorItemV2, AggregateMode,
+};
 use crate::physical_plan::hash_utils::create_row_hashes;
 use crate::physical_plan::metrics::{BaselineMetrics, RecordOutput};
 use crate::physical_plan::{aggregates, AggregateExpr, PhysicalExpr};
 use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 
+use arrow::compute::cast;
 use arrow::datatypes::Schema;
 use arrow::{array::ArrayRef, compute};
 use arrow::{
@@ -41,11 +44,13 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
 };
 use arrow::{datatypes::SchemaRef, record_batch::RecordBatch};
-use datafusion_row::layout::RowLayout;
-use datafusion_row::writer::{write_row, RowWriter};
-use datafusion_row::RowType;
-use hashbrown::raw::RawTable;
+use datafusion_common::ScalarValue;
 use datafusion_row::accessor::RowAccessor;
+use datafusion_row::layout::RowLayout;
+use datafusion_row::reader::{read_row, RowReader};
+use datafusion_row::writer::{write_row, RowWriter};
+use datafusion_row::{MutableRecordBatch, RowType};
+use hashbrown::raw::RawTable;
 
 /*
 The architecture is the following:
@@ -79,7 +84,6 @@ pub(crate) struct GroupedRowHashAggregateStream {
     accumulators: Accumulators,
     aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
 
-    aggr_expr: Vec<Arc<dyn AggregateExpr>>,
     group_expr: Vec<Arc<dyn PhysicalExpr>>,
     accs_v2: Vec<AccumulatorItemV2>,
 
@@ -131,7 +135,6 @@ impl GroupedRowHashAggregateStream {
             schema,
             mode,
             input,
-            aggr_expr,
             group_expr,
             accs_v2,
             group_schema,
@@ -169,10 +172,8 @@ impl Stream for GroupedRowHashAggregateStream {
                         &this.mode,
                         &this.random_state,
                         &this.group_expr,
-                        &this.aggr_expr,
                         &mut this.accs_v2,
                         &this.group_schema,
-                        &this.aggr_schema,
                         &this.aggr_layout,
                         this.aggr_buffer_width,
                         batch,
@@ -193,8 +194,10 @@ impl Stream for GroupedRowHashAggregateStream {
                     let timer = this.baseline_metrics.elapsed_compute().timer();
                     let result = create_batch_from_map(
                         &this.mode,
-                        &this.accumulators,
-                        this.group_expr.len(),
+                        &this.group_schema,
+                        &this.aggr_schema,
+                        &mut this.accumulators,
+                        &mut this.accs_v2,
                         &this.schema,
                     )
                     .record_output(&this.baseline_metrics);
@@ -221,11 +224,9 @@ fn group_aggregate_batch(
     mode: &AggregateMode,
     random_state: &RandomState,
     group_expr: &[Arc<dyn PhysicalExpr>],
-    aggr_expr: &[Arc<dyn AggregateExpr>],
     accs_v2: &mut [AccumulatorItemV2],
     group_schema: &Schema,
-    aggr_schema: &Schema,
-    aggr_row_layout: &RowLayout,
+    state_layout: &RowLayout,
     aggr_buffer_width: usize,
     batch: RecordBatch,
     accumulators: &mut Accumulators,
@@ -239,7 +240,6 @@ fn group_aggregate_batch(
     // We could evaluate them after the `take`, but since we need to evaluate all
     // of them anyways, it is more performant to do it while they are together.
     let aggr_input_values = evaluate_many(aggregate_expressions, &batch)?;
-    let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
 
     // 1.1 construct the key from the group values
     // 1.2 construct the mapping key if it does not exist
@@ -349,9 +349,14 @@ fn group_aggregate_batch(
                     )
                 })
                 .try_for_each(|(accumulator, values)| {
-                    state_accessor.point_to(0, group_state.aggregation_buffer.as_mut_slice());
+                    let mut state_accessor =
+                        RowAccessor::new_from_layout(state_layout.clone());
+                    state_accessor
+                        .point_to(0, group_state.aggregation_buffer.as_mut_slice());
                     match mode {
-                        AggregateMode::Partial => accumulator.update_batch(&values, &mut state_accessor),
+                        AggregateMode::Partial => {
+                            accumulator.update_batch(&values, &mut state_accessor)
+                        }
                         AggregateMode::FinalPartitioned | AggregateMode::Final => {
                             // note: the aggregation here is over states, not values, thus the merge
                             accumulator.merge_batch(&values, &mut state_accessor)
@@ -421,6 +426,71 @@ fn create_group_rows(arrays: Vec<ArrayRef>, schema: &Schema) -> Vec<Vec<u8>> {
     results
 }
 
-fn create_state_accessor(schema: &Schema) -> RowAccessor {
-    RowAccessor::
+/// Create a RecordBatch with all group keys and accumulator' states or values.
+fn create_batch_from_map(
+    mode: &AggregateMode,
+    group_schema: &Schema,
+    aggr_schema: &Schema,
+    accumulators: &mut Accumulators,
+    accs_v2: &mut [AccumulatorItemV2],
+    output_schema: &Schema,
+) -> ArrowResult<RecordBatch> {
+    if accumulators.group_states.is_empty() {
+        return Ok(RecordBatch::new_empty(Arc::new(output_schema.to_owned())));
+    }
+
+    let mut state_accessor = RowAccessor::new(aggr_schema, RowType::WordAligned);
+
+    let (group_buffers, mut state_buffers): (Vec<_>, Vec<_>) = accumulators
+        .group_states
+        .iter()
+        .map(|gs| (gs.group_by_values.clone(), gs.aggregation_buffer.clone()))
+        .unzip();
+
+    let mut columns: Vec<ArrayRef> =
+        read_as_batch(&group_buffers, group_schema, RowType::Compact);
+
+    match mode {
+        AggregateMode::Partial => columns.extend(read_as_batch(
+            &state_buffers,
+            aggr_schema,
+            RowType::WordAligned,
+        )),
+        AggregateMode::Final | AggregateMode::FinalPartitioned => {
+            let mut results: Vec<Vec<ScalarValue>> = vec![vec![]; accs_v2.len()];
+            for buffer in state_buffers.iter_mut() {
+                state_accessor.point_to(0, buffer);
+                for (i, acc) in accs_v2.iter().enumerate() {
+                    results[i].push(acc.evaluate(&state_accessor).unwrap());
+                }
+            }
+            for scalars in results {
+                columns.push(ScalarValue::iter_to_array(scalars)?);
+            }
+        }
+    }
+
+    // cast output if needed (e.g. for types like Dictionary where
+    // the intermediate GroupByScalar type was not the same as the
+    // output
+    let columns = columns
+        .iter()
+        .zip(output_schema.fields().iter())
+        .map(|(col, desired_field)| cast(col, desired_field.data_type()))
+        .collect::<ArrowResult<Vec<_>>>()?;
+
+    RecordBatch::try_new(Arc::new(output_schema.to_owned()), columns)
+}
+
+fn read_as_batch(rows: &[Vec<u8>], schema: &Schema, row_type: RowType) -> Vec<ArrayRef> {
+    let row_num = rows.len();
+    let mut output = MutableRecordBatch::new(row_num, Arc::new(schema.clone()));
+    let mut row = RowReader::new(&schema, row_type);
+
+    for data in rows {
+        row.point_to(0, data);
+        read_row(&row, &mut output, schema);
+    }
+
+    output.output_as_columns()
 }

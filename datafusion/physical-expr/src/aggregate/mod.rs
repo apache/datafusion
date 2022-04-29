@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::aggregate::accumulator_v2::AccumulatorV2;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::Result;
@@ -22,7 +23,6 @@ use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
-use crate::aggregate::row_accumulator::RowAccumulator;
 
 pub(crate) mod approx_distinct;
 pub(crate) mod approx_median;
@@ -37,9 +37,9 @@ pub(crate) mod covariance;
 pub(crate) mod distinct_expressions;
 #[macro_use]
 pub(crate) mod min_max;
+pub mod accumulator_v2;
 pub mod build_in;
 mod hyperloglog;
-pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
@@ -79,11 +79,14 @@ pub trait AggregateExpr: Send + Sync + Debug {
     }
 
     /// If the aggregate expression is supported by row format
-    fn row_state_supported(&self) -> bool {
+    fn accumulator_v2_supported(&self) -> bool {
         false
     }
 
-    fn create_accumulator_v2(&self, _start_index: usize) -> Result<Box<dyn RowAccumulator>> {
+    fn create_accumulator_v2(
+        &self,
+        _start_index: usize,
+    ) -> Result<Box<dyn AccumulatorV2>> {
         unreachable!()
     }
 }

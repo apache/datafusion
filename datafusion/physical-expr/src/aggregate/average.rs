@@ -21,7 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::accumulator_v2::AccumulatorV2;
 use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -104,7 +104,7 @@ impl AggregateExpr for Avg {
         &self.name
     }
 
-    fn row_state_supported(&self) -> bool {
+    fn accumulator_v2_supported(&self) -> bool {
         matches!(
             self.data_type,
             DataType::UInt8
@@ -120,8 +120,11 @@ impl AggregateExpr for Avg {
         )
     }
 
-    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(AvgRowAccumulator::new(
+    fn create_accumulator_v2(
+        &self,
+        start_index: usize,
+    ) -> Result<Box<dyn AccumulatorV2>> {
+        Ok(Box::new(AvgAccumulatorV2::new(
             start_index,
             self.data_type.clone(),
         )))
@@ -193,12 +196,12 @@ impl Accumulator for AvgAccumulator {
 }
 
 #[derive(Debug)]
-struct AvgRowAccumulator {
+struct AvgAccumulatorV2 {
     start_index: usize,
     sum_datatype: DataType,
 }
 
-impl AvgRowAccumulator {
+impl AvgAccumulatorV2 {
     pub fn new(start_index: usize, sum_datatype: DataType) -> Self {
         Self {
             start_index,
@@ -207,7 +210,7 @@ impl AvgRowAccumulator {
     }
 }
 
-impl RowAccumulator for AvgRowAccumulator {
+impl AccumulatorV2 for AvgAccumulatorV2 {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -242,6 +245,19 @@ impl RowAccumulator for AvgRowAccumulator {
             &sum::sum_batch(&states[1])?,
         )?;
         Ok(())
+    }
+
+    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
+        assert_eq!(self.sum_datatype, DataType::Float64);
+        Ok(match accessor.get_u64_opt(self.start_index) {
+            None => ScalarValue::Float64(None),
+            Some(0) => ScalarValue::Float64(Some(0.0)),
+            Some(n) => ScalarValue::Float64(
+                accessor
+                    .get_f64_opt(self.start_index + 1)
+                    .map(|f| f / n as f64),
+            ),
+        })
     }
 }
 

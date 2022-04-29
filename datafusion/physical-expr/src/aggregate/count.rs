@@ -21,7 +21,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::accumulator_v2::AccumulatorV2;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::DataType;
@@ -96,12 +96,15 @@ impl AggregateExpr for Count {
         &self.name
     }
 
-    fn row_state_supported(&self) -> bool {
+    fn accumulator_v2_supported(&self) -> bool {
         true
     }
 
-    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(CountRowAccumulator::new(start_index)))
+    fn create_accumulator_v2(
+        &self,
+        start_index: usize,
+    ) -> Result<Box<dyn AccumulatorV2>> {
+        Ok(Box::new(CountAccumulatorV2::new(start_index)))
     }
 }
 
@@ -143,17 +146,17 @@ impl Accumulator for CountAccumulator {
 }
 
 #[derive(Debug)]
-struct CountRowAccumulator {
+struct CountAccumulatorV2 {
     index: usize,
 }
 
-impl CountRowAccumulator {
+impl CountAccumulatorV2 {
     pub fn new(index: usize) -> Self {
         Self { index }
     }
 }
 
-impl RowAccumulator for CountRowAccumulator {
+impl AccumulatorV2 for CountAccumulatorV2 {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -176,6 +179,10 @@ impl RowAccumulator for CountRowAccumulator {
             accessor.add_u64(self.index, *d);
         }
         Ok(())
+    }
+
+    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
+        Ok(accessor.get_as_scalar(&DataType::UInt64, self.index))
     }
 }
 

@@ -34,7 +34,7 @@ use arrow::{
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::row_accumulator::RowAccumulator;
+use crate::aggregate::accumulator_v2::AccumulatorV2;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::DecimalArray;
@@ -99,7 +99,7 @@ impl AggregateExpr for Sum {
         &self.name
     }
 
-    fn row_state_supported(&self) -> bool {
+    fn accumulator_v2_supported(&self) -> bool {
         matches!(
             self.data_type,
             DataType::UInt8
@@ -115,8 +115,14 @@ impl AggregateExpr for Sum {
         )
     }
 
-    fn create_accumulator_v2(&self, start_index: usize) -> Result<Box<dyn RowAccumulator>> {
-        Ok(Box::new(SumRowAccumulator::new(start_index, self.data_type.clone())))
+    fn create_accumulator_v2(
+        &self,
+        start_index: usize,
+    ) -> Result<Box<dyn AccumulatorV2>> {
+        Ok(Box::new(SumAccumulatorV2::new(
+            start_index,
+            self.data_type.clone(),
+        )))
     }
 }
 
@@ -441,18 +447,18 @@ impl Accumulator for SumAccumulator {
 }
 
 #[derive(Debug)]
-struct SumRowAccumulator {
+struct SumAccumulatorV2 {
     index: usize,
     datatype: DataType,
 }
 
-impl SumRowAccumulator {
+impl SumAccumulatorV2 {
     pub fn new(index: usize, datatype: DataType) -> Self {
         Self { index, datatype }
     }
 }
 
-impl RowAccumulator for SumRowAccumulator {
+impl AccumulatorV2 for SumAccumulatorV2 {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -469,6 +475,10 @@ impl RowAccumulator for SumRowAccumulator {
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         self.update_batch(states, accessor)
+    }
+
+    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
+        Ok(accessor.get_as_scalar(&self.datatype, self.index))
     }
 }
 

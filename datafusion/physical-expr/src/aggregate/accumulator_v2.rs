@@ -18,11 +18,11 @@
 //! Accumulator in raw format
 
 use arrow::array::ArrayRef;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_row::accessor::RowAccessor;
 use std::fmt::Debug;
 
-pub trait RowAccumulator: Send + Sync + Debug {
+pub trait AccumulatorV2: Send + Sync + Debug {
     /// updates the accumulator's state from a vector of arrays.
     fn update_batch(
         &mut self,
@@ -36,4 +36,7 @@ pub trait RowAccumulator: Send + Sync + Debug {
         states: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()>;
+
+    /// returns its value based on its current state.
+    fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue>;
 }

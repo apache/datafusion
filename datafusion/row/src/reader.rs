@@ -76,7 +76,7 @@ macro_rules! fn_get_idx {
 macro_rules! fn_get_idx_opt {
     ($NATIVE: ident) => {
         paste::item! {
-            fn [<get_ $NATIVE _opt>](&self, idx: usize) -> Option<$NATIVE> {
+            pub fn [<get_ $NATIVE _opt>](&self, idx: usize) -> Option<$NATIVE> {
                 if self.is_valid_at(idx) {
                     Some(self.[<get_ $NATIVE>](idx))
                 } else {

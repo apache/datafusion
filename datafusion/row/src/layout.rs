@@ -38,7 +38,7 @@ pub enum RowType {
 }
 
 /// Reveals how the fields of a record are stored in the raw-bytes format
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RowLayout {
     /// Type of the layout
     row_type: RowType,

@@ -47,7 +47,7 @@
 //! 0          1          2                     10              14                     22                     31         32
 //!
 
-use arrow::array::{make_builder, ArrayBuilder};
+use arrow::array::{make_builder, ArrayBuilder, ArrayRef};
 use arrow::datatypes::Schema;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -85,6 +85,10 @@ impl MutableRecordBatch {
         let result = make_batch(self.schema.clone(), self.arrays.drain(..).collect());
         result
     }
+
+    pub fn output_as_columns(&mut self) -> Vec<ArrayRef> {
+        get_columns(self.arrays.drain(..).collect())
+    }
 }
 
 fn new_arrays(schema: &Schema, batch_size: usize) -> Vec<Box<dyn ArrayBuilder>> {
@@ -104,6 +108,10 @@ fn make_batch(
 ) -> ArrowResult<RecordBatch> {
     let columns = arrays.iter_mut().map(|array| array.finish()).collect();
     RecordBatch::try_new(schema, columns)
+}
+
+fn get_columns(mut arrays: Vec<Box<dyn ArrayBuilder>>) -> Vec<ArrayRef> {
+    arrays.iter_mut().map(|array| array.finish()).collect()
 }
 
 #[cfg(test)]
