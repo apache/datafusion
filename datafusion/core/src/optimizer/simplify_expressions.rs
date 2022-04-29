@@ -1909,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn now_less_than_date_plus_interval() {
+    fn select_date_plus_interval() {
         let table_scan = test_table_scan();
 
         let ts_string = "2020-09-08T12:05:00+00:00";
@@ -1917,22 +1917,24 @@ mod tests {
 
         //  now() < cast(to_timestamp(...) as int) + 5000000000
         let schema = table_scan.schema();
+
+        let date_plus_interval_expr = to_timestamp_expr(ts_string)
+            .cast_to(&DataType::Date32, schema)
+            .unwrap()
+            + Expr::Literal(ScalarValue::IntervalDayTime(Some(123)));
+
         let plan = LogicalPlanBuilder::from(table_scan.clone())
-            .filter(
-                cast_to_int64_expr(now_expr()).lt(to_timestamp_expr(ts_string)
-                    .cast_to(&DataType::Date32, schema)
-                    .unwrap()
-                    + Expr::Literal(ScalarValue::IntervalDayTime(Some(123)))),
-            )
+            .project(vec![date_plus_interval_expr])
             .unwrap()
             .build()
             .unwrap();
 
+        println!("{:?}", plan);
+
         // Note that constant folder runs and folds the entire
         // expression down to a single constant (true)
-        let expected = "Filter: Int64(1599566400000000000) < Date32(\"18513\") + IntervalDayTime(\"123\") \
-        AS CAST(now() AS Int64) < CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Date32) + IntervalDayTime(\"123\")\
-        \n  TableScan: test projection=None";
+        let expected = "Projection: Date32(\"18636\") AS CAST(totimestamp(Utf8(\"2020-09-08T12:05:00+00:00\")) AS Date32) + IntervalDayTime(\"123\")\
+            \n  TableScan: test projection=None";
         let actual = get_optimized_plan_formatted(&plan, &time);
 
         assert_eq!(expected, actual);

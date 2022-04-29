@@ -965,13 +965,21 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            match (lhs.data_type(input_schema)?, rhs.data_type(input_schema)?) {
-                (DataType::Date32, DataType::Interval(_)) => Ok(Arc::new(
-                    DateIntervalExpr::try_new(lhs, *op, rhs, input_schema)?,
-                )),
-                (DataType::Date64, DataType::Interval(_)) => Ok(Arc::new(
-                    DateIntervalExpr::try_new(lhs, *op, rhs, input_schema)?,
-                )),
+            match (
+                lhs.data_type(input_schema)?,
+                op,
+                rhs.data_type(input_schema)?,
+            ) {
+                (
+                    DataType::Date32 | DataType::Date64,
+                    Operator::Plus | Operator::Minus,
+                    DataType::Interval(_),
+                ) => Ok(Arc::new(DateIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
                 _ => {
                     // assume that we can coerce both sides into a common type
                     // and then perform a binary operation

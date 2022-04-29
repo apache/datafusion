@@ -18,8 +18,8 @@
 use crate::PhysicalExpr;
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
-use datafusion_common::DataFusionError;
 use datafusion_common::Result;
+use datafusion_common::{DataFusionError, ScalarValue};
 use datafusion_expr::{ColumnarValue, Operator};
 use std::any::Any;
 use std::fmt::{Display, Formatter};
@@ -83,6 +83,68 @@ impl PhysicalExpr for DateIntervalExpr {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> datafusion_common::Result<ColumnarValue> {
-        todo!()
+        let dates = self.lhs.evaluate(batch)?;
+        let intervals = self.rhs.evaluate(batch)?;
+
+        let interval = match intervals {
+            ColumnarValue::Scalar(interval) => match interval {
+                ScalarValue::IntervalDayTime(Some(interval)) => interval as i32,
+                other => {
+                    return Err(DataFusionError::Execution(format!(
+                        "DateIntervalExpr does not support interval {}",
+                        other
+                    )))
+                }
+            },
+            _ => {
+                return Err(DataFusionError::Execution(
+                    "Columnar execution is not yet supported for DateIntervalExpr"
+                        .to_string(),
+                ))
+            }
+        };
+
+        match dates {
+            ColumnarValue::Scalar(scalar) => match scalar {
+                ScalarValue::Date32(Some(date)) => match &self.op {
+                    Operator::Plus => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
+                        Some(date + interval),
+                    ))),
+                    Operator::Minus => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
+                        Some(date - interval),
+                    ))),
+                    _ => {
+                        // this should be unreachable because we check the operators in `try_new`
+                        Err(DataFusionError::Execution(
+                            "Invalid operator for DateIntervalExpr".to_string(),
+                        ))
+                    }
+                },
+                ScalarValue::Date64(Some(date)) => match &self.op {
+                    Operator::Plus => Ok(ColumnarValue::Scalar(ScalarValue::Date64(
+                        Some(date + interval as i64),
+                    ))),
+                    Operator::Minus => Ok(ColumnarValue::Scalar(ScalarValue::Date64(
+                        Some(date - interval as i64),
+                    ))),
+                    _ => {
+                        // this should be unreachable because we check the operators in `try_new`
+                        Err(DataFusionError::Execution(
+                            "Invalid operator for DateIntervalExpr".to_string(),
+                        ))
+                    }
+                },
+                _ => {
+                    // this should be unreachable because we check the types in `try_new`
+                    Err(DataFusionError::Execution(
+                        "Invalid lhs type for DateIntervalExpr".to_string(),
+                    ))
+                }
+            },
+            _ => Err(DataFusionError::Execution(
+                "Columnar execution is not yet supported for DateIntervalExpr"
+                    .to_string(),
+            )),
+        }
     }
 }
