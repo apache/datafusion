@@ -254,9 +254,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             // Process CTEs from top to bottom
             // do not allow self-references
             for cte in with.cte_tables {
-                // A `WITH` block can't use the same name for many times
-                let cte_name: &str = cte.alias.name.value.as_ref();
-                if ctes.contains_key(cte_name) {
+                // A `WITH` block can't use the same name more than once
+                let cte_name = normalize_ident(&cte.alias.name);
+                if ctes.contains_key(&cte_name) {
                     return Err(DataFusionError::SQL(ParserError(format!(
                         "WITH query name {:?} specified more than once",
                         cte_name
@@ -265,11 +265,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 // create logical plan & pass backreferencing CTEs
                 let logical_plan = self.query_to_plan_with_alias(
                     cte.query,
-                    Some(cte.alias.name.value.clone()),
+                    Some(cte_name.clone()),
                     &mut ctes.clone(),
                     outer_query_schema,
                 )?;
-                ctes.insert(cte.alias.name.value, logical_plan);
+                ctes.insert(cte_name, logical_plan);
             }
         }
         let plan = self.set_expr_to_plan(set_expr, alias, ctes, outer_query_schema)?;
@@ -415,7 +415,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 .options
                 .iter()
                 .any(|x| x.option == ColumnOption::Null);
-            fields.push(Field::new(&column.name.value, data_type, allow_null));
+            fields.push(Field::new(
+                &normalize_ident(&column.name),
+                data_type,
+                allow_null,
+            ));
         }
 
         Ok(Schema::new(fields))
@@ -640,7 +644,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             JoinConstraint::Using(idents) => {
                 let keys: Vec<Column> = idents
                     .into_iter()
-                    .map(|x| Column::from_name(x.value))
+                    .map(|x| Column::from_name(&normalize_ident(&x)))
                     .collect();
                 LogicalPlanBuilder::from(left)
                     .join_using(&right, join_type, keys)?
@@ -666,28 +670,37 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ) -> Result<LogicalPlan> {
         let (plan, alias) = match relation {
             TableFactor::Table {
-                ref name, alias, ..
+                name: ref sql_object_name,
+                alias,
+                ..
             } => {
-                let table_name = name.to_string();
+                // normalize name and alias
+                let table_name = normalize_sql_object_name(sql_object_name);
+                let table_ref: TableReference = table_name.as_str().into();
+                let table_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 let cte = ctes.get(&table_name);
                 (
-                    match (
-                        cte,
-                        self.schema_provider.get_table_provider(name.try_into()?),
-                    ) {
-                        (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                    match (cte, self.schema_provider.get_table_provider(table_ref)) {
+                        (Some(cte_plan), _) => match table_alias {
+                            Some(cte_alias) => project_with_alias(
+                                cte_plan.clone(),
+                                vec![Expr::Wildcard],
+                                Some(cte_alias),
+                            ),
+                            _ => Ok(cte_plan.clone()),
+                        },
                         (_, Some(provider)) => {
                             let scan =
                                 LogicalPlanBuilder::scan(&table_name, provider, None);
-                            let scan = match alias {
-                                Some(ref name) => scan?.alias(name.name.value.as_str()),
+                            let scan = match table_alias.as_ref() {
+                                Some(ref name) => scan?.alias(name.to_owned().as_str()),
                                 _ => scan,
                             };
                             scan?.build()
                         }
                         (None, None) => Err(DataFusionError::Plan(format!(
                             "Table or CTE with name '{}' not found",
-                            name
+                            sql_object_name
                         ))),
                     }?,
                     alias,
@@ -696,15 +709,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             TableFactor::Derived {
                 subquery, alias, ..
             } => {
+                let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
                 // if alias is None, return Err
-                if alias.is_none() {
+                if normalized_alias.is_none() {
                     return Err(DataFusionError::Plan(
                         "subquery in FROM must have an alias".to_string(),
                     ));
                 }
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
-                    alias.as_ref().map(|a| a.name.value.to_string()),
+                    normalized_alias.clone(),
                     ctes,
                     outer_query_schema,
                 )?;
@@ -716,7 +730,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             .fields()
                             .iter()
                             .map(|field| col(field.name())),
-                        alias.as_ref().map(|a| normalize_ident(a.name.clone())),
+                        normalized_alias,
                     )?,
                     alias,
                 )
@@ -747,12 +761,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             } else {
                 Ok(LogicalPlanBuilder::from(plan.clone())
                     .project_with_alias(
-                        plan.schema()
-                            .fields()
-                            .iter()
-                            .zip(columns_alias.iter())
-                            .map(|(field, ident)| col(field.name()).alias(&ident.value)),
-                        Some(alias.name.value),
+                        plan.schema().fields().iter().zip(columns_alias.iter()).map(
+                            |(field, ident)| {
+                                col(field.name()).alias(&normalize_ident(ident))
+                            },
+                        ),
+                        Some(normalize_ident(&alias.name)),
                     )?
                     .build()?)
             }
@@ -1271,7 +1285,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SelectItem::ExprWithAlias { expr, alias } => {
                 let expr = Alias(
                     Box::new(self.sql_to_rex(expr, &input_schema)?),
-                    normalize_ident(alias),
+                    normalize_ident(&alias),
                 );
                 Ok(vec![normalize_col(expr, plan)?])
             }
@@ -1515,14 +1529,14 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // identifier. (e.g. it is "foo.bar" not foo.bar)
                     Ok(Expr::Column(Column {
                         relation: None,
-                        name: normalize_ident(id),
+                        name: normalize_ident(&id),
                     }))
                 }
             }
 
             SQLExpr::MapAccess { ref column, keys } => {
                 if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    plan_indexed(col(&id.value), keys)
+                    plan_indexed(col(&normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
@@ -1532,7 +1546,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
-                let mut var_names: Vec<_> = ids.into_iter().map(normalize_ident).collect();
+                let mut var_names: Vec<_> = ids.into_iter().map(|s| normalize_ident(&s)).collect();
 
                 if &var_names[0][0..1] == "@" {
                     let ty = self
@@ -1774,7 +1788,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // (e.g. "foo.bar") for function names yet
                     function.name.to_string()
                 } else {
-                    normalize_ident(function.name.0[0].clone())
+                    normalize_ident(&function.name.0[0])
                 };
 
                 // first, scalar built-in
@@ -2183,7 +2197,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         &self,
         extended: bool,
         full: bool,
-        table_name: &ObjectName,
+        sql_table_name: &ObjectName,
         filter: Option<&ShowStatementFilter>,
     ) -> Result<LogicalPlan> {
         if filter.is_some() {
@@ -2198,26 +2212,26 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     .to_string(),
             ));
         }
+        let table_name = normalize_sql_object_name(sql_table_name);
+        let table_ref: TableReference = table_name.as_str().into();
 
-        if self
-            .schema_provider
-            .get_table_provider(table_name.try_into()?)
-            .is_none()
-        {
+        if self.schema_provider.get_table_provider(table_ref).is_none() {
             return Err(DataFusionError::Plan(format!(
                 "Unknown relation for SHOW COLUMNS: {}",
-                table_name
+                sql_table_name
             )));
         }
 
         // Figure out the where clause
         let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
-        let where_clause = table_name
+        let where_clause = sql_table_name
             .0
             .iter()
             .rev()
             .zip(columns)
-            .map(|(ident, column_name)| format!(r#"{} = '{}'"#, column_name, ident))
+            .map(|(ident, column_name)| {
+                format!(r#"{} = '{}'"#, column_name, normalize_ident(ident))
+            })
             .collect::<Vec<_>>()
             .join(" AND ");
 
@@ -2290,6 +2304,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )))
         }
     }
+}
+
+/// Normalize a SQL object name
+fn normalize_sql_object_name(sql_object_name: &ObjectName) -> String {
+    sql_object_name
+        .0
+        .iter()
+        .map(normalize_ident)
+        .collect::<Vec<String>>()
+        .join(".")
 }
 
 /// Remove join expressions from a filter expression
