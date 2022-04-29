@@ -29,6 +29,7 @@ use crate::physical_plan::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
@@ -41,6 +42,7 @@ use std::sync::Arc;
 
 mod hash;
 mod no_grouping;
+mod row_hash;
 
 pub use datafusion_expr::AggregateFunction;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
@@ -402,6 +404,27 @@ fn finalize_aggregation(
                 .collect::<datafusion_common::Result<Vec<ArrayRef>>>()
         }
     }
+}
+
+/// Evaluates expressions against a record batch.
+fn evaluate(
+    expr: &[Arc<dyn PhysicalExpr>],
+    batch: &RecordBatch,
+) -> Result<Vec<ArrayRef>> {
+    expr.iter()
+        .map(|expr| expr.evaluate(batch))
+        .map(|r| r.map(|v| v.into_array(batch.num_rows())))
+        .collect::<Result<Vec<_>>>()
+}
+
+/// Evaluates expressions against a record batch.
+fn evaluate_many(
+    expr: &[Vec<Arc<dyn PhysicalExpr>>],
+    batch: &RecordBatch,
+) -> Result<Vec<Vec<ArrayRef>>> {
+    expr.iter()
+        .map(|expr| evaluate(expr, batch))
+        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]

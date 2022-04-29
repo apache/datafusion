@@ -54,6 +54,7 @@ use arrow::record_batch::RecordBatch;
 pub use layout::RowType;
 use std::sync::Arc;
 
+pub mod accessor;
 #[cfg(feature = "jit")]
 pub mod jit;
 pub mod layout;

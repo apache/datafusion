@@ -38,6 +38,7 @@ pub(crate) mod distinct_expressions;
 pub(crate) mod min_max;
 pub mod build_in;
 mod hyperloglog;
+pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
@@ -74,5 +75,10 @@ pub trait AggregateExpr: Send + Sync + Debug {
     /// implementation returns placeholder text.
     fn name(&self) -> &str {
         "AggregateExpr: default name"
+    }
+
+    /// If the aggregate expression is supported by row format
+    fn row_state_supported(&self) -> bool {
+        false
     }
 }

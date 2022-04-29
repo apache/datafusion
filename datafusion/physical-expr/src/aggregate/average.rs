@@ -21,6 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -33,6 +34,7 @@ use arrow::{
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
+use datafusion_row::accessor::RowAccessor;
 
 /// AVG aggregate expression
 #[derive(Debug)]
@@ -101,6 +103,22 @@ impl AggregateExpr for Avg {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn row_state_supported(&self) -> bool {
+        matches!(
+            self.data_type,
+            DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Float32
+                | DataType::Float64
+        )
+    }
 }
 
 /// An accumulator to compute the average
@@ -164,6 +182,59 @@ impl Accumulator for AvgAccumulator {
                 "Sum should be f64 on average".to_string(),
             )),
         }
+    }
+}
+
+#[derive(Debug)]
+struct AvgRowAccumulator {
+    start_index: usize,
+    sum_datatype: DataType,
+}
+
+impl AvgRowAccumulator {
+    pub fn new(start_index: usize, sum_datatype: DataType) -> Self {
+        Self {
+            start_index,
+            sum_datatype,
+        }
+    }
+}
+
+impl RowAccumulator for AvgRowAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let values = &values[0];
+
+        let delta = (values.len() - values.data().null_count()) as u64;
+        accessor.add_u64(self.start_index, delta);
+        sum::add_to_row(
+            &self.sum_datatype,
+            self.start_index + 1,
+            accessor,
+            &sum::sum_batch(values)?,
+        )?;
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        states: &[ArrayRef],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let delta = compute::sum(counts).unwrap_or(0);
+        accessor.add_u64(self.start_index, delta);
+
+        sum::add_to_row(
+            &self.sum_datatype,
+            self.start_index + 1,
+            accessor,
+            &sum::sum_batch(&states[1])?,
+        )?;
+        Ok(())
     }
 }
 

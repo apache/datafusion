@@ -18,8 +18,10 @@
 //! Defines physical expressions that can evaluated at runtime during query execution
 
 use std::any::Any;
+use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::DataType;
@@ -30,6 +32,7 @@ use arrow::{
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
 use datafusion_expr::Accumulator;
+use datafusion_row::accessor::RowAccessor;
 
 use crate::expressions::format_state_name;
 
@@ -92,6 +95,10 @@ impl AggregateExpr for Count {
     fn name(&self) -> &str {
         &self.name
     }
+
+    fn row_state_supported(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -128,6 +135,43 @@ impl Accumulator for CountAccumulator {
 
     fn evaluate(&self) -> Result<ScalarValue> {
         Ok(ScalarValue::UInt64(Some(self.count)))
+    }
+}
+
+#[derive(Debug)]
+struct CountRowAccumulator {
+    index: usize,
+}
+
+impl CountRowAccumulator {
+    pub fn new(index: usize) -> Self {
+        Self { index }
+    }
+}
+
+impl RowAccumulator for CountRowAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let array = &values[0];
+        let delta = (array.len() - array.data().null_count()) as u64;
+        accessor.add_u64(self.index, delta);
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        states: &[ArrayRef],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        let delta = &compute::sum(counts);
+        if let Some(d) = delta {
+            accessor.add_u64(self.index, *d);
+        }
+        Ok(())
     }
 }
 

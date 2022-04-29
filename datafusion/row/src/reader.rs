@@ -46,6 +46,7 @@ pub fn read_as_batch(
     output.output().map_err(DataFusionError::ArrowError)
 }
 
+#[macro_export]
 macro_rules! get_idx {
     ($NATIVE: ident, $SELF: ident, $IDX: ident, $WIDTH: literal) => {{
         $SELF.assert_index_valid($IDX);
@@ -56,6 +57,7 @@ macro_rules! get_idx {
     }};
 }
 
+#[macro_export]
 macro_rules! fn_get_idx {
     ($NATIVE: ident, $WIDTH: literal) => {
         paste::item! {
@@ -70,6 +72,7 @@ macro_rules! fn_get_idx {
     };
 }
 
+#[macro_export]
 macro_rules! fn_get_idx_opt {
     ($NATIVE: ident) => {
         paste::item! {

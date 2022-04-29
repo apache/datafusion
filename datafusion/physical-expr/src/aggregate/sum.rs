@@ -34,9 +34,11 @@ use arrow::{
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::DecimalArray;
+use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
 #[derive(Debug)]
@@ -95,6 +97,22 @@ impl AggregateExpr for Sum {
 
     fn name(&self) -> &str {
         &self.name
+    }
+
+    fn row_state_supported(&self) -> bool {
+        matches!(
+            self.data_type,
+            DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Float32
+                | DataType::Float64
+        )
     }
 }
 
@@ -177,6 +195,17 @@ macro_rules! typed_sum {
             (None, Some(b)) => Some(b.clone() as $TYPE),
             (Some(a), Some(b)) => Some(a + (*b as $TYPE)),
         })
+    }};
+}
+
+macro_rules! sum_row {
+    ($INDEX:ident, $ACC:ident, $DELTA:expr, $TYPE:ident) => {{
+        paste::item! {
+            match $DELTA {
+                None => {}
+                Some(v) => $ACC.[<add_ $TYPE>]($INDEX, *v as $TYPE)
+            }
+        }
     }};
 }
 
@@ -284,7 +313,7 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
         (ScalarValue::UInt64(lhs), ScalarValue::UInt8(rhs)) => {
             typed_sum!(lhs, rhs, UInt64, u64)
         }
-        // i64 coerces i* to u64
+        // i64 coerces i* to i64
         (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
             typed_sum!(lhs, rhs, Int64, i64)
         }
@@ -304,6 +333,84 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
             )));
         }
     })
+}
+
+pub(crate) fn add_to_row(
+    dt: &DataType,
+    index: usize,
+    accessor: &mut RowAccessor,
+    s: &ScalarValue,
+) -> Result<()> {
+    match (dt, s) {
+        // float64 coerces everything to f64
+        (DataType::Float64, ScalarValue::Float64(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::Float32(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::Int64(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::Int32(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::Int16(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::Int8(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::UInt64(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::UInt32(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::UInt16(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        (DataType::Float64, ScalarValue::UInt8(rhs)) => {
+            sum_row!(index, accessor, rhs, f64)
+        }
+        // float32 has no cast
+        (DataType::Float32, ScalarValue::Float32(rhs)) => {
+            sum_row!(index, accessor, rhs, f32)
+        }
+        // u64 coerces u* to u64
+        (DataType::UInt64, ScalarValue::UInt64(rhs)) => {
+            sum_row!(index, accessor, rhs, u64)
+        }
+        (DataType::UInt64, ScalarValue::UInt32(rhs)) => {
+            sum_row!(index, accessor, rhs, u64)
+        }
+        (DataType::UInt64, ScalarValue::UInt16(rhs)) => {
+            sum_row!(index, accessor, rhs, u64)
+        }
+        (DataType::UInt64, ScalarValue::UInt8(rhs)) => {
+            sum_row!(index, accessor, rhs, u64)
+        }
+        // i64 coerces i* to i64
+        (DataType::Int64, ScalarValue::Int64(rhs)) => {
+            sum_row!(index, accessor, rhs, i64)
+        }
+        (DataType::Int64, ScalarValue::Int32(rhs)) => {
+            sum_row!(index, accessor, rhs, i64)
+        }
+        (DataType::Int64, ScalarValue::Int16(rhs)) => {
+            sum_row!(index, accessor, rhs, i64)
+        }
+        (DataType::Int64, ScalarValue::Int8(rhs)) => {
+            sum_row!(index, accessor, rhs, i64)
+        }
+        e => {
+            return Err(DataFusionError::Internal(format!(
+                "Row sum updater is not expected to receive a scalar {:?}",
+                e
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl Accumulator for SumAccumulator {
@@ -326,6 +433,38 @@ impl Accumulator for SumAccumulator {
         // TODO: add the checker for overflow
         // For the decimal(precision,_) data type, the absolute of value must be less than 10^precision.
         Ok(self.sum.clone())
+    }
+}
+
+#[derive(Debug)]
+struct SumRowAccumulator {
+    index: usize,
+    datatype: DataType,
+}
+
+impl SumRowAccumulator {
+    pub fn new(index: usize, datatype: DataType) -> Self {
+        Self { index, datatype }
+    }
+}
+
+impl RowAccumulator for SumRowAccumulator {
+    fn update_batch(
+        &mut self,
+        values: &[ArrayRef],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        let values = &values[0];
+        add_to_row(&self.datatype, self.index, accessor, &sum_batch(values)?)?;
+        Ok(())
+    }
+
+    fn merge_batch(
+        &mut self,
+        states: &[ArrayRef],
+        accessor: &mut RowAccessor,
+    ) -> Result<()> {
+        self.update_batch(states, accessor)
     }
 }
 
