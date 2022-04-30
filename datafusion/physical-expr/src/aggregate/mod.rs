@@ -17,7 +17,7 @@
 
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
@@ -28,12 +28,13 @@ pub(crate) mod approx_median;
 pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
+pub(crate) mod array_agg_distinct;
 pub(crate) mod average;
 pub(crate) mod coercion_rule;
 pub(crate) mod correlation;
 pub(crate) mod count;
+pub(crate) mod count_distinct;
 pub(crate) mod covariance;
-pub(crate) mod distinct_expressions;
 #[macro_use]
 pub(crate) mod min_max;
 pub mod build_in;
@@ -75,4 +76,11 @@ pub trait AggregateExpr: Send + Sync + Debug {
     fn name(&self) -> &str {
         "AggregateExpr: default name"
     }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct DistinctScalarValues(Vec<ScalarValue>);
+
+fn format_state_name(name: &str, state_name: &str) -> String {
+    format!("{}[{}]", name, state_name)
 }
