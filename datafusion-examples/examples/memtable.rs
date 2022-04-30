@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     // Register the in-memory table containing the data
     ctx.register_table("users", Arc::new(mem_table))?;
 
-    let dataframe = ctx.sql("SELECT * FROM users;").await?;
+    let dataframe = ctx.sql("SELECT \"Bank_Account\" FROM users;").await?;
 
     timeout(Duration::from_secs(10), async move {
         let result = dataframe.collect().await.unwrap();
@@ -71,6 +71,6 @@ fn create_record_batch() -> Result<RecordBatch> {
 fn get_schema() -> SchemaRef {
     SchemaRef::new(Schema::new(vec![
         Field::new("id", DataType::UInt8, false),
-        Field::new("bank_account", DataType::UInt64, true),
+        Field::new("Bank_Account", DataType::UInt64, true),
     ]))
 }

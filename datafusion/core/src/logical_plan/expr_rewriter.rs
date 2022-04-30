@@ -574,7 +574,7 @@ mod test {
             .to_string();
         assert_eq!(
             error,
-            "Error during planning: Column #b not found in provided schemas"
+            "Schema error: No field named 'b'. Valid fields are 'tableA.a'."
         );
     }
 
