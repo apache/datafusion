@@ -780,3 +780,34 @@ async fn decimal_group_function() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
+
+#[tokio::test]
+async fn sql_abs_decimal() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_decimal_csv_table_by_sql(&ctx).await;
+    let sql = "SELECT abs(c1) from decimal_simple";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+------------------------+",
+        "| abs(decimal_simple.c1) |",
+        "+------------------------+",
+        "| 0.00001                |",
+        "| 0.00002                |",
+        "| 0.00002                |",
+        "| 0.00003                |",
+        "| 0.00003                |",
+        "| 0.00003                |",
+        "| 0.00004                |",
+        "| 0.00004                |",
+        "| 0.00004                |",
+        "| 0.00004                |",
+        "| 0.00005                |",
+        "| 0.00005                |",
+        "| 0.00005                |",
+        "| 0.00005                |",
+        "| 0.00005                |",
+        "+------------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
