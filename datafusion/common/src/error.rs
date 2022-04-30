@@ -104,12 +104,12 @@ pub enum SchemaError {
 
 /// Create a "field not found" DataFusion::SchemaError
 pub fn field_not_found(
-    qualifier: &Option<String>,
+    qualifier: Option<String>,
     name: &str,
     schema: &DFSchema,
 ) -> DataFusionError {
     DataFusionError::SchemaError(SchemaError::FieldNotFound {
-        qualifier: qualifier.clone(),
+        qualifier,
         name: name.to_string(),
         valid_fields: Some(schema.field_names()),
     })

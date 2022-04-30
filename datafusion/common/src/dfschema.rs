@@ -182,7 +182,7 @@ impl DFSchema {
             }
         }
 
-        Err(field_not_found(&None, name, self))
+        Err(field_not_found(None, name, self))
     }
 
     pub fn index_of_column_by_name(
@@ -207,7 +207,7 @@ impl DFSchema {
             .map(|(idx, _)| idx);
         match matches.next() {
             None => Err(field_not_found(
-                &qualifier.map(|s| s.to_string()),
+                qualifier.map(|s| s.to_string()),
                 name,
                 self,
             )),
@@ -261,7 +261,7 @@ impl DFSchema {
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
-            0 => Err(field_not_found(&None, name, self)),
+            0 => Err(field_not_found(None, name, self)),
             1 => Ok(matches[0]),
             _ => Err(DataFusionError::SchemaError(
                 SchemaError::AmbiguousReference {
