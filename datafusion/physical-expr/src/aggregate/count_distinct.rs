@@ -15,12 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
-
+use super::*;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 
 use ahash::RandomState;
@@ -31,13 +29,6 @@ use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct DistinctScalarValues(Vec<ScalarValue>);
-
-fn format_state_name(name: &str, state_name: &str) -> String {
-    format!("{}[{}]", name, state_name)
-}
 
 /// Expression for a COUNT(DISTINCT) aggregation.
 #[derive(Debug)]
@@ -233,146 +224,44 @@ impl Accumulator for DistinctCountAccumulator {
     }
 }
 
-/// Expression for a ARRAY_AGG(DISTINCT) aggregation.
-#[derive(Debug)]
-pub struct DistinctArrayAgg {
-    /// Column name
-    name: String,
-    /// The DataType for the input expression
-    input_data_type: DataType,
-    /// The input expression
-    expr: Arc<dyn PhysicalExpr>,
-}
-
-impl DistinctArrayAgg {
-    /// Create a new DistinctArrayAgg aggregate function
-    pub fn new(
-        expr: Arc<dyn PhysicalExpr>,
-        name: impl Into<String>,
-        input_data_type: DataType,
-    ) -> Self {
-        let name = name.into();
-        Self {
-            name,
-            expr,
-            input_data_type,
-        }
-    }
-}
-
-impl AggregateExpr for DistinctArrayAgg {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn field(&self) -> Result<Field> {
-        Ok(Field::new(
-            &self.name,
-            DataType::List(Box::new(Field::new(
-                "item",
-                self.input_data_type.clone(),
-                true,
-            ))),
-            false,
-        ))
-    }
-
-    fn create_accumulator(&self) -> Result<Box<dyn Accumulator>> {
-        Ok(Box::new(DistinctArrayAggAccumulator::try_new(
-            &self.input_data_type,
-        )?))
-    }
-
-    fn state_fields(&self) -> Result<Vec<Field>> {
-        Ok(vec![Field::new(
-            &format_state_name(&self.name, "distinct_array_agg"),
-            DataType::List(Box::new(Field::new(
-                "item",
-                self.input_data_type.clone(),
-                true,
-            ))),
-            false,
-        )])
-    }
-
-    fn expressions(&self) -> Vec<Arc<dyn PhysicalExpr>> {
-        vec![self.expr.clone()]
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-#[derive(Debug)]
-struct DistinctArrayAggAccumulator {
-    values: HashSet<ScalarValue>,
-    datatype: DataType,
-}
-
-impl DistinctArrayAggAccumulator {
-    pub fn try_new(datatype: &DataType) -> Result<Self> {
-        Ok(Self {
-            values: HashSet::new(),
-            datatype: datatype.clone(),
-        })
-    }
-}
-
-impl Accumulator for DistinctArrayAggAccumulator {
-    fn state(&self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::List(
-            Some(Box::new(self.values.clone().into_iter().collect())),
-            Box::new(self.datatype.clone()),
-        )])
-    }
-
-    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        assert_eq!(values.len(), 1, "batch input should only include 1 column!");
-
-        let arr = &values[0];
-        for i in 0..arr.len() {
-            self.values.insert(ScalarValue::try_from_array(arr, i)?);
-        }
-        Ok(())
-    }
-
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
-        if states.is_empty() {
-            return Ok(());
-        };
-
-        for array in states {
-            for j in 0..array.len() {
-                self.values.insert(ScalarValue::try_from_array(array, j)?);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn evaluate(&self) -> Result<ScalarValue> {
-        Ok(ScalarValue::List(
-            Some(Box::new(self.values.clone().into_iter().collect())),
-            Box::new(self.datatype.clone()),
-        ))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::col;
-    use crate::expressions::tests::aggregate;
     use arrow::array::{
         ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array,
         Int64Array, Int8Array, ListArray, UInt16Array, UInt32Array, UInt64Array,
         UInt8Array,
     };
     use arrow::array::{Int32Builder, ListBuilder, UInt64Builder};
-    use arrow::datatypes::{DataType, Schema};
-    use arrow::record_batch::RecordBatch;
+    use arrow::datatypes::DataType;
+
+    macro_rules! state_to_vec {
+        ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
+            match $LIST {
+                ScalarValue::List(_, data_type) => match data_type.as_ref() {
+                    &DataType::$DATA_TYPE => (),
+                    _ => panic!("Unexpected DataType for list"),
+                },
+                _ => panic!("Expected a ScalarValue::List"),
+            }
+
+            match $LIST {
+                ScalarValue::List(None, _) => None,
+                ScalarValue::List(Some(scalar_values), _) => {
+                    let vec = scalar_values
+                        .iter()
+                        .map(|scalar_value| match scalar_value {
+                            ScalarValue::$DATA_TYPE(value) => *value,
+                            _ => panic!("Unexpected ScalarValue variant"),
+                        })
+                        .collect::<Vec<Option<$PRIM_TY>>>();
+
+                    Some(vec)
+                }
+                _ => unreachable!(),
+            }
+        }};
+    }
 
     macro_rules! build_list {
         ($LISTS:expr, $BUILDER_TYPE:ident) => {{
@@ -401,31 +290,33 @@ mod tests {
         }};
     }
 
-    macro_rules! state_to_vec {
-        ($LIST:expr, $DATA_TYPE:ident, $PRIM_TY:ty) => {{
-            match $LIST {
-                ScalarValue::List(_, data_type) => match data_type.as_ref() {
-                    &DataType::$DATA_TYPE => (),
-                    _ => panic!("Unexpected DataType for list"),
-                },
-                _ => panic!("Expected a ScalarValue::List"),
-            }
+    macro_rules! test_count_distinct_update_batch_numeric {
+        ($ARRAY_TYPE:ident, $DATA_TYPE:ident, $PRIM_TYPE:ty) => {{
+            let values: Vec<Option<$PRIM_TYPE>> = vec![
+                Some(1),
+                Some(1),
+                None,
+                Some(3),
+                Some(2),
+                None,
+                Some(2),
+                Some(3),
+                Some(1),
+            ];
 
-            match $LIST {
-                ScalarValue::List(None, _) => None,
-                ScalarValue::List(Some(scalar_values), _) => {
-                    let vec = scalar_values
-                        .iter()
-                        .map(|scalar_value| match scalar_value {
-                            ScalarValue::$DATA_TYPE(value) => *value,
-                            _ => panic!("Unexpected ScalarValue variant"),
-                        })
-                        .collect::<Vec<Option<$PRIM_TY>>>();
+            let arrays = vec![Arc::new($ARRAY_TYPE::from(values)) as ArrayRef];
 
-                    Some(vec)
-                }
-                _ => unreachable!(),
-            }
+            let (states, result) = run_update_batch(&arrays)?;
+
+            let mut state_vec =
+                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
+            state_vec.sort();
+
+            assert_eq!(states.len(), 1);
+            assert_eq!(state_vec, vec![Some(1), Some(2), Some(3)]);
+            assert_eq!(result, ScalarValue::UInt64(Some(3)));
+
+            Ok(())
         }};
     }
 
@@ -506,36 +397,6 @@ mod tests {
         accum.merge_batch(arrays)?;
 
         Ok((accum.state()?, accum.evaluate()?))
-    }
-
-    macro_rules! test_count_distinct_update_batch_numeric {
-        ($ARRAY_TYPE:ident, $DATA_TYPE:ident, $PRIM_TYPE:ty) => {{
-            let values: Vec<Option<$PRIM_TYPE>> = vec![
-                Some(1),
-                Some(1),
-                None,
-                Some(3),
-                Some(2),
-                None,
-                Some(2),
-                Some(3),
-                Some(1),
-            ];
-
-            let arrays = vec![Arc::new($ARRAY_TYPE::from(values)) as ArrayRef];
-
-            let (states, result) = run_update_batch(&arrays)?;
-
-            let mut state_vec =
-                state_to_vec!(&states[0], $DATA_TYPE, $PRIM_TYPE).unwrap();
-            state_vec.sort();
-
-            assert_eq!(states.len(), 1);
-            assert_eq!(state_vec, vec![Some(1), Some(2), Some(3)]);
-            assert_eq!(result, ScalarValue::UInt64(Some(3)));
-
-            Ok(())
-        }};
     }
 
     // Used trait to create associated constant for f32 and f64
@@ -869,144 +730,5 @@ mod tests {
         assert_eq!(result, ScalarValue::UInt64(Some(5)));
 
         Ok(())
-    }
-
-    fn check_distinct_array_agg(
-        input: ArrayRef,
-        expected: ScalarValue,
-        datatype: DataType,
-    ) -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", datatype.clone(), false)]);
-        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![input])?;
-
-        let agg = Arc::new(DistinctArrayAgg::new(
-            col("a", &schema)?,
-            "bla".to_string(),
-            datatype,
-        ));
-        let actual = aggregate(&batch, agg)?;
-
-        match (expected, actual) {
-            (ScalarValue::List(Some(mut e), _), ScalarValue::List(Some(mut a), _)) => {
-                // workaround lack of Ord of ScalarValue
-                let cmp = |a: &ScalarValue, b: &ScalarValue| {
-                    a.partial_cmp(b).expect("Can compare ScalarValues")
-                };
-
-                e.sort_by(cmp);
-                a.sort_by(cmp);
-                // Check that the inputs are the same
-                assert_eq!(e, a);
-            }
-            _ => {
-                unreachable!()
-            }
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn distinct_array_agg_i32() -> Result<()> {
-        let col: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 7, 4, 5, 2]));
-
-        let out = ScalarValue::List(
-            Some(Box::new(vec![
-                ScalarValue::Int32(Some(1)),
-                ScalarValue::Int32(Some(2)),
-                ScalarValue::Int32(Some(7)),
-                ScalarValue::Int32(Some(4)),
-                ScalarValue::Int32(Some(5)),
-            ])),
-            Box::new(DataType::Int32),
-        );
-
-        check_distinct_array_agg(col, out, DataType::Int32)
-    }
-
-    #[test]
-    fn distinct_array_agg_nested() -> Result<()> {
-        // [[1, 2, 3], [4, 5]]
-        let l1 = ScalarValue::List(
-            Some(Box::new(vec![
-                ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(1i32),
-                        ScalarValue::from(2i32),
-                        ScalarValue::from(3i32),
-                    ])),
-                    Box::new(DataType::Int32),
-                ),
-                ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(4i32),
-                        ScalarValue::from(5i32),
-                    ])),
-                    Box::new(DataType::Int32),
-                ),
-            ])),
-            Box::new(DataType::List(Box::new(Field::new(
-                "item",
-                DataType::Int32,
-                true,
-            )))),
-        );
-
-        // [[6], [7, 8]]
-        let l2 = ScalarValue::List(
-            Some(Box::new(vec![
-                ScalarValue::List(
-                    Some(Box::new(vec![ScalarValue::from(6i32)])),
-                    Box::new(DataType::Int32),
-                ),
-                ScalarValue::List(
-                    Some(Box::new(vec![
-                        ScalarValue::from(7i32),
-                        ScalarValue::from(8i32),
-                    ])),
-                    Box::new(DataType::Int32),
-                ),
-            ])),
-            Box::new(DataType::List(Box::new(Field::new(
-                "item",
-                DataType::Int32,
-                true,
-            )))),
-        );
-
-        // [[9]]
-        let l3 = ScalarValue::List(
-            Some(Box::new(vec![ScalarValue::List(
-                Some(Box::new(vec![ScalarValue::from(9i32)])),
-                Box::new(DataType::Int32),
-            )])),
-            Box::new(DataType::List(Box::new(Field::new(
-                "item",
-                DataType::Int32,
-                true,
-            )))),
-        );
-
-        let list = ScalarValue::List(
-            Some(Box::new(vec![l1.clone(), l2.clone(), l3.clone()])),
-            Box::new(DataType::List(Box::new(Field::new(
-                "item",
-                DataType::Int32,
-                true,
-            )))),
-        );
-
-        // Duplicate l1 in the input array and check that it is deduped in the output.
-        let array = ScalarValue::iter_to_array(vec![l1.clone(), l2, l3, l1]).unwrap();
-
-        check_distinct_array_agg(
-            array,
-            list,
-            DataType::List(Box::new(Field::new(
-                "item",
-                DataType::List(Box::new(Field::new("item", DataType::Int32, true))),
-                true,
-            ))),
-        )
     }
 }
