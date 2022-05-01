@@ -1873,7 +1873,7 @@ mod tests {
         let formatted = format!("{:?}", execution_plan);
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in HashAggregate (which is slower)
+        // mode in Aggregate (which is slower)
         assert!(formatted.contains("FinalPartitioned"));
 
         Ok(())

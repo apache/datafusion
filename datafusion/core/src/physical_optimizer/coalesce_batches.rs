@@ -62,9 +62,9 @@ impl PhysicalOptimizerRule for CoalesceBatches {
             || plan_any.downcast_ref::<HashJoinExec>().is_some()
             || plan_any.downcast_ref::<RepartitionExec>().is_some();
 
-        // TODO we should also do this for HashAggregateExec but we need to update tests
+        // TODO we should also do this for AggregateExec but we need to update tests
         // as part of this work - see https://issues.apache.org/jira/browse/ARROW-11068
-        // || plan_any.downcast_ref::<HashAggregateExec>().is_some();
+        // || plan_any.downcast_ref::<AggregateExec>().is_some();
 
         if plan.children().is_empty() {
             // leaf node, children cannot be replaced

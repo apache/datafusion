@@ -306,19 +306,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Arc::new((&input_schema).try_into()?),
                 )?))
             }
-            PhysicalPlanType::HashAggregate(hash_agg) => {
+            PhysicalPlanType::Aggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
                     hash_agg.input,
                     registry,
                     runtime,
                     extension_codec
                 )?;
-                let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(|| {
-                    proto_error(format!(
-                        "Received a HashAggregateNode message with unknown AggregateMode {}",
+                let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(
+                    || {
+                        proto_error(format!(
+                        "Received a AggregateNode message with unknown AggregateMode {}",
                         hash_agg.mode
                     ))
-                })?;
+                    },
+                )?;
                 let agg_mode: AggregateMode = match mode {
                     protobuf::AggregateMode::Partial => AggregateMode::Partial,
                     protobuf::AggregateMode::Final => AggregateMode::Final,
@@ -341,7 +343,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .as_ref()
                     .ok_or_else(|| {
                         BallistaError::General(
-                            "input_schema in HashAggregateNode is missing.".to_owned(),
+                            "input_schema in AggregateNode is missing.".to_owned(),
                         )
                     })?
                     .clone();
@@ -384,7 +386,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 )?)
                             }
                             _ => Err(BallistaError::General(
-                                "Invalid aggregate  expression for HashAggregateExec"
+                                "Invalid aggregate expression for AggregateExec"
                                     .to_string(),
                             )),
                         }
@@ -768,8 +770,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 extension_codec,
             )?;
             Ok(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::HashAggregate(Box::new(
-                    protobuf::HashAggregateExecNode {
+                physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
+                    protobuf::AggregateExecNode {
                         group_expr: groups,
                         group_expr_name: group_names,
                         aggr_expr: agg,
@@ -1212,7 +1214,7 @@ mod roundtrip_tests {
     }
 
     #[test]
-    fn rountrip_hash_aggregate() -> Result<()> {
+    fn rountrip_aggregate() -> Result<()> {
         let field_a = Field::new("a", DataType::Int64, false);
         let field_b = Field::new("b", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));

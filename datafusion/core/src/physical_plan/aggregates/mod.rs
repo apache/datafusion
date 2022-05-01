@@ -237,7 +237,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "HashAggregateExec: mode={:?}", self.mode)?;
+                write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = self
                     .group_expr
                     .iter()
@@ -682,7 +682,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let hash_aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -690,7 +690,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec, task_ctx);
+        let fut = crate::physical_plan::collect(aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -720,7 +720,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let hash_aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -728,7 +728,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec, task_ctx);
+        let fut = crate::physical_plan::collect(aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

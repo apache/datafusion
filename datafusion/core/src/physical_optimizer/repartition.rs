@@ -300,7 +300,7 @@ mod tests {
         Arc::new(ProjectionExec::try_new(exprs, input).unwrap())
     }
 
-    fn hash_aggregate(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
+    fn aggregate(input: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
         let schema = schema();
         Arc::new(
             AggregateExec::try_new(
@@ -361,11 +361,11 @@ mod tests {
 
     #[test]
     fn added_repartition_to_single_partition() -> Result<()> {
-        let plan = hash_aggregate(parquet_exec());
+        let plan = aggregate(parquet_exec());
 
         let expected = [
-            "HashAggregateExec: mode=Final, gby=[], aggr=[]",
-            "HashAggregateExec: mode=Partial, gby=[], aggr=[]",
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
         ];
@@ -376,11 +376,11 @@ mod tests {
 
     #[test]
     fn repartition_deepest_node() -> Result<()> {
-        let plan = hash_aggregate(filter_exec(parquet_exec()));
+        let plan = aggregate(filter_exec(parquet_exec()));
 
         let expected = &[
-            "HashAggregateExec: mode=Final, gby=[], aggr=[]",
-            "HashAggregateExec: mode=Partial, gby=[], aggr=[]",
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "FilterExec: c1@0",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "ParquetExec: limit=None, partitions=[x], projection=[c1]",
@@ -443,11 +443,11 @@ mod tests {
 
     #[test]
     fn repartition_ignores_limit() -> Result<()> {
-        let plan = hash_aggregate(limit_exec(filter_exec(limit_exec(parquet_exec()))));
+        let plan = aggregate(limit_exec(filter_exec(limit_exec(parquet_exec()))));
 
         let expected = &[
-            "HashAggregateExec: mode=Final, gby=[], aggr=[]",
-            "HashAggregateExec: mode=Partial, gby=[], aggr=[]",
+            "AggregateExec: mode=Final, gby=[], aggr=[]",
+            "AggregateExec: mode=Partial, gby=[], aggr=[]",
             "RepartitionExec: partitioning=RoundRobinBatch(10)",
             "GlobalLimitExec: limit=100",
             "LocalLimitExec: limit=100",

@@ -48,7 +48,7 @@ pub(crate) struct NoGroupingAggregateStream {
 }
 
 impl NoGroupingAggregateStream {
-    /// Create a new HashAggregateStream
+    /// Create a new NoGroupingAggregateStream
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,

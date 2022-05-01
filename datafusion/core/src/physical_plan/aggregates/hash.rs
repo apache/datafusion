@@ -87,7 +87,7 @@ pub(crate) struct GroupedHashAggregateStream {
 }
 
 impl GroupedHashAggregateStream {
-    /// Create a new HashAggregateStream
+    /// Create a new GroupedHashAggregateStream
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,

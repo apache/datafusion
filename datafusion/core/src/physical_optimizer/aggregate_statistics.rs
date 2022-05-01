@@ -54,7 +54,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
             let partial_agg_exec = partial_agg_exec
                 .as_any()
                 .downcast_ref::<AggregateExec>()
-                .expect("take_optimizable() ensures that this is a HashAggregateExec");
+                .expect("take_optimizable() ensures that this is a AggregateExec");
             let stats = partial_agg_exec.input().statistics();
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
@@ -96,12 +96,12 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     }
 }
 
-/// assert if the node passed as argument is a final `HashAggregateExec` node that can be optimized:
-/// - its child (with posssible intermediate layers) is a partial `HashAggregateExec` node
+/// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
+/// - its child (with posssible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
 /// - the statistics are exact
-/// If this is the case, return a ref to the partial `HashAggregateExec`, else `None`.
-/// We would have prefered to return a casted ref to HashAggregateExec but the recursion requires
+/// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
+/// We would have prefered to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
     if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {

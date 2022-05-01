@@ -152,7 +152,7 @@ fn build_exec_plan_diagram(
     draw_entity: bool,
 ) -> Result<usize> {
     let operator_str = if plan.as_any().downcast_ref::<AggregateExec>().is_some() {
-        "HashAggregateExec"
+        "AggregateExec"
     } else if plan.as_any().downcast_ref::<SortExec>().is_some() {
         "SortExec"
     } else if plan.as_any().downcast_ref::<ProjectionExec>().is_some() {
