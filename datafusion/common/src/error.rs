@@ -22,6 +22,7 @@ use std::fmt::{Display, Formatter};
 use std::io;
 use std::result;
 
+use crate::DFSchema;
 use arrow::error::ArrowError;
 #[cfg(feature = "avro")]
 use avro_rs::Error as AvroError;
@@ -94,17 +95,30 @@ pub enum SchemaError {
     /// Schema contains duplicate unqualified field name
     DuplicateUnqualifiedField { name: String },
     /// No field with this name
-    FieldNotExist {
+    FieldNotFound {
         qualifier: Option<String>,
         name: String,
         valid_fields: Option<Vec<String>>,
     },
 }
 
+/// Create a "field not found" DataFusion::SchemaError
+pub fn field_not_found(
+    qualifier: Option<String>,
+    name: &str,
+    schema: &DFSchema,
+) -> DataFusionError {
+    DataFusionError::SchemaError(SchemaError::FieldNotFound {
+        qualifier,
+        name: name.to_string(),
+        valid_fields: Some(schema.field_names()),
+    })
+}
+
 impl Display for SchemaError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::FieldNotExist {
+            Self::FieldNotFound {
                 qualifier,
                 name,
                 valid_fields,
@@ -116,7 +130,15 @@ impl Display for SchemaError {
                     write!(f, "'{}'", name)?;
                 }
                 if let Some(field_names) = valid_fields {
-                    write!(f, ". Valid fields are {}", field_names.join(", "))?;
+                    write!(
+                        f,
+                        ". Valid fields are {}",
+                        field_names
+                            .iter()
+                            .map(|name| format!("'{}'", name))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )?;
                 }
                 write!(f, ".")
             }

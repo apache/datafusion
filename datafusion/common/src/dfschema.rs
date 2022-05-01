@@ -23,7 +23,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result, SchemaError};
-use crate::Column;
+use crate::{field_not_found, Column};
 
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -185,11 +185,7 @@ impl DFSchema {
             }
         }
 
-        Err(DataFusionError::SchemaError(SchemaError::FieldNotExist {
-            qualifier: None,
-            name: name.to_string(),
-            valid_fields: Some(self.get_field_names()),
-        }))
+        Err(field_not_found(None, name, self))
     }
 
     pub fn index_of_column_by_name(
@@ -213,11 +209,11 @@ impl DFSchema {
             })
             .map(|(idx, _)| idx);
         match matches.next() {
-            None => Err(DataFusionError::SchemaError(SchemaError::FieldNotExist {
-                qualifier: qualifier.map(|s| s.to_string()),
-                name: name.to_string(),
-                valid_fields: Some(self.get_field_names()),
-            })),
+            None => Err(field_not_found(
+                qualifier.map(|s| s.to_string()),
+                name,
+                self,
+            )),
             Some(idx) => match matches.next() {
                 None => Ok(idx),
                 // found more than one matches
@@ -268,11 +264,7 @@ impl DFSchema {
     pub fn field_with_unqualified_name(&self, name: &str) -> Result<&DFField> {
         let matches = self.fields_with_unqualified_name(name);
         match matches.len() {
-            0 => Err(DataFusionError::SchemaError(SchemaError::FieldNotExist {
-                qualifier: None,
-                name: name.to_string(),
-                valid_fields: Some(self.get_field_names()),
-            })),
+            0 => Err(field_not_found(None, name, self)),
             1 => Ok(matches[0]),
             _ => Err(DataFusionError::SchemaError(
                 SchemaError::AmbiguousReference {
@@ -357,14 +349,11 @@ impl DFSchema {
         }
     }
 
-    /// Get comma-separated list of field names for use in error messages
-    fn get_field_names(&self) -> Vec<String> {
+    /// Get list of fully-qualified field names in this schema
+    pub fn field_names(&self) -> Vec<String> {
         self.fields
             .iter()
-            .map(|f| match f.qualifier() {
-                Some(qualifier) => format!("'{}.{}'", qualifier, f.name()),
-                None => format!("'{}'", f.name()),
-            })
+            .map(|f| f.qualified_name())
             .collect::<Vec<_>>()
     }
 
