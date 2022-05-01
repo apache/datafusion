@@ -133,11 +133,14 @@ impl DFSchema {
     /// Modify this schema by appending the fields from the supplied schema, ignoring any
     /// duplicate fields.
     pub fn merge(&mut self, other_schema: &DFSchema) {
+        if other_schema.fields.is_empty() {
+            return;
+        }
         for field in other_schema.fields() {
             // skip duplicate columns
             let duplicated_field = match field.qualifier() {
                 Some(q) => self.field_with_name(Some(q.as_str()), field.name()).is_ok(),
-                // for unqualifed columns, check as unqualified name
+                // for unqualified columns, check as unqualified name
                 None => self.field_with_unqualified_name(field.name()).is_ok(),
             };
             if !duplicated_field {
