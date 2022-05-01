@@ -37,7 +37,7 @@ use futures::{
 };
 
 /// stream struct for aggregation without grouping columns
-pub(crate) struct NoGroupingAggregateStream {
+pub(crate) struct AggregateStream {
     schema: SchemaRef,
     mode: AggregateMode,
     input: SendableRecordBatchStream,
@@ -47,8 +47,8 @@ pub(crate) struct NoGroupingAggregateStream {
     finished: bool,
 }
 
-impl NoGroupingAggregateStream {
-    /// Create a new NoGroupingAggregateStream
+impl AggregateStream {
+    /// Create a new AggregateStream
     pub fn new(
         mode: AggregateMode,
         schema: SchemaRef,
@@ -71,7 +71,7 @@ impl NoGroupingAggregateStream {
     }
 }
 
-impl Stream for NoGroupingAggregateStream {
+impl Stream for AggregateStream {
     type Item = ArrowResult<RecordBatch>;
 
     fn poll_next(
@@ -125,7 +125,7 @@ impl Stream for NoGroupingAggregateStream {
     }
 }
 
-impl RecordBatchStream for NoGroupingAggregateStream {
+impl RecordBatchStream for AggregateStream {
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

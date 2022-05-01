@@ -19,7 +19,7 @@
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::hash::GroupedHashAggregateStream;
-use crate::physical_plan::aggregates::no_grouping::NoGroupingAggregateStream;
+use crate::physical_plan::aggregates::no_grouping::AggregateStream;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -207,7 +207,7 @@ impl ExecutionPlan for AggregateExec {
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         if self.group_expr.is_empty() {
-            Ok(Box::pin(NoGroupingAggregateStream::new(
+            Ok(Box::pin(AggregateStream::new(
                 self.mode,
                 self.schema.clone(),
                 self.aggr_expr.clone(),
