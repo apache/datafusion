@@ -215,28 +215,28 @@ async fn case_insensitive_in_sql_errors() {
         .await
         .unwrap_err()
         .to_string();
-    assert_contains!(actual, "Invalid identifier '#column1'");
+    assert_contains!(actual, "No field named 'column1'");
 
     let actual = ctx
         .sql("SELECT Column1 from test")
         .await
         .unwrap_err()
         .to_string();
-    assert_contains!(actual, "Invalid identifier '#column1'");
+    assert_contains!(actual, "No field named 'column1'");
 
     let actual = ctx
         .sql("SELECT column1 from test")
         .await
         .unwrap_err()
         .to_string();
-    assert_contains!(actual, "Invalid identifier '#column1'");
+    assert_contains!(actual, "No field named 'column1'");
 
     let actual = ctx
         .sql(r#"SELECT "column1" from test"#)
         .await
         .unwrap_err()
         .to_string();
-    assert_contains!(actual, "Invalid identifier '#column1'");
+    assert_contains!(actual, "No field named 'column1'");
 
     // This should pass (note the quotes)
     ctx.sql(r#"SELECT "Column1" from test"#).await.unwrap();

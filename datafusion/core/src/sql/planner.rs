@@ -49,6 +49,7 @@ use arrow::datatypes::*;
 use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
+use datafusion_common::field_not_found;
 use datafusion_expr::logical_plan::Subquery;
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -1253,18 +1254,16 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         if !schema.fields_with_unqualified_name(&col.name).is_empty() {
                             Ok(())
                         } else {
-                            Err(DataFusionError::Plan(format!(
-                                "No field with unqualified name '{}'",
-                                &col.name
-                            )))
+                            Err(field_not_found(None, col.name.as_str(), schema))
                         }
                     }
                 }
                 .map_err(|_: DataFusionError| {
-                    DataFusionError::Plan(format!(
-                        "Invalid identifier '{}' for schema {}",
-                        col, schema
-                    ))
+                    field_not_found(
+                        col.relation.as_ref().map(|s| s.to_owned()),
+                        col.name.as_str(),
+                        schema,
+                    )
                 }),
                 _ => Err(DataFusionError::Internal("Not a column".to_string())),
             })
@@ -2544,10 +2543,7 @@ mod tests {
     fn select_column_does_not_exist() {
         let sql = "SELECT doesnotexist FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
-        ));
+        assert_field_not_found(err, "doesnotexist");
     }
 
     #[test]
@@ -2602,20 +2598,14 @@ mod tests {
     fn select_filter_column_does_not_exist() {
         let sql = "SELECT first_name FROM person WHERE doesnotexist = 'A'";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
-        ));
+        assert_field_not_found(err, "doesnotexist");
     }
 
     #[test]
     fn select_filter_cannot_use_alias() {
         let sql = "SELECT first_name AS x FROM person WHERE x = 'A'";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#x' for schema "),
-        ));
+        assert_field_not_found(err, "x");
     }
 
     #[test]
@@ -3109,10 +3099,7 @@ mod tests {
     fn select_simple_aggregate_column_does_not_exist() {
         let sql = "SELECT MIN(doesnotexist) FROM person";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
-        ));
+        assert_field_not_found(err, "doesnotexist");
     }
 
     #[test]
@@ -3199,20 +3186,16 @@ mod tests {
     fn select_simple_aggregate_with_groupby_and_column_in_group_by_does_not_exist() {
         let sql = "SELECT SUM(age) FROM person GROUP BY doesnotexist";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::Plan(msg) if msg.contains("Column #doesnotexist not found in provided schemas"),
-        ));
+        assert_eq!("Schema error: No field named 'doesnotexist'. Valid fields are 'SUM(person.age)', \
+        'person.id', 'person.first_name', 'person.last_name', 'person.age', 'person.state', \
+        'person.salary', 'person.birth_date', 'person.😀'.", format!("{}", err));
     }
 
     #[test]
     fn select_simple_aggregate_with_groupby_and_column_in_aggregate_does_not_exist() {
         let sql = "SELECT SUM(doesnotexist) FROM person GROUP BY first_name";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert!(matches!(
-            err,
-            DataFusionError::Plan(msg) if msg.contains("Invalid identifier '#doesnotexist' for schema "),
-        ));
+        assert_field_not_found(err, "doesnotexist");
     }
 
     #[test]
@@ -4556,5 +4539,18 @@ mod tests {
         \n    TableScan: person projection=None", subquery);
 
         quick_test(sql, &expected)
+    }
+
+    fn assert_field_not_found(err: DataFusionError, name: &str) {
+        match err {
+            DataFusionError::SchemaError { .. } => {
+                let msg = format!("{}", err);
+                let expected = format!("Schema error: No field named '{}'.", name);
+                if !msg.starts_with(&expected) {
+                    panic!("error [{}] did not start with [{}]", msg, expected);
+                }
+            }
+            _ => panic!("assert_field_not_found wrong error type"),
+        }
     }
 }
