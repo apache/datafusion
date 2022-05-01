@@ -62,6 +62,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_physical_expr::expressions::DateIntervalExpr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -964,7 +965,27 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            binary(lhs, *op, rhs, input_schema)
+            match (
+                lhs.data_type(input_schema)?,
+                op,
+                rhs.data_type(input_schema)?,
+            ) {
+                (
+                    DataType::Date32 | DataType::Date64,
+                    Operator::Plus | Operator::Minus,
+                    DataType::Interval(_),
+                ) => Ok(Arc::new(DateIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
+                _ => {
+                    // assume that we can coerce both sides into a common type
+                    // and then perform a binary operation
+                    binary(lhs, *op, rhs, input_schema)
+                }
+            }
         }
         Expr::Case {
             expr,
