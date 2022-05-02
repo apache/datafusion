@@ -1140,10 +1140,14 @@ async fn nested_subquery() -> Result<()> {
     let empty_table = Arc::new(EmptyTable::new(Arc::new(schema)));
     ctx.register_table("t1", empty_table.clone())?;
     ctx.register_table("t2", empty_table)?;
-    let sql = "SELECT id FROM t1";
+    let sql = "SELECT COUNT(*) as cnt \
+    FROM (\
+        (SELECT id FROM t1) EXCEPT \
+        (SELECT id FROM t2)\
+        ) foo";
     let actual = execute_to_batches(&ctx, sql).await;
     // the purpose of this test is just to make sure the query produces a valid plan
-    let expected = vec!["++", "++"];
+    let expected = vec!["+-----+", "| cnt |", "+-----+", "| 0   |", "+-----+"];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
