@@ -361,7 +361,7 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
 
 /// Recursively call [`Column::normalize_with_schemas`] on all Column expressions
 /// in the `expr` expression tree.
-fn normalize_col_with_schemas(
+pub fn normalize_col_with_schemas(
     expr: Expr,
     schemas: &[&Arc<DFSchema>],
     using_columns: &[HashSet<Column>],

@@ -29,10 +29,10 @@ use crate::logical_plan::window_frames::{WindowFrame, WindowFrameUnits};
 use crate::logical_plan::Expr::Alias;
 use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
-    normalize_col, union_with_alias, Column, CreateCatalog, CreateCatalogSchema,
-    CreateExternalTable as PlanCreateExternalTable, CreateMemoryTable, DFSchema,
-    DFSchemaRef, DropTable, Expr, FileType, LogicalPlan, LogicalPlanBuilder, Operator,
-    PlanType, ToDFSchema, ToStringifiedPlan,
+    normalize_col, normalize_col_with_schemas, union_with_alias, Column, CreateCatalog,
+    CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
+    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, FileType, LogicalPlan,
+    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -808,6 +808,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 let mut all_join_keys = HashSet::new();
 
+                let orig_plans = plans.clone();
                 let mut plans = plans.into_iter();
                 let mut left = plans.next().unwrap(); // have at least one plan
 
@@ -889,10 +890,36 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // remove join expressions from filter
                 match remove_join_expressions(&filter_expr, &all_join_keys)? {
-                    Some(filter_expr) => Ok(LogicalPlan::Filter(Filter {
-                        predicate: filter_expr,
-                        input: Arc::new(left),
-                    })),
+                    Some(filter_expr) => {
+                        // this logic is adapted from [`LogicalPlanBuilder::filter`] to take
+                        // the query outer schema into account so that joins in subqueries
+                        // can reference outer query fields.
+                        let mut all_schemas: Vec<DFSchemaRef> = vec![];
+                        for plan in orig_plans {
+                            for schema in plan.all_schemas() {
+                                all_schemas.push(schema.clone());
+                            }
+                        }
+                        if let Some(outer_query_schema) = outer_query_schema {
+                            all_schemas.push(Arc::new(outer_query_schema.clone()));
+                        }
+                        let mut join_columns = HashSet::new();
+                        for (l, r) in &all_join_keys {
+                            join_columns.insert(l.clone());
+                            join_columns.insert(r.clone());
+                        }
+                        let x: Vec<&DFSchemaRef> =
+                            all_schemas.iter().map(|s| s).collect();
+                        let filter_expr = normalize_col_with_schemas(
+                            filter_expr,
+                            x.as_slice(),
+                            &[join_columns],
+                        )?;
+                        Ok(LogicalPlan::Filter(Filter {
+                            predicate: filter_expr,
+                            input: Arc::new(left),
+                        }))
+                    }
                     _ => Ok(left),
                 }
             }
@@ -4547,18 +4574,18 @@ mod tests {
             AND j1_id = j3_id)";
 
         let subquery = "Subquery: Projection: #COUNT(UInt8(1))\
-        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
-        \n    Filter: #j2_id = #j1_id\
-        \n      Inner Join: #j1.j1_id = #j3.j3_id\
-        \n        TableScan: j1 projection=None\
-        \n        TableScan: j3 projection=None";
+            \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+            \n    Filter: #j2.j2_id = #j1.j1_id\
+            \n      Inner Join: #j1.j1_id = #j3.j3_id\
+            \n        TableScan: j1 projection=None\
+            \n        TableScan: j3 projection=None";
 
         let expected = format!(
             "Projection: #j1.j1_string, #j2.j2_string\
-        \n  Filter: #j1_id = #j2_id - Int64(1) AND #j2_id < ({})\
-        \n    CrossJoin:\
-        \n      TableScan: j1 projection=None\
-        \n      TableScan: j2 projection=None",
+            \n  Filter: #j1.j1_id = #j2.j2_id - Int64(1) AND #j2.j2_id < ({})\
+            \n    CrossJoin:\
+            \n      TableScan: j1 projection=None\
+            \n      TableScan: j2 projection=None",
             subquery
         );
 
