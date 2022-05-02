@@ -25,9 +25,20 @@ async fn test_sort_unprojected_col() -> Result<()> {
     // execute the query
     let sql = "SELECT id FROM alltypes_plain ORDER BY int_col, double_col";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| id |", "+----+", "| 4  |", "| 6  |", "| 2  |", "| 0  |", "| 5  |",
-        "| 7  |", "| 3  |", "| 1  |", "+----+",
+        "+----+",
+        "| id |",
+        "+----+",
+        "| 4  |",
+        "| 6  |",
+        "| 2  |",
+        "| 0  |",
+        "| 5  |",
+        "| 7  |",
+        "| 3  |",
+        "| 1  |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

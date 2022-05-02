@@ -509,8 +509,15 @@ async fn query_get_indexed_field() -> Result<()> {
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 7  |", "+----+",
+        "+----+",
+        "| i0 |",
+        "+----+",
+        "| 0  |",
+        "| 4  |",
+        "| 7  |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -567,8 +574,15 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| i0 |", "+----+", "| 0  |", "| 5  |", "| 11 |", "+----+",
+        "+----+",
+        "| i0 |",
+        "+----+",
+        "| 0  |",
+        "| 5  |",
+        "| 11 |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -617,8 +631,15 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 8  |", "+----+",
+        "+----+",
+        "| i0 |",
+        "+----+",
+        "| 0  |",
+        "| 4  |",
+        "| 8  |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -875,19 +896,41 @@ async fn query_cte() -> Result<()> {
     let sql =
         "WITH t AS (SELECT 1 AS a), u AS (SELECT 2 AS a) SELECT * FROM t UNION ALL SELECT * FROM u";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| a |",
+        "+---+",
+        "| 1 |",
+        "| 2 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     // with + join
     let sql = "WITH t AS (SELECT 1 AS id1), u AS (SELECT 1 AS id2, 5 as x) SELECT x FROM t JOIN u ON (id1 = id2)";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| x |", "+---+", "| 5 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| x |",
+        "+---+",
+        "| 5 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     // backward reference
     let sql = "WITH t AS (SELECT 1 AS id1), u AS (SELECT * FROM t) SELECT * from u";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+-----+", "| id1 |", "+-----+", "| 1   |", "+-----+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| id1 |",
+        "+-----+",
+        "| 1   |",
+        "+-----+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     Ok(())
