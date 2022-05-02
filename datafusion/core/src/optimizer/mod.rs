@@ -28,4 +28,5 @@ pub mod optimizer;
 pub mod projection_push_down;
 pub mod simplify_expressions;
 pub mod single_distinct_to_groupby;
+pub mod subquery_filter_to_join;
 pub mod utils;

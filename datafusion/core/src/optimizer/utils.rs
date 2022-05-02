@@ -25,7 +25,7 @@ use datafusion_expr::logical_plan::{
 };
 
 use crate::logical_plan::{
-    build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
+    and, build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
     Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
     Repartition, Union, Values,
 };
@@ -554,6 +554,41 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             key: key.clone(),
         }),
     }
+}
+
+/// converts "A AND B AND C" => [A, B, C]
+pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>) {
+    match predicate {
+        Expr::BinaryExpr {
+            right,
+            op: Operator::And,
+            left,
+        } => {
+            split_conjunction(left, predicates);
+            split_conjunction(right, predicates);
+        }
+        Expr::Alias(expr, _) => {
+            split_conjunction(expr, predicates);
+        }
+        other => predicates.push(other),
+    }
+}
+
+/// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
+/// its predicate be all `predicates` ANDed.
+pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
+    // reduce filters to a single filter with an AND
+    let predicate = predicates
+        .iter()
+        .skip(1)
+        .fold(predicates[0].clone(), |acc, predicate| {
+            and(acc, (*predicate).to_owned())
+        });
+
+    LogicalPlan::Filter(Filter {
+        predicate,
+        input: Arc::new(plan),
+    })
 }
 
 #[cfg(test)]
