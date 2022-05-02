@@ -44,7 +44,7 @@ You'll need cmake in order to compile some of ballista's dependencies. Ubuntu us
 sudo apt-get install cmake
 ```
 
-MacOS users cau use the follow command:
+MacOS users can use the following command:
 
 ```bash
 brew install cmake
