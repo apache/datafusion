@@ -85,7 +85,7 @@ def main():
 
     print(f'Updating datafusion versions in {repo_root} to {new_version}')
 
-    update_datafusion_version("datafusion/Cargo.toml", new_version)
+    update_datafusion_version("datafusion/core/Cargo.toml", new_version)
     for cargo_toml in repo_root.rglob('Cargo.toml'):
         update_downstream_versions(cargo_toml, new_version)
 
