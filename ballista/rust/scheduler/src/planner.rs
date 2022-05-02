@@ -276,8 +276,8 @@ mod test {
     use ballista_core::error::BallistaError;
     use ballista_core::execution_plans::UnresolvedShuffleExec;
     use ballista_core::serde::{protobuf, AsExecutionPlan, BallistaCodec};
+    use datafusion::physical_plan::aggregates::{AggregateExec, AggregateMode};
     use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
-    use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
     use datafusion::physical_plan::hash_join::HashJoinExec;
     use datafusion::physical_plan::sorts::sort::SortExec;
     use datafusion::physical_plan::{
@@ -298,7 +298,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
+    async fn distributed_aggregate_plan() -> Result<(), BallistaError> {
         let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
@@ -327,12 +327,12 @@ mod test {
         /* Expected result:
 
         ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 2))
-          HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+          AggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
             CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
 
         ShuffleWriterExec: None
           ProjectionExec: expr=[l_returnflag@0 as l_returnflag, SUM(lineitem.l_extendedprice Multiply Int64(1))@1 as sum_disc_price]
-            HashAggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+            AggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
               CoalesceBatchesExec: target_batch_size=4096
                 UnresolvedShuffleExec
 
@@ -346,14 +346,14 @@ mod test {
 
         // verify stage 0
         let stage0 = stages[0].children()[0].clone();
-        let partial_hash = downcast_exec!(stage0, HashAggregateExec);
+        let partial_hash = downcast_exec!(stage0, AggregateExec);
         assert!(*partial_hash.mode() == AggregateMode::Partial);
 
         // verify stage 1
         let stage1 = stages[1].children()[0].clone();
         let projection = downcast_exec!(stage1, ProjectionExec);
         let final_hash = projection.children()[0].clone();
-        let final_hash = downcast_exec!(final_hash, HashAggregateExec);
+        let final_hash = downcast_exec!(final_hash, AggregateExec);
         assert!(*final_hash.mode() == AggregateMode::FinalPartitioned);
         let coalesce = final_hash.children()[0].clone();
         let coalesce = downcast_exec!(coalesce, CoalesceBatchesExec);
@@ -449,7 +449,7 @@ order by
           CsvExec: source=Path(testdata/orders: [testdata/orders/orders.tbl]), has_header=false
 
         ShuffleWriterExec: Some(Hash([Column { name: "l_shipmode", index: 0 }], 2))
-          HashAggregateExec: mode=Partial, gby=[l_shipmode@4 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+          AggregateExec: mode=Partial, gby=[l_shipmode@4 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
             CoalesceBatchesExec: target_batch_size=4096
               HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "l_orderkey", index: 0 }, Column { name: "o_orderkey", index: 0 })]
                 CoalesceBatchesExec: target_batch_size=4096
@@ -459,7 +459,7 @@ order by
 
         ShuffleWriterExec: None
           ProjectionExec: expr=[l_shipmode@0 as l_shipmode, SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@1 as high_line_count, SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@2 as low_line_count]
-            HashAggregateExec: mode=FinalPartitioned, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+            AggregateExec: mode=FinalPartitioned, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
               CoalesceBatchesExec: target_batch_size=4096
                 UnresolvedShuffleExec
 
@@ -514,7 +514,7 @@ order by
                 .partition_count()
         );
 
-        let hash_agg = downcast_exec!(input, HashAggregateExec);
+        let hash_agg = downcast_exec!(input, AggregateExec);
 
         let coalesce_batches = hash_agg.children()[0].clone();
         let coalesce_batches = downcast_exec!(coalesce_batches, CoalesceBatchesExec);
@@ -560,7 +560,7 @@ order by
     }
 
     #[tokio::test]
-    async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
+    async fn roundtrip_serde_aggregate() -> Result<(), BallistaError> {
         let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
@@ -586,8 +586,8 @@ order by
         let partial_hash = stages[0].children()[0].clone();
         let partial_hash_serde = roundtrip_operator(partial_hash.clone())?;
 
-        let partial_hash = downcast_exec!(partial_hash, HashAggregateExec);
-        let partial_hash_serde = downcast_exec!(partial_hash_serde, HashAggregateExec);
+        let partial_hash = downcast_exec!(partial_hash, AggregateExec);
+        let partial_hash_serde = downcast_exec!(partial_hash_serde, AggregateExec);
 
         assert_eq!(
             format!("{:?}", partial_hash),

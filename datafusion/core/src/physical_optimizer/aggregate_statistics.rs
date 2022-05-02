@@ -21,8 +21,8 @@ use std::sync::Arc;
 use arrow::datatypes::Schema;
 
 use crate::execution::context::SessionConfig;
+use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use crate::physical_plan::empty::EmptyExec;
-use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::{
     expressions, AggregateExpr, ColumnStatistics, ExecutionPlan, Statistics,
@@ -53,8 +53,8 @@ impl PhysicalOptimizerRule for AggregateStatistics {
         if let Some(partial_agg_exec) = take_optimizable(&*plan) {
             let partial_agg_exec = partial_agg_exec
                 .as_any()
-                .downcast_ref::<HashAggregateExec>()
-                .expect("take_optimizable() ensures that this is a HashAggregateExec");
+                .downcast_ref::<AggregateExec>()
+                .expect("take_optimizable() ensures that this is a AggregateExec");
             let stats = partial_agg_exec.input().statistics();
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
@@ -96,22 +96,22 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     }
 }
 
-/// assert if the node passed as argument is a final `HashAggregateExec` node that can be optimized:
-/// - its child (with posssible intermediate layers) is a partial `HashAggregateExec` node
+/// assert if the node passed as argument is a final `AggregateExec` node that can be optimized:
+/// - its child (with posssible intermediate layers) is a partial `AggregateExec` node
 /// - they both have no grouping expression
 /// - the statistics are exact
-/// If this is the case, return a ref to the partial `HashAggregateExec`, else `None`.
-/// We would have prefered to return a casted ref to HashAggregateExec but the recursion requires
+/// If this is the case, return a ref to the partial `AggregateExec`, else `None`.
+/// We would have prefered to return a casted ref to AggregateExec but the recursion requires
 /// the `ExecutionPlan.children()` method that returns an owned reference.
 fn take_optimizable(node: &dyn ExecutionPlan) -> Option<Arc<dyn ExecutionPlan>> {
-    if let Some(final_agg_exec) = node.as_any().downcast_ref::<HashAggregateExec>() {
+    if let Some(final_agg_exec) = node.as_any().downcast_ref::<AggregateExec>() {
         if final_agg_exec.mode() == &AggregateMode::Final
             && final_agg_exec.group_expr().is_empty()
         {
             let mut child = Arc::clone(final_agg_exec.input());
             loop {
                 if let Some(partial_agg_exec) =
-                    child.as_any().downcast_ref::<HashAggregateExec>()
+                    child.as_any().downcast_ref::<AggregateExec>()
                 {
                     if partial_agg_exec.mode() == &AggregateMode::Partial
                         && partial_agg_exec.group_expr().is_empty()
@@ -260,11 +260,11 @@ mod tests {
 
     use crate::error::Result;
     use crate::logical_plan::Operator;
+    use crate::physical_plan::aggregates::AggregateExec;
     use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
     use crate::physical_plan::common;
     use crate::physical_plan::expressions::Count;
     use crate::physical_plan::filter::FilterExec;
-    use crate::physical_plan::hash_aggregate::HashAggregateExec;
     use crate::physical_plan::memory::MemoryExec;
     use crate::prelude::SessionContext;
 
@@ -291,10 +291,7 @@ mod tests {
     }
 
     /// Checks that the count optimization was applied and we still get the right result
-    async fn assert_count_optim_success(
-        plan: HashAggregateExec,
-        nulls: bool,
-    ) -> Result<()> {
+    async fn assert_count_optim_success(plan: AggregateExec, nulls: bool) -> Result<()> {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
         let conf = session_ctx.copied_config();
@@ -336,7 +333,7 @@ mod tests {
         let source = mock_data()?;
         let schema = source.schema();
 
-        let partial_agg = HashAggregateExec::try_new(
+        let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
             vec![count_expr(None, None)],
@@ -344,7 +341,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let final_agg = HashAggregateExec::try_new(
+        let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
             vec![count_expr(None, None)],
@@ -363,7 +360,7 @@ mod tests {
         let source = mock_data()?;
         let schema = source.schema();
 
-        let partial_agg = HashAggregateExec::try_new(
+        let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
             vec![count_expr(Some(&schema), Some("a"))],
@@ -371,7 +368,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let final_agg = HashAggregateExec::try_new(
+        let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
             vec![count_expr(Some(&schema), Some("a"))],
@@ -389,7 +386,7 @@ mod tests {
         let source = mock_data()?;
         let schema = source.schema();
 
-        let partial_agg = HashAggregateExec::try_new(
+        let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
             vec![count_expr(None, None)],
@@ -400,7 +397,7 @@ mod tests {
         // We introduce an intermediate optimization step between the partial and final aggregtator
         let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
 
-        let final_agg = HashAggregateExec::try_new(
+        let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
             vec![count_expr(None, None)],
@@ -418,7 +415,7 @@ mod tests {
         let source = mock_data()?;
         let schema = source.schema();
 
-        let partial_agg = HashAggregateExec::try_new(
+        let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
             vec![count_expr(Some(&schema), Some("a"))],
@@ -429,7 +426,7 @@ mod tests {
         // We introduce an intermediate optimization step between the partial and final aggregtator
         let coalesce = CoalescePartitionsExec::new(Arc::new(partial_agg));
 
-        let final_agg = HashAggregateExec::try_new(
+        let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
             vec![count_expr(Some(&schema), Some("a"))],
@@ -458,7 +455,7 @@ mod tests {
             source,
         )?);
 
-        let partial_agg = HashAggregateExec::try_new(
+        let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
             vec![count_expr(None, None)],
@@ -466,7 +463,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let final_agg = HashAggregateExec::try_new(
+        let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
             vec![count_expr(None, None)],
@@ -479,7 +476,7 @@ mod tests {
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
         // check that the original ExecutionPlan was not replaced
-        assert!(optimized.as_any().is::<HashAggregateExec>());
+        assert!(optimized.as_any().is::<AggregateExec>());
 
         Ok(())
     }
@@ -500,7 +497,7 @@ mod tests {
             source,
         )?);
 
-        let partial_agg = HashAggregateExec::try_new(
+        let partial_agg = AggregateExec::try_new(
             AggregateMode::Partial,
             vec![],
             vec![count_expr(Some(&schema), Some("a"))],
@@ -508,7 +505,7 @@ mod tests {
             Arc::clone(&schema),
         )?;
 
-        let final_agg = HashAggregateExec::try_new(
+        let final_agg = AggregateExec::try_new(
             AggregateMode::Final,
             vec![],
             vec![count_expr(Some(&schema), Some("a"))],
@@ -521,7 +518,7 @@ mod tests {
             AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
 
         // check that the original ExecutionPlan was not replaced
-        assert!(optimized.as_any().is::<HashAggregateExec>());
+        assert!(optimized.as_any().is::<AggregateExec>());
 
         Ok(())
     }
