@@ -712,12 +712,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 subquery, alias, ..
             } => {
                 let normalized_alias = alias.as_ref().map(|a| normalize_ident(&a.name));
-                // if alias is None, return Err
-                if normalized_alias.is_none() {
-                    return Err(DataFusionError::Plan(
-                        "subquery in FROM must have an alias".to_string(),
-                    ));
-                }
                 let logical_plan = self.query_to_plan_with_alias(
                     *subquery,
                     normalized_alias.clone(),
