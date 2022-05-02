@@ -27,7 +27,14 @@ async fn projection_same_fields() -> Result<()> {
     let sql = "select (1+1) as a from (select 1 as a) as b;";
     let actual = execute_to_batches(&ctx, sql).await;
 
-    let expected = vec!["+---+", "| a |", "+---+", "| 2 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| a |",
+        "+---+",
+        "| 2 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     Ok(())

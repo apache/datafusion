@@ -23,7 +23,15 @@ async fn csv_query_limit() -> Result<()> {
     register_aggregate_csv(&ctx).await?;
     let sql = "SELECT c1 FROM aggregate_test_100 LIMIT 2";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+----+", "| c1 |", "+----+", "| c  |", "| d  |", "+----+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| c  |",
+        "| d  |",
+        "+----+"
+    ];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
@@ -101,8 +109,14 @@ async fn limit() -> Result<()> {
         .await
         .unwrap();
 
+    #[rustfmt::skip]
     let expected = vec![
-        "+------+", "| i    |", "+------+", "| 1000 |", "| 999  |", "| 998  |",
+        "+------+",
+        "| i    |",
+        "+------+",
+        "| 1000 |",
+        "| 999  |",
+        "| 998  |",
         "+------+",
     ];
 
@@ -112,8 +126,15 @@ async fn limit() -> Result<()> {
         .await
         .unwrap();
 
+    #[rustfmt::skip]
     let expected = vec![
-        "+---+", "| i |", "+---+", "| 1 |", "| 2 |", "| 3 |", "+---+",
+        "+---+",
+        "| i |",
+        "+---+",
+        "| 1 |",
+        "| 2 |",
+        "| 3 |",
+        "+---+",
     ];
 
     assert_batches_eq!(expected, &results);
