@@ -28,6 +28,17 @@ import argparse
 from pathlib import Path
 import tomlkit
 
+crate_names = [
+    'datafusion',
+    'datafusion-cli',
+    'datafusion-common',
+    'datafusion-data-access',
+    'datafusion-expr',
+    'datafusion-jit',
+    'datafusion-physical-expr',
+    'datafusion-proto',
+    'datafusion-row',
+]
 
 def update_datafusion_version(cargo_toml: str, new_version: str):
     print(f'updating {cargo_toml}')
@@ -47,16 +58,17 @@ def update_downstream_versions(cargo_toml: str, new_version: str):
 
     doc = tomlkit.parse(data)
 
-    df_dep = doc.get('dependencies', {}).get('datafusion')
-    # skip crates that pin datafusion using git hash
-    if df_dep is not None and df_dep.get('version') is not None:
-        print(f'updating datafusion dependency in {cargo_toml}')
-        df_dep['version'] = new_version
+    for crate in crate_names:
+        df_dep = doc.get('dependencies', {}).get(crate)
+        # skip crates that pin datafusion using git hash
+        if df_dep is not None and df_dep.get('version') is not None:
+            print(f'updating {crate} dependency in {cargo_toml}')
+            df_dep['version'] = new_version
 
-    df_dep = doc.get('dev-dependencies', {}).get('datafusion')
-    if df_dep is not None and df_dep.get('version') is not None:
-        print(f'updating datafusion dev-dependency in {cargo_toml}')
-        df_dep['version'] = new_version
+        df_dep = doc.get('dev-dependencies', {}).get(crate)
+        if df_dep is not None and df_dep.get('version') is not None:
+            print(f'updating {crate} dev-dependency in {cargo_toml}')
+            df_dep['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
