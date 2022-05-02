@@ -969,6 +969,61 @@ async fn csv_select_nested() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_select_nested_without_aliases() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT o1, o2, c3
+               FROM (
+                 SELECT c1 AS o1, c2 + 1 AS o2, c3
+                 FROM (
+                   SELECT c1, c2, c3, c4
+                   FROM aggregate_test_100
+                   WHERE c1 = 'a' AND c2 >= 4
+                   ORDER BY c2 ASC, c3 ASC
+                 )
+               )";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+------+",
+        "| o1 | o2 | c3   |",
+        "+----+----+------+",
+        "| a  | 5  | -101 |",
+        "| a  | 5  | -54  |",
+        "| a  | 5  | -38  |",
+        "| a  | 5  | 65   |",
+        "| a  | 6  | -101 |",
+        "| a  | 6  | -31  |",
+        "| a  | 6  | 36   |",
+        "+----+----+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_join_unaliased_subqueries() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT o1, o2, c3, p1, p2, p3 FROM \
+        (SELECT c1 AS o1, c2 + 1 AS o2, c3 FROM aggregate_test_100), \
+        (SELECT c1 AS p1, c2 - 1 AS p2, c3 AS p3 FROM aggregate_test_100) LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+----+----+----+-----+",
+        "| o1 | o2 | c3 | p1 | p2 | p3  |",
+        "+----+----+----+----+----+-----+",
+        "| c  | 3  | 1  | c  | 1  | 1   |",
+        "| c  | 3  | 1  | d  | 4  | -40 |",
+        "| c  | 3  | 1  | b  | 0  | 29  |",
+        "| c  | 3  | 1  | a  | 0  | -85 |",
+        "| c  | 3  | 1  | b  | 4  | -82 |",
+        "+----+----+----+----+----+-----+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn parallel_query_with_filter() -> Result<()> {
     let tmp_dir = TempDir::new()?;
     let partition_count = 4;
