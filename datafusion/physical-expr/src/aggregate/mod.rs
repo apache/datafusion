@@ -80,7 +80,3 @@ pub trait AggregateExpr: Send + Sync + Debug {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 struct DistinctScalarValues(Vec<ScalarValue>);
-
-fn format_state_name(name: &str, state_name: &str) -> String {
-    format!("{}[{}]", name, state_name)
-}

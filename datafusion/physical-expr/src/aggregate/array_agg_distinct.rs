@@ -17,7 +17,6 @@
 
 //! Implementations for DISTINCT expressions, e.g. `COUNT(DISTINCT c)`
 
-use super::*;
 use arrow::datatypes::{DataType, Field};
 use std::any::Any;
 use std::fmt::Debug;
@@ -26,6 +25,7 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef};
 use std::collections::HashSet;
 
+use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
