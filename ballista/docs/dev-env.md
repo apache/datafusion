@@ -30,10 +30,22 @@ command works.
 sudo apt-get install pkg-config libssl-dev
 ```
 
+For MacOS users, the following command works.
+
+```bash
+brew install openssl@1.1
+```
+
 ## Install CMake
 
 You'll need cmake in order to compile some of ballista's dependencies. Ubuntu users can use the following command:
 
 ```bash
 sudo apt-get install cmake
+```
+
+MacOS users cau use the follow command:
+
+```bash
+brew install cmake
 ```
