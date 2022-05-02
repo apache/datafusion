@@ -71,7 +71,7 @@ lazy_static = { version = "^1.4.0" }
 log = "^0.4"
 num-traits = { version = "0.2", optional = true }
 num_cpus = "1.13.0"
-ordered-float = "2.10"
+ordered-float = "3.0"
 parking_lot = "0.12"
 parquet = { version = "12", features = ["arrow"] }
 paste = "^1.0"
