@@ -50,7 +50,7 @@ use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
 use datafusion_common::field_not_found;
-use datafusion_expr::logical_plan::Subquery;
+use datafusion_expr::logical_plan::{Filter, Subquery};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
     FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
@@ -889,9 +889,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
                 // remove join expressions from filter
                 match remove_join_expressions(&filter_expr, &all_join_keys)? {
-                    Some(filter_expr) => {
-                        LogicalPlanBuilder::from(left).filter(filter_expr)?.build()
-                    }
+                    Some(filter_expr) => Ok(LogicalPlan::Filter(Filter {
+                        predicate: filter_expr,
+                        input: Arc::new(left),
+                    })),
                     _ => Ok(left),
                 }
             }
@@ -4249,6 +4250,18 @@ mod tests {
                     Field::new("t_date32", DataType::Date32, false),
                     Field::new("t_date64", DataType::Date64, false),
                 ])),
+                "j1" => Some(Schema::new(vec![
+                    Field::new("j1_id", DataType::Int32, false),
+                    Field::new("j1_string", DataType::Utf8, false),
+                ])),
+                "j2" => Some(Schema::new(vec![
+                    Field::new("j2_id", DataType::Int32, false),
+                    Field::new("j2_string", DataType::Utf8, false),
+                ])),
+                "j3" => Some(Schema::new(vec![
+                    Field::new("j3_id", DataType::Int32, false),
+                    Field::new("j3_string", DataType::Utf8, false),
+                ])),
                 "person" => Some(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
                     Field::new("first_name", DataType::Utf8, false),
@@ -4520,6 +4533,35 @@ mod tests {
             \n    TableScan: person projection=None",
             subquery_expected
         );
+        quick_test(sql, &expected);
+    }
+
+    #[test]
+    fn scalar_subquery_reference_outer_field() {
+        let sql = "SELECT j1_string, j2_string \
+        FROM j1, j2 \
+        WHERE j1_id = j2_id - 1 \
+        AND j2_id < (SELECT count(*) \
+            FROM j1, j3 \
+            WHERE j2_id = j1_id \
+            AND j1_id = j3_id)";
+
+        let subquery = "Subquery: Projection: #COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
+        \n    Filter: #j2_id = #j1_id\
+        \n      Inner Join: #j1.j1_id = #j3.j3_id\
+        \n        TableScan: j1 projection=None\
+        \n        TableScan: j3 projection=None";
+
+        let expected = format!(
+            "Projection: #j1.j1_string, #j2.j2_string\
+        \n  Filter: #j1_id = #j2_id - Int64(1) AND #j2_id < ({})\
+        \n    CrossJoin:\
+        \n      TableScan: j1 projection=None\
+        \n      TableScan: j2 projection=None",
+            subquery
+        );
+
         quick_test(sql, &expected);
     }
 
