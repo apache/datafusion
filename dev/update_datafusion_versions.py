@@ -40,6 +40,13 @@ crates = {
     'datafusion-row': 'datafusion/row/Cargo.toml'
 }
 
+ballista_crates = {
+    'core': 'ballista/rust/core/Cargo.toml',
+    'client': 'ballista/rust/client/Cargo.toml',
+    'executor': 'ballista/rust/executor/Cargo.toml',
+    'scheduler': 'ballista/rust/scheduler/Cargo.toml',
+}
+
 def update_datafusion_version(cargo_toml: str, new_version: str):
     print(f'updating {cargo_toml}')
     with open(cargo_toml) as f:
@@ -95,9 +102,14 @@ def main():
     new_version = args.new_version
     repo_root = Path(__file__).parent.parent.absolute()
 
-    print(f'Updating datafusion versions in {repo_root} to {new_version}')
+    print(f'Updating datafusion crate versions in {repo_root} to {new_version}')
     for cargo_toml in crates.values():
         update_datafusion_version(cargo_toml, new_version)
+
+    print(f'Updating datafusion dependency versions in {repo_root} to {new_version}')
+    for cargo_toml in crates.values():
+        update_downstream_versions(cargo_toml, new_version)
+    for cargo_toml in ballista_crates.values():
         update_downstream_versions(cargo_toml, new_version)
 
     update_docs("README.md", new_version)
