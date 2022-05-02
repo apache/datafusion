@@ -421,14 +421,13 @@ async fn csv_query_approx_percentile_cont() -> Result<()> {
         ($ctx:ident, column=$column:literal, percentile=$percentile:literal, actual=$actual:literal) => {
             let sql = format!("SELECT (ABS(1 - CAST(approx_percentile_cont({}, {}) AS DOUBLE) / {}) < 0.05) AS q FROM aggregate_test_100", $column, $percentile, $actual);
             let actual = execute_to_batches(&ctx, &sql).await;
-            //
-            //   "+------+",
-            //   "| q    |",
-            //   "+------+",
-            //   "| true |",
-            //   "+------+",
-            //
-            let want = ["+------+", "| q    |", "+------+", "| true |", "+------+"];
+            let want = [
+                "+------+",
+                "| q    |",
+                "+------+",
+                "| true |",
+                "+------+"
+            ];
             assert_batches_eq!(want, &actual);
         };
     }
