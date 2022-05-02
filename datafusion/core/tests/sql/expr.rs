@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use datafusion::datasource::empty::EmptyTable;
+
 use super::*;
 
 #[tokio::test]
@@ -1125,5 +1127,27 @@ async fn csv_query_sqrt_sqrt() -> Result<()> {
     // sqrt(sqrt(c12=0.9294097332465232)) = 0.9818650561397431
     let expected = vec![vec!["0.9818650561397431"]];
     assert_float_eq(&expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn nested_subquery() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int16, false),
+        Field::new("a", DataType::Int16, false),
+    ]);
+    let empty_table = Arc::new(EmptyTable::new(Arc::new(schema)));
+    ctx.register_table("t1", empty_table.clone())?;
+    ctx.register_table("t2", empty_table)?;
+    let sql = "SELECT COUNT(*) as cnt \
+    FROM (\
+        (SELECT id FROM t1) EXCEPT \
+        (SELECT id FROM t2)\
+        ) foo";
+    let actual = execute_to_batches(&ctx, sql).await;
+    // the purpose of this test is just to make sure the query produces a valid plan
+    let expected = vec!["+-----+", "| cnt |", "+-----+", "| 0   |", "+-----+"];
+    assert_batches_eq!(expected, &actual);
     Ok(())
 }
