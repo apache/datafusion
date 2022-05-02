@@ -908,8 +908,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             join_columns.insert(l.clone());
                             join_columns.insert(r.clone());
                         }
-                        let x: Vec<&DFSchemaRef> =
-                            all_schemas.iter().collect();
+                        let x: Vec<&DFSchemaRef> = all_schemas.iter().collect();
                         let filter_expr = normalize_col_with_schemas(
                             filter_expr,
                             x.as_slice(),
