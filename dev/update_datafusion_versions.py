@@ -28,17 +28,17 @@ import argparse
 from pathlib import Path
 import tomlkit
 
-crate_names = [
-    'datafusion',
-    'datafusion-cli',
-    'datafusion-common',
-    'datafusion-data-access',
-    'datafusion-expr',
-    'datafusion-jit',
-    'datafusion-physical-expr',
-    'datafusion-proto',
-    'datafusion-row',
-]
+crates = {
+    'datafusion': 'datafusion/core/Cargo.toml',
+    'datafusion-cli': 'datafusion-cli/Cargo.toml',
+    'datafusion-common': 'datafusion/common/Cargo.toml',
+    'datafusion-data-access': 'data-access/Cargo.toml',
+    'datafusion-expr': 'datafusion/expr/Cargo.toml',
+    'datafusion-jit': 'datafusion/jit/Cargo.toml',
+    'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
+    'datafusion-proto': 'datafusion/proto/Cargo.toml',
+    'datafusion-row': 'datafusion/row/Cargo.toml'
+}
 
 def update_datafusion_version(cargo_toml: str, new_version: str):
     print(f'updating {cargo_toml}')
@@ -58,7 +58,7 @@ def update_downstream_versions(cargo_toml: str, new_version: str):
 
     doc = tomlkit.parse(data)
 
-    for crate in crate_names:
+    for crate in crates.keys():
         df_dep = doc.get('dependencies', {}).get(crate)
         # skip crates that pin datafusion using git hash
         if df_dep is not None and df_dep.get('version') is not None:
@@ -96,9 +96,8 @@ def main():
     repo_root = Path(__file__).parent.parent.absolute()
 
     print(f'Updating datafusion versions in {repo_root} to {new_version}')
-
-    update_datafusion_version("datafusion/core/Cargo.toml", new_version)
-    for cargo_toml in repo_root.rglob('Cargo.toml'):
+    for cargo_toml in crates.values():
+        update_datafusion_version(cargo_toml, new_version)
         update_downstream_versions(cargo_toml, new_version)
 
     update_docs("README.md", new_version)
