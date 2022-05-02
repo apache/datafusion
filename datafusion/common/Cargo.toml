@@ -41,7 +41,7 @@ pyarrow = ["pyo3"]
 arrow = { version = "12", features = ["prettyprint"] }
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 cranelift-module = { version = "0.83.0", optional = true }
-ordered-float = "2.10"
+ordered-float = "3.0"
 parquet = { version = "12", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
 sqlparser = "0.16"
