@@ -102,7 +102,7 @@ impl DistinctSumAccumulator {
     }
 
     fn update(&mut self, values: &[ScalarValue]) -> Result<()> {
-        values.into_iter().for_each(|v| {
+        values.iter().for_each(|v| {
             // If the value is NULL, it is not included in the final sum.
             if !v.is_null() {
                 self.hash_values.insert(v.clone());
