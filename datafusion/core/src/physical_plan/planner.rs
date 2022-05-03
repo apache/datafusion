@@ -801,8 +801,6 @@ impl DefaultPhysicalPlanner {
                 LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
                     match input.as_ref() {
                         LogicalPlan::TableScan(scan) => {
-                            let mut scan = scan.clone();
-                            scan.table_name = alias.clone();
                             self.create_initial_plan(input, session_state).await
                         }
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
