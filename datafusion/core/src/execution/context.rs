@@ -1370,7 +1370,7 @@ impl ContextProvider for SessionState {
         match schema.table(resolved_ref.table) {
             Some(e) => Ok(e),
             None => Err(DataFusionError::Plan(format!(
-                "Table or CTE with name '{}' not found",
+                "Table with name '{}' not found",
                 name.table()
             ))),
         }
