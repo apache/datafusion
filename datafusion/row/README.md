@@ -17,6 +17,10 @@
   under the License.
 -->
 
-# Ballista Scheduler Process
+# DataFusion Row
 
-This crate contains the Ballista scheduler process.
+[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+
+This crate is a submodule of DataFusion that provides a format for row-based data.
+
+[df]: https://crates.io/crates/datafusion

@@ -19,5 +19,4 @@
 
 # Ballista Executor Process
 
-This crate contains the Ballista executor process. Refer to <https://crates.io/crates/ballista> for
-documentation.
+This crate contains the Ballista executor process.

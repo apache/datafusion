@@ -19,6 +19,8 @@
 
 # DataFusion Logical Plan and Expressions
 
-This is an internal module for fundamental expression types of [DataFusion][df].
+[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+
+This crate is a submodule of DataFusion that provides data types and utilities for logical plans and expressions.
 
 [df]: https://crates.io/crates/datafusion
