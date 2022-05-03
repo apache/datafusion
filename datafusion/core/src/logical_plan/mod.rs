@@ -51,8 +51,9 @@ pub use expr::{
     when, Column, Expr, ExprSchema, Literal,
 };
 pub use expr_rewriter::{
-    normalize_col, normalize_cols, replace_col, rewrite_sort_cols_by_aggs,
-    unnormalize_col, unnormalize_cols, ExprRewritable, ExprRewriter, RewriteRecursion,
+    normalize_col, normalize_col_with_schemas, normalize_cols, replace_col,
+    rewrite_sort_cols_by_aggs, unnormalize_col, unnormalize_cols, ExprRewritable,
+    ExprRewriter, RewriteRecursion,
 };
 pub use expr_simplier::{ExprSimplifiable, SimplifyInfo};
 pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
