@@ -87,68 +87,75 @@ impl OptimizerRule for SubqueryFilterToJoin {
 
                 // Add subquery joins to new_input
                 // optimized_input value should retain for possible optimization rollback
-                let mut new_input = optimized_input.clone();
-                let opt_result = subquery_filters.iter().try_for_each(|&e| match e {
-                    Expr::InSubquery {
-                        expr,
-                        subquery,
-                        negated,
-                    } => {
-                        let right_input =
-                            self.optimize(&*subquery.subquery, execution_props)?;
-                        let right_schema = right_input.schema();
-                        if right_schema.fields().len() != 1 {
-                            return Err(DataFusionError::Plan(
-                                "Only single column allowed in InSubquery".to_string(),
-                            ));
-                        };
+                let opt_result = subquery_filters.iter().try_fold(
+                    optimized_input.clone(),
+                    |input, &e| match e {
+                        Expr::InSubquery {
+                            expr,
+                            subquery,
+                            negated,
+                        } => {
+                            let right_input = self.optimize(
+                                &*subquery.subquery,
+                                execution_props
+                            )?;
+                            let right_schema = right_input.schema();
+                            if right_schema.fields().len() != 1 {
+                                return Err(DataFusionError::Plan(
+                                    "Only single column allowed in InSubquery"
+                                        .to_string(),
+                                ));
+                            };
 
-                        let right_key = right_schema.field(0).qualified_column();
-                        let left_key = match *expr.clone() {
-                            Expr::Column(col) => col,
-                            _ => return Err(DataFusionError::NotImplemented(
-                                "Filtering by expression not implemented for InSubquery"
-                                    .to_string(),
-                            )),
-                        };
+                            let right_key = right_schema.field(0).qualified_column();
+                            let left_key = match *expr.clone() {
+                                Expr::Column(col) => col,
+                                _ => return Err(DataFusionError::NotImplemented(
+                                    "Filtering by expression not implemented for InSubquery"
+                                        .to_string(),
+                                )),
+                            };
 
-                        let join_type = match negated {
-                            true => JoinType::Anti,
-                            false => JoinType::Semi,
-                        };
+                            let join_type = if *negated {
+                                JoinType::Anti
+                            } else {
+                                JoinType::Semi
+                            };
 
-                        let schema = build_join_schema(
-                            new_input.schema(),
-                            right_schema,
-                            &join_type,
-                        )?;
+                            let schema = build_join_schema(
+                                optimized_input.schema(),
+                                right_schema,
+                                &join_type,
+                            )?;
 
-                        new_input = LogicalPlan::Join(Join {
-                            left: Arc::new(new_input.clone()),
-                            right: Arc::new(right_input),
-                            on: vec![(left_key, right_key)],
-                            join_type,
-                            join_constraint: JoinConstraint::On,
-                            schema: Arc::new(schema),
-                            null_equals_null: false,
-                        });
-
-                        Ok(())
+                            Ok(LogicalPlan::Join(Join {
+                                left: Arc::new(input),
+                                right: Arc::new(right_input),
+                                on: vec![(left_key, right_key)],
+                                join_type,
+                                join_constraint: JoinConstraint::On,
+                                schema: Arc::new(schema),
+                                null_equals_null: false,
+                            }))
+                        }
+                        _ => Err(DataFusionError::Plan(
+                            "Unknown expression while rewriting subquery to joins"
+                                .to_string(),
+                        )),
                     }
-                    _ => Err(DataFusionError::Plan(
-                        "Unknown expression while rewriting subquery to joins"
-                            .to_string(),
-                    )),
-                });
+                );
 
                 // In case of expressions which could not be rewritten
                 // return original filter with optimized input
-                if opt_result.is_err() {
-                    return Ok(LogicalPlan::Filter(Filter {
-                        predicate: predicate.clone(),
-                        input: Arc::new(optimized_input),
-                    }));
-                }
+                let new_input = match opt_result {
+                    Ok(plan) => plan,
+                    Err(_) => {
+                        return Ok(LogicalPlan::Filter(Filter {
+                            predicate: predicate.clone(),
+                            input: Arc::new(optimized_input),
+                        }))
+                    }
+                };
 
                 // Apply regular filters to join output if some or just return join
                 if regular_filters.is_empty() {
