@@ -297,9 +297,6 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
         (ScalarValue::Int64(lhs), ScalarValue::Int8(rhs)) => {
             typed_sum!(lhs, rhs, Int64, i64)
         }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt64(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
         (ScalarValue::Int64(lhs), ScalarValue::UInt32(rhs)) => {
             typed_sum!(lhs, rhs, Int64, i64)
         }
