@@ -172,10 +172,11 @@ pub(crate) fn rebase_expr(
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
-pub(crate) fn can_columns_satisfy_exprs(
+pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-) -> Result<bool> {
+    message_prefix: &str,
+) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
         _ => Err(DataFusionError::Internal(
@@ -183,7 +184,22 @@ pub(crate) fn can_columns_satisfy_exprs(
         )),
     })?;
 
-    Ok(find_column_exprs(exprs).iter().all(|c| columns.contains(c)))
+    for e in &find_column_exprs(exprs) {
+        if !columns.contains(e) {
+            return Err(DataFusionError::Plan(format!(
+                "{}: Expression {:?} could not be resolved from available columns: {}",
+                message_prefix,
+                e,
+                columns
+                    .iter()
+                    .map(|e| format!("{}", e))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Returns a cloned `Expr`, but any of the `Expr`'s in the tree may be
