@@ -19,7 +19,7 @@ use std::task::{Context, Poll};
 
 use arrow::record_batch::RecordBatch;
 
-use datafusion::error::Result;
+use crate::error::Result;
 
 pub mod execution;
 pub mod repartition;

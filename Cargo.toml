@@ -24,7 +24,6 @@ members = [
     "datafusion/physical-expr",
     "datafusion/proto",
     "datafusion/row",
-    "datafusion/scheduler",
     "datafusion-examples",
     "benchmarks",
     "ballista/rust/client",

@@ -20,12 +20,12 @@ use std::task::{Context, Poll, Waker};
 
 use parking_lot::Mutex;
 
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::error::Result;
-use datafusion::physical_plan::repartition::BatchPartitioner;
-use datafusion::physical_plan::Partitioning;
+use crate::arrow::record_batch::RecordBatch;
+use crate::error::Result;
+use crate::physical_plan::repartition::BatchPartitioner;
+use crate::physical_plan::Partitioning;
 
-use crate::pipeline::Pipeline;
+use crate::scheduler::pipeline::Pipeline;
 
 /// A [`Pipeline`] that can repartition its input
 #[derive(Debug)]

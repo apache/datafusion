@@ -79,12 +79,12 @@ use std::sync::Arc;
 use futures::stream::BoxStream;
 use log::{debug, error};
 
-use datafusion::error::Result;
-use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::ExecutionPlan;
+use crate::error::Result;
+use crate::execution::context::TaskContext;
+use crate::physical_plan::ExecutionPlan;
 
-use crate::plan::{PipelinePlan, PipelinePlanner, RoutablePipeline};
-use crate::task::{spawn_plan, Task};
+use plan::{PipelinePlan, PipelinePlanner, RoutablePipeline};
+use task::{spawn_plan, Task};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 
@@ -246,12 +246,12 @@ mod tests {
     use rand::distributions::uniform::SampleUniform;
     use rand::{thread_rng, Rng};
 
-    use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
-    use datafusion::arrow::datatypes::{ArrowPrimitiveType, Float64Type, Int32Type};
-    use datafusion::arrow::record_batch::RecordBatch;
-    use datafusion::datasource::{MemTable, TableProvider};
-    use datafusion::physical_plan::displayable;
-    use datafusion::prelude::{SessionConfig, SessionContext};
+    use crate::arrow::array::{ArrayRef, PrimitiveArray};
+    use crate::arrow::datatypes::{ArrowPrimitiveType, Float64Type, Int32Type};
+    use crate::arrow::record_batch::RecordBatch;
+    use crate::datasource::{MemTable, TableProvider};
+    use crate::physical_plan::displayable;
+    use crate::prelude::{SessionConfig, SessionContext};
 
     use super::*;
 

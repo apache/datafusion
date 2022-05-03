@@ -15,10 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::plan::PipelinePlan;
-use crate::{is_worker, spawn_local, spawn_local_fifo, RoutablePipeline, Spawner};
+use crate::error::{DataFusionError, Result};
+use crate::scheduler::{
+    is_worker, plan::PipelinePlan, spawn_local, spawn_local_fifo, RoutablePipeline,
+    Spawner,
+};
 use arrow::record_batch::RecordBatch;
-use datafusion::error::{DataFusionError, Result};
 use futures::channel::mpsc;
 use futures::task::ArcWake;
 use futures::{Stream, StreamExt};
@@ -302,7 +304,7 @@ impl ArcWake for TaskWaker {
 
             // If called from a worker, spawn to the current worker's
             // local queue, otherwise reschedule on any worker
-            match crate::is_worker() {
+            match crate::scheduler::is_worker() {
                 true => spawn_local(task),
                 false => task.context.spawner.clone().spawn(task),
             }
@@ -319,12 +321,10 @@ impl ArcWake for TaskWaker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::Pipeline;
-    use crate::plan::RoutablePipeline;
-    use crate::Scheduler;
+    use crate::error::Result;
+    use crate::scheduler::{pipeline::Pipeline, plan::RoutablePipeline, Scheduler};
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::record_batch::RecordBatch;
-    use datafusion::error::Result;
     use futures::{channel::oneshot, ready, FutureExt, StreamExt};
     use parking_lot::Mutex;
     use std::fmt::Debug;

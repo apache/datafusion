@@ -17,13 +17,13 @@
 
 use std::sync::Arc;
 
-use datafusion::error::Result;
-use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::repartition::RepartitionExec;
-use datafusion::physical_plan::{ExecutionPlan, Partitioning};
+use crate::error::Result;
+use crate::execution::context::TaskContext;
+use crate::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use crate::physical_plan::repartition::RepartitionExec;
+use crate::physical_plan::{ExecutionPlan, Partitioning};
 
-use crate::pipeline::{
+use crate::scheduler::pipeline::{
     execution::ExecutionPipeline, repartition::RepartitionPipeline, Pipeline,
 };
 

@@ -27,19 +27,19 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use parking_lot::Mutex;
 
-use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
-use datafusion::error::Result;
-use datafusion::execution::context::TaskContext;
-use datafusion::physical_plan::expressions::PhysicalSortExpr;
-use datafusion::physical_plan::metrics::MetricsSet;
-use datafusion::physical_plan::{
+use crate::arrow::datatypes::SchemaRef;
+use crate::arrow::{error::Result as ArrowResult, record_batch::RecordBatch};
+use crate::error::Result;
+use crate::execution::context::TaskContext;
+use crate::physical_plan::expressions::PhysicalSortExpr;
+use crate::physical_plan::metrics::MetricsSet;
+use crate::physical_plan::{
     displayable, DisplayFormatType, Distribution, ExecutionPlan, Partitioning,
     RecordBatchStream, SendableRecordBatchStream, Statistics,
 };
 
-use crate::pipeline::Pipeline;
-use crate::BoxStream;
+use crate::scheduler::pipeline::Pipeline;
+use crate::scheduler::BoxStream;
 
 /// An [`ExecutionPipeline`] wraps a portion of an [`ExecutionPlan`] and
 /// converts it to the push-based [`Pipeline`] interface
@@ -285,7 +285,7 @@ impl ExecutionPlan for ProxyExecutionPlan {
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
-    ) -> crate::Result<SendableRecordBatchStream> {
+    ) -> Result<SendableRecordBatchStream> {
         Ok(Box::pin(InputPartitionStream {
             schema: self.schema(),
             partition: self.inputs[partition].clone(),

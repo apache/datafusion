@@ -218,6 +218,8 @@ pub mod physical_optimizer;
 pub mod physical_plan;
 pub mod prelude;
 pub mod scalar;
+#[cfg(feature = "scheduler")]
+pub mod scheduler;
 pub mod sql;
 pub mod variable;
 
