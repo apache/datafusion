@@ -1147,7 +1147,14 @@ async fn nested_subquery() -> Result<()> {
         ) foo";
     let actual = execute_to_batches(&ctx, sql).await;
     // the purpose of this test is just to make sure the query produces a valid plan
-    let expected = vec!["+-----+", "| cnt |", "+-----+", "| 0   |", "+-----+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| cnt |",
+        "+-----+",
+        "| 0   |",
+        "+-----+"
+    ];
     assert_batches_eq!(expected, &actual);
     Ok(())
 }
