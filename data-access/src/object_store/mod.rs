@@ -21,7 +21,8 @@ pub mod local;
 
 use std::fmt::Debug;
 use std::io::Read;
-use std::path::Path;
+use std::path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -91,7 +92,7 @@ pub trait ObjectStore: Sync + Send + Debug {
             self.list_file(glob_pattern).await
         } else {
             let start_path = find_longest_search_path_without_glob_pattern(glob_pattern);
-            let file_stream = self.list_file(start_path).await?;
+            let file_stream = self.list_file(&start_path).await?;
             let pattern = Pattern::new(glob_pattern).unwrap();
             Ok(Box::pin(file_stream.filter(move |fr| {
                 let matches_pattern = match fr {
@@ -154,24 +155,42 @@ async fn filter_suffix(
     })))
 }
 
-fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> &str {
+fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
     // in case the glob_pattern is not actually a glob pattern, take the entire thing
-    if !is_glob_path(&glob_pattern) {
-        glob_pattern //.to_string()
+    if !is_glob_path(glob_pattern) {
+        glob_pattern.to_string()
     } else {
-        // take path up to first occurence of a glob char
-        let path_to_first_glob_character = glob_pattern
-            .splitn(2, |c| GLOB_CHARS.contains(&c))
-            .collect::<Vec<&str>>()[0]; // always find one, because otherwise is_glob_pattern would not be true
-        let path = Path::new(path_to_first_glob_character);
+        // take all the components of the path (left-to-right) which do not contain a glob pattern
+        let components_in_glob_pattern =
+            Path::new(glob_pattern).components().collect::<Vec<_>>();
+        let mut path_buf_for_longest_search_path_without_glob_pattern = PathBuf::new();
+        let mut encountered_glob = false;
+        for component_in_glob_pattern in components_in_glob_pattern {
+            let component_as_str =
+                component_in_glob_pattern.as_os_str().to_str().unwrap();
+            if !encountered_glob {
+                let component_str_is_glob = is_glob_path(component_as_str);
+                encountered_glob = component_str_is_glob;
+                if !encountered_glob {
+                    path_buf_for_longest_search_path_without_glob_pattern
+                        .push(component_in_glob_pattern);
+                }
+            }
+        }
 
-        let dir_path = if path.is_file() {
-            // &path::MAIN_SEPARATOR_STR is unstabled but / is the vale for unix and windows
-            path.parent().unwrap_or(Path::new("/"))
-        } else {
-            path
-        };
-        dir_path.to_str().unwrap()
+        let mut result = path_buf_for_longest_search_path_without_glob_pattern
+            .to_str()
+            .unwrap()
+            .to_string();
+        // when we're not at the root, append a separator
+        if path_buf_for_longest_search_path_without_glob_pattern
+            .components()
+            .count()
+            > 1
+        {
+            result.push(path::MAIN_SEPARATOR);
+        }
+        result
     }
 }
 
@@ -211,6 +230,7 @@ mod tests {
         test_longest_base_path("/a/*b.txt", "/a/");
         test_longest_base_path("/a/*/b.txt", "/a/");
         test_longest_base_path("/a/b/[123]/file*.txt", "/a/b/");
+        test_longest_base_path("/a/b*.txt", "/a/");
         Ok(())
     }
 }
