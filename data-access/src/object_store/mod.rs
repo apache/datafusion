@@ -81,7 +81,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         prefix: &str,
         suffix: &str,
     ) -> Result<FileMetaStream> {
-        let file_stream = self.list_file(prefix).await?;
+        let file_stream = self.glob_file(prefix).await?;
         let suffix = suffix.to_owned();
         Ok(Box::pin(file_stream.filter(move |fr| {
             let has_suffix = match fr {
@@ -102,8 +102,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         }
 
         if !is_glob_path(path) {
-            let result = self.list_file(path).await?;
-            Ok(result)
+            self.list_file(path).await
         } else {
             // take path up to first occurence of a glob char
             let path_to_first_glob_character: Vec<&str> =
