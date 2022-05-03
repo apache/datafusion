@@ -64,7 +64,7 @@ use sqlparser::parser::ParserError::ParserError;
 use super::{
     parser::DFParser,
     utils::{
-        can_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
+        check_columns_satisfy_exprs, expr_as_column_expr, extract_aliases,
         find_aggregate_exprs, find_column_exprs, find_window_exprs, rebase_expr,
         resolve_aliases_to_exprs, resolve_positions_to_exprs,
     },
@@ -1023,37 +1023,33 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
 
         // process group by, aggregation or having
-        let (plan, select_exprs_post_aggr, having_expr_post_aggr_opt) = if !group_by_exprs
-            .is_empty()
-            || !aggr_exprs.is_empty()
-        {
-            self.aggregate(
-                plan,
-                &select_exprs,
-                &having_expr_opt,
-                group_by_exprs,
-                aggr_exprs,
-            )?
-        } else {
-            if let Some(having_expr) = &having_expr_opt {
-                let available_columns = select_exprs
-                    .iter()
-                    .map(|expr| expr_as_column_expr(expr, &plan))
-                    .collect::<Result<Vec<Expr>>>()?;
+        let (plan, select_exprs_post_aggr, having_expr_post_aggr_opt) =
+            if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
+                self.aggregate(
+                    plan,
+                    &select_exprs,
+                    &having_expr_opt,
+                    group_by_exprs,
+                    aggr_exprs,
+                )?
+            } else {
+                if let Some(having_expr) = &having_expr_opt {
+                    let available_columns = select_exprs
+                        .iter()
+                        .map(|expr| expr_as_column_expr(expr, &plan))
+                        .collect::<Result<Vec<Expr>>>()?;
 
-                // Ensure the HAVING expression is using only columns
-                // provided by the SELECT.
-                if !can_columns_satisfy_exprs(&available_columns, &[having_expr.clone()])?
-                {
-                    return Err(DataFusionError::Plan(
-                        "Having references column(s) not provided by the select"
-                            .to_owned(),
-                    ));
+                    // Ensure the HAVING expression is using only columns
+                    // provided by the SELECT.
+                    check_columns_satisfy_exprs(
+                        &available_columns,
+                        &[having_expr.clone()],
+                        "HAVING clause references column(s) not provided by the select",
+                    )?;
                 }
-            }
 
-            (plan, select_exprs, having_expr_opt)
-        };
+                (plan, select_exprs, having_expr_opt)
+            };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr_opt {
             LogicalPlanBuilder::from(plan)
@@ -1147,11 +1143,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        if !can_columns_satisfy_exprs(&column_exprs_post_aggr, &select_exprs_post_aggr)? {
-            return Err(DataFusionError::Plan(
-                "Projection references non-aggregate values".to_owned(),
-            ));
-        }
+        check_columns_satisfy_exprs(
+            &column_exprs_post_aggr,
+            &select_exprs_post_aggr,
+            "Projection references non-aggregate values",
+        )?;
 
         // Rewrite the HAVING expression to use the columns produced by the
         // aggregation.
@@ -1159,14 +1155,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             let having_expr_post_aggr =
                 rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
 
-            if !can_columns_satisfy_exprs(
+            check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
                 &[having_expr_post_aggr.clone()],
-            )? {
-                return Err(DataFusionError::Plan(
-                    "Having references non-aggregate values".to_owned(),
-                ));
-            }
+                "HAVING clause references non-aggregate values",
+            )?;
 
             Some(having_expr_post_aggr)
         } else {
@@ -2794,7 +2787,7 @@ mod tests {
                    HAVING first_name = 'M'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Having references column(s) not provided by the select\")",
+            "Plan(\"HAVING clause references column(s) not provided by the select: Expression #person.first_name could not be resolved from available columns: #person.id, #person.age\")",
             format!("{:?}", err)
         );
     }
@@ -2806,7 +2799,9 @@ mod tests {
                    HAVING age > 100";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Having references column(s) not provided by the select\")",
+            "Plan(\"HAVING clause references column(s) not provided by the select: \
+            Expression #person.age could not be resolved from available columns: \
+            #person.id, #person.age + Int64(1)\")",
             format!("{:?}", err)
         );
     }
@@ -2818,7 +2813,7 @@ mod tests {
                    HAVING MAX(age) > 100";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            "Plan(\"Projection references non-aggregate values: Expression #person.first_name could not be resolved from available columns: #MAX(person.age)\")",
             format!("{:?}", err)
         );
     }
@@ -2854,7 +2849,9 @@ mod tests {
                    HAVING first_name = 'M'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Having references non-aggregate values\")",
+            "Plan(\"HAVING clause references non-aggregate values: \
+            Expression #person.first_name could not be resolved from available columns: \
+            #COUNT(UInt8(1))\")",
             format!("{:?}", err)
         );
     }
@@ -2976,7 +2973,9 @@ mod tests {
                    HAVING MAX(age) > 10 AND last_name = 'M'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Having references non-aggregate values\")",
+            "Plan(\"HAVING clause references non-aggregate values: \
+            Expression #person.last_name could not be resolved from available columns: \
+            #person.first_name, #MAX(person.age)\")",
             format!("{:?}", err)
         );
     }
@@ -3283,14 +3282,14 @@ mod tests {
         let sql = "SELECT state, MIN(age) FROM person GROUP BY 0";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            "Plan(\"Projection references non-aggregate values: Expression #person.state could not be resolved from available columns: #Int64(0), #MIN(person.age)\")",
             format!("{:?}", err)
         );
 
         let sql2 = "SELECT state, MIN(age) FROM person GROUP BY 5";
         let err2 = logical_plan(sql2).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            "Plan(\"Projection references non-aggregate values: Expression #person.state could not be resolved from available columns: #Int64(5), #MIN(person.age)\")",
             format!("{:?}", err2)
         );
     }
@@ -3371,7 +3370,7 @@ mod tests {
             "SELECT ((age + 1) / 2) * (age + 9), MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            r#"Plan("Projection references non-aggregate values")"#,
+            "Plan(\"Projection references non-aggregate values: Expression #person.age could not be resolved from available columns: #person.age + Int64(1), #MIN(person.first_name)\")",
             format!("{:?}", err)
         );
     }
@@ -3381,8 +3380,7 @@ mod tests {
     ) {
         let sql = "SELECT age, MIN(first_name) FROM person GROUP BY age + 1";
         let err = logical_plan(sql).expect_err("query should have failed");
-        assert_eq!(
-            r#"Plan("Projection references non-aggregate values")"#,
+        assert_eq!("Plan(\"Projection references non-aggregate values: Expression #person.age could not be resolved from available columns: #person.age + Int64(1), #MIN(person.first_name)\")",
             format!("{:?}", err)
         );
     }
@@ -3637,7 +3635,9 @@ mod tests {
         let sql = "SELECT c1, c13, MIN(c12) FROM aggregate_test_100 GROUP BY c1";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"Projection references non-aggregate values\")",
+            "Plan(\"Projection references non-aggregate values: \
+            Expression #aggregate_test_100.c13 could not be resolved from available columns: \
+            #aggregate_test_100.c1, #MIN(aggregate_test_100.c12)\")",
             format!("{:?}", err)
         );
     }
