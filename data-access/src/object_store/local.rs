@@ -110,7 +110,7 @@ async fn list_all(prefix: String) -> Result<FileMetaStream> {
                 path,
                 size: metadata.len(),
             },
-            last_modified: None, /*metadata.modified().map(chrono::DateTime::from).ok()*/
+            last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
         }
     }
 
@@ -185,7 +185,7 @@ pub fn local_unpartitioned_file(file: String) -> FileMeta {
             size: metadata.len(),
             path: file,
         },
-        last_modified: None, //metadata.modified().map(chrono::DateTime::from).ok(),
+        last_modified: metadata.modified().map(chrono::DateTime::from).ok(),
     }
 }
 
