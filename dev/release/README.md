@@ -303,13 +303,16 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd data-access && cargo publish)
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
-(cd datafusion/jit && cargo publish)
-(cd datafusion/proto && cargo publish)
-(cd datafusion/row && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
+(cd datafusion/jit && cargo publish)
+(cd datafusion/row && cargo publish)
 (cd datafusion && cargo publish)
+(cd datafusion/proto && cargo publish)
 (cd datafusion-cli && cargo publish)
 ```
+
+Note that `datafusion-cli` will depend on the previously published version of Ballista (which depends on the 
+previously published version of DataFusion) until https://github.com/apache/arrow-datafusion/issues/2433 is resolved.
 
 If there is a ballista release, run
 
@@ -319,7 +322,6 @@ If there is a ballista release, run
 (cd ballista/rust/scheduler && cargo publish)
 (cd ballista/rust/client && cargo publish)
 ```
-
 
 ### Publish datafusion-cli on Homebrew and crates.io
 
