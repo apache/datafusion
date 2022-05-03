@@ -50,10 +50,10 @@ pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable row format experiment
 row = ["datafusion-row"]
-simd = ["arrow/simd"]
-unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable scheduler
 scheduler = ["rayon"]
+simd = ["arrow/simd"]
+unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
