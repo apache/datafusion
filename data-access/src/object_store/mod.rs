@@ -21,7 +21,6 @@ pub mod local;
 
 use std::fmt::Debug;
 use std::io::Read;
-use std::path;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
