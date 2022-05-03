@@ -90,7 +90,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         if !is_glob_path(glob_pattern) {
             self.list_file(glob_pattern).await
         } else {
-            let start_path = find_longest_base_path(glob_pattern);
+            let start_path = find_longest_search_path_without_glob_pattern(glob_pattern);
             let file_stream = self.list_file(start_path).await?;
             let pattern = Pattern::new(glob_pattern).unwrap();
             Ok(Box::pin(file_stream.filter(move |fr| {
@@ -154,7 +154,7 @@ async fn filter_suffix(
     })))
 }
 
-fn find_longest_base_path(glob_pattern: &str) -> &str {
+fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> &str {
     // in case the glob_pattern is not actually a glob pattern, take the entire thing
     if !is_glob_path(&glob_pattern) {
         glob_pattern //.to_string()
@@ -187,80 +187,29 @@ mod tests {
         Ok(())
     }
 
+    fn test_longest_base_path(input: &str, expected: &str) {
+        assert_eq!(
+            find_longest_search_path_without_glob_pattern(input),
+            expected,
+            "testing find_longest_search_path_without_glob_pattern with {}",
+            input
+        );
+    }
+
     #[tokio::test]
-    async fn test_find_longest_base_path() -> Result<()> {
-        assert_eq!(
-            find_longest_base_path("/"),
-            "/",
-            "testing longest_path with {}",
-            "/"
-        );
-        assert_eq!(
-            find_longest_base_path("/a.txt"),
-            "/a.txt",
-            "testing longest_path with {}",
-            "/a.txt"
-        );
-        assert_eq!(
-            find_longest_base_path("/a"),
-            "/a",
-            "testing longest_path with {}",
-            "/a"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/"),
-            "/a/",
-            "testing longest_path with {}",
-            "/a/"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/b"),
-            "/a/b",
-            "testing longest_path with {}",
-            "/a/b"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/b/"),
-            "/a/b/",
-            "testing longest_path with {}",
-            "/a/b/"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/b.txt"),
-            "/a/b.txt",
-            "testing longest_path with {}",
-            "/a/bt.xt"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/b/c.txt"),
-            "/a/b/c.txt",
-            "testing longest_path with {}",
-            "/a/b/c.txt"
-        );
-        assert_eq!(
-            find_longest_base_path("/*.txt"),
-            "/",
-            "testing longest_path with {}",
-            "/*.txt"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/*b.txt"),
-            "/a/",
-            "testing longest_path with {}",
-            "/a/*b.txt"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/*/b.txt"),
-            "/a/",
-            "testing longest_path with {}",
-            "/a/*/b.txt"
-        );
-        assert_eq!(
-            find_longest_base_path("/a/b/[123]/file*.txt"),
-            "/a/b/",
-            "testing longest_path with {}",
-            "/a/b/[123]/file*.txt"
-        );
+    async fn test_find_longest_search_path_without_glob_pattern() -> Result<()> {
+        test_longest_base_path("/", "/");
+        test_longest_base_path("/a.txt", "/a.txt");
+        test_longest_base_path("/a", "/a");
+        test_longest_base_path("/a/", "/a/");
+        test_longest_base_path("/a/b", "/a/b");
+        test_longest_base_path("/a/b/", "/a/b/");
+        test_longest_base_path("/a/b.txt", "/a/b.txt");
+        test_longest_base_path("/a/b/c.txt", "/a/b/c.txt");
+        test_longest_base_path("/*.txt", "/");
+        test_longest_base_path("/a/*b.txt", "/a/");
+        test_longest_base_path("/a/*/b.txt", "/a/");
+        test_longest_base_path("/a/b/[123]/file*.txt", "/a/b/");
         Ok(())
     }
 }
