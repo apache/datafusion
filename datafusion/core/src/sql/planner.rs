@@ -76,7 +76,7 @@ use crate::logical_plan::plan::{Analyze, Explain};
 /// functions referenced in SQL statements
 pub trait ContextProvider {
     /// Getter for a datasource
-    fn get_table_provider(&self, name: TableReference) -> Option<Arc<dyn TableProvider>>;
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>>;
     /// Getter for a UDF description
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>>;
     /// Getter for a UDAF description
@@ -692,7 +692,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             ),
                             _ => Ok(cte_plan.clone()),
                         },
-                        (_, Some(provider)) => {
+                        (_, Ok(provider)) => {
                             let scan =
                                 LogicalPlanBuilder::scan(&table_name, provider, None);
                             let scan = match table_alias.as_ref() {
@@ -701,10 +701,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                             };
                             scan?.build()
                         }
-                        (None, None) => Err(DataFusionError::Plan(format!(
-                            "Table or CTE with name '{}' not found",
-                            sql_object_name
-                        ))),
+                        (None, Err(e)) => Err(e),
                     }?,
                     alias,
                 )
@@ -2279,7 +2276,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_name = normalize_sql_object_name(sql_table_name);
         let table_ref: TableReference = table_name.as_str().into();
 
-        if self.schema_provider.get_table_provider(table_ref).is_none() {
+        if self.schema_provider.get_table_provider(table_ref).is_err() {
             return Err(DataFusionError::Plan(format!(
                 "Unknown relation for SHOW COLUMNS: {}",
                 sql_table_name
@@ -2321,7 +2318,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let tables_reference = TableReference::Partial { schema, table };
         self.schema_provider
             .get_table_provider(tables_reference)
-            .is_some()
+            .is_ok()
     }
 
     fn sql_array_literal(

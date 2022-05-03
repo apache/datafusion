@@ -1364,10 +1364,13 @@ impl SessionState {
 }
 
 impl ContextProvider for SessionState {
-    fn get_table_provider(&self, name: TableReference) -> Option<Arc<dyn TableProvider>> {
+    fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>> {
         let resolved_ref = self.resolve_table_ref(name);
-        let schema = self.schema_for_ref(resolved_ref).ok()?;
-        schema.table(resolved_ref.table)
+        let schema = self.schema_for_ref(resolved_ref).unwrap();
+        match schema.table(resolved_ref.table) {
+            Some(e) => Ok(e),
+            None => Err(DataFusionError::Plan(format!("Table or CTE with name '{}' not found", name.table()))),
+        }
     }
 
     fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
