@@ -35,7 +35,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .enumerate()
         .map(|(i, arg)| -> (Field, ArrayRef) {
-            let field_name = format!("c_{}", i).clone();
+            let field_name = format!("c_{}", i);
             match arg.data_type() {
                 DataType::Utf8 => (
                     Field::new(field_name.as_str(), DataType::Utf8, true),
