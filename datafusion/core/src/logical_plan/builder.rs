@@ -1063,8 +1063,16 @@ pub fn union_with_alias(
             x => vec![x],
         });
 
-    let inputs = inputs_iter
+    inputs_iter
         .clone()
+        .skip(1)
+        .try_for_each(|input_plan| -> Result<()> {
+            union_schema.check_arrow_schema_type_compatible(
+                &((**input_plan.schema()).clone().into()),
+            )
+        })?;
+
+    let inputs = inputs_iter
         .map(|p| match p {
             LogicalPlan::Projection(Projection {
                 expr, input, alias, ..
@@ -1084,14 +1092,6 @@ pub fn union_with_alias(
         Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
         None => union_schema.strip_qualifiers(),
     });
-
-    inputs_iter
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
 
     Ok(LogicalPlan::Union(Union {
         inputs,
