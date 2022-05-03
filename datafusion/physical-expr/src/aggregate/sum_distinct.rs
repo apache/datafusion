@@ -129,24 +129,17 @@ impl DistinctSumAccumulator {
 
 impl Accumulator for DistinctSumAccumulator {
     fn state(&self) -> Result<Vec<ScalarValue>> {
-        let mut cols_out = {
-            let values = Box::new(Vec::new());
+        // 1. Stores aggregate state in `ScalarValue::List`
+        // 2. Construct this `ScalarValue::List` state from distinct numeric in hash set
+        let state_out = {
+            let mut distinct_values = Box::new(Vec::new());
             let data_type = Box::new(self.data_type.clone());
-            vec![ScalarValue::List(Some(values), data_type)]
+            self.hash_values
+                .iter()
+                .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
+            vec![ScalarValue::List(Some(distinct_values), data_type)]
         };
-
-        let mut cols_vec = cols_out
-            .iter_mut()
-            .map(|c| match c {
-                ScalarValue::List(Some(ref mut v), _) => v,
-                _ => unreachable!(),
-            })
-            .collect::<Vec<_>>();
-
-        self.hash_values
-            .iter()
-            .for_each(|distinct_value| cols_vec[0].push(distinct_value.clone()));
-        Ok(cols_out)
+        Ok(state_out)
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
