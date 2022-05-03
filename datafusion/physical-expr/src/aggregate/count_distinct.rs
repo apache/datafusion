@@ -163,7 +163,7 @@ impl Accumulator for DistinctCountAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         if values.is_empty() {
             return Ok(());
-        };
+        }
         (0..values[0].len()).try_for_each(|index| {
             let v = values
                 .iter()
@@ -175,7 +175,7 @@ impl Accumulator for DistinctCountAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
-        };
+        }
         (0..states[0].len()).try_for_each(|index| {
             let v = states
                 .iter()

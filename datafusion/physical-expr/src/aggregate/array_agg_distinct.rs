@@ -139,7 +139,7 @@ impl Accumulator for DistinctArrayAggAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         if states.is_empty() {
             return Ok(());
-        };
+        }
 
         for array in states {
             for j in 0..array.len() {
