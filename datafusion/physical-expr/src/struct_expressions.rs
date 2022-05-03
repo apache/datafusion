@@ -35,57 +35,58 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .enumerate()
         .map(|(i, arg)| -> (Field, ArrayRef) {
+            let field_name = format!("c_{}", i).clone();
             match arg.data_type() {
                 DataType::Utf8 => (
-                    Field::new(&*format!("f_{}", i), DataType::Utf8, true),
+                    Field::new(field_name.as_str(), DataType::Utf8, true),
                     arg.clone(),
                 ),
                 DataType::LargeUtf8 => (
-                    Field::new(&*format!("f_{}", i), DataType::LargeUtf8, true),
+                    Field::new(field_name.as_str(), DataType::LargeUtf8, true),
                     arg.clone(),
                 ),
                 DataType::Boolean => (
-                    Field::new(&*format!("f_{}", i), DataType::Boolean, true),
+                    Field::new(field_name.as_str(), DataType::Boolean, true),
                     arg.clone(),
                 ),
                 DataType::Float32 => (
-                    Field::new(&*format!("f_{}", i), DataType::Float64, true),
+                    Field::new(field_name.as_str(), DataType::Float64, true),
                     arg.clone(),
                 ),
                 DataType::Float64 => (
-                    Field::new(&*format!("f_{}", i), DataType::Float64, true),
+                    Field::new(field_name.as_str(), DataType::Float64, true),
                     arg.clone(),
                 ),
                 DataType::Int8 => (
-                    Field::new(&*format!("f_{}", i), DataType::Int8, true),
+                    Field::new(field_name.as_str(), DataType::Int8, true),
                     arg.clone(),
                 ),
                 DataType::Int16 => (
-                    Field::new(&*format!("f_{}", i), DataType::Int16, true),
+                    Field::new(field_name.as_str(), DataType::Int16, true),
                     arg.clone(),
                 ),
                 DataType::Int32 => (
-                    Field::new(&*format!("f_{}", i), DataType::Int32, true),
+                    Field::new(field_name.as_str(), DataType::Int32, true),
                     arg.clone(),
                 ),
                 DataType::Int64 => (
-                    Field::new(&*format!("f_{}", i), DataType::Int64, true),
+                    Field::new(field_name.as_str(), DataType::Int64, true),
                     arg.clone(),
                 ),
                 DataType::UInt8 => (
-                    Field::new(&*format!("f_{}", i), DataType::UInt8, true),
+                    Field::new(field_name.as_str(), DataType::UInt8, true),
                     arg.clone(),
                 ),
                 DataType::UInt16 => (
-                    Field::new(&*format!("f_{}", i), DataType::UInt16, true),
+                    Field::new(field_name.as_str(), DataType::UInt16, true),
                     arg.clone(),
                 ),
                 DataType::UInt32 => (
-                    Field::new(&*format!("f_{}", i), DataType::UInt32, true),
+                    Field::new(field_name.as_str(), DataType::UInt32, true),
                     arg.clone(),
                 ),
                 DataType::UInt64 => (
-                    Field::new(&*format!("f_{}", i), DataType::UInt64, true),
+                    Field::new(field_name.as_str(), DataType::UInt64, true),
                     arg.clone(),
                 ),
                 data_type => unimplemented!("struct not support {} type", data_type),
@@ -96,7 +97,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StructArray::from(vec)))
 }
 
-/// put values in an array.
+/// put values in a struct array.
 pub fn struct_expr(values: &[ColumnarValue]) -> Result<ColumnarValue> {
     let arrays: Vec<ArrayRef> = values
         .iter()

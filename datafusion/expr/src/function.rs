@@ -223,11 +223,11 @@ pub fn return_type(
         },
 
         BuiltinScalarFunction::Struct => {
-            let fields = input_expr_types
-                .iter()
-                .map(|x| Field::new("item", x.clone(), true))
-                .collect();
-            Ok(DataType::Struct(fields))
+            // let fields = input_expr_types
+            //     .iter()
+            //     .map(|x| Field::new("item", x.clone(), true))
+            //     .collect();
+            Ok(DataType::Struct(vec![]))
         }
 
         BuiltinScalarFunction::Abs
