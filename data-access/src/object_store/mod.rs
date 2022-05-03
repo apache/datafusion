@@ -21,6 +21,7 @@ pub mod local;
 
 use std::fmt::Debug;
 use std::io::Read;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -81,8 +82,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         prefix: &str,
         suffix: &str,
     ) -> Result<FileMetaStream> {
-        let file_stream = self.glob_file(prefix).await?;
-        filter_suffix(file_stream, suffix).await
+        self.glob_file_with_suffix(prefix, suffix).await
     }
 
     /// Returns all the files matching `glob_pattern`
@@ -90,16 +90,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         if !is_glob_path(glob_pattern) {
             self.list_file(glob_pattern).await
         } else {
-            // take path up to first occurence of a glob char
-            let path_to_first_glob_character: Vec<&str> = glob_pattern
-                .splitn(2, |c| GLOB_CHARS.contains(&c))
-                .collect();
-            // find last occurrence of folder /
-            let path_parts: Vec<&str> = path_to_first_glob_character[0]
-                .rsplitn(2, |c| c == '/')
-                .collect();
-            let start_path = path_parts[1];
-
+            let start_path = find_longest_base_path(glob_pattern);
             let file_stream = self.list_file(start_path).await?;
             let pattern = Pattern::new(glob_pattern).unwrap();
             Ok(Box::pin(file_stream.filter(move |fr| {
@@ -115,12 +106,12 @@ pub trait ObjectStore: Sync + Send + Debug {
     /// Calls `glob_file` with a suffix filter
     async fn glob_file_with_suffix(
         &self,
-        prefix: &str,
+        glob_pattern: &str,
         suffix: &str,
     ) -> Result<FileMetaStream> {
-        let files_to_consider = match is_glob_path(prefix) {
-            true => self.glob_file(prefix).await,
-            false => self.list_file(prefix).await,
+        let files_to_consider = match is_glob_path(glob_pattern) {
+            true => self.glob_file(glob_pattern).await,
+            false => self.list_file(glob_pattern).await,
         }?;
 
         match suffix.is_empty() {
@@ -161,4 +152,115 @@ async fn filter_suffix(
         };
         async move { has_suffix }
     })))
+}
+
+fn find_longest_base_path(glob_pattern: &str) -> &str {
+    // in case the glob_pattern is not actually a glob pattern, take the entire thing
+    if !is_glob_path(&glob_pattern) {
+        glob_pattern //.to_string()
+    } else {
+        // take path up to first occurence of a glob char
+        let path_to_first_glob_character = glob_pattern
+            .splitn(2, |c| GLOB_CHARS.contains(&c))
+            .collect::<Vec<&str>>()[0]; // always find one, because otherwise is_glob_pattern would not be true
+        let path = Path::new(path_to_first_glob_character);
+
+        let dir_path = if path.is_file() {
+            path.parent().unwrap_or(Path::new("/"))
+        } else {
+            path
+        };
+        dir_path.to_str().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_is_glob_path() -> Result<()> {
+        assert!(!is_glob_path("/"));
+        assert!(!is_glob_path("/test"));
+        assert!(!is_glob_path("/test/"));
+        assert!(is_glob_path("/test*"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_find_longest_base_path() -> Result<()> {
+        assert_eq!(
+            find_longest_base_path("/"),
+            "/",
+            "testing longest_path with {}",
+            "/"
+        );
+        assert_eq!(
+            find_longest_base_path("/a.txt"),
+            "/a.txt",
+            "testing longest_path with {}",
+            "/a.txt"
+        );
+        assert_eq!(
+            find_longest_base_path("/a"),
+            "/a",
+            "testing longest_path with {}",
+            "/a"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/"),
+            "/a/",
+            "testing longest_path with {}",
+            "/a/"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/b"),
+            "/a/b",
+            "testing longest_path with {}",
+            "/a/b"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/b/"),
+            "/a/b/",
+            "testing longest_path with {}",
+            "/a/b/"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/b.txt"),
+            "/a/b.txt",
+            "testing longest_path with {}",
+            "/a/bt.xt"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/b/c.txt"),
+            "/a/b/c.txt",
+            "testing longest_path with {}",
+            "/a/b/c.txt"
+        );
+        assert_eq!(
+            find_longest_base_path("/*.txt"),
+            "/",
+            "testing longest_path with {}",
+            "/*.txt"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/*b.txt"),
+            "/a/",
+            "testing longest_path with {}",
+            "/a/*b.txt"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/*/b.txt"),
+            "/a/",
+            "testing longest_path with {}",
+            "/a/*/b.txt"
+        );
+        assert_eq!(
+            find_longest_base_path("/a/b/[123]/file*.txt"),
+            "/a/b/",
+            "testing longest_path with {}",
+            "/a/b/[123]/file*.txt"
+        );
+        Ok(())
+    }
 }
