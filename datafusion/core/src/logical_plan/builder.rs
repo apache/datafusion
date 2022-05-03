@@ -23,7 +23,7 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::expr_schema::ExprSchemable;
+use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
@@ -43,7 +43,6 @@ use std::{
     sync::Arc,
 };
 
-use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, provider_as_source,
@@ -51,6 +50,7 @@ use crate::logical_plan::{
     Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
+use datafusion_common::ToDFSchema;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
@@ -1202,8 +1202,11 @@ pub(crate) fn expand_qualified_wildcard(
 #[cfg(test)]
 mod tests {
     use arrow::datatypes::{DataType, Field};
+    use datafusion_common::SchemaError;
+    use datafusion_expr::expr_fn::exists;
 
     use crate::logical_plan::StringifiedPlan;
+    use crate::test::test_table_scan_with_name;
 
     use super::super::{col, lit, sum};
     use super::*;
@@ -1340,6 +1343,81 @@ mod tests {
     }
 
     #[test]
+    fn exists_subquery() -> Result<()> {
+        let foo = test_table_scan_with_name("foo")?;
+        let bar = test_table_scan_with_name("bar")?;
+
+        let subquery = LogicalPlanBuilder::from(foo)
+            .project(vec![col("a")])?
+            .filter(col("a").eq(col("bar.a")))?
+            .build()?;
+
+        let outer_query = LogicalPlanBuilder::from(bar)
+            .project(vec![col("a")])?
+            .filter(exists(Arc::new(subquery)))?
+            .build()?;
+
+        let expected = "Filter: EXISTS (\
+            Subquery: Filter: #foo.a = #bar.a\
+            \n  Projection: #foo.a\
+            \n    TableScan: foo projection=None)\
+        \n  Projection: #bar.a\n    TableScan: bar projection=None";
+        assert_eq!(expected, format!("{:?}", outer_query));
+
+        Ok(())
+    }
+
+    #[test]
+    fn filter_in_subquery() -> Result<()> {
+        let foo = test_table_scan_with_name("foo")?;
+        let bar = test_table_scan_with_name("bar")?;
+
+        let subquery = LogicalPlanBuilder::from(foo)
+            .project(vec![col("a")])?
+            .filter(col("a").eq(col("bar.a")))?
+            .build()?;
+
+        // SELECT a FROM bar WHERE a IN (SELECT a FROM foo WHERE a = bar.a)
+        let outer_query = LogicalPlanBuilder::from(bar)
+            .project(vec![col("a")])?
+            .filter(in_subquery(col("a"), Arc::new(subquery)))?
+            .build()?;
+
+        let expected = "Filter: #bar.a IN (Subquery: Filter: #foo.a = #bar.a\
+        \n  Projection: #foo.a\
+        \n    TableScan: foo projection=None)\
+        \n  Projection: #bar.a\
+        \n    TableScan: bar projection=None";
+        assert_eq!(expected, format!("{:?}", outer_query));
+
+        Ok(())
+    }
+
+    #[test]
+    fn select_scalar_subquery() -> Result<()> {
+        let foo = test_table_scan_with_name("foo")?;
+        let bar = test_table_scan_with_name("bar")?;
+
+        let subquery = LogicalPlanBuilder::from(foo)
+            .project(vec![col("b")])?
+            .filter(col("a").eq(col("bar.a")))?
+            .build()?;
+
+        // SELECT (SELECT a FROM foo WHERE a = bar.a) FROM bar
+        let outer_query = LogicalPlanBuilder::from(bar)
+            .project(vec![scalar_subquery(Arc::new(subquery))])?
+            .build()?;
+
+        let expected = "Projection: (Subquery: Filter: #foo.a = #bar.a\
+                \n  Projection: #foo.b\
+                \n    TableScan: foo projection=None)\
+            \n  TableScan: bar projection=None";
+        assert_eq!(expected, format!("{:?}", outer_query));
+
+        Ok(())
+    }
+
+    #[test]
     fn projection_non_unique_names() -> Result<()> {
         let plan = LogicalPlanBuilder::scan_empty(
             Some("employee_csv"),
@@ -1351,16 +1429,16 @@ mod tests {
         .project(vec![col("id"), col("first_name").alias("id")]);
 
         match plan {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!(
-                    e,
-                    "Schema contains qualified field name 'employee_csv.id' \
-                    and unqualified field name 'id' which would be ambiguous"
-                );
+            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
+                qualifier,
+                name,
+            })) => {
+                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("id", &name);
                 Ok(())
             }
             _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::Plan".to_string(),
+                "Plan should have returned an DataFusionError::SchemaError".to_string(),
             )),
         }
     }
@@ -1377,16 +1455,16 @@ mod tests {
         .aggregate(vec![col("state")], vec![sum(col("salary")).alias("state")]);
 
         match plan {
-            Err(DataFusionError::Plan(e)) => {
-                assert_eq!(
-                    e,
-                    "Schema contains qualified field name 'employee_csv.state' and \
-                    unqualified field name 'state' which would be ambiguous"
-                );
+            Err(DataFusionError::SchemaError(SchemaError::AmbiguousReference {
+                qualifier,
+                name,
+            })) => {
+                assert_eq!("employee_csv", qualifier.unwrap().as_str());
+                assert_eq!("state", &name);
                 Ok(())
             }
             _ => Err(DataFusionError::Plan(
-                "Plan should have returned an DataFusionError::Plan".to_string(),
+                "Plan should have returned an DataFusionError::SchemaError".to_string(),
             )),
         }
     }

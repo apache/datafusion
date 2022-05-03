@@ -368,9 +368,20 @@ where
                 asc: *asc,
                 nulls_first: *nulls_first,
             }),
-            Expr::Column { .. } | Expr::Literal(_) | Expr::ScalarVariable(_, _) => {
-                Ok(expr.clone())
-            }
+            Expr::Column { .. }
+            | Expr::Literal(_)
+            | Expr::ScalarVariable(_, _)
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_) => Ok(expr.clone()),
+            Expr::InSubquery {
+                expr: nested_expr,
+                subquery,
+                negated,
+            } => Ok(Expr::InSubquery {
+                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                subquery: subquery.clone(),
+                negated: *negated,
+            }),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
             Expr::GetIndexedField { expr, key } => Ok(Expr::GetIndexedField {
@@ -536,9 +547,9 @@ pub(crate) fn make_decimal_type(
 }
 
 // Normalize an identifer to a lowercase string unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: Ident) -> String {
+pub(crate) fn normalize_ident(id: &Ident) -> String {
     match id.quote_style {
-        Some(_) => id.value,
+        Some(_) => id.value.clone(),
         None => id.value.to_ascii_lowercase(),
     }
 }

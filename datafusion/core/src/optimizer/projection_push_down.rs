@@ -466,6 +466,7 @@ fn optimize_plan(
         | LogicalPlan::Filter { .. }
         | LogicalPlan::Repartition(_)
         | LogicalPlan::EmptyRelation(_)
+        | LogicalPlan::Subquery(_)
         | LogicalPlan::Values(_)
         | LogicalPlan::Sort { .. }
         | LogicalPlan::CreateExternalTable(_)

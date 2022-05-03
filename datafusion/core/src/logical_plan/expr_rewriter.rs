@@ -111,6 +111,17 @@ impl ExprRewritable for Expr {
         let expr = match self {
             Expr::Alias(expr, name) => Expr::Alias(rewrite_boxed(expr, rewriter)?, name),
             Expr::Column(_) => self.clone(),
+            Expr::Exists { .. } => self.clone(),
+            Expr::InSubquery {
+                expr,
+                subquery,
+                negated,
+            } => Expr::InSubquery {
+                expr: rewrite_boxed(expr, rewriter)?,
+                subquery,
+                negated,
+            },
+            Expr::ScalarSubquery(_) => self.clone(),
             Expr::ScalarVariable(ty, names) => Expr::ScalarVariable(ty, names),
             Expr::Literal(value) => Expr::Literal(value),
             Expr::BinaryExpr { left, op, right } => Expr::BinaryExpr {
@@ -563,7 +574,7 @@ mod test {
             .to_string();
         assert_eq!(
             error,
-            "Error during planning: Column #b not found in provided schemas"
+            "Schema error: No field named 'b'. Valid fields are 'tableA.a'."
         );
     }
 

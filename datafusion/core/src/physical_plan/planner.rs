@@ -34,6 +34,7 @@ use crate::logical_plan::{
 };
 use crate::logical_plan::{Limit, Values};
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
+use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
@@ -41,7 +42,6 @@ use crate::physical_plan::expressions::{
     CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
 };
 use crate::physical_plan::filter::FilterExec;
-use crate::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
@@ -62,6 +62,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_physical_expr::expressions::DateIntervalExpr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -186,6 +187,15 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
+        Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
+            "EXISTS is not yet supported in the physical plan".to_string(),
+        )),
+        Expr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
+            "IN subquery is not yet supported in the physical plan".to_string(),
+        )),
+        Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
+            "Scalar subqueries are not yet supported in the physical plan".to_string(),
+        )),
         Expr::Between {
             expr,
             negated,
@@ -521,7 +531,7 @@ impl DefaultPhysicalPlanner {
                         })
                         .collect::<Result<Vec<_>>>()?;
 
-                    let initial_aggr = Arc::new(HashAggregateExec::try_new(
+                    let initial_aggr = Arc::new(AggregateExec::try_new(
                         AggregateMode::Partial,
                         groups.clone(),
                         aggregates.clone(),
@@ -563,7 +573,7 @@ impl DefaultPhysicalPlanner {
                         (initial_aggr, AggregateMode::Final)
                     };
 
-                    Ok(Arc::new(HashAggregateExec::try_new(
+                    Ok(Arc::new(AggregateExec::try_new(
                         next_partition_mode,
                         final_group
                             .iter()
@@ -780,6 +790,7 @@ impl DefaultPhysicalPlanner {
                     let right = self.create_initial_plan(right, session_state).await?;
                     Ok(Arc::new(CrossJoinExec::try_new(left, right)?))
                 }
+                LogicalPlan::Subquery(_) => todo!(),
                 LogicalPlan::EmptyRelation(EmptyRelation {
                     produce_one_row,
                     schema,
@@ -954,7 +965,27 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            binary(lhs, *op, rhs, input_schema)
+            match (
+                lhs.data_type(input_schema)?,
+                op,
+                rhs.data_type(input_schema)?,
+            ) {
+                (
+                    DataType::Date32 | DataType::Date64,
+                    Operator::Plus | Operator::Minus,
+                    DataType::Interval(_),
+                ) => Ok(Arc::new(DateIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
+                _ => {
+                    // assume that we can coerce both sides into a common type
+                    // and then perform a binary operation
+                    binary(lhs, *op, rhs, input_schema)
+                }
+            }
         }
         Expr::Case {
             expr,
@@ -1835,7 +1866,7 @@ mod tests {
         let execution_plan = plan(&logical_plan).await?;
         let final_hash_agg = execution_plan
             .as_any()
-            .downcast_ref::<HashAggregateExec>()
+            .downcast_ref::<AggregateExec>()
             .expect("hash aggregate");
         assert_eq!(
             "SUM(aggregate_test_100.c2)",
@@ -1869,7 +1900,7 @@ mod tests {
         let formatted = format!("{:?}", execution_plan);
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in HashAggregate (which is slower)
+        // mode in Aggregate (which is slower)
         assert!(formatted.contains("FinalPartitioned"));
 
         Ok(())

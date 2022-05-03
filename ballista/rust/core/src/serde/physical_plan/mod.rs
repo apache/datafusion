@@ -28,7 +28,8 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_plan::window_frames::WindowFrame;
 use datafusion::logical_plan::FunctionRegistry;
-use datafusion::physical_plan::aggregates::create_aggregate_expr;
+use datafusion::physical_plan::aggregates::AggregateExec;
+use datafusion::physical_plan::aggregates::{create_aggregate_expr, AggregateMode};
 use datafusion::physical_plan::coalesce_batches::CoalesceBatchesExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::cross_join::CrossJoinExec;
@@ -39,7 +40,6 @@ use datafusion::physical_plan::file_format::{
     AvroExec, CsvExec, FileScanConfig, ParquetExec,
 };
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::hash_aggregate::{AggregateMode, HashAggregateExec};
 use datafusion::physical_plan::hash_join::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -306,19 +306,21 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     Arc::new((&input_schema).try_into()?),
                 )?))
             }
-            PhysicalPlanType::HashAggregate(hash_agg) => {
+            PhysicalPlanType::Aggregate(hash_agg) => {
                 let input: Arc<dyn ExecutionPlan> = into_physical_plan!(
                     hash_agg.input,
                     registry,
                     runtime,
                     extension_codec
                 )?;
-                let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(|| {
-                    proto_error(format!(
-                        "Received a HashAggregateNode message with unknown AggregateMode {}",
+                let mode = protobuf::AggregateMode::from_i32(hash_agg.mode).ok_or_else(
+                    || {
+                        proto_error(format!(
+                        "Received a AggregateNode message with unknown AggregateMode {}",
                         hash_agg.mode
                     ))
-                })?;
+                    },
+                )?;
                 let agg_mode: AggregateMode = match mode {
                     protobuf::AggregateMode::Partial => AggregateMode::Partial,
                     protobuf::AggregateMode::Final => AggregateMode::Final,
@@ -341,7 +343,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     .as_ref()
                     .ok_or_else(|| {
                         BallistaError::General(
-                            "input_schema in HashAggregateNode is missing.".to_owned(),
+                            "input_schema in AggregateNode is missing.".to_owned(),
                         )
                     })?
                     .clone();
@@ -384,14 +386,14 @@ impl AsExecutionPlan for PhysicalPlanNode {
                                 )?)
                             }
                             _ => Err(BallistaError::General(
-                                "Invalid aggregate  expression for HashAggregateExec"
+                                "Invalid aggregate expression for AggregateExec"
                                     .to_string(),
                             )),
                         }
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(Arc::new(HashAggregateExec::try_new(
+                Ok(Arc::new(AggregateExec::try_new(
                     agg_mode,
                     group,
                     physical_aggr_expr,
@@ -730,7 +732,7 @@ impl AsExecutionPlan for PhysicalPlanNode {
                     },
                 ))),
             })
-        } else if let Some(exec) = plan.downcast_ref::<HashAggregateExec>() {
+        } else if let Some(exec) = plan.downcast_ref::<AggregateExec>() {
             let groups = exec
                 .group_expr()
                 .iter()
@@ -768,8 +770,8 @@ impl AsExecutionPlan for PhysicalPlanNode {
                 extension_codec,
             )?;
             Ok(protobuf::PhysicalPlanNode {
-                physical_plan_type: Some(PhysicalPlanType::HashAggregate(Box::new(
-                    protobuf::HashAggregateExecNode {
+                physical_plan_type: Some(PhysicalPlanType::Aggregate(Box::new(
+                    protobuf::AggregateExecNode {
                         group_expr: groups,
                         group_expr_name: group_names,
                         aggr_expr: agg,
@@ -1080,12 +1082,12 @@ mod roundtrip_tests {
         datasource::listing::PartitionedFile,
         logical_plan::{JoinType, Operator},
         physical_plan::{
+            aggregates::{AggregateExec, AggregateMode},
             empty::EmptyExec,
             expressions::{binary, col, lit, InListExpr, NotExpr},
             expressions::{Avg, Column, PhysicalSortExpr},
             file_format::{FileScanConfig, ParquetExec},
             filter::FilterExec,
-            hash_aggregate::{AggregateMode, HashAggregateExec},
             hash_join::{HashJoinExec, PartitionMode},
             limit::{GlobalLimitExec, LocalLimitExec},
             sorts::sort::SortExec,
@@ -1212,7 +1214,7 @@ mod roundtrip_tests {
     }
 
     #[test]
-    fn rountrip_hash_aggregate() -> Result<()> {
+    fn rountrip_aggregate() -> Result<()> {
         let field_a = Field::new("a", DataType::Int64, false);
         let field_b = Field::new("b", DataType::Int64, false);
         let schema = Arc::new(Schema::new(vec![field_a, field_b]));
@@ -1226,7 +1228,7 @@ mod roundtrip_tests {
             DataType::Float64,
         ))];
 
-        roundtrip_test(Arc::new(HashAggregateExec::try_new(
+        roundtrip_test(Arc::new(AggregateExec::try_new(
             AggregateMode::Final,
             groups.clone(),
             aggregates.clone(),

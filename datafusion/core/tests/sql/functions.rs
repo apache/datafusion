@@ -144,34 +144,13 @@ async fn query_array() -> Result<()> {
 }
 
 #[tokio::test]
-async fn query_count_distinct() -> Result<()> {
-    let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
-
-    let data = RecordBatch::try_new(
-        schema.clone(),
-        vec![Arc::new(Int32Array::from(vec![
-            Some(0),
-            Some(1),
-            None,
-            Some(3),
-            Some(3),
-        ]))],
-    )?;
-
-    let table = MemTable::try_new(schema, vec![vec![data]])?;
-
+async fn query_array_scalar() -> Result<()> {
     let ctx = SessionContext::new();
-    ctx.register_table("test", Arc::new(table))?;
-    let sql = "SELECT COUNT(DISTINCT c1) FROM test";
-    let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec![
-        "+-------------------------+",
-        "| COUNT(DISTINCT test.c1) |",
-        "+-------------------------+",
-        "| 3                       |",
-        "+-------------------------+",
-    ];
-    assert_batches_eq!(expected, &actual);
+
+    let sql = "SELECT array(1, 2, 3);";
+    let actual = execute(&ctx, sql).await;
+    let expected = vec![vec!["[1, 2, 3]"]];
+    assert_eq!(expected, actual);
     Ok(())
 }
 
@@ -355,5 +334,240 @@ async fn coalesce_mul_with_default_value() -> Result<()> {
         "+---------------------------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn case_sensitive_identifiers_functions() {
+    let ctx = SessionContext::new();
+    ctx.register_table("t", table_with_sequence(1, 1).unwrap())
+        .unwrap();
+
+    let expected = vec![
+        "+-----------+",
+        "| sqrt(t.i) |",
+        "+-----------+",
+        "| 1         |",
+        "+-----------+",
+    ];
+
+    let results = plan_and_collect(&ctx, "SELECT sqrt(i) FROM t")
+        .await
+        .unwrap();
+
+    assert_batches_sorted_eq!(expected, &results);
+
+    let results = plan_and_collect(&ctx, "SELECT SQRT(i) FROM t")
+        .await
+        .unwrap();
+    assert_batches_sorted_eq!(expected, &results);
+
+    // Using double quotes allows specifying the function name with capitalization
+    let err = plan_and_collect(&ctx, "SELECT \"SQRT\"(i) FROM t")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "Error during planning: Invalid function 'SQRT'"
+    );
+
+    let results = plan_and_collect(&ctx, "SELECT \"sqrt\"(i) FROM t")
+        .await
+        .unwrap();
+    assert_batches_sorted_eq!(expected, &results);
+}
+
+#[tokio::test]
+async fn case_builtin_math_expression() {
+    let ctx = SessionContext::new();
+
+    let type_values = vec![
+        (
+            DataType::Int8,
+            Arc::new(Int8Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Int16,
+            Arc::new(Int16Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Int32,
+            Arc::new(Int32Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Int64,
+            Arc::new(Int64Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt8,
+            Arc::new(UInt8Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt16,
+            Arc::new(UInt16Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt32,
+            Arc::new(UInt32Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::UInt64,
+            Arc::new(UInt64Array::from_slice(&[1])) as ArrayRef,
+        ),
+        (
+            DataType::Float32,
+            Arc::new(Float32Array::from_slice(&[1.0_f32])) as ArrayRef,
+        ),
+        (
+            DataType::Float64,
+            Arc::new(Float64Array::from_slice(&[1.0_f64])) as ArrayRef,
+        ),
+    ];
+
+    for (data_type, array) in type_values.iter() {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("v", data_type.clone(), false)]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![array.clone()]).unwrap();
+        let provider = MemTable::try_new(schema, vec![vec![batch]]).unwrap();
+        ctx.deregister_table("t").unwrap();
+        ctx.register_table("t", Arc::new(provider)).unwrap();
+        let expected = vec![
+            "+-----------+",
+            "| sqrt(t.v) |",
+            "+-----------+",
+            "| 1         |",
+            "+-----------+",
+        ];
+        let results = plan_and_collect(&ctx, "SELECT sqrt(v) FROM t")
+            .await
+            .unwrap();
+
+        assert_batches_sorted_eq!(expected, &results);
+    }
+}
+
+#[tokio::test]
+async fn test_power() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("i32", DataType::Int16, true),
+        Field::new("i64", DataType::Int64, true),
+        Field::new("f32", DataType::Float32, true),
+        Field::new("f64", DataType::Float64, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int16Array::from(vec![
+                Some(2),
+                Some(5),
+                Some(0),
+                Some(-14),
+                None,
+            ])),
+            Arc::new(Int64Array::from(vec![
+                Some(2),
+                Some(5),
+                Some(0),
+                Some(-14),
+                None,
+            ])),
+            Arc::new(Float32Array::from(vec![
+                Some(1.0),
+                Some(2.5),
+                Some(0.0),
+                Some(-14.5),
+                None,
+            ])),
+            Arc::new(Float64Array::from(vec![
+                Some(1.0),
+                Some(2.5),
+                Some(0.0),
+                Some(-14.5),
+                None,
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+    let sql = r"SELECT power(i32, exp_i) as power_i32,
+                 power(i64, exp_f) as power_i64,
+                 power(f32, exp_i) as power_f32,
+                 power(f64, exp_f) as power_f64,
+                 power(2, 3) as power_int_scalar,
+                 power(2.5, 3.0) as power_float_scalar
+          FROM (select test.*, 3 as exp_i, 3.0 as exp_f from test) a";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------+-----------+-----------+-----------+------------------+--------------------+",
+        "| power_i32 | power_i64 | power_f32 | power_f64 | power_int_scalar | power_float_scalar |",
+        "+-----------+-----------+-----------+-----------+------------------+--------------------+",
+        "| 8         | 8         | 1         | 1         | 8                | 15.625             |",
+        "| 125       | 125       | 15.625    | 15.625    | 8                | 15.625             |",
+        "| 0         | 0         | 0         | 0         | 8                | 15.625             |",
+        "| -2744     | -2744     | -3048.625 | -3048.625 | 8                | 15.625             |",
+        "|           |           |           |           | 8                | 15.625             |",
+        "+-----------+-----------+-----------+-----------+------------------+--------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    //dbg!(actual[0].schema().fields());
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_i32")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Int64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_i64")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_f32")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_f64")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_int_scalar")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Int64
+    );
+    assert_eq!(
+        actual[0]
+            .schema()
+            .field_with_name("power_float_scalar")
+            .unwrap()
+            .data_type()
+            .to_owned(),
+        DataType::Float64
+    );
+
     Ok(())
 }

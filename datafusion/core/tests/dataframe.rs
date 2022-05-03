@@ -113,8 +113,15 @@ async fn sort_on_unprojected_columns() -> Result<()> {
         .unwrap();
     let results = df.collect().await.unwrap();
 
+    #[rustfmt::skip]
     let expected = vec![
-        "+-----+", "| a   |", "+-----+", "| 100 |", "| 10  |", "| 10  |", "| 1   |",
+        "+-----+",
+        "| a   |",
+        "+-----+",
+        "| 100 |",
+        "| 10  |",
+        "| 10  |",
+        "| 1   |",
         "+-----+",
     ];
     assert_batches_eq!(expected, &results);
@@ -145,8 +152,14 @@ async fn filter_with_alias_overwrite() -> Result<()> {
         .unwrap();
     let results = df.collect().await.unwrap();
 
+    #[rustfmt::skip]
     let expected = vec![
-        "+------+", "| a    |", "+------+", "| true |", "| true |", "+------+",
+        "+------+",
+        "| a    |",
+        "+------+",
+        "| true |",
+        "| true |",
+        "+------+",
     ];
     assert_batches_eq!(expected, &results);
 

@@ -31,9 +31,9 @@ use datafusion::{
     logical_plan::{
         abs, acos, ascii, asin, atan, ceil, character_length, chr, concat_expr,
         concat_ws_expr, cos, digest, exp, floor, left, ln, log10, log2, now_expr, nullif,
-        random, regexp_replace, repeat, replace, reverse, right, round, signum, sin,
-        split_part, sqrt, starts_with, strpos, substr, tan, to_hex, to_timestamp_micros,
-        to_timestamp_millis, to_timestamp_seconds, translate, trunc,
+        power, random, regexp_replace, repeat, replace, reverse, right, round, signum,
+        sin, split_part, sqrt, starts_with, strpos, substr, tan, to_hex,
+        to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate, trunc,
         window_frames::{WindowFrame, WindowFrameBound, WindowFrameUnits},
         Column, DFField, DFSchema, DFSchemaRef, Expr, Operator,
     },
@@ -466,6 +466,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::Translate => Self::Translate,
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
+            ScalarFunction::Power => Self::Power,
         }
     }
 }
@@ -1242,6 +1243,10 @@ pub fn parse_expr(
                         .iter()
                         .map(|expr| parse_expr(expr, registry))
                         .collect::<Result<Vec<_>, _>>()?,
+                )),
+                ScalarFunction::Power => Ok(power(
+                    parse_expr(&args[0], registry)?,
+                    parse_expr(&args[1], registry)?,
                 )),
                 _ => Err(proto_error(
                     "Protobuf deserialization error: Unsupported scalar function",

@@ -48,7 +48,7 @@ use crate::logical_plan::combine_filters;
 use crate::logical_plan::Expr;
 use crate::physical_plan::expressions::{MaxAccumulator, MinAccumulator};
 use crate::physical_plan::file_format::{ParquetExec, SchemaAdapter};
-use crate::physical_plan::ExecutionPlan;
+use crate::physical_plan::{metrics, ExecutionPlan};
 use crate::physical_plan::{Accumulator, Statistics};
 use datafusion_data_access::object_store::{ObjectReader, ObjectReaderStream};
 
@@ -275,7 +275,10 @@ fn summarize_min_max(
 
 /// Read and parse the schema of the Parquet file at location `path`
 fn fetch_schema(object_reader: Arc<dyn ObjectReader>) -> Result<Schema> {
-    let obj_reader = ChunkObjectReader(object_reader);
+    let obj_reader = ChunkObjectReader {
+        object_reader,
+        bytes_scanned: None,
+    };
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let schema = arrow_reader.get_schema()?;
@@ -288,7 +291,10 @@ fn fetch_statistics(
     object_reader: Arc<dyn ObjectReader>,
     table_schema: SchemaRef,
 ) -> Result<Statistics> {
-    let obj_reader = ChunkObjectReader(object_reader);
+    let obj_reader = ChunkObjectReader {
+        object_reader,
+        bytes_scanned: None,
+    };
     let file_reader = Arc::new(SerializedFileReader::new(obj_reader)?);
     let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
     let file_schema = arrow_reader.get_schema()?;
@@ -362,11 +368,16 @@ fn fetch_statistics(
 }
 
 /// A wrapper around the object reader to make it implement `ChunkReader`
-pub struct ChunkObjectReader(pub Arc<dyn ObjectReader>);
+pub struct ChunkObjectReader {
+    /// The underlying object reader
+    pub object_reader: Arc<dyn ObjectReader>,
+    /// Optional counter which will track total number of bytes scanned
+    pub bytes_scanned: Option<metrics::Count>,
+}
 
 impl Length for ChunkObjectReader {
     fn len(&self) -> u64 {
-        self.0.length()
+        self.object_reader.length()
     }
 }
 
@@ -374,7 +385,10 @@ impl ChunkReader for ChunkObjectReader {
     type T = Box<dyn Read + Send + Sync>;
 
     fn get_read(&self, start: u64, length: usize) -> ParquetResult<Self::T> {
-        self.0
+        if let Some(m) = self.bytes_scanned.as_ref() {
+            m.add(length)
+        }
+        self.object_reader
             .sync_chunk_reader(start, length)
             .map_err(DataFusionError::IoError)
             .map_err(|e| ParquetError::ArrowError(e.to_string()))
@@ -391,6 +405,7 @@ mod tests {
 
     use super::*;
 
+    use crate::physical_plan::metrics::MetricValue;
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::{
         ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
@@ -513,6 +528,30 @@ mod tests {
         // test metadata
         assert_eq!(exec.statistics().num_rows, Some(8));
         assert_eq!(exec.statistics().total_byte_size, Some(671));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn capture_bytes_scanned_metric() -> Result<()> {
+        let config = SessionConfig::new().with_batch_size(2);
+        let ctx = SessionContext::with_config(config);
+        let projection = None;
+
+        // Read the full file
+        let exec = get_exec("alltypes_plain.parquet", &projection, None).await?;
+
+        // Read only one column. This should scan less data.
+        let exec_projected =
+            get_exec("alltypes_plain.parquet", &Some(vec![0]), None).await?;
+
+        let task_ctx = ctx.task_ctx();
+
+        let _ = collect(exec.clone(), task_ctx.clone()).await?;
+        let _ = collect(exec_projected.clone(), task_ctx).await?;
+
+        assert_bytes_scanned(exec, 2522);
+        assert_bytes_scanned(exec_projected, 1924);
 
         Ok(())
     }
@@ -746,6 +785,17 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    fn assert_bytes_scanned(exec: Arc<dyn ExecutionPlan>, expected: usize) {
+        let actual = exec
+            .metrics()
+            .expect("Metrics not recorded")
+            .sum(|metric| matches!(metric.value(), MetricValue::Count { name, .. } if name == "bytes_scanned"))
+            .map(|t| t.as_usize())
+            .expect("bytes_scanned metric not recorded");
+
+        assert_eq!(actual, expected);
     }
 
     async fn get_exec(

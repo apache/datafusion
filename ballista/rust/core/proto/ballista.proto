@@ -266,7 +266,7 @@ message PhysicalPlanNode {
     ProjectionExecNode projection = 4;
     GlobalLimitExecNode global_limit = 6;
     LocalLimitExecNode local_limit = 7;
-    HashAggregateExecNode hash_aggregate = 8;
+    AggregateExecNode aggregate = 8;
     HashJoinExecNode hash_join = 9;
     ShuffleReaderExecNode shuffle_reader = 10;
     SortExecNode sort = 11;
@@ -519,7 +519,7 @@ message WindowAggExecNode {
   datafusion.Schema input_schema = 4;
 }
 
-message HashAggregateExecNode {
+message AggregateExecNode {
   repeated PhysicalExprNode group_expr = 1;
   repeated PhysicalExprNode aggr_expr = 2;
   AggregateMode mode = 3;

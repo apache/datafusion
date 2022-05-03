@@ -56,6 +56,7 @@ Projects that adapt to or serve as plugins to DataFusion:
 - [datafusion-objectstore-s3](https://github.com/datafusion-contrib/datafusion-objectstore-s3)
 - [datafusion-objectstore-hdfs](https://github.com/datafusion-contrib/datafusion-objectstore-hdfs)
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
+- [datafusion-objectstore-azure](https://github.com/datafusion-contrib/datafusion-objectstore-azure)
 
 Here are some of the projects known to use DataFusion:
 
@@ -63,10 +64,10 @@ Here are some of the projects known to use DataFusion:
 - [Cloudfuse Buzz](https://github.com/cloudfuse-io/buzz-rust)
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust)
 - [delta-rs](https://github.com/delta-io/delta-rs)
+- [Flock](https://github.com/flock-lab/flock)
 - [InfluxDB IOx](https://github.com/influxdata/influxdb_iox) Time Series Database
 - [ROAPI](https://github.com/roapi/roapi)
 - [Tensorbase](https://github.com/tensorbase/tensorbase)
-- [Squirtle](https://github.com/DSLAM-UMD/Squirtle)
 - [VegaFusion](https://vegafusion.io/) Server-side acceleration for the [Vega](https://vega.github.io/) visualization grammar
 
 (if you know of another project, please submit a PR to add a link!)

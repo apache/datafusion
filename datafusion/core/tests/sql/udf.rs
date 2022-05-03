@@ -82,7 +82,7 @@ async fn scalar_udf() -> Result<()> {
 
     let t = ctx.table("t")?;
 
-    let plan = LogicalPlanBuilder::from(t.to_logical_plan())
+    let plan = LogicalPlanBuilder::from(t.to_logical_plan()?)
         .project(vec![
             col("a"),
             col("b"),
@@ -92,7 +92,7 @@ async fn scalar_udf() -> Result<()> {
 
     assert_eq!(
         format!("{:?}", plan),
-        "Projection: #t.a, #t.b, my_add(#t.a, #t.b)\n  TableScan: t projection=None"
+        "Projection: #t.a, #t.b, my_add(#t.a, #t.b)\n  TableScan: t projection=Some([0, 1])"
     );
 
     let plan = ctx.optimize(&plan)?;

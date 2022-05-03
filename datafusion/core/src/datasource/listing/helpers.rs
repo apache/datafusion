@@ -92,6 +92,9 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::BinaryExpr { .. }
             | Expr::Between { .. }
             | Expr::InList { .. }
+            | Expr::Exists { .. }
+            | Expr::InSubquery { .. }
+            | Expr::ScalarSubquery(_)
             | Expr::GetIndexedField { .. }
             | Expr::Case { .. } => Recursion::Continue(self),
 
