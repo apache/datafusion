@@ -798,11 +798,9 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias { input,.. }) => {
                     match input.as_ref() {
-                        LogicalPlan::TableScan(scan) => {
-                            let mut scan = scan.clone();
-                            scan.table_name = alias.clone();
+                        LogicalPlan::TableScan(..) => {
                             self.create_initial_plan(input, session_state).await
                         }
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
