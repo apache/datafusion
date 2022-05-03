@@ -28,6 +28,24 @@ import argparse
 from pathlib import Path
 import tomlkit
 
+crates = {
+    'datafusion': 'datafusion/core/Cargo.toml',
+    'datafusion-cli': 'datafusion-cli/Cargo.toml',
+    'datafusion-common': 'datafusion/common/Cargo.toml',
+    'datafusion-data-access': 'data-access/Cargo.toml',
+    'datafusion-expr': 'datafusion/expr/Cargo.toml',
+    'datafusion-jit': 'datafusion/jit/Cargo.toml',
+    'datafusion-physical-expr': 'datafusion/physical-expr/Cargo.toml',
+    'datafusion-proto': 'datafusion/proto/Cargo.toml',
+    'datafusion-row': 'datafusion/row/Cargo.toml'
+}
+
+ballista_crates = {
+    'core': 'ballista/rust/core/Cargo.toml',
+    'client': 'ballista/rust/client/Cargo.toml',
+    'executor': 'ballista/rust/executor/Cargo.toml',
+    'scheduler': 'ballista/rust/scheduler/Cargo.toml',
+}
 
 def update_datafusion_version(cargo_toml: str, new_version: str):
     print(f'updating {cargo_toml}')
@@ -47,16 +65,17 @@ def update_downstream_versions(cargo_toml: str, new_version: str):
 
     doc = tomlkit.parse(data)
 
-    df_dep = doc.get('dependencies', {}).get('datafusion')
-    # skip crates that pin datafusion using git hash
-    if df_dep is not None and df_dep.get('version') is not None:
-        print(f'updating datafusion dependency in {cargo_toml}')
-        df_dep['version'] = new_version
+    for crate in crates.keys():
+        df_dep = doc.get('dependencies', {}).get(crate)
+        # skip crates that pin datafusion using git hash
+        if df_dep is not None and df_dep.get('version') is not None:
+            print(f'updating {crate} dependency in {cargo_toml}')
+            df_dep['version'] = new_version
 
-    df_dep = doc.get('dev-dependencies', {}).get('datafusion')
-    if df_dep is not None and df_dep.get('version') is not None:
-        print(f'updating datafusion dev-dependency in {cargo_toml}')
-        df_dep['version'] = new_version
+        df_dep = doc.get('dev-dependencies', {}).get(crate)
+        if df_dep is not None and df_dep.get('version') is not None:
+            print(f'updating {crate} dev-dependency in {cargo_toml}')
+            df_dep['version'] = new_version
 
     with open(cargo_toml, 'w') as f:
         f.write(tomlkit.dumps(doc))
@@ -83,10 +102,14 @@ def main():
     new_version = args.new_version
     repo_root = Path(__file__).parent.parent.absolute()
 
-    print(f'Updating datafusion versions in {repo_root} to {new_version}')
+    print(f'Updating datafusion crate versions in {repo_root} to {new_version}')
+    for cargo_toml in crates.values():
+        update_datafusion_version(cargo_toml, new_version)
 
-    update_datafusion_version("datafusion/Cargo.toml", new_version)
-    for cargo_toml in repo_root.rglob('Cargo.toml'):
+    print(f'Updating datafusion dependency versions in {repo_root} to {new_version}')
+    for cargo_toml in crates.values():
+        update_downstream_versions(cargo_toml, new_version)
+    for cargo_toml in ballista_crates.values():
         update_downstream_versions(cargo_toml, new_version)
 
     update_docs("README.md", new_version)
