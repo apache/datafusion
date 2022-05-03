@@ -77,6 +77,7 @@ cargo build
 ```
 
 ## Ballista
+
 If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
 
 ```bash
