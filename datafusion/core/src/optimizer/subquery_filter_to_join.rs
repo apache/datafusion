@@ -56,6 +56,9 @@ impl OptimizerRule for SubqueryFilterToJoin {
     ) -> Result<LogicalPlan> {
         match plan {
             LogicalPlan::Filter(Filter { predicate, input }) => {
+                // Apply optimizer rule to current input
+                let optimized_input = self.optimize(input, execution_props)?;
+
                 // Splitting filter expression into components by AND
                 let mut filters = vec![];
                 utils::split_conjunction(predicate, &mut filters);
@@ -67,22 +70,25 @@ impl OptimizerRule for SubqueryFilterToJoin {
                         .partition(|&e| matches!(e, Expr::InSubquery { .. }));
 
                 // Check all subquery filters could be rewritten
+                //
+                // In case of expressions which could not be rewritten
+                // return original filter with optimized input
                 let mut subqueries_in_regular = vec![];
                 regular_filters.iter().try_for_each(|&e| {
                     extract_subquery_filters(e, &mut subqueries_in_regular)
                 })?;
 
                 if !subqueries_in_regular.is_empty() {
-                    return Err(DataFusionError::NotImplemented(
-                        "InSubquery allowed only as part of AND conjunction".to_string(),
-                    ));
+                    return Ok(LogicalPlan::Filter(Filter {
+                        predicate: predicate.clone(),
+                        input: Arc::new(optimized_input),
+                    }));
                 };
 
-                // Apply optimizer rule to current input
-                let mut new_input = self.optimize(input, execution_props)?;
-
                 // Add subquery joins to new_input
-                subquery_filters.iter().try_for_each(|&e| match e {
+                // optimized_input value should retain for possible optimization rollback
+                let mut new_input = optimized_input.clone();
+                let opt_result = subquery_filters.iter().try_for_each(|&e| match e {
                     Expr::InSubquery {
                         expr,
                         subquery,
@@ -133,7 +139,16 @@ impl OptimizerRule for SubqueryFilterToJoin {
                         "Unknown expression while rewriting subquery to joins"
                             .to_string(),
                     )),
-                })?;
+                });
+
+                // In case of expressions which could not be rewritten
+                // return original filter with optimized input
+                if opt_result.is_err() {
+                    return Ok(LogicalPlan::Filter(Filter {
+                        predicate: predicate.clone(),
+                        input: Arc::new(optimized_input),
+                    }));
+                }
 
                 // Apply regular filters to join output if some or just return join
                 if regular_filters.is_empty() {
