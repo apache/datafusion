@@ -241,10 +241,7 @@ impl ExecutionResults {
 
     /// Returns a [`SendableRecordBatchStream`] for each partition of this execution
     pub fn stream_partitioned(self) -> Vec<SendableRecordBatchStream> {
-        self.streams
-            .into_iter()
-            .map(|s| Box::pin(s) as _)
-            .collect()
+        self.streams.into_iter().map(|s| Box::pin(s) as _).collect()
     }
 }
 
