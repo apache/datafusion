@@ -21,6 +21,7 @@ pub mod local;
 
 use std::fmt::Debug;
 use std::io::Read;
+use std::path;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -166,6 +167,7 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> &str {
         let path = Path::new(path_to_first_glob_character);
 
         let dir_path = if path.is_file() {
+            // &path::MAIN_SEPARATOR_STR is unstabled but / is the vale for unix and windows
             path.parent().unwrap_or(Path::new("/"))
         } else {
             path
