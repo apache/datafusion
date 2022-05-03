@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow::datatypes::SchemaRef;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -54,6 +55,13 @@ pub struct RoutablePipeline {
 /// necessary to route output from one stage to the next
 #[derive(Debug)]
 pub struct PipelinePlan {
+    /// Schema of this plans output
+    pub schema: SchemaRef,
+
+    /// Number of output partitions
+    pub output_partitions: usize,
+
+    /// Pipelines that comprise this plan
     pub pipelines: Vec<RoutablePipeline>,
 }
 
@@ -78,6 +86,12 @@ struct OperatorGroup {
 pub struct PipelinePlanner {
     task_context: Arc<TaskContext>,
 
+    /// The schema of this plan
+    schema: SchemaRef,
+
+    /// The number of output partitions of this plan
+    output_partitions: usize,
+
     /// The current list of completed pipelines
     completed: Vec<RoutablePipeline>,
 
@@ -92,11 +106,15 @@ pub struct PipelinePlanner {
 
 impl PipelinePlanner {
     pub fn new(plan: Arc<dyn ExecutionPlan>, task_context: Arc<TaskContext>) -> Self {
+        let schema = plan.schema();
+        let output_partitions = plan.output_partitioning().partition_count();
         Self {
             completed: vec![],
             to_visit: vec![(plan, None)],
             task_context,
             execution_operators: None,
+            schema,
+            output_partitions,
         }
     }
 
@@ -270,6 +288,8 @@ impl PipelinePlanner {
         }
 
         Ok(PipelinePlan {
+            schema: self.schema,
+            output_partitions: self.output_partitions,
             pipelines: self.completed,
         })
     }

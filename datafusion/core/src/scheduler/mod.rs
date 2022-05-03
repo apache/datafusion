@@ -288,21 +288,21 @@ mod tests {
         .unwrap()
     }
 
+    const BATCHES_PER_PARTITION: usize = 20;
+    const ROWS_PER_BATCH: usize = 100;
+    const NUM_PARTITIONS: usize = 2;
+
     fn make_batches() -> Vec<Vec<RecordBatch>> {
         let mut rng = thread_rng();
 
-        let batches_per_partition = 20;
-        let rows_per_batch = 100;
-        let num_partitions = 2;
-
         let mut id_offset = 0;
 
-        (0..num_partitions)
+        (0..NUM_PARTITIONS)
             .map(|_| {
-                (0..batches_per_partition)
+                (0..BATCHES_PER_PARTITION)
                     .map(|_| {
-                        let batch = generate_batch(&mut rng, rows_per_batch, id_offset);
-                        id_offset += rows_per_batch as i32;
+                        let batch = generate_batch(&mut rng, ROWS_PER_BATCH, id_offset);
+                        id_offset += ROWS_PER_BATCH as i32;
                         batch
                     })
                     .collect()
@@ -353,7 +353,7 @@ mod tests {
 
             info!("Plan: {}", displayable(plan.as_ref()).indent());
 
-            let stream = scheduler.schedule(plan, task).unwrap();
+            let stream = scheduler.schedule(plan, task).unwrap().stream();
             let scheduled: Vec<_> = stream.try_collect().await.unwrap();
             let expected = query.collect().await.unwrap();
 
@@ -371,6 +371,51 @@ mod tests {
                 "\n\nexpected:\n\n{}\nactual:\n\n{}\n\n",
                 expected, scheduled
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_partitioned() {
+        init_logging();
+
+        let scheduler = Scheduler::new(4);
+
+        let config = SessionConfig::new().with_target_partitions(4);
+        let context = SessionContext::with_config(config);
+        let plan = context
+            .read_table(make_provider())
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+
+        assert_eq!(plan.output_partitioning().partition_count(), NUM_PARTITIONS);
+
+        let results = scheduler
+            .schedule(plan.clone(), context.task_ctx())
+            .unwrap();
+
+        let batches = results.stream().try_collect::<Vec<_>>().await.unwrap();
+        assert_eq!(batches.len(), NUM_PARTITIONS * BATCHES_PER_PARTITION);
+
+        for batch in batches {
+            assert_eq!(batch.num_rows(), ROWS_PER_BATCH)
+        }
+
+        let results = scheduler.schedule(plan, context.task_ctx()).unwrap();
+        let streams = results.stream_partitioned();
+
+        let partitions: Vec<Vec<_>> =
+            futures::future::try_join_all(streams.into_iter().map(|s| s.try_collect()))
+                .await
+                .unwrap();
+
+        assert_eq!(partitions.len(), NUM_PARTITIONS);
+        for batches in partitions {
+            assert_eq!(batches.len(), BATCHES_PER_PARTITION);
+            for batch in batches {
+                assert_eq!(batch.num_rows(), ROWS_PER_BATCH);
+            }
         }
     }
 

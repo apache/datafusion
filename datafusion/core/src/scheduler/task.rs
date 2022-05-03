@@ -16,14 +16,18 @@
 // under the License.
 
 use crate::error::{DataFusionError, Result};
+use crate::physical_plan::stream::RecordBatchStreamAdapter;
+use crate::physical_plan::{RecordBatchStream, SendableRecordBatchStream};
 use crate::scheduler::{
     is_worker, plan::PipelinePlan, spawn_local, spawn_local_fifo, RoutablePipeline,
     Spawner,
 };
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use futures::channel::mpsc;
 use futures::task::ArcWake;
-use futures::{Stream, StreamExt};
+use futures::{ready, Stream, StreamExt};
 use log::{debug, trace};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -34,11 +38,15 @@ use std::task::{Context, Poll};
 pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
     debug!("Spawning pipeline plan: {:#?}", plan);
 
-    let (sender, receiver) = mpsc::unbounded();
+    let (senders, receivers) = (0..plan.output_partitions)
+        .map(|_| mpsc::unbounded())
+        .unzip::<_, _, Vec<_>, Vec<_>>();
+
     let context = Arc::new(ExecutionContext {
         spawner,
         pipelines: plan.pipelines,
-        output: sender,
+        schema: plan.schema,
+        output: senders,
     });
 
     for (pipeline_idx, query_pipeline) in context.pipelines.iter().enumerate() {
@@ -55,9 +63,17 @@ pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
         }
     }
 
+    let partitions = receivers
+        .into_iter()
+        .map(|receiver| ExecutionResultStream {
+            receiver: receiver,
+            context: context.clone(),
+        })
+        .collect();
+
     ExecutionResults {
+        streams: partitions,
         context,
-        inner: receiver,
     }
 }
 
@@ -86,8 +102,13 @@ impl std::fmt::Debug for Task {
 }
 
 impl Task {
-    fn handle_error(&self, routable: &RoutablePipeline, error: DataFusionError) {
-        self.context.send_query_output(Err(error));
+    fn handle_error(
+        &self,
+        partition: usize,
+        routable: &RoutablePipeline,
+        error: DataFusionError,
+    ) {
+        self.context.send_query_output(partition, Err(error));
         if let Some(link) = routable.output {
             trace!(
                 "Closing pipeline: {:?}, partition: {}, due to error",
@@ -136,7 +157,7 @@ impl Task {
                             .push(batch, link.child, partition);
 
                         if let Err(e) = r {
-                            self.handle_error(routable, e);
+                            self.handle_error(partition, routable, e);
 
                             // Return without rescheduling this output again
                             return;
@@ -144,7 +165,7 @@ impl Task {
                     }
                     None => {
                         trace!("Publishing batch to output");
-                        self.context.send_query_output(Ok(batch))
+                        self.context.send_query_output(partition, Ok(batch))
                     }
                 }
 
@@ -160,7 +181,7 @@ impl Task {
             }
             Poll::Ready(Some(Err(e))) => {
                 trace!("Poll {:?}: Error: {:?}", self, e);
-                self.handle_error(routable, e)
+                self.handle_error(partition, routable, e)
             }
             Poll::Ready(None) => {
                 trace!("Poll {:?}: None", self);
@@ -171,7 +192,7 @@ impl Task {
                             .pipeline
                             .close(link.child, partition)
                     }
-                    None => self.context.finish(),
+                    None => self.context.finish(partition),
                 }
             }
             Poll::Pending => {
@@ -197,27 +218,59 @@ impl Task {
     }
 }
 
-/// The result stream for the execution of a query
-///
-/// # Cancellation
-///
-/// Dropping this will cancel the inflight query
+/// The results of the execution of a query
 pub struct ExecutionResults {
-    inner: mpsc::UnboundedReceiver<Option<Result<RecordBatch>>>,
+    /// [`ExecutionResultStream`] for each partition of this query
+    streams: Vec<ExecutionResultStream>,
 
     /// Keep a reference to the [`ExecutionContext`] so it isn't dropped early
-    #[allow(unused)]
     context: Arc<ExecutionContext>,
 }
 
-impl Stream for ExecutionResults {
-    type Item = Result<RecordBatch>;
+impl ExecutionResults {
+    /// Returns a [`SendableRecordBatchStream`] of this execution
+    ///
+    /// In the event of multiple output partitions, the output will be interleaved
+    pub fn stream(self) -> SendableRecordBatchStream {
+        let schema = self.context.schema.clone();
+        Box::pin(RecordBatchStreamAdapter::new(
+            schema,
+            futures::stream::select_all(self.streams),
+        ))
+    }
+
+    /// Returns a [`SendableRecordBatchStream`] for each partition of this execution
+    pub fn stream_partitioned(self) -> Vec<SendableRecordBatchStream> {
+        self.streams
+            .into_iter()
+            .map(|s| Box::pin(s) as _)
+            .collect()
+    }
+}
+
+/// A result stream for the execution of a query
+struct ExecutionResultStream {
+    receiver: mpsc::UnboundedReceiver<Option<Result<RecordBatch>>>,
+
+    /// Keep a reference to the [`ExecutionContext`] so it isn't dropped early
+    context: Arc<ExecutionContext>,
+}
+
+impl Stream for ExecutionResultStream {
+    type Item = arrow::error::Result<RecordBatch>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.inner.poll_next_unpin(cx).map(Option::flatten)
+        let opt = ready!(self.receiver.poll_next_unpin(cx)).flatten();
+        Poll::Ready(opt.map(|r| r.map_err(|e| ArrowError::ExternalError(Box::new(e)))))
+    }
+}
+
+impl RecordBatchStream for ExecutionResultStream {
+    fn schema(&self) -> SchemaRef {
+        self.context.schema.clone()
     }
 }
 
@@ -231,8 +284,11 @@ struct ExecutionContext {
     /// based on their index within this list
     pipelines: Vec<RoutablePipeline>,
 
-    /// The output stream for this query's execution
-    output: mpsc::UnboundedSender<Option<Result<RecordBatch>>>,
+    /// Schema of this plans output
+    pub schema: SchemaRef,
+
+    /// The output streams, per partition, for this query's execution
+    output: Vec<mpsc::UnboundedSender<Option<Result<RecordBatch>>>>,
 }
 
 impl Drop for ExecutionContext {
@@ -245,17 +301,17 @@ impl ExecutionContext {
     /// Returns `true` if this query has been dropped, specifically if the
     /// stream returned by [`super::Scheduler::schedule`] has been dropped
     fn is_cancelled(&self) -> bool {
-        self.output.is_closed()
+        self.output.iter().all(|x| x.is_closed())
     }
 
     /// Sends `output` to this query's output stream
-    fn send_query_output(&self, output: Result<RecordBatch>) {
-        let _ = self.output.unbounded_send(Some(output));
+    fn send_query_output(&self, partition: usize, output: Result<RecordBatch>) {
+        let _ = self.output[partition].unbounded_send(Some(output));
     }
 
-    /// Mark this query as finished
-    fn finish(&self) {
-        let _ = self.output.unbounded_send(None);
+    /// Mark this partition as finished
+    fn finish(&self, partition: usize) {
+        let _ = self.output[partition].unbounded_send(None);
     }
 }
 
@@ -324,6 +380,7 @@ mod tests {
     use crate::error::Result;
     use crate::scheduler::{pipeline::Pipeline, plan::RoutablePipeline, Scheduler};
     use arrow::array::{ArrayRef, Int32Array};
+    use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
     use futures::{channel::oneshot, ready, FutureExt, StreamExt};
     use parking_lot::Mutex;
@@ -417,13 +474,19 @@ mod tests {
         };
 
         let plan = PipelinePlan {
+            schema: Arc::new(Schema::new(vec![Field::new(
+                "int",
+                DataType::Int32,
+                false,
+            )])),
+            output_partitions: 1,
             pipelines: vec![RoutablePipeline {
                 pipeline: Box::new(pipeline),
                 output: None,
             }],
         };
 
-        let mut receiver = scheduler.schedule_plan(plan);
+        let mut receiver = scheduler.schedule_plan(plan).stream();
 
         runtime.block_on(async move {
             // Should wait for output
