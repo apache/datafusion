@@ -2276,11 +2276,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let table_name = normalize_sql_object_name(sql_table_name);
         let table_ref: TableReference = table_name.as_str().into();
 
-        if self.schema_provider.get_table_provider(table_ref).is_err() {
-            return Err(DataFusionError::Plan(format!(
-                "Unknown relation for SHOW COLUMNS: {}",
-                sql_table_name
-            )));
+        if let Err(e) = self.schema_provider.get_table_provider(table_ref) {
+            return Err(e);
         }
 
         // Figure out the where clause
