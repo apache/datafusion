@@ -222,13 +222,7 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
-        BuiltinScalarFunction::Struct => {
-            // let fields = input_expr_types
-            //     .iter()
-            //     .map(|x| Field::new("item", x.clone(), true))
-            //     .collect();
-            Ok(DataType::Struct(vec![]))
-        }
+        BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
 
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
