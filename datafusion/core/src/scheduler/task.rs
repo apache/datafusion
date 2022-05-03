@@ -56,7 +56,7 @@ pub fn spawn_plan(plan: PipelinePlan, spawner: Spawner) -> ExecutionResults {
     }
 
     ExecutionResults {
-        context: context,
+        context,
         inner: receiver,
     }
 }
@@ -304,7 +304,7 @@ impl ArcWake for TaskWaker {
 
             // If called from a worker, spawn to the current worker's
             // local queue, otherwise reschedule on any worker
-            match crate::scheduler::is_worker() {
+            match is_worker() {
                 true => spawn_local(task),
                 false => task.context.spawner.clone().spawn(task),
             }

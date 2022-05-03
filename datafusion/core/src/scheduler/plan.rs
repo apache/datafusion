@@ -79,7 +79,7 @@ pub struct PipelinePlanner {
     task_context: Arc<TaskContext>,
 
     /// The current list of completed pipelines
-    in_progress: Vec<RoutablePipeline>,
+    completed: Vec<RoutablePipeline>,
 
     /// A list of [`ExecutionPlan`] still to visit, along with
     /// where they should route their output
@@ -93,7 +93,7 @@ pub struct PipelinePlanner {
 impl PipelinePlanner {
     pub fn new(plan: Arc<dyn ExecutionPlan>, task_context: Arc<TaskContext>) -> Self {
         Self {
-            in_progress: vec![],
+            completed: vec![],
             to_visit: vec![(plan, None)],
             task_context,
             execution_operators: None,
@@ -104,8 +104,8 @@ impl PipelinePlanner {
     /// into a single [`ExecutionPipeline]
     fn flush_exec(&mut self) -> Result<usize> {
         let group = self.execution_operators.take().unwrap();
-        let node_idx = self.in_progress.len();
-        self.in_progress.push(RoutablePipeline {
+        let node_idx = self.completed.len();
+        self.completed.push(RoutablePipeline {
             pipeline: Box::new(ExecutionPipeline::new(
                 group.root,
                 self.task_context.clone(),
@@ -183,8 +183,8 @@ impl PipelinePlanner {
         node: RoutablePipeline,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) {
-        let node_idx = self.in_progress.len();
-        self.in_progress.push(node);
+        let node_idx = self.completed.len();
+        self.completed.push(node);
         self.enqueue_children(children, node_idx)
     }
 
@@ -270,7 +270,7 @@ impl PipelinePlanner {
         }
 
         Ok(PipelinePlan {
-            pipelines: self.in_progress,
+            pipelines: self.completed,
         })
     }
 }

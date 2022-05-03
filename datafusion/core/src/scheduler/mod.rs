@@ -112,9 +112,7 @@ impl SchedulerBuilder {
     }
 
     /// Registers a custom panic handler
-    ///
-    /// Used by tests
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn panic_handler<H>(self, panic_handler: H) -> Self
     where
         H: Fn(Box<dyn std::any::Any + Send>) + Send + Sync + 'static,
