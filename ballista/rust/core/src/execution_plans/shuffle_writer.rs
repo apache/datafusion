@@ -300,7 +300,7 @@ impl ExecutionPlan for ShuffleWriterExec {
     }
 
     fn schema(&self) -> SchemaRef {
-        result_schema()
+        self.plan.schema()
     }
 
     fn output_partitioning(&self) -> Partitioning {
