@@ -103,9 +103,6 @@ If there is a ballista release, update versions in ballista Cargo.tomls, run
 ./dev/update_ballista_versions.py 0.5.0
 ```
 
-If there is a datafusion python binding release, update versions in
-`./python/Cargo.toml`.
-
 Lastly commit the version change:
 
 ```
@@ -114,8 +111,8 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Manully edit the base version tag argument in
-`dev/release/update_change_log-{ballista,datafusion,python}.sh`. Commits
+Manually edit the base version tag argument in
+`dev/release/update_change_log-{ballista,datafusion}.sh`. Commits
 between the base verstion tag and the latest upstream master will be used to
 populate the changelog content.
 
