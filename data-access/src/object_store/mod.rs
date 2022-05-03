@@ -81,19 +81,6 @@ pub trait ObjectStore: Sync + Send + Debug {
         prefix: &str,
         suffix: &str,
     ) -> Result<FileMetaStream> {
-        /* could use this, but it's slower, so lets' stick with the original
-        if prefix.ends_with(suffix) {
-            self.list_file(prefix).await
-        } else {
-            if(prefix.ends_with("/")) {
-                let path = format!("{}*{}", prefix, suffix);
-                self.glob_file(&path).await
-            } else {
-                let path = format!("{}/**/
-*{}", prefix, suffix);
-                self.glob_file(&path).await
-            }
-        }*/
         let file_stream = self.list_file(prefix).await?;
         let suffix = suffix.to_owned();
         Ok(Box::pin(file_stream.filter(move |fr| {
