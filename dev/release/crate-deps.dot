@@ -1,0 +1,45 @@
+digraph G {
+
+    datafusion_common
+
+    datafusion_data_access
+
+	datafusion_expr -> datafusion_common
+
+	datafusion_physical_expr -> datafusion_common
+	datafusion_physical_expr -> datafusion_expr
+
+	datafusion_jit -> datafusion_common
+	datafusion_jit -> datafusion_expr
+
+    datafusion_row -> datafusion_common
+    datafusion_row -> datafusion_expr
+    datafusion_row -> datafusion_jit
+
+	datafusion -> datafusion_common
+	datafusion -> datafusion_data_access
+	datafusion -> datafusion_expr
+	datafusion -> datafusion_jit
+	datafusion -> datafusion_physical_expr
+	datafusion -> datafusion_row
+
+	datafusion_proto -> datafusion
+
+	ballista_core -> datafusion
+	ballista_core -> datafusion_proto
+
+	ballista_scheduler -> ballista_core
+	ballista_scheduler -> datafusion
+
+	ballista_executor -> ballista_core
+	ballista_executor -> datafusion
+
+    ballista -> datafusion
+    ballista -> ballista_core
+    ballista -> ballista_scheduler
+    ballista -> ballista_executor
+
+	datafusion_cli -> datafusion
+	datafusion_cli -> ballista
+
+}
