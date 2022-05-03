@@ -82,31 +82,18 @@ pub trait ObjectStore: Sync + Send + Debug {
         suffix: &str,
     ) -> Result<FileMetaStream> {
         let file_stream = self.glob_file(prefix).await?;
-        let suffix = suffix.to_owned();
-        Ok(Box::pin(file_stream.filter(move |fr| {
-            let has_suffix = match fr {
-                Ok(f) => f.path().ends_with(&suffix),
-                Err(_) => true,
-            };
-            async move { has_suffix }
-        })))
+        filter_suffix(file_stream, suffix).await
     }
 
-    /// Calls `list_file` with a glob_pattern
-    async fn glob_file(&self, path: &str) -> Result<FileMetaStream> {
-        const GLOB_CHARS: [char; 7] = ['{', '}', '[', ']', '*', '?', '\\'];
-
-        /// Determine whether the path contains a globbing character
-        fn is_glob_path(path: &str) -> bool {
-            path.chars().any(|c| GLOB_CHARS.contains(&c))
-        }
-
-        if !is_glob_path(path) {
-            self.list_file(path).await
+    /// Returns all the files matching `glob_pattern`
+    async fn glob_file(&self, glob_pattern: &str) -> Result<FileMetaStream> {
+        if !is_glob_path(glob_pattern) {
+            self.list_file(glob_pattern).await
         } else {
             // take path up to first occurence of a glob char
-            let path_to_first_glob_character: Vec<&str> =
-                path.splitn(2, |c| GLOB_CHARS.contains(&c)).collect();
+            let path_to_first_glob_character: Vec<&str> = glob_pattern
+                .splitn(2, |c| GLOB_CHARS.contains(&c))
+                .collect();
             // find last occurrence of folder /
             let path_parts: Vec<&str> = path_to_first_glob_character[0]
                 .rsplitn(2, |c| c == '/')
@@ -114,7 +101,7 @@ pub trait ObjectStore: Sync + Send + Debug {
             let start_path = path_parts[1];
 
             let file_stream = self.list_file(start_path).await?;
-            let pattern = Pattern::new(path).unwrap();
+            let pattern = Pattern::new(glob_pattern).unwrap();
             Ok(Box::pin(file_stream.filter(move |fr| {
                 let matches_pattern = match fr {
                     Ok(f) => pattern.matches(f.path()),
@@ -122,6 +109,23 @@ pub trait ObjectStore: Sync + Send + Debug {
                 };
                 async move { matches_pattern }
             })))
+        }
+    }
+
+    /// Calls `glob_file` with a suffix filter
+    async fn glob_file_with_suffix(
+        &self,
+        prefix: &str,
+        suffix: &str,
+    ) -> Result<FileMetaStream> {
+        let files_to_consider = match is_glob_path(prefix) {
+            true => self.glob_file(prefix).await,
+            false => self.list_file(prefix).await,
+        }?;
+
+        match suffix.is_empty() {
+            true => Ok(files_to_consider),
+            false => filter_suffix(files_to_consider, suffix).await,
         }
     }
 
@@ -135,4 +139,26 @@ pub trait ObjectStore: Sync + Send + Debug {
 
     /// Get object reader for one file
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
+}
+
+const GLOB_CHARS: [char; 7] = ['{', '}', '[', ']', '*', '?', '\\'];
+
+/// Determine whether the path contains a globbing character
+fn is_glob_path(path: &str) -> bool {
+    path.chars().any(|c| GLOB_CHARS.contains(&c))
+}
+
+/// Filters the file_stream to only contain files that end with suffix
+async fn filter_suffix(
+    file_stream: FileMetaStream,
+    suffix: &str,
+) -> Result<FileMetaStream> {
+    let suffix = suffix.to_owned();
+    Ok(Box::pin(file_stream.filter(move |fr| {
+        let has_suffix = match fr {
+            Ok(f) => f.path().ends_with(&suffix),
+            Err(_) => true,
+        };
+        async move { has_suffix }
+    })))
 }
