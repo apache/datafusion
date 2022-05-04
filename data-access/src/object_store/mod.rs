@@ -218,7 +218,7 @@ mod tests {
 
     fn make_expected(input: &str, expected: &str) -> String {
         if contains_glob_start_char(input) {
-            expected.replace("/", &String::from(path::MAIN_SEPARATOR))
+            expected.replace('/', &String::from(path::MAIN_SEPARATOR))
         } else {
             expected.to_string()
         }
