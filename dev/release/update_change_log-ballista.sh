@@ -27,6 +27,6 @@ SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/ballista/rust/client/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
 ${SOURCE_DIR}/update_change_log.sh \
     ballista \
-    ballista-0.5.0 \
+    ballista-0.6.0 \
     --exclude-tags-regex "python-.+" \
     --future-release "ballista-${CURRENT_VER}"
