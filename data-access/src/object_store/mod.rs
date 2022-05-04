@@ -163,8 +163,7 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
         for component_in_glob_pattern in components_in_glob_pattern {
             let component_as_str =
                 component_in_glob_pattern.as_os_str().to_str().unwrap();
-            let component_str_is_glob = contains_glob_start_char(component_as_str);
-            if component_str_is_glob {
+            if contains_glob_start_char(component_as_str) {
                 break;
             }
             path_buf_for_longest_search_path_without_glob_pattern
