@@ -39,7 +39,7 @@ use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
 use crate::physical_plan::expressions;
 use crate::physical_plan::expressions::{
-    CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
+    ArrayIndexExpr, CaseExpr, Column, Literal, MapAccessExpr, PhysicalSortExpr,
 };
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::hash_join::HashJoinExec;
@@ -148,8 +148,13 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
             let expr = create_physical_name(expr, false)?;
             Ok(format!("{} IS NOT NULL", expr))
         }
-        Expr::GetIndexedField { expr, key } => {
+        Expr::MapAccess { expr, key } => {
             let expr = create_physical_name(expr, false)?;
+            Ok(format!("{}[{}]", expr, key))
+        }
+        Expr::ArrayIndex { expr, key } => {
+            let expr = create_physical_name(expr, false)?;
+            let key = create_physical_name(key, false)?;
             Ok(format!("{}[{}]", expr, key))
         }
         Expr::ScalarFunction { fun, args, .. } => {
@@ -1077,9 +1082,13 @@ pub fn create_physical_expr(
             input_schema,
             execution_props,
         )?),
-        Expr::GetIndexedField { expr, key } => Ok(Arc::new(GetIndexedFieldExpr::new(
+        Expr::MapAccess { expr, key } => Ok(Arc::new(MapAccessExpr::new(
             create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
             key.clone(),
+        ))),
+        Expr::ArrayIndex { expr, key } => Ok(Arc::new(ArrayIndexExpr::new(
+            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
+            create_physical_expr(key, input_dfschema, input_schema, execution_props)?,
         ))),
 
         Expr::ScalarFunction { fun, args } => {

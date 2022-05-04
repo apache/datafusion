@@ -107,12 +107,19 @@ pub enum Expr {
     IsNull(Box<Expr>),
     /// arithmetic negation of an expression, the operand must be of a signed numeric data type
     Negative(Box<Expr>),
-    /// Returns the field of a [`arrow::array::ListArray`] or [`arrow::array::StructArray`] by key
-    GetIndexedField {
+    /// Returns the field of a [`arrow::array::ListArray`] by key
+    MapAccess {
         /// the expression to take the field from
         expr: Box<Expr>,
         /// The name of the field to take
         key: ScalarValue,
+    },
+    /// Returns the field of a [`arrow::array::StructArray`] by key
+    ArrayIndex {
+        /// the expression to take the field from
+        expr: Box<Expr>,
+        /// The name of the field to take
+        key: Box<Expr>,
     },
     /// Whether an expression is between a given range.
     Between {
@@ -553,7 +560,10 @@ impl fmt::Debug for Expr {
             }
             Expr::Wildcard => write!(f, "*"),
             Expr::QualifiedWildcard { qualifier } => write!(f, "{}.*", qualifier),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::MapAccess { ref expr, key } => {
+                write!(f, "({:?}).{}", expr, key)
+            }
+            Expr::ArrayIndex { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }
         }
@@ -663,7 +673,11 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
         Expr::ScalarSubquery(subquery) => {
             Ok(subquery.subquery.schema().field(0).name().clone())
         }
-        Expr::GetIndexedField { expr, key } => {
+        Expr::MapAccess { expr, key } => {
+            let expr = create_name(expr, input_schema)?;
+            Ok(format!("{}[{}]", expr, key))
+        }
+        Expr::ArrayIndex { expr, key } => {
             let expr = create_name(expr, input_schema)?;
             Ok(format!("{}[{}]", expr, key))
         }

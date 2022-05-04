@@ -28,21 +28,19 @@ use arrow::{
 use datafusion_common::DataFusionError;
 use datafusion_common::Result;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{
-    field_util::get_indexed_field as get_data_type_field, ColumnarValue,
-};
+use datafusion_expr::{field_util::get_map_access_field, ColumnarValue};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::{any::Any, sync::Arc};
 
-/// expression to get a field of a struct array.
+/// expression to get a field of a struct.
 #[derive(Debug)]
-pub struct GetIndexedFieldExpr {
+pub struct MapAccessExpr {
     arg: Arc<dyn PhysicalExpr>,
     key: ScalarValue,
 }
 
-impl GetIndexedFieldExpr {
+impl MapAccessExpr {
     /// Create new get field expression
     pub fn new(arg: Arc<dyn PhysicalExpr>, key: ScalarValue) -> Self {
         Self { arg, key }
@@ -54,50 +52,31 @@ impl GetIndexedFieldExpr {
     }
 }
 
-impl std::fmt::Display for GetIndexedFieldExpr {
+impl std::fmt::Display for MapAccessExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "({}).[{}]", self.arg, self.key)
     }
 }
 
-impl PhysicalExpr for GetIndexedFieldExpr {
+impl PhysicalExpr for MapAccessExpr {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         let data_type = self.arg.data_type(input_schema)?;
-        get_data_type_field(&data_type, &self.key).map(|f| f.data_type().clone())
+        get_map_access_field(&data_type, &self.key).map(|f| f.data_type().clone())
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
         let data_type = self.arg.data_type(input_schema)?;
-        get_data_type_field(&data_type, &self.key).map(|f| f.is_nullable())
+        get_map_access_field(&data_type, &self.key).map(|f| f.is_nullable())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let arg = self.arg.evaluate(batch)?;
         match arg {
             ColumnarValue::Array(array) => match (array.data_type(), &self.key) {
-                (DataType::List(_) | DataType::Struct(_), _) if self.key.is_null() => {
-                    let scalar_null: ScalarValue = array.data_type().try_into()?;
-                    Ok(ColumnarValue::Scalar(scalar_null))
-                }
-                (DataType::List(_), ScalarValue::Int64(Some(i))) => {
-                    let as_list_array =
-                        array.as_any().downcast_ref::<ListArray>().unwrap();
-                    if as_list_array.is_empty() {
-                        let scalar_null: ScalarValue = array.data_type().try_into()?;
-                        return Ok(ColumnarValue::Scalar(scalar_null))
-                    }
-                    let sliced_array: Vec<Arc<dyn Array>> = as_list_array
-                        .iter()
-                        .filter_map(|o| o.map(|list| list.slice(*i as usize, 1)))
-                        .collect();
-                    let vec = sliced_array.iter().map(|a| a.as_ref()).collect::<Vec<&dyn Array>>();
-                    let iter = concat(vec.as_slice()).unwrap();
-                    Ok(ColumnarValue::Array(iter))
-                }
                 (DataType::Struct(_), ScalarValue::Utf8(Some(k))) => {
                     let as_struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
                     match as_struct_array.column_by_name(k) {
@@ -153,7 +132,7 @@ mod tests {
         let expr = col("l", &schema).unwrap();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(list_col)])?;
         let key = ScalarValue::Int64(Some(index));
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
+        let expr = Arc::new(MapAccessExpr::new(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -199,7 +178,7 @@ mod tests {
         let expr = col("l", &schema).unwrap();
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
         let key = ScalarValue::Int64(Some(0));
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
+        let expr = Arc::new(MapAccessExpr::new(expr, key));
         let result = expr.evaluate(&batch)?.into_array(batch.num_rows());
         assert!(result.is_empty());
         Ok(())
@@ -214,7 +193,7 @@ mod tests {
         let builder = StringBuilder::new(3);
         let mut lb = ListBuilder::new(builder);
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(lb.finish())])?;
-        let expr = Arc::new(GetIndexedFieldExpr::new(expr, key));
+        let expr = Arc::new(MapAccessExpr::new(expr, key));
         let r = expr.evaluate(&batch).map(|_| ());
         assert!(r.is_err());
         assert_eq!(format!("{}", r.unwrap_err()), expected);
@@ -294,10 +273,8 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(struct_col)])?;
 
         let int_field_key = ScalarValue::Utf8(Some("foo".to_string()));
-        let get_field_expr = Arc::new(GetIndexedFieldExpr::new(
-            struct_col_expr.clone(),
-            int_field_key,
-        ));
+        let get_field_expr =
+            Arc::new(MapAccessExpr::new(struct_col_expr.clone(), int_field_key));
         let result = get_field_expr
             .evaluate(&batch)?
             .into_array(batch.num_rows());
@@ -309,8 +286,7 @@ mod tests {
         assert_eq!(expected, result);
 
         let list_field_key = ScalarValue::Utf8(Some("bar".to_string()));
-        let get_list_expr =
-            Arc::new(GetIndexedFieldExpr::new(struct_col_expr, list_field_key));
+        let get_list_expr = Arc::new(MapAccessExpr::new(struct_col_expr, list_field_key));
         let result = get_list_expr.evaluate(&batch)?.into_array(batch.num_rows());
         let result = result
             .as_any()
@@ -321,7 +297,7 @@ mod tests {
         assert_eq!(expected, result);
 
         for (i, expected) in expected_strings.into_iter().enumerate() {
-            let get_nested_str_expr = Arc::new(GetIndexedFieldExpr::new(
+            let get_nested_str_expr = Arc::new(MapAccessExpr::new(
                 get_list_expr.clone(),
                 ScalarValue::Int64(Some(i as i64)),
             ));

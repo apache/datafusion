@@ -17,7 +17,7 @@
 
 use super::Expr;
 use crate::binary_rule::binary_operator_data_type;
-use crate::field_util::get_indexed_field;
+use crate::field_util::{get_array_index_field, get_map_access_field};
 use crate::{aggregate_function, function, window_function};
 use arrow::compute::can_cast_types;
 use arrow::datatypes::DataType;
@@ -124,10 +124,15 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::MapAccess { ref expr, key } => {
                 let data_type = expr.get_type(schema)?;
 
-                get_indexed_field(&data_type, key).map(|x| x.data_type().clone())
+                get_map_access_field(&data_type, key).map(|x| x.data_type().clone())
+            }
+            Expr::ArrayIndex { ref expr, key } => {
+                let data_type = expr.get_type(schema)?;
+
+                Ok(get_array_index_field(&data_type)?.data_type().clone())
             }
         }
     }
@@ -194,9 +199,13 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
-            Expr::GetIndexedField { ref expr, key } => {
+            Expr::MapAccess { ref expr, key } => {
                 let data_type = expr.get_type(input_schema)?;
-                get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+                get_map_access_field(&data_type, key).map(|x| x.is_nullable())
+            }
+            Expr::ArrayIndex { ref expr, key } => {
+                let data_type = expr.get_type(input_schema)?;
+                Ok(get_array_index_field(&data_type)?.is_nullable())
             }
         }
     }

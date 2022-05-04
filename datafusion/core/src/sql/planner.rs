@@ -90,7 +90,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     schema_provider: &'a S,
 }
 
-fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
+fn plan_map_access_key(key: SQLExpr) -> Result<ScalarValue> {
     let scalar = match key {
         SQLExpr::Value(Value::Number(s, _)) => {
             ScalarValue::Int64(Some(s.parse().unwrap()))
@@ -107,7 +107,7 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
     Ok(scalar)
 }
 
-fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
+fn plan_map_access(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
     let key = keys.pop().ok_or_else(|| {
         DataFusionError::SQL(ParserError(
             "Internal error: Missing index key expression".to_string(),
@@ -115,14 +115,33 @@ fn plan_indexed(expr: Expr, mut keys: Vec<SQLExpr>) -> Result<Expr> {
     })?;
 
     let expr = if !keys.is_empty() {
-        plan_indexed(expr, keys)?
+        plan_map_access(expr, keys)?
     } else {
         expr
     };
 
-    Ok(Expr::GetIndexedField {
+    Ok(Expr::MapAccess {
         expr: Box::new(expr),
-        key: plan_key(key)?,
+        key: plan_map_access_key(key)?,
+    })
+}
+
+fn plan_array_index(expr: Expr, mut keys: Vec<Expr>) -> Result<Expr> {
+    let key = keys.pop().ok_or_else(|| {
+        DataFusionError::SQL(ParserError(
+            "Internal error: Missing index key expression".to_string(),
+        ))
+    })?;
+
+    let expr = if !keys.is_empty() {
+        plan_array_index(expr, keys)?
+    } else {
+        expr
+    };
+
+    Ok(Expr::ArrayIndex {
+        expr: Box::new(expr),
+        key: Box::new(key),
     })
 }
 
@@ -1582,13 +1601,22 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::MapAccess { ref column, keys } => {
                 if let SQLExpr::Identifier(ref id) = column.as_ref() {
-                    plan_indexed(col(&normalize_ident(id)), keys)
+                    plan_map_access(col(&normalize_ident(id)), keys)
                 } else {
                     Err(DataFusionError::NotImplemented(format!(
                         "map access requires an identifier, found column {} instead",
                         column
                     )))
                 }
+            }
+
+            SQLExpr::ArrayIndex { obj, indexs } => {
+                let expr = self.sql_expr_to_logical_expr(*obj, schema, ctes)?;
+                let indexes = indexs.into_iter()
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, ctes))
+                    .collect::<Result<Vec<_>>>()?;
+
+                plan_array_index(expr, indexes)
             }
 
             SQLExpr::CompoundIdentifier(ids) => {

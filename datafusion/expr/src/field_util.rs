@@ -20,23 +20,13 @@
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 
-/// Returns the field access indexed by `key` from a [`DataType::List`] or [`DataType::Struct`]
+/// Returns the field access indexed by `key` from a [`DataType::Struct`]
 /// # Error
 /// Errors if
 /// * the `data_type` is not a Struct or,
 /// * there is no field key is not of the required index type
-pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
+pub fn get_map_access_field(data_type: &DataType, key: &ScalarValue) -> Result<Field> {
     match (data_type, key) {
-        (DataType::List(lt), ScalarValue::Int64(Some(i))) => {
-            if *i < 0 {
-                Err(DataFusionError::Plan(format!(
-                    "List based indexed access requires a positive int, was {0}",
-                    i
-                )))
-            } else {
-                Ok(Field::new(&i.to_string(), lt.data_type().clone(), false))
-            }
-        }
         (DataType::Struct(fields), ScalarValue::Utf8(Some(s))) => {
             if s.is_empty() {
                 Err(DataFusionError::Plan(
@@ -59,6 +49,16 @@ pub fn get_indexed_field(data_type: &DataType, key: &ScalarValue) -> Result<Fiel
         (DataType::List(_), _) => Err(DataFusionError::Plan(
             "Only ints are valid as an indexed field in a list".to_string(),
         )),
+        _ => Err(DataFusionError::Plan(
+            "The expression to get an indexed field is only valid for `List` types"
+                .to_string(),
+        )),
+    }
+}
+
+pub fn get_array_index_field(data_type: &DataType) -> Result<Field> {
+    match (data_type) {
+        (DataType::List(field)) => Ok(*field.clone()),
         _ => Err(DataFusionError::Plan(
             "The expression to get an indexed field is only valid for `List` types"
                 .to_string(),

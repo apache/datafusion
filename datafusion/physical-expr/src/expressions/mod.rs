@@ -19,15 +19,16 @@
 
 #[macro_use]
 mod binary;
+mod array_index;
 mod case;
 mod cast;
 mod column;
 mod datetime;
-mod get_indexed_field;
 mod in_list;
 mod is_not_null;
 mod is_null;
 mod literal;
+mod map_access;
 mod negative;
 mod not;
 mod nullif;
@@ -64,6 +65,7 @@ pub use crate::window::nth_value::NthValue;
 pub use crate::window::rank::{dense_rank, percent_rank, rank};
 pub use crate::window::row_number::RowNumber;
 
+pub use array_index::ArrayIndexExpr;
 pub use binary::{binary, BinaryExpr};
 pub use case::{case, CaseExpr};
 pub use cast::{
@@ -71,11 +73,11 @@ pub use cast::{
 };
 pub use column::{col, Column};
 pub use datetime::DateIntervalExpr;
-pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};
 pub use is_null::{is_null, IsNullExpr};
 pub use literal::{lit, Literal};
+pub use map_access::MapAccessExpr;
 pub use negative::{negative, NegativeExpr};
 pub use not::{not, NotExpr};
 pub use nullif::nullif_func;

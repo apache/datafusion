@@ -95,7 +95,8 @@ impl ExpressionVisitor for ApplicabilityVisitor<'_> {
             | Expr::Exists { .. }
             | Expr::InSubquery { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::GetIndexedField { .. }
+            | Expr::MapAccess { .. }
+            | Expr::ArrayIndex { .. }
             | Expr::Case { .. } => Recursion::Continue(self),
 
             Expr::ScalarFunction { fun, .. } => self.visit_volatility(fun.volatility()),

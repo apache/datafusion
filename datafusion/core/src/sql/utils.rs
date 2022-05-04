@@ -400,9 +400,13 @@ where
             }),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
-            Expr::GetIndexedField { expr, key } => Ok(Expr::GetIndexedField {
+            Expr::MapAccess { expr, key } => Ok(Expr::MapAccess {
                 expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
                 key: key.clone(),
+            }),
+            Expr::ArrayIndex { expr, key } => Ok(Expr::ArrayIndex {
+                expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
+                key: Box::new(clone_with_replacement(key.as_ref(), replacement_fn)?),
             }),
         },
     }

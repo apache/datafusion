@@ -90,7 +90,8 @@ impl ExpressionVisitor for ColumnNameVisitor<'_> {
             | Expr::ScalarSubquery(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. }
-            | Expr::GetIndexedField { .. } => {}
+            | Expr::MapAccess { .. }
+            | Expr::ArrayIndex { .. } => {}
         }
         Ok(Recursion::Continue(self))
     }
@@ -318,7 +319,10 @@ pub fn expr_sub_expressions(expr: &Expr) -> Result<Vec<Expr>> {
         | Expr::Not(expr)
         | Expr::Negative(expr)
         | Expr::Sort { expr, .. }
-        | Expr::GetIndexedField { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
+        | Expr::MapAccess { expr, .. } => Ok(vec![expr.as_ref().to_owned()]),
+        Expr::ArrayIndex { expr, key } => {
+            Ok(vec![expr.as_ref().to_owned(), key.as_ref().to_owned()])
+        }
         Expr::ScalarFunction { args, .. }
         | Expr::ScalarUDF { args, .. }
         | Expr::AggregateFunction { args, .. }
@@ -549,9 +553,13 @@ pub fn rewrite_expression(expr: &Expr, expressions: &[Expr]) -> Result<Expr> {
             "QualifiedWildcard expressions are not valid in a logical query plan"
                 .to_owned(),
         )),
-        Expr::GetIndexedField { expr: _, key } => Ok(Expr::GetIndexedField {
+        Expr::MapAccess { expr: _, key } => Ok(Expr::MapAccess {
             expr: Box::new(expressions[0].clone()),
             key: key.clone(),
+        }),
+        Expr::ArrayIndex { .. } => Ok(Expr::ArrayIndex {
+            expr: Box::new(expressions[0].clone()),
+            key: Box::new(expressions[1].clone()),
         }),
     }
 }

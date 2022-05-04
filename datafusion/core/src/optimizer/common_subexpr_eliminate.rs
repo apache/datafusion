@@ -478,8 +478,12 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("QualifiedWildcard-");
                 desc.push_str(qualifier);
             }
-            Expr::GetIndexedField { key, .. } => {
-                desc.push_str("GetIndexedField-");
+            Expr::MapAccess { key, .. } => {
+                desc.push_str("MapAccess-");
+                desc.push_str(&key.to_string());
+            }
+            Expr::ArrayIndex { key, .. } => {
+                desc.push_str("ArrayIndex-");
                 desc.push_str(&key.to_string());
             }
         }

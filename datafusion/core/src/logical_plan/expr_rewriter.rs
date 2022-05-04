@@ -232,9 +232,13 @@ impl ExprRewritable for Expr {
             Expr::QualifiedWildcard { qualifier } => {
                 Expr::QualifiedWildcard { qualifier }
             }
-            Expr::GetIndexedField { expr, key } => Expr::GetIndexedField {
+            Expr::MapAccess { expr, key } => Expr::MapAccess {
                 expr: rewrite_boxed(expr, rewriter)?,
                 key,
+            },
+            Expr::ArrayIndex { expr, key } => Expr::ArrayIndex {
+                expr: rewrite_boxed(expr, rewriter)?,
+                key: rewrite_boxed(key, rewriter)?,
             },
         };
 

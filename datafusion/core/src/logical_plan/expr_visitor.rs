@@ -102,7 +102,8 @@ impl ExprVisitable for Expr {
             | Expr::Cast { expr, .. }
             | Expr::TryCast { expr, .. }
             | Expr::Sort { expr, .. }
-            | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
+            | Expr::MapAccess { expr, .. }
+            | Expr::ArrayIndex { expr, .. } => expr.accept(visitor),
             Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)

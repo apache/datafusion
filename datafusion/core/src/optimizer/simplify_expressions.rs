@@ -395,7 +395,8 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::Cast { .. }
             | Expr::TryCast { .. }
             | Expr::InList { .. }
-            | Expr::GetIndexedField { .. } => true,
+            | Expr::MapAccess { .. }
+            | Expr::ArrayIndex { .. } => true,
         }
     }
 
