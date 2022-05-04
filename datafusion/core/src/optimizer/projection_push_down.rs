@@ -450,6 +450,30 @@ fn optimize_plan(
                     let expr = vec![];
                     utils::from_plan(plan, &expr, &new_inputs)
                 }
+                LogicalPlan::Union(Union { schema, .. }) => {
+                    // Scope of alias is outside, inside we should remove it.
+                    // Here we remove the alias `in new_required_columns`.
+                    let new_required_columns = new_required_columns
+                        .iter()
+                        .map(|c| match &c.relation {
+                            Some(q) if q == alias => Column {
+                                relation: None,
+                                name: c.name.clone(),
+                            },
+                            _ => c.clone(),
+                        })
+                        .collect();
+                    let new_inputs = vec![optimize_plan(
+                        _optimizer,
+                        input,
+                        &new_required_columns,
+                        has_projection,
+                        _execution_props,
+                    )?];
+                    let expr = vec![];
+
+                    utils::from_plan(plan, &expr, &new_inputs)
+                }
                 _ => Err(DataFusionError::Plan(
                     "SubqueryAlias should only wrap TableScan".to_string(),
                 )),

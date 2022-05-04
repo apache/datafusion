@@ -901,11 +901,12 @@ mod tests {
 
         // filter appears below Union without relation qualifier
         let expected = "\
-            Union\
-            \n  Filter: #a = Int64(1)\
-            \n    TableScan: test projection=None\
-            \n  Filter: #a = Int64(1)\
-            \n    TableScan: test projection=None";
+            SubqueryAlias: t\
+            \n  Union\
+            \n    Filter: #t.a = Int64(1)\
+            \n      TableScan: test projection=None\
+            \n    Filter: #t.a = Int64(1)\
+            \n      TableScan: test projection=None";
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }

@@ -17,6 +17,8 @@
 
 //! Optimizer rule to push down LIMIT in the query plan
 //! It will push down through projection, limits (taking the smaller limit)
+use datafusion_expr::logical_plan::SubqueryAlias;
+
 use super::utils;
 use crate::error::Result;
 use crate::execution::context::ExecutionProps;
@@ -119,6 +121,26 @@ fn limit_push_down(
             Ok(LogicalPlan::Union(Union {
                 inputs: new_inputs,
                 schema: schema.clone(),
+            }))
+        }
+        (
+            LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input,
+                alias,
+                schema,
+            }),
+            upper_limit,
+        ) => {
+            // Push down limit directly
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
+                input: Arc::new(limit_push_down(
+                    _optimizer,
+                    upper_limit,
+                    input.as_ref(),
+                    _execution_props,
+                )?),
+                schema: schema.clone(),
+                alias: alias.clone(),
             }))
         }
         // For other nodes we can't push down the limit
