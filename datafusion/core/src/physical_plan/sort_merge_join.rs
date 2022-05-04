@@ -32,7 +32,6 @@ use arrow::compute::{take, SortOptions};
 use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
 use arrow::error::{ArrowError, Result as ArrowResult};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 
 use crate::error::DataFusionError;
@@ -112,7 +111,6 @@ impl SortMergeJoinExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for SortMergeJoinExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -153,7 +151,7 @@ impl ExecutionPlan for SortMergeJoinExec {
         }
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -178,8 +176,8 @@ impl ExecutionPlan for SortMergeJoinExec {
         };
 
         // execute children plans
-        let streamed = streamed.execute(partition, context.clone()).await?;
-        let buffered = buffered.execute(partition, context.clone()).await?;
+        let streamed = streamed.execute(partition, context.clone())?;
+        let buffered = buffered.execute(partition, context.clone())?;
 
         // create output buffer
         let batch_size = context.session_config().batch_size;
@@ -1357,7 +1355,7 @@ mod tests {
         )?;
         let columns = columns(&join.schema());
 
-        let stream = join.execute(0, task_ctx).await?;
+        let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
         Ok((columns, batches))
     }
@@ -1374,7 +1372,7 @@ mod tests {
         let join = join(left, right, on, join_type)?;
         let columns = columns(&join.schema());
 
-        let stream = join.execute(0, task_ctx).await?;
+        let stream = join.execute(0, task_ctx)?;
         let batches = common::collect(stream).await?;
         Ok((columns, batches))
     }

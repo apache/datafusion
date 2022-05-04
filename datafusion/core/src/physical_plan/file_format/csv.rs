@@ -26,7 +26,6 @@ use crate::physical_plan::{
 
 use arrow::csv;
 use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use std::any::Any;
 use std::fs;
@@ -75,7 +74,6 @@ impl CsvExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CsvExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -112,7 +110,7 @@ impl ExecutionPlan for CsvExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -191,7 +189,7 @@ pub async fn plan_to_csv(
                 let file = fs::File::create(path)?;
                 let mut writer = csv::Writer::new(file);
                 let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx).await?;
+                let stream = plan.execute(i, task_ctx)?;
                 let handle: JoinHandle<Result<()>> = task::spawn(async move {
                     stream
                         .map(|batch| writer.write(&batch?))
@@ -250,7 +248,7 @@ mod tests {
         assert_eq!(3, csv.projected_schema.fields().len());
         assert_eq!(3, csv.schema().fields().len());
 
-        let mut stream = csv.execute(0, task_ctx).await?;
+        let mut stream = csv.execute(0, task_ctx)?;
         let batch = stream.next().await.unwrap()?;
         assert_eq!(3, batch.num_columns());
         assert_eq!(100, batch.num_rows());
@@ -297,7 +295,7 @@ mod tests {
         assert_eq!(13, csv.projected_schema.fields().len());
         assert_eq!(13, csv.schema().fields().len());
 
-        let mut it = csv.execute(0, task_ctx).await?;
+        let mut it = csv.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
         assert_eq!(13, batch.num_columns());
         assert_eq!(5, batch.num_rows());
@@ -344,7 +342,7 @@ mod tests {
         assert_eq!(14, csv.projected_schema.fields().len());
         assert_eq!(14, csv.schema().fields().len());
 
-        let mut it = csv.execute(0, task_ctx).await?;
+        let mut it = csv.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
         assert_eq!(14, batch.num_columns());
         assert_eq!(5, batch.num_rows());
@@ -398,7 +396,7 @@ mod tests {
         assert_eq!(2, csv.projected_schema.fields().len());
         assert_eq!(2, csv.schema().fields().len());
 
-        let mut it = csv.execute(0, task_ctx).await?;
+        let mut it = csv.execute(0, task_ctx)?;
         let batch = it.next().await.unwrap()?;
         assert_eq!(2, batch.num_columns());
         assert_eq!(100, batch.num_rows());

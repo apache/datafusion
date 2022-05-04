@@ -34,7 +34,6 @@ use log::debug;
 use super::{expressions::PhysicalSortExpr, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics};
-use async_trait::async_trait;
 
 /// Explain execution plan operator. This operator contains the string
 /// values of the various plans it has when it is created, and passes
@@ -74,7 +73,6 @@ impl ExplainExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ExplainExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -110,7 +108,7 @@ impl ExecutionPlan for ExplainExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,

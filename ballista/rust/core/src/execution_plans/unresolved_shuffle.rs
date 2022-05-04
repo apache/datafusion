@@ -18,7 +18,6 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::TaskContext;
@@ -63,7 +62,6 @@ impl UnresolvedShuffleExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for UnresolvedShuffleExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -101,7 +99,7 @@ impl ExecutionPlan for UnresolvedShuffleExec {
         ))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,

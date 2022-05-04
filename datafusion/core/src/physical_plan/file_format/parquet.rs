@@ -33,7 +33,6 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::{
@@ -165,7 +164,6 @@ impl ParquetFileMetrics {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ParquetExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -201,7 +199,7 @@ impl ExecutionPlan for ParquetExec {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition_index: usize,
         context: Arc<TaskContext>,
@@ -592,7 +590,7 @@ pub async fn plan_to_parquet(
                     writer_properties.clone(),
                 )?;
                 let task_ctx = Arc::new(TaskContext::from(state));
-                let stream = plan.execute(i, task_ctx).await?;
+                let stream = plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<Result<()>> =
                     tokio::task::spawn(async move {
                         stream
@@ -1059,7 +1057,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, task_ctx).await?;
+        let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
 
         assert_eq!(8, batch.num_rows());
@@ -1111,7 +1109,7 @@ mod tests {
                 None,
             );
             assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
-            let results = parquet_exec.execute(0, task_ctx).await?.next().await;
+            let results = parquet_exec.execute(0, task_ctx)?.next().await;
 
             if let Some(expected_row_num) = expected_row_num {
                 let batch = results.unwrap()?;
@@ -1190,7 +1188,7 @@ mod tests {
         );
         assert_eq!(parquet_exec.output_partitioning().partition_count(), 1);
 
-        let mut results = parquet_exec.execute(0, task_ctx).await?;
+        let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap()?;
         let expected = vec![
             "+----+----------+-------------+-------+",
@@ -1247,7 +1245,7 @@ mod tests {
             None,
         );
 
-        let mut results = parquet_exec.execute(0, task_ctx).await?;
+        let mut results = parquet_exec.execute(0, task_ctx)?;
         let batch = results.next().await.unwrap();
         // invalid file should produce an error to that effect
         assert_contains!(

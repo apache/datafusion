@@ -55,7 +55,6 @@ struct CustomPlan {
     batches: Vec<Arc<RecordBatch>>,
 }
 
-#[async_trait]
 impl ExecutionPlan for CustomPlan {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -84,7 +83,7 @@ impl ExecutionPlan for CustomPlan {
         unreachable!()
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,

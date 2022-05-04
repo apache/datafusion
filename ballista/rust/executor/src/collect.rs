@@ -22,7 +22,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::{any::Any, pin::Pin};
 
-use async_trait::async_trait;
 use datafusion::arrow::{
     datatypes::SchemaRef, error::Result as ArrowResult, record_batch::RecordBatch,
 };
@@ -49,7 +48,6 @@ impl CollectExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CollectExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -78,7 +76,7 @@ impl ExecutionPlan for CollectExec {
         unimplemented!()
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -86,10 +84,8 @@ impl ExecutionPlan for CollectExec {
         assert_eq!(0, partition);
         let num_partitions = self.plan.output_partitioning().partition_count();
 
-        let futures = (0..num_partitions).map(|i| self.plan.execute(i, context.clone()));
-        let streams = futures::future::join_all(futures)
-            .await
-            .into_iter()
+        let streams = (0..num_partitions)
+            .map(|i| self.plan.execute(i, context.clone()))
             .collect::<Result<Vec<_>>>()
             .map_err(|e| DataFusionError::Execution(format!("BallistaError: {:?}", e)))?;
 
