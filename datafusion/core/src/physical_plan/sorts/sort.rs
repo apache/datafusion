@@ -1143,7 +1143,7 @@ mod tests {
         // explicitlty ensure the metadata is present
         assert_eq!(
             result[0].schema().fields()[0].metadata(),
-            &Some(field_metadata)
+            Some(&field_metadata)
         );
         assert_eq!(result[0].schema().metadata(), &schema_metadata);
 
