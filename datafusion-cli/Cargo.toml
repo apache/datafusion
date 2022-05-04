@@ -29,7 +29,7 @@ rust-version = "1.59"
 readme = "README.md"
 
 [dependencies]
-arrow = { version = "12" }
+arrow = { version = "13" }
 ballista = { path = "../ballista/rust/client", version = "0.6.0", optional = true }
 clap = { version = "3", features = ["derive", "cargo"] }
 datafusion = { path = "../datafusion/core", version = "7.0.0" }
