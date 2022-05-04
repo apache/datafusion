@@ -162,7 +162,7 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
     } else {
         // take all the components of the path (left-to-right) which do not contain a glob pattern
         let components_in_glob_pattern =
-            Path::new(glob_pattern).components().collect::<Vec<_>>();
+            Path::new(glob_pattern).components();
         let mut path_buf_for_longest_search_path_without_glob_pattern = PathBuf::new();
         for component_in_glob_pattern in components_in_glob_pattern {
             let component_as_str =
