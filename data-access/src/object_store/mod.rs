@@ -27,7 +27,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::{AsyncRead, Stream, StreamExt};
+use futures::future::ready;
+use futures::{AsyncRead, Stream, StreamExt, TryStreamExt};
 use glob::Pattern;
 
 use crate::{FileMeta, ListEntry, Result, SizedFile};
@@ -143,13 +144,9 @@ fn contains_glob_start_char(path: &str) -> bool {
 /// Filters the file_stream to only contain files that end with suffix
 fn filter_suffix(file_stream: FileMetaStream, suffix: &str) -> Result<FileMetaStream> {
     let suffix = suffix.to_owned();
-    Ok(Box::pin(file_stream.filter(move |fr| {
-        let has_suffix = match fr {
-            Ok(f) => f.path().ends_with(&suffix),
-            Err(_) => true,
-        };
-        async move { has_suffix }
-    })))
+    Ok(Box::pin(
+        file_stream.try_filter(move |f| ready(f.path().ends_with(&suffix))),
+    ))
 }
 
 fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
