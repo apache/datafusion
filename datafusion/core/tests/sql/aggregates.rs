@@ -1236,6 +1236,63 @@ async fn simple_avg() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_sum_distinct() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Int64, true),
+        Field::new("c2", DataType::Int64, true),
+    ]));
+
+    let data = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int64Array::from(vec![
+                Some(0),
+                Some(1),
+                None,
+                Some(3),
+                Some(3),
+            ])),
+            Arc::new(Int64Array::from(vec![
+                None,
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(2),
+            ])),
+        ],
+    )?;
+
+    let table = MemTable::try_new(schema, vec![vec![data]])?;
+    let ctx = SessionContext::new();
+    ctx.register_table("test", Arc::new(table))?;
+
+    // 2 different aggregate functions: avg and sum(distinct)
+    let sql = "SELECT AVG(c1), SUM(DISTINCT c2) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+--------------+-----------------------+",
+        "| AVG(test.c1) | SUM(DISTINCT test.c2) |",
+        "+--------------+-----------------------+",
+        "| 1.75         | 3                     |",
+        "+--------------+-----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    // 2 sum(distinct) functions
+    let sql = "SELECT SUM(DISTINCT c1), SUM(DISTINCT c2) FROM test";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----------------------+-----------------------+",
+        "| SUM(DISTINCT test.c1) | SUM(DISTINCT test.c2) |",
+        "+-----------------------+-----------------------+",
+        "| 4                     | 3                     |",
+        "+-----------------------+-----------------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_count_distinct() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("c1", DataType::Int32, true)]));
 
