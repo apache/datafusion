@@ -210,10 +210,18 @@ mod tests {
     fn test_longest_base_path(input: &str, expected: &str) {
         assert_eq!(
             find_longest_search_path_without_glob_pattern(input),
-            expected,
+            make_expected(input, expected),
             "testing find_longest_search_path_without_glob_pattern with {}",
             input
         );
+    }
+
+    fn make_expected(input: &str, expected: &str) -> String {
+        if contains_glob_start_char(input) {
+            expected.replace("/", &String::from(path::MAIN_SEPARATOR))
+        } else {
+            expected.to_string()
+        }
     }
 
     #[tokio::test]
