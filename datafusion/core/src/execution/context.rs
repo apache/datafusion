@@ -2127,7 +2127,7 @@ mod tests {
         assert_batches_eq!(expected, &result);
         Ok(())
     }
-    
+
     #[tokio::test]
     async fn read_with_glob_path() -> Result<()> {
         let ctx = SessionContext::new();
