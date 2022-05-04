@@ -17,7 +17,10 @@
   under the License.
 -->
 
-# Ballista Core Library
+# DataFusion Proto
 
-This crate contains the Ballista core library which is used as a dependency by the `ballista-client`,
-`ballista-scheduler`, and `ballista-executor` crates.
+[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+
+This crate is a submodule of DataFusion that provides a protocol buffer format for representing query plans and expressions.
+
+[df]: https://crates.io/crates/datafusion

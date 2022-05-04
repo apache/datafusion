@@ -19,6 +19,8 @@
 
 # DataFusion Command-line Interface
 
+[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+
 The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context, or by a distributed
 Ballista context.
 
@@ -75,6 +77,7 @@ cargo build
 ```
 
 ## Ballista
+
 If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
 
 ```bash
@@ -87,3 +90,5 @@ The DataFusion CLI can connect to a Ballista scheduler for query execution.
 ```bash
 datafusion-cli --host localhost --port 50050
 ```
+
+[df]: https://crates.io/crates/datafusion
