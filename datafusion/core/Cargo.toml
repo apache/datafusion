@@ -24,7 +24,7 @@ repository = "https://github.com/apache/arrow-datafusion"
 readme = "../README.md"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow", "query", "sql" ]
+keywords = ["arrow", "query", "sql"]
 include = [
     "benches/*.rs",
     "src/**/*.rs",
@@ -50,6 +50,8 @@ pyarrow = ["pyo3", "arrow/pyarrow", "datafusion-common/pyarrow"]
 regex_expressions = ["datafusion-physical-expr/regex_expressions"]
 # Used to enable row format experiment
 row = ["datafusion-row"]
+# Used to enable scheduler
+scheduler = ["rayon"]
 simd = ["arrow/simd"]
 unicode_expressions = ["datafusion-physical-expr/regex_expressions"]
 
@@ -75,9 +77,10 @@ ordered-float = "3.0"
 parking_lot = "0.12"
 parquet = { version = "13", features = ["arrow"] }
 paste = "^1.0"
-pin-project-lite= "^0.2.7"
+pin-project-lite = "^0.2.7"
 pyo3 = { version = "0.16", optional = true }
 rand = "0.8"
+rayon = { version = "1.5", optional = true }
 smallvec = { version = "1.6", features = ["union"] }
 sqlparser = "0.16"
 tempfile = "3"
@@ -88,6 +91,7 @@ uuid = { version = "1.0", features = ["v4"] }
 [dev-dependencies]
 criterion = "0.3"
 doc-comment = "0.3"
+env_logger = "0.9"
 fuzz-utils = { path = "fuzz-utils" }
 
 [[bench]]
@@ -121,6 +125,7 @@ name = "physical_plan"
 [[bench]]
 harness = false
 name = "parquet_query_sql"
+required-features = ["scheduler"]
 
 [[bench]]
 harness = false

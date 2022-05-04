@@ -24,7 +24,9 @@ use arrow::datatypes::{
 };
 use arrow::record_batch::RecordBatch;
 use criterion::{criterion_group, criterion_main, Criterion};
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion::scheduler::Scheduler;
+use futures::stream::StreamExt;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::{WriterProperties, WriterVersion};
 use rand::distributions::uniform::SampleUniform;
@@ -37,7 +39,6 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::NamedTempFile;
-use tokio_stream::StreamExt;
 
 /// The number of batches to write
 const NUM_BATCHES: usize = 2048;
@@ -193,15 +194,24 @@ fn criterion_benchmark(c: &mut Criterion) {
     assert!(Path::new(&file_path).exists(), "path not found");
     println!("Using parquet file {}", file_path);
 
-    let context = SessionContext::new();
+    let partitions = 4;
+    let config = SessionConfig::new().with_target_partitions(partitions);
+    let context = SessionContext::with_config(config);
 
-    let rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
-    rt.block_on(context.register_parquet(
-        "t",
-        file_path.as_str(),
-        ParquetReadOptions::default(),
-    ))
-    .unwrap();
+    let scheduler = Scheduler::new(partitions);
+
+    let local_rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+
+    let query_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(partitions)
+        .build()
+        .unwrap();
+
+    local_rt
+        .block_on(context.register_parquet("t", file_path.as_str(), Default::default()))
+        .unwrap();
 
     // We read the queries from a file so they can be changed without recompiling the benchmark
     let mut queries_file = File::open("benches/parquet_query_sql.sql").unwrap();
@@ -220,15 +230,40 @@ fn criterion_benchmark(c: &mut Criterion) {
             continue;
         }
 
-        let query = query.as_str();
-        c.bench_function(query, |b| {
+        c.bench_function(&format!("tokio: {}", query), |b| {
             b.iter(|| {
+                let query = query.clone();
                 let context = context.clone();
-                rt.block_on(async move {
-                    let query = context.sql(query).await.unwrap();
+                let (sender, mut receiver) = futures::channel::mpsc::unbounded();
+
+                // Spawn work to a separate tokio thread pool
+                query_rt.spawn(async move {
+                    let query = context.sql(&query).await.unwrap();
                     let mut stream = query.execute_stream().await.unwrap();
-                    while criterion::black_box(stream.next().await).is_some() {}
+
+                    while let Some(next) = stream.next().await {
+                        sender.unbounded_send(next).unwrap();
+                    }
+                });
+
+                local_rt.block_on(async {
+                    while receiver.next().await.transpose().unwrap().is_some() {}
                 })
+            });
+        });
+
+        c.bench_function(&format!("scheduled: {}", query), |b| {
+            b.iter(|| {
+                let query = query.clone();
+                let context = context.clone();
+
+                local_rt.block_on(async {
+                    let query = context.sql(&query).await.unwrap();
+                    let plan = query.create_physical_plan().await.unwrap();
+                    let mut stream =
+                        scheduler.schedule(plan, context.task_ctx()).unwrap();
+                    while stream.next().await.transpose().unwrap().is_some() {}
+                });
             });
         });
     }
