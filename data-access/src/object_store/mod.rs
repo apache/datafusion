@@ -240,6 +240,10 @@ mod tests {
             "/a/b*.txt",
             &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}"),
         );
+        test_longest_base_path(
+            "/a/b/**/c*.txt",
+            &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}b{MAIN_SEPARATOR}"),
+        );
         Ok(())
     }
 }
