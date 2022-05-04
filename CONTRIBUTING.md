@@ -53,6 +53,16 @@ Testing setup:
 - `git submodule init`
 - `git submodule update`
 
+Each PR also needs to pass the following checks:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --all-targets --workspace -- -D warnings`
+- `find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \; ; git diff --exit-code`
+
+or simply run:
+
+- `./dev/pr-checks.sh`
+
 ## Test Organization
 
 DataFusion has several levels of tests in its [Test
