@@ -53,16 +53,6 @@ Testing setup:
 - `git submodule init`
 - `git submodule update`
 
-Formatting instructions:
-
-- `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --workspace -- -D warnings`
-- `find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \; ; git diff --exit-code`
-
-or simply run:
-
-- `./dev/format-code.sh`
-
 ## Test Organization
 
 DataFusion has several levels of tests in its [Test
