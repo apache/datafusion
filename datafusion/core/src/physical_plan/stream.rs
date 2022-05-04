@@ -78,7 +78,7 @@ impl RecordBatchStream for RecordBatchReceiverStream {
 pin_project! {
     /// Combines a [`Stream`] with a [`SchemaRef`] implementing
     /// [`RecordBatchStream`] for the combination
-    pub(crate) struct RecordBatchStreamAdapter<S> {
+    pub struct RecordBatchStreamAdapter<S> {
         schema: SchemaRef,
 
         #[pin]
@@ -88,7 +88,7 @@ pin_project! {
 
 impl<S> RecordBatchStreamAdapter<S> {
     /// Creates a new [`RecordBatchStreamAdapter`] from the provided schema and stream
-    pub(crate) fn new(schema: SchemaRef, stream: S) -> Self {
+    pub fn new(schema: SchemaRef, stream: S) -> Self {
         Self { schema, stream }
     }
 }
@@ -112,6 +112,10 @@ where
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         self.project().stream.poll_next(cx)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.stream.size_hint()
     }
 }
 
