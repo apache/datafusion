@@ -24,6 +24,7 @@ use crate::logical_plan::{
 use crate::logical_plan::{DFSchema, Expr};
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
+use datafusion_expr::logical_plan::SubqueryAlias;
 use std::collections::{HashMap, HashSet};
 
 /// Filter Push Down optimizer rule pushes filter clauses down the plan
@@ -503,6 +504,7 @@ fn optimize(plan: &LogicalPlan, mut state: State) -> Result<LogicalPlan> {
                 }),
             )
         }
+        LogicalPlan::SubqueryAlias(SubqueryAlias { .. }) => push_down(&state, plan),
         _ => {
             // all other plans are _not_ filter-commutable
             let used_columns = plan

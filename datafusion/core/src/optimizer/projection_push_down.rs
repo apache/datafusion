@@ -450,7 +450,7 @@ fn optimize_plan(
                     let expr = vec![];
                     utils::from_plan(plan, &expr, &new_inputs)
                 }
-                LogicalPlan::Union(Union { schema, .. }) => {
+                LogicalPlan::Union(Union { .. }) => {
                     // Scope of alias is outside, inside we should remove it.
                     // Here we remove the alias `in new_required_columns`.
                     let new_required_columns = new_required_columns

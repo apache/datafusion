@@ -835,6 +835,9 @@ impl DefaultPhysicalPlanner {
                         LogicalPlan::TableScan(..) => {
                             self.create_initial_plan(input, session_state).await
                         }
+                        LogicalPlan::Union(..) => {
+                            self.create_initial_plan(input, session_state).await
+                        }
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
                     }
                 }
