@@ -18,5 +18,5 @@
 # under the License.
 set -e
 cargo fmt --all -- --check
-#cargo clippy --all-targets --workspace -- -D warnings
+cargo clippy --all-targets --workspace -- -D warnings
 find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \; ; git diff --exit-code

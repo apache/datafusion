@@ -53,7 +53,7 @@ Testing setup:
 - `git submodule init`
 - `git submodule update`
 
-Each PR also needs to pass the following checks:
+Formatting instructions:
 
 - `cargo fmt --all -- --check`
 - `cargo clippy --all-targets --workspace -- -D warnings`
@@ -61,7 +61,7 @@ Each PR also needs to pass the following checks:
 
 or simply run:
 
-- `./dev/pr-checks.sh`
+- `./dev/format-code.sh`
 
 ## Test Organization
 
