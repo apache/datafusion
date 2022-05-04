@@ -253,5 +253,5 @@ $ prettier --version
 After you've confirmed your prettier version, you can format all the `.md` files:
 
 ```bash
-prettier -w {ballista,datafusion,datafusion-examples,dev,docs,python}/**/*.md
+prettier -w {ballista,datafusion,data-access,datafusion-cli,datafusion-examples,dev,docs}/**/*.md
 ```

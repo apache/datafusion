@@ -17,6 +17,12 @@
   under the License.
 -->
 
-# Data Access Layer
+# DataFusion Data Access Layer
 
-This module contains an `async` API for accessing data, either remotely or locally. Currently, it's based on the object store interfaces. In the future, this module may include interfaces for accessing databases, or streaming data.
+[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+
+This crate is a submodule of DataFusion that provides an `async` API for accessing data, either remotely or locally.
+Currently, it is based on the object store interfaces. In the future, this module may include interfaces for accessing
+databases, or streaming data.
+
+[df]: https://crates.io/crates/datafusion

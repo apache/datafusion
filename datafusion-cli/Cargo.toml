@@ -26,6 +26,7 @@ license = "Apache-2.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 rust-version = "1.59"
+readme = "README.md"
 
 [dependencies]
 arrow = { version = "12" }

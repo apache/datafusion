@@ -15,6 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [DataFusion](https://github.com/apache/arrow-datafusion)
+//! is an extensible query execution framework that uses
+//! [Apache Arrow](https://arrow.apache.org) as its in-memory format.
+//!
+//! This crate is a submodule of DataFusion that provides types representing
+//! logical query plans ([LogicalPlan]) and logical expressions ([Expr]) as well as utilities for
+//! working with these types.
+//!
+//! The [expr_fn] module contains functions for creating expressions.
+
 mod accumulator;
 pub mod aggregate_function;
 pub mod array_expressions;
@@ -44,18 +54,7 @@ pub use aggregate_function::AggregateFunction;
 pub use built_in_function::BuiltinScalarFunction;
 pub use columnar_value::{ColumnarValue, NullColumnarValue};
 pub use expr::Expr;
-pub use expr_fn::{
-    abs, acos, and, approx_distinct, approx_percentile_cont, array, ascii, asin, atan,
-    avg, bit_length, btrim, case, ceil, character_length, chr, coalesce, col, concat,
-    concat_expr, concat_ws, concat_ws_expr, cos, count, count_distinct, date_part,
-    date_trunc, digest, exists, exp, floor, in_list, in_subquery, initcap, left, length,
-    ln, log10, log2, lower, lpad, ltrim, max, md5, min, not_exists, not_in_subquery, now,
-    now_expr, nullif, octet_length, or, random, regexp_match, regexp_replace, repeat,
-    replace, reverse, right, round, rpad, rtrim, scalar_subquery, sha224, sha256, sha384,
-    sha512, signum, sin, split_part, sqrt, starts_with, strpos, substr, sum, tan, to_hex,
-    to_timestamp_micros, to_timestamp_millis, to_timestamp_seconds, translate, trim,
-    trunc, upper, when,
-};
+pub use expr_fn::*;
 pub use expr_schema::ExprSchemable;
 pub use function::{
     AccumulatorFunctionImplementation, ReturnTypeFunction, ScalarFunctionImplementation,

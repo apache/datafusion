@@ -19,5 +19,4 @@
 
 # Ballista Scheduler Process
 
-This crate contains the Ballista scheduler process. Refer to <https://crates.io/crates/ballista> for
-documentation.
+This crate contains the Ballista scheduler process.
