@@ -337,7 +337,7 @@ mod tests {
         )?;
 
         let col_field = projection.schema.field(0);
-        let col_metadata = col_field.metadata().clone().unwrap().clone();
+        let col_metadata = col_field.metadata().unwrap().clone();
         let data: &str = &col_metadata["testing"];
         assert_eq!(data, "test");
 
