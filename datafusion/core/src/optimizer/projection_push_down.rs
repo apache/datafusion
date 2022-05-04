@@ -452,7 +452,7 @@ fn optimize_plan(
                 }
                 LogicalPlan::Union(Union { .. }) => {
                     // Scope of alias is outside, inside we should remove it.
-                    // Here we remove the alias `in new_required_columns`.
+                    // Here we remove the alias in `new_required_columns`.
                     let new_required_columns = new_required_columns
                         .iter()
                         .map(|c| match &c.relation {
