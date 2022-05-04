@@ -25,8 +25,6 @@ use std::task::Poll;
 use futures::Stream;
 use tokio::sync::mpsc;
 
-use async_trait::async_trait;
-
 use arrow::record_batch::RecordBatch;
 use arrow::{datatypes::SchemaRef, error::Result as ArrowResult};
 
@@ -66,7 +64,6 @@ impl CoalescePartitionsExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for CoalescePartitionsExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -101,7 +98,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
         Ok(Arc::new(CoalescePartitionsExec::new(children[0].clone())))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -121,7 +118,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
             )),
             1 => {
                 // bypass any threading / metrics if there is a single partition
-                self.input.execute(0, context).await
+                self.input.execute(0, context)
             }
             _ => {
                 let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -252,7 +249,7 @@ mod tests {
         assert_eq!(merge.output_partitioning().partition_count(), 1);
 
         // the result should contain 4 batches (one per input partition)
-        let iter = merge.execute(0, task_ctx).await?;
+        let iter = merge.execute(0, task_ctx)?;
         let batches = common::collect(iter).await?;
         assert_eq!(batches.len(), num_partitions);
 

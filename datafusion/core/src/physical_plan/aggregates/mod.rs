@@ -29,7 +29,6 @@ use crate::physical_plan::{
 };
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
@@ -145,7 +144,6 @@ impl AggregateExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for AggregateExec {
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
@@ -196,12 +194,12 @@ impl ExecutionPlan for AggregateExec {
         )?))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context).await?;
+        let input = self.input.execute(partition, context)?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
@@ -417,7 +415,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
-    use async_trait::async_trait;
     use datafusion_common::{DataFusionError, Result};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
@@ -489,8 +486,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, task_ctx.clone()).await?)
-                .await?;
+            common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
         let expected = vec![
             "+---+---------------+-------------+",
@@ -522,7 +518,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(merged_aggregate.execute(0, task_ctx.clone()).await?).await?;
+            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];
@@ -556,7 +552,6 @@ mod tests {
         pub yield_first: bool,
     }
 
-    #[async_trait]
     impl ExecutionPlan for TestYieldingExec {
         fn as_any(&self) -> &dyn Any {
             self
@@ -587,7 +582,7 @@ mod tests {
             )))
         }
 
-        async fn execute(
+        fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,

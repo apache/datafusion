@@ -111,7 +111,7 @@ async fn load_left_input(
 
     // merge all left parts into a single stream
     let merge = CoalescePartitionsExec::new(left.clone());
-    let stream = merge.execute(0, context).await?;
+    let stream = merge.execute(0, context)?;
 
     // Load all batches and count the rows
     let (batches, num_rows) = stream
@@ -133,7 +133,6 @@ async fn load_left_input(
     Ok(merged_batch)
 }
 
-#[async_trait]
 impl ExecutionPlan for CrossJoinExec {
     fn as_any(&self) -> &dyn Any {
         self
@@ -169,12 +168,12 @@ impl ExecutionPlan for CrossJoinExec {
         false
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let stream = self.right.execute(partition, context.clone()).await?;
+        let stream = self.right.execute(partition, context.clone())?;
 
         let left_fut = self
             .left_fut

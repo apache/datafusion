@@ -33,7 +33,6 @@ use arrow::{
     error::{ArrowError, Result as ArrowResult},
     record_batch::RecordBatch,
 };
-use async_trait::async_trait;
 use futures::stream::Stream;
 use futures::{ready, StreamExt};
 use std::any::Any;
@@ -90,7 +89,6 @@ impl WindowAggExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for WindowAggExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -148,12 +146,12 @@ impl ExecutionPlan for WindowAggExec {
         )?))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context).await?;
+        let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
             self.schema.clone(),
             self.window_expr.clone(),

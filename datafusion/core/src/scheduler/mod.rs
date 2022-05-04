@@ -76,7 +76,6 @@
 
 use std::sync::Arc;
 
-use futures::stream::BoxStream;
 use log::{debug, error};
 
 use crate::error::Result;

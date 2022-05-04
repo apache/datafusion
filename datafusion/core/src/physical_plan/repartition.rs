@@ -37,17 +37,14 @@ use super::common::{AbortOnDropMany, AbortOnDropSingle};
 use super::expressions::PhysicalSortExpr;
 use super::metrics::{self, ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use super::{RecordBatchStream, SendableRecordBatchStream};
-use async_trait::async_trait;
 
 use crate::execution::context::TaskContext;
 use datafusion_physical_expr::PhysicalExpr;
 use futures::stream::Stream;
 use futures::StreamExt;
 use hashbrown::HashMap;
-use tokio::sync::{
-    mpsc::{self, UnboundedReceiver, UnboundedSender},
-    Mutex,
-};
+use parking_lot::Mutex;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::task::JoinHandle;
 
 type MaybeBatch = Option<ArrowResult<RecordBatch>>;
@@ -261,7 +258,6 @@ impl RepartitionExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for RepartitionExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -299,7 +295,7 @@ impl ExecutionPlan for RepartitionExec {
         None
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -309,7 +305,7 @@ impl ExecutionPlan for RepartitionExec {
             partition
         );
         // lock mutexes
-        let mut state = self.state.lock().await;
+        let mut state = self.state.lock();
 
         let num_input_partitions = self.input.output_partitioning().partition_count();
         let num_output_partitions = self.partitioning.partition_count();
@@ -437,7 +433,7 @@ impl RepartitionExec {
 
         // execute the child operator
         let timer = r_metrics.fetch_time.timer();
-        let mut stream = input.execute(i, context).await?;
+        let mut stream = input.execute(i, context)?;
         timer.done();
 
         // While there are still outputs to send to, keep
@@ -689,7 +685,7 @@ mod tests {
         let mut output_partitions = vec![];
         for i in 0..exec.partitioning.partition_count() {
             // execute this *output* partition and collect all batches
-            let mut stream = exec.execute(i, task_ctx.clone()).await?;
+            let mut stream = exec.execute(i, task_ctx.clone())?;
             let mut batches = vec![];
             while let Some(result) = stream.next().await {
                 batches.push(result?);
@@ -745,7 +741,7 @@ mod tests {
         // returned and no results produced
         let partitioning = Partitioning::UnknownPartitioning(1);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream = exec.execute(0, task_ctx).await.unwrap();
+        let output_stream = exec.execute(0, task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::physical_plan::common::collect(output_stream)
@@ -773,7 +769,7 @@ mod tests {
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, task_ctx).await.unwrap();
+        let output_stream = exec.execute(0, task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::physical_plan::common::collect(output_stream)
@@ -808,7 +804,7 @@ mod tests {
 
         // Note: this should pass (the stream can be created) but the
         // error when the input is executed should get passed back
-        let output_stream = exec.execute(0, task_ctx).await.unwrap();
+        let output_stream = exec.execute(0, task_ctx).unwrap();
 
         // Expect that an error is returned
         let result_string = crate::physical_plan::common::collect(output_stream)
@@ -860,7 +856,7 @@ mod tests {
 
         assert_batches_sorted_eq!(&expected, &expected_batches);
 
-        let output_stream = exec.execute(0, task_ctx).await.unwrap();
+        let output_stream = exec.execute(0, task_ctx).unwrap();
         let batches = crate::physical_plan::common::collect(output_stream)
             .await
             .unwrap();
@@ -880,8 +876,8 @@ mod tests {
         // partition into two output streams
         let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
 
-        let output_stream0 = exec.execute(0, task_ctx.clone()).await.unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).await.unwrap();
+        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
+        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
 
         // now, purposely drop output stream 0
         // *before* any outputs are produced
@@ -927,7 +923,7 @@ mod tests {
         // We first collect the results without droping the output stream.
         let input = Arc::new(make_barrier_exec());
         let exec = RepartitionExec::try_new(input.clone(), partitioning.clone()).unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).await.unwrap();
+        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
         input.wait().await;
         let batches_without_drop = crate::physical_plan::common::collect(output_stream1)
             .await
@@ -947,8 +943,8 @@ mod tests {
         // Now do the same but dropping the stream before waiting for the barrier
         let input = Arc::new(make_barrier_exec());
         let exec = RepartitionExec::try_new(input.clone(), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, task_ctx.clone()).await.unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).await.unwrap();
+        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
+        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
         // now, purposely drop output stream 0
         // *before* any outputs are produced
         std::mem::drop(output_stream0);
@@ -1053,11 +1049,11 @@ mod tests {
         let schema = batch.schema();
         let input = MockExec::new(vec![Ok(batch)], schema);
         let exec = RepartitionExec::try_new(Arc::new(input), partitioning).unwrap();
-        let output_stream0 = exec.execute(0, task_ctx.clone()).await.unwrap();
+        let output_stream0 = exec.execute(0, task_ctx.clone()).unwrap();
         let batch0 = crate::physical_plan::common::collect(output_stream0)
             .await
             .unwrap();
-        let output_stream1 = exec.execute(1, task_ctx.clone()).await.unwrap();
+        let output_stream1 = exec.execute(1, task_ctx.clone()).unwrap();
         let batch1 = crate::physical_plan::common::collect(output_stream1)
             .await
             .unwrap();

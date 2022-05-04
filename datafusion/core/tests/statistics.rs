@@ -106,7 +106,6 @@ impl TableProvider for StatisticsValidation {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for StatisticsValidation {
     fn as_any(&self) -> &dyn Any {
         self
@@ -135,7 +134,7 @@ impl ExecutionPlan for StatisticsValidation {
         Ok(self)
     }
 
-    async fn execute(
+    fn execute(
         &self,
         _partition: usize,
         _context: Arc<TaskContext>,
