@@ -117,7 +117,7 @@ pub trait ObjectStore: Sync + Send + Debug {
 
         match suffix.is_empty() {
             true => Ok(files_to_consider),
-            false => filter_suffix(files_to_consider, suffix).await,
+            false => filter_suffix(files_to_consider, suffix),
         }
     }
 
@@ -141,7 +141,7 @@ fn contains_glob_start_char(path: &str) -> bool {
 }
 
 /// Filters the file_stream to only contain files that end with suffix
-async fn filter_suffix(
+fn filter_suffix(
     file_stream: FileMetaStream,
     suffix: &str,
 ) -> Result<FileMetaStream> {
