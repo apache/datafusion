@@ -1088,45 +1088,32 @@ pub fn union_with_alias(
     }
 
     let union_schema = (**inputs[0].schema()).clone();
+    let union_schema_strip = union_schema.clone().strip_qualifiers();
+
+    inputs
+        .iter()
+        .skip(1)
+        .try_for_each(|input_plan| -> Result<()> {
+            union_schema_strip.check_arrow_schema_type_compatible(
+                &((**input_plan.schema()).clone().into()),
+            )
+        })?;
+
+    let union_plan = LogicalPlan::Union(Union {
+        inputs,
+        schema: Arc::new(union_schema_strip),
+    });
+
     match alias {
         Some(ref alias) => {
-            let alias_schema = union_schema.clone().replace_qualifier(alias.as_str());
-            let union_schema = union_schema.strip_qualifiers();
-
-            inputs
-                .iter()
-                .skip(1)
-                .try_for_each(|input_plan| -> Result<()> {
-                    union_schema.check_arrow_schema_type_compatible(
-                        &((**input_plan.schema()).clone().into()),
-                    )
-                })?;
-
+            let alias_schema = union_schema.replace_qualifier(alias.as_str());
             Ok(LogicalPlan::SubqueryAlias(SubqueryAlias {
-                input: Arc::new(LogicalPlan::Union(Union {
-                    inputs,
-                    schema: Arc::new(union_schema),
-                })),
+                input: Arc::new(union_plan),
                 alias: alias.to_string(),
                 schema: Arc::new(alias_schema),
             }))
         }
-        None => {
-            let union_schema = union_schema.strip_qualifiers();
-            inputs
-                .iter()
-                .skip(1)
-                .try_for_each(|input_plan| -> Result<()> {
-                    union_schema.check_arrow_schema_type_compatible(
-                        &((**input_plan.schema()).clone().into()),
-                    )
-                })?;
-
-            Ok(LogicalPlan::Union(Union {
-                inputs,
-                schema: Arc::new(union_schema),
-            }))
-        }
+        None => Ok(union_plan),
     }
 }
 
