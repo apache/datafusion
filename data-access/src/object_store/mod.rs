@@ -164,24 +164,21 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
         let components_in_glob_pattern =
             Path::new(glob_pattern).components().collect::<Vec<_>>();
         let mut path_buf_for_longest_search_path_without_glob_pattern = PathBuf::new();
-        let mut encountered_glob = false;
         for component_in_glob_pattern in components_in_glob_pattern {
             let component_as_str =
                 component_in_glob_pattern.as_os_str().to_str().unwrap();
-            if !encountered_glob {
-                let component_str_is_glob = contains_glob_start_char(component_as_str);
-                encountered_glob = component_str_is_glob;
-                if !encountered_glob {
-                    path_buf_for_longest_search_path_without_glob_pattern
-                        .push(component_in_glob_pattern);
-                }
+            let component_str_is_glob = contains_glob_start_char(component_as_str);
+            if component_str_is_glob {
+                break;
             }
+            path_buf_for_longest_search_path_without_glob_pattern.push(component_in_glob_pattern);
         }
 
         let mut result = path_buf_for_longest_search_path_without_glob_pattern
             .to_str()
             .unwrap()
             .to_string();
+
         // when we're not at the root, append a separator
         if path_buf_for_longest_search_path_without_glob_pattern
             .components()
