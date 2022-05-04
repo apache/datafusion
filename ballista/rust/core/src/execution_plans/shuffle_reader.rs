@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::any::Any;
 use std::sync::Arc;
-use std::{any::Any, pin::Pin};
 
 use crate::client::BallistaClient;
 use crate::serde::scheduler::{PartitionLocation, PartitionStats};
 
-use crate::utils::WrappedStream;
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 
+use datafusion::error::{DataFusionError, Result};
 use datafusion::physical_plan::expressions::PhysicalSortExpr;
 use datafusion::physical_plan::metrics::{
     ExecutionPlanMetricsSet, MetricBuilder, MetricsSet,
@@ -32,13 +32,11 @@ use datafusion::physical_plan::metrics::{
 use datafusion::physical_plan::{
     DisplayFormatType, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
-use datafusion::{
-    error::{DataFusionError, Result},
-    physical_plan::RecordBatchStream,
-};
-use futures::{future, StreamExt};
+use futures::{StreamExt, TryStreamExt};
 
+use datafusion::arrow::error::ArrowError;
 use datafusion::execution::context::TaskContext;
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use log::info;
 
 /// ShuffleReaderExec reads partitions that have already been materialized by a ShuffleWriterExec
@@ -112,18 +110,23 @@ impl ExecutionPlan for ShuffleReaderExec {
 
         let fetch_time =
             MetricBuilder::new(&self.metrics).subset_time("fetch_time", partition);
-        let timer = fetch_time.timer();
 
-        let partition_locations = &self.partition[partition];
-        let result = future::join_all(partition_locations.iter().map(fetch_partition))
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
-        timer.done();
+        let locations = self.partition[partition].clone();
+        let stream = locations.into_iter().map(move |p| {
+            let fetch_time = fetch_time.clone();
+            futures::stream::once(async move {
+                let timer = fetch_time.timer();
+                let r = fetch_partition(&p).await;
+                timer.done();
 
-        let result = WrappedStream::new(
-            Box::pin(futures::stream::iter(result).flatten()),
+                r.map_err(|e| ArrowError::ExternalError(Box::new(e)))
+            })
+            .try_flatten()
+        });
+
+        let result = RecordBatchStreamAdapter::new(
             Arc::new(self.schema.as_ref().clone()),
+            futures::stream::iter(stream).flatten(),
         );
         Ok(Box::pin(result))
     }
@@ -201,7 +204,7 @@ fn stats_for_partitions(
 
 async fn fetch_partition(
     location: &PartitionLocation,
-) -> Result<Pin<Box<dyn RecordBatchStream + Send>>> {
+) -> Result<SendableRecordBatchStream> {
     let metadata = &location.executor_meta;
     let partition_id = &location.partition_id;
     let mut ballista_client =
