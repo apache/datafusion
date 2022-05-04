@@ -88,7 +88,7 @@ pub trait ObjectStore: Sync + Send + Debug {
 
     /// Returns all the files matching `glob_pattern`
     async fn glob_file(&self, glob_pattern: &str) -> Result<FileMetaStream> {
-        if !is_glob_path(glob_pattern) {
+        if !contains_glob_start_char(glob_pattern) {
             self.list_file(glob_pattern).await
         } else {
             let start_path = find_longest_search_path_without_glob_pattern(glob_pattern);
@@ -110,7 +110,7 @@ pub trait ObjectStore: Sync + Send + Debug {
         glob_pattern: &str,
         suffix: &str,
     ) -> Result<FileMetaStream> {
-        let files_to_consider = match is_glob_path(glob_pattern) {
+        let files_to_consider = match contains_glob_start_char(glob_pattern) {
             true => self.glob_file(glob_pattern).await,
             false => self.list_file(glob_pattern).await,
         }?;
@@ -133,11 +133,11 @@ pub trait ObjectStore: Sync + Send + Debug {
     fn file_reader(&self, file: SizedFile) -> Result<Arc<dyn ObjectReader>>;
 }
 
-const GLOB_CHARS: [char; 7] = ['{', '}', '[', ']', '*', '?', '\\'];
+const GLOB_START_CHARS: [char; 3] = ['?', '*', '['];
 
 /// Determine whether the path contains a globbing character
-fn is_glob_path(path: &str) -> bool {
-    path.chars().any(|c| GLOB_CHARS.contains(&c))
+fn contains_glob_start_char(path: &str) -> bool {
+    path.chars().any(|c| GLOB_START_CHARS.contains(&c))
 }
 
 /// Filters the file_stream to only contain files that end with suffix
@@ -157,7 +157,7 @@ async fn filter_suffix(
 
 fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
     // in case the glob_pattern is not actually a glob pattern, take the entire thing
-    if !is_glob_path(glob_pattern) {
+    if !contains_glob_start_char(glob_pattern) {
         glob_pattern.to_string()
     } else {
         // take all the components of the path (left-to-right) which do not contain a glob pattern
@@ -169,7 +169,7 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
             let component_as_str =
                 component_in_glob_pattern.as_os_str().to_str().unwrap();
             if !encountered_glob {
-                let component_str_is_glob = is_glob_path(component_as_str);
+                let component_str_is_glob = contains_glob_start_char(component_as_str);
                 encountered_glob = component_str_is_glob;
                 if !encountered_glob {
                     path_buf_for_longest_search_path_without_glob_pattern
@@ -200,10 +200,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_glob_path() -> Result<()> {
-        assert!(!is_glob_path("/"));
-        assert!(!is_glob_path("/test"));
-        assert!(!is_glob_path("/test/"));
-        assert!(is_glob_path("/test*"));
+        assert!(!contains_glob_start_char("/"));
+        assert!(!contains_glob_start_char("/test"));
+        assert!(!contains_glob_start_char("/test/"));
+        assert!(contains_glob_start_char("/test*"));
         Ok(())
     }
 
