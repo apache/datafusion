@@ -2125,7 +2125,6 @@ mod tests {
             "+----------+",
         ];
         assert_batches_eq!(expected, &result);
-
         Ok(())
     }
     
