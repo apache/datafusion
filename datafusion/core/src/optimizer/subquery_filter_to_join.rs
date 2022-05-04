@@ -192,7 +192,7 @@ fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Res
 mod tests {
     use super::*;
     use crate::logical_plan::{
-        and, binary_expr, col, in_subquery, lit, not_in_subquery, LogicalPlanBuilder,
+        and, binary_expr, col, in_subquery, lit, not_in_subquery, or, LogicalPlanBuilder,
         Operator,
     };
     use crate::test::*;
@@ -206,8 +206,8 @@ mod tests {
         assert_eq!(formatted_plan, expected);
     }
 
-    fn test_subquery() -> Result<Arc<LogicalPlan>> {
-        let table_scan = test_table_scan()?;
+    fn test_subquery_with_name(name: &str) -> Result<Arc<LogicalPlan>> {
+        let table_scan = test_table_scan_with_name(name)?;
         Ok(Arc::new(
             LogicalPlanBuilder::from(table_scan)
                 .project(vec![col("c")])?
@@ -220,15 +220,15 @@ mod tests {
     fn in_subquery_simple() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(in_subquery(col("c"), test_subquery()?))?
+            .filter(in_subquery(col("c"), test_subquery_with_name("sq")?))?
             .project(vec![col("test.b")])?
             .build()?;
 
         let expected = "Projection: #test.b [b:UInt32]\
-        \n  Semi Join: #test.c = #test.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: #test.c [c:UInt32]\
-        \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n    Projection: #sq.c [c:UInt32]\
+        \n      TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -239,15 +239,15 @@ mod tests {
     fn not_in_subquery_simple() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
-            .filter(not_in_subquery(col("c"), test_subquery()?))?
+            .filter(not_in_subquery(col("c"), test_subquery_with_name("sq")?))?
             .project(vec![col("test.b")])?
             .build()?;
 
         let expected = "Projection: #test.b [b:UInt32]\
-        \n  Anti Join: #test.c = #test.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Anti Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: #test.c [c:UInt32]\
-        \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n    Projection: #sq.c [c:UInt32]\
+        \n      TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -259,32 +259,32 @@ mod tests {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(and(
-                in_subquery(col("c"), test_subquery()?),
-                in_subquery(col("b"), test_subquery()?),
+                in_subquery(col("c"), test_subquery_with_name("sq_1")?),
+                in_subquery(col("b"), test_subquery_with_name("sq_2")?),
             ))?
             .project(vec![col("test.b")])?
             .build()?;
 
         let expected = "Projection: #test.b [b:UInt32]\
-        \n  Semi Join: #test.b = #test.c [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Semi Join: #test.c = #test.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Semi Join: #test.b = #sq_2.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Semi Join: #test.c = #sq_1.c [a:UInt32, b:UInt32, c:UInt32]\
         \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n      Projection: #test.c [c:UInt32]\
-        \n        TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: #test.c [c:UInt32]\
-        \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n      Projection: #sq_1.c [c:UInt32]\
+        \n        TableScan: sq_1 projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Projection: #sq_2.c [c:UInt32]\
+        \n      TableScan: sq_2 projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
     }
 
-    /// Test for IN subquery with additional filters
+    /// Test for IN subquery with additional AND filter
     #[test]
-    fn in_subquery_with_filters() -> Result<()> {
+    fn in_subquery_with_and_filters() -> Result<()> {
         let table_scan = test_table_scan()?;
         let plan = LogicalPlanBuilder::from(table_scan)
             .filter(and(
-                in_subquery(col("c"), test_subquery()?),
+                in_subquery(col("c"), test_subquery_with_name("sq")?),
                 and(
                     binary_expr(col("a"), Operator::Eq, lit(1_u32)),
                     binary_expr(col("b"), Operator::Lt, lit(30_u32)),
@@ -295,10 +295,36 @@ mod tests {
 
         let expected = "Projection: #test.b [b:UInt32]\
         \n  Filter: #test.a = UInt32(1) AND #test.b < UInt32(30) [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Semi Join: #test.c = #test.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Semi Join: #test.c = #sq.c [a:UInt32, b:UInt32, c:UInt32]\
         \n      TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n      Projection: #test.c [c:UInt32]\
-        \n        TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n      Projection: #sq.c [c:UInt32]\
+        \n        TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for IN subquery with additional OR filter
+    /// filter expression not modified
+    #[test]
+    fn in_subquery_with_or_filters() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(or(
+                and(
+                    binary_expr(col("a"), Operator::Eq, lit(1_u32)),
+                    binary_expr(col("b"), Operator::Lt, lit(30_u32)),
+                ),
+                in_subquery(col("c"), test_subquery_with_name("sq")?),
+            ))?
+            .project(vec![col("test.b")])?
+            .build()?;
+
+        let expected = "Projection: #test.b [b:UInt32]\
+        \n  Filter: #test.a = UInt32(1) AND #test.b < UInt32(30) OR #test.c IN (\
+        Subquery: Projection: #sq.c\
+        \n  TableScan: sq projection=None) [a:UInt32, b:UInt32, c:UInt32]\
+        \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
@@ -309,8 +335,8 @@ mod tests {
     fn in_subquery_nested() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let subquery = LogicalPlanBuilder::from(table_scan.clone())
-            .filter(in_subquery(col("a"), test_subquery()?))?
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+            .filter(in_subquery(col("a"), test_subquery_with_name("sq_nested")?))?
             .project(vec![col("a")])?
             .build()?;
 
@@ -320,13 +346,42 @@ mod tests {
             .build()?;
 
         let expected = "Projection: #test.b [b:UInt32]\
-        \n  Semi Join: #test.b = #test.a [a:UInt32, b:UInt32, c:UInt32]\
+        \n  Semi Join: #test.b = #sq.a [a:UInt32, b:UInt32, c:UInt32]\
         \n    TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n    Projection: #test.a [a:UInt32]\
-        \n      Semi Join: #test.a = #test.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n    Projection: #sq.a [a:UInt32]\
+        \n      Semi Join: #sq.a = #sq_nested.c [a:UInt32, b:UInt32, c:UInt32]\
+        \n        TableScan: sq projection=None [a:UInt32, b:UInt32, c:UInt32]\
+        \n        Projection: #sq_nested.c [c:UInt32]\
+        \n          TableScan: sq_nested projection=None [a:UInt32, b:UInt32, c:UInt32]";
+
+        assert_optimized_plan_eq(&plan, expected);
+        Ok(())
+    }
+
+    /// Test for filter input modification in case filter not supported
+    /// Outer filter expression not modified while inner converted to join
+    #[test]
+    fn in_subquery_input_modified() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .filter(in_subquery(col("c"), test_subquery_with_name("sq_inner")?))?
+            .project_with_alias(vec![col("b"), col("c")], Some("wrapped".to_string()))?
+            .filter(or(
+                binary_expr(col("b"), Operator::Lt, lit(30_u32)),
+                in_subquery(col("c"), test_subquery_with_name("sq_outer")?),
+            ))?
+            .project(vec![col("b")])?
+            .build()?;
+
+        let expected = "Projection: #wrapped.b [b:UInt32]\
+        \n  Filter: #wrapped.b < UInt32(30) OR #wrapped.c IN (\
+        Subquery: Projection: #sq_outer.c\
+        \n  TableScan: sq_outer projection=None) [b:UInt32, c:UInt32]\
+        \n    Projection: #test.b, #test.c, alias=wrapped [b:UInt32, c:UInt32]\
+        \n      Semi Join: #test.c = #sq_inner.c [a:UInt32, b:UInt32, c:UInt32]\
         \n        TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]\
-        \n        Projection: #test.c [c:UInt32]\
-        \n          TableScan: test projection=None [a:UInt32, b:UInt32, c:UInt32]";
+        \n        Projection: #sq_inner.c [c:UInt32]\
+        \n          TableScan: sq_inner projection=None [a:UInt32, b:UInt32, c:UInt32]";
 
         assert_optimized_plan_eq(&plan, expected);
         Ok(())
