@@ -1055,19 +1055,31 @@ pub fn union_with_alias(
     right_plan: LogicalPlan,
     alias: Option<String>,
 ) -> Result<LogicalPlan> {
-    let inputs = vec![left_plan, right_plan]
+    let union_schema = left_plan.schema().clone();
+    let inputs_iter = vec![left_plan, right_plan]
         .into_iter()
         .flat_map(|p| match p {
             LogicalPlan::Union(Union { inputs, .. }) => inputs,
             x => vec![x],
-        })
+        });
+
+    inputs_iter
+        .clone()
+        .skip(1)
+        .try_for_each(|input_plan| -> Result<()> {
+            union_schema.check_arrow_schema_type_compatible(
+                &((**input_plan.schema()).clone().into()),
+            )
+        })?;
+
+    let inputs = inputs_iter
         .map(|p| match p {
             LogicalPlan::Projection(Projection {
-                expr,
-                input,
-                schema,
-                alias,
-            }) => project_with_column_index_alias(expr, input, schema, alias).unwrap(),
+                expr, input, alias, ..
+            }) => {
+                project_with_column_index_alias(expr, input, union_schema.clone(), alias)
+                    .unwrap()
+            }
             x => x,
         })
         .collect::<Vec<_>>();
@@ -1080,15 +1092,6 @@ pub fn union_with_alias(
         Some(ref alias) => union_schema.replace_qualifier(alias.as_str()),
         None => union_schema.strip_qualifiers(),
     });
-
-    inputs
-        .iter()
-        .skip(1)
-        .try_for_each(|input_plan| -> Result<()> {
-            union_schema.check_arrow_schema_type_compatible(
-                &((**input_plan.schema()).clone().into()),
-            )
-        })?;
 
     Ok(LogicalPlan::Union(Union {
         inputs,
