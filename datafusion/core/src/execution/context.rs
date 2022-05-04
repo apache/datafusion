@@ -3243,7 +3243,7 @@ mod tests {
             "SELECT cat, SUM(i) AS total FROM (
                     SELECT i, 'a' AS cat FROM catalog_a.schema_a.table_a
                     UNION ALL
-                    SELECT i, 'b' FROM catalog_b.schema_b.table_b
+                    SELECT i, 'b' AS cat FROM catalog_b.schema_b.table_b
                 ) AS all
                 GROUP BY cat
                 ORDER BY cat
@@ -3333,6 +3333,44 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn union_test() -> Result<()> {
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        let result = ctx
+            .sql("SELECT 1 A UNION ALL SELECT 2")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+        assert_batches_eq!(expected, &result);
+
+        let result = ctx
+            .sql("SELECT 1 UNION SELECT 2")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----------+",
+            "| Int64(1) |",
+            "+----------+",
+            "| 1        |",
+            "| 2        |",
+            "+----------+",
+        ];
+        assert_batches_eq!(expected, &result);
+
         Ok(())
     }
 
