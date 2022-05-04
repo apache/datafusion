@@ -141,10 +141,7 @@ fn contains_glob_start_char(path: &str) -> bool {
 }
 
 /// Filters the file_stream to only contain files that end with suffix
-fn filter_suffix(
-    file_stream: FileMetaStream,
-    suffix: &str,
-) -> Result<FileMetaStream> {
+fn filter_suffix(file_stream: FileMetaStream, suffix: &str) -> Result<FileMetaStream> {
     let suffix = suffix.to_owned();
     Ok(Box::pin(file_stream.filter(move |fr| {
         let has_suffix = match fr {
@@ -161,8 +158,7 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
         glob_pattern.to_string()
     } else {
         // take all the components of the path (left-to-right) which do not contain a glob pattern
-        let components_in_glob_pattern =
-            Path::new(glob_pattern).components();
+        let components_in_glob_pattern = Path::new(glob_pattern).components();
         let mut path_buf_for_longest_search_path_without_glob_pattern = PathBuf::new();
         for component_in_glob_pattern in components_in_glob_pattern {
             let component_as_str =
@@ -171,7 +167,8 @@ fn find_longest_search_path_without_glob_pattern(glob_pattern: &str) -> String {
             if component_str_is_glob {
                 break;
             }
-            path_buf_for_longest_search_path_without_glob_pattern.push(component_in_glob_pattern);
+            path_buf_for_longest_search_path_without_glob_pattern
+                .push(component_in_glob_pattern);
         }
 
         let mut result = path_buf_for_longest_search_path_without_glob_pattern
@@ -207,22 +204,15 @@ mod tests {
     fn test_longest_base_path(input: &str, expected: &str) {
         assert_eq!(
             find_longest_search_path_without_glob_pattern(input),
-            make_expected(input, expected),
+            expected,
             "testing find_longest_search_path_without_glob_pattern with {}",
             input
         );
     }
 
-    fn make_expected(input: &str, expected: &str) -> String {
-        if contains_glob_start_char(input) {
-            expected.replace('/', &String::from(path::MAIN_SEPARATOR))
-        } else {
-            expected.to_string()
-        }
-    }
-
     #[tokio::test]
     async fn test_find_longest_search_path_without_glob_pattern() -> Result<()> {
+        // no glob patterns, thus we get the full path (as-is)
         test_longest_base_path("/", "/");
         test_longest_base_path("/a.txt", "/a.txt");
         test_longest_base_path("/a", "/a");
@@ -231,11 +221,25 @@ mod tests {
         test_longest_base_path("/a/b/", "/a/b/");
         test_longest_base_path("/a/b.txt", "/a/b.txt");
         test_longest_base_path("/a/b/c.txt", "/a/b/c.txt");
-        test_longest_base_path("/*.txt", "/");
-        test_longest_base_path("/a/*b.txt", "/a/");
-        test_longest_base_path("/a/*/b.txt", "/a/");
-        test_longest_base_path("/a/b/[123]/file*.txt", "/a/b/");
-        test_longest_base_path("/a/b*.txt", "/a/");
+        // glob patterns, thus we build the longest path (os-specific)
+        use path::MAIN_SEPARATOR;
+        test_longest_base_path("/*.txt", &format!("{MAIN_SEPARATOR}"));
+        test_longest_base_path(
+            "/a/*b.txt",
+            &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}"),
+        );
+        test_longest_base_path(
+            "/a/*/b.txt",
+            &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}"),
+        );
+        test_longest_base_path(
+            "/a/b/[123]/file*.txt",
+            &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}b{MAIN_SEPARATOR}"),
+        );
+        test_longest_base_path(
+            "/a/b*.txt",
+            &format!("{MAIN_SEPARATOR}a{MAIN_SEPARATOR}"),
+        );
         Ok(())
     }
 }
