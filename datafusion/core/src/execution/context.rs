@@ -2090,6 +2090,44 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn union_test() -> Result<()> {
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        let result = ctx
+            .sql("SELECT 1 A UNION ALL SELECT 2")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+        assert_batches_eq!(expected, &result);
+
+        let result = ctx
+            .sql("SELECT 1 UNION SELECT 2")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----------+",
+            "| Int64(1) |",
+            "+----------+",
+            "| 1        |",
+            "| 2        |",
+            "+----------+",
+        ];
+        assert_batches_eq!(expected, &result);
+
+        Ok(())
+    }
+
     struct MyPhysicalPlanner {}
 
     #[async_trait]
