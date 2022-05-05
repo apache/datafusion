@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Accumulator in raw format
+//! Accumulator over row format
 
 use arrow::array::ArrayRef;
 use datafusion_common::{Result, ScalarValue};

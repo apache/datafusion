@@ -217,9 +217,11 @@ impl AccumulatorV2 for AvgAccumulatorV2 {
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let values = &values[0];
-
+        // count
         let delta = (values.len() - values.data().null_count()) as u64;
         accessor.add_u64(self.start_index, delta);
+
+        // sum
         sum::add_to_row(
             &self.sum_datatype,
             self.start_index + 1,
@@ -235,9 +237,11 @@ impl AccumulatorV2 for AvgAccumulatorV2 {
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
+        // count
         let delta = compute::sum(counts).unwrap_or(0);
         accessor.add_u64(self.start_index, delta);
 
+        // sum
         sum::add_to_row(
             &self.sum_datatype,
             self.start_index + 1,

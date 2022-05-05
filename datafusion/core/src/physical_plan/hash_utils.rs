@@ -265,7 +265,7 @@ pub fn create_hashes<'a>(
     for hash in hashes_buffer.iter_mut() {
         *hash = 0
     }
-    return Ok(hashes_buffer);
+    Ok(hashes_buffer)
 }
 
 /// Test version of `create_row_hashes` that produces the same value for
@@ -281,7 +281,7 @@ pub fn create_row_hashes<'a>(
     for hash in hashes_buffer.iter_mut() {
         *hash = 0
     }
-    return Ok(hashes_buffer);
+    Ok(hashes_buffer)
 }
 
 /// Test version of `create_row_hashes` that produces the same value for
@@ -300,7 +300,7 @@ pub fn create_row_hashes<'a>(
     for (i, hash) in hashes_buffer.iter_mut().enumerate() {
         *hash = <Vec<u8>>::get_hash(&rows[i], random_state);
     }
-    return Ok(hashes_buffer);
+    Ok(hashes_buffer)
 }
 
 /// Creates hash values for every row, based on the values in the

@@ -57,7 +57,12 @@ pub struct RowLayout {
 impl RowLayout {
     /// new
     pub fn new(schema: &Schema, row_type: RowType) -> Self {
-        assert!(row_supported(schema, row_type));
+        assert!(
+            row_supported(schema, row_type),
+            "{:?}Row with {:?} not supported yet.",
+            row_type,
+            schema,
+        );
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
         let null_width = if null_free {
@@ -151,7 +156,7 @@ pub(crate) fn estimate_row_width(schema: &Schema, layout: &RowLayout) -> usize {
 
 /// Tell if we can create raw-bytes based rows since we currently
 /// has limited data type supports in the row format
-fn row_supported(schema: &Schema, row_type: RowType) -> bool {
+pub fn row_supported(schema: &Schema, row_type: RowType) -> bool {
     schema
         .fields()
         .iter()
