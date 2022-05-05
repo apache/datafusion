@@ -17,6 +17,11 @@
 # specific language governing permissions and limitations
 # under the License.
 set -e
+if ! command -v cargo-tomlfmt &> /dev/null; then
+    echo "Installing cargo-tomlfmt using cargo"
+    cargo install cargo-tomlfmt
+fi
+
 cargo fmt --all
 cargo clippy --all-targets --workspace -- -D warnings
 find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \; ; git diff --exit-code
