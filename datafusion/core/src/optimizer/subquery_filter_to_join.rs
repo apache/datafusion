@@ -242,7 +242,6 @@ impl SubqueryFilterToJoin {
                 };
 
                 let right_input = self.optimize(&right_input, execution_props)?;
-                let right_schema = right_input.schema();
 
                 let join_type = if *negated {
                     JoinType::Anti
@@ -250,8 +249,11 @@ impl SubqueryFilterToJoin {
                     JoinType::Semi
                 };
 
-                let schema =
-                    build_join_schema(outer_plan.schema(), right_schema, &join_type)?;
+                let schema = build_join_schema(
+                    outer_plan.schema(),
+                    right_input.schema(),
+                    &join_type,
+                )?;
 
                 Ok(LogicalPlan::Join(Join {
                     left: Arc::new(outer_plan),
@@ -278,7 +280,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
     ) -> Result<LogicalPlan> {
         match plan {
             // Pattern match on all plans of the form
-            // Filter: Exists(Filter(..)) AND InSubquery(Filter(..)) AND ...
+            // Filter: Exists(Filter(..)) AND InSubquery(Project(Filter(..))) AND ...
             LogicalPlan::Filter(Filter { predicate, input }) => {
                 // Apply optimizer rule to current input
                 let optimized_input = self.optimize(input, execution_props)?;
