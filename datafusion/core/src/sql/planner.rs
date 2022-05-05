@@ -1033,21 +1033,12 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     aggr_exprs,
                 )?
             } else {
-                if let Some(having_expr) = &having_expr_opt {
-                    let available_columns = select_exprs
-                        .iter()
-                        .map(|expr| expr_as_column_expr(expr, &plan))
-                        .collect::<Result<Vec<Expr>>>()?;
-
-                    // Ensure the HAVING expression is using only columns
-                    // provided by the SELECT.
-                    check_columns_satisfy_exprs(
-                        &available_columns,
-                        &[having_expr.clone()],
-                        "HAVING clause references column(s) not provided by the select",
-                    )?;
+                if having_expr_opt.is_some() {
+                    return Err(DataFusionError::Plan(
+                        "HAVING clause can only be used with aggregate queries"
+                            .to_owned(),
+                    ));
                 }
-
                 (plan, select_exprs, having_expr_opt)
             };
 
@@ -2774,10 +2765,11 @@ mod tests {
         let sql = "SELECT id, age
                    FROM person
                    HAVING age > 100 AND age < 200";
-        let expected = "Projection: #person.id, #person.age\
-                        \n  Filter: #person.age > Int64(100) AND #person.age < Int64(200)\
-                        \n    TableScan: person projection=None";
-        quick_test(sql, expected);
+        let err = logical_plan(sql).expect_err("query should have failed");
+        assert_eq!(
+            "Plan(\"HAVING clause can only be used with aggregate queries\")",
+            format!("{:?}", err)
+        );
     }
 
     #[test]
@@ -2787,7 +2779,7 @@ mod tests {
                    HAVING first_name = 'M'";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"HAVING clause references column(s) not provided by the select: Expression #person.first_name could not be resolved from available columns: #person.id, #person.age\")",
+            "Plan(\"HAVING clause can only be used with aggregate queries\")",
             format!("{:?}", err)
         );
     }
@@ -2799,9 +2791,7 @@ mod tests {
                    HAVING age > 100";
         let err = logical_plan(sql).expect_err("query should have failed");
         assert_eq!(
-            "Plan(\"HAVING clause references column(s) not provided by the select: \
-            Expression #person.age could not be resolved from available columns: \
-            #person.id, #person.age + Int64(1)\")",
+            "Plan(\"HAVING clause can only be used with aggregate queries\")",
             format!("{:?}", err)
         );
     }
