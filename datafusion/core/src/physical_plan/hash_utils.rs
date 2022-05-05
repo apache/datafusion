@@ -39,11 +39,7 @@ fn combine_hashes(l: u64, r: u64) -> u64 {
     hash.wrapping_mul(37).wrapping_add(r)
 }
 
-fn hash_null<'a>(
-    random_state: &RandomState,
-    hashes_buffer: &'a mut [u64],
-    mul_col: bool,
-) {
+fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
     if mul_col {
         hashes_buffer.iter_mut().for_each(|hash| {
             // stable hash for null value
