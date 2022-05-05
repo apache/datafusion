@@ -4259,25 +4259,25 @@ mod tests {
         fn get_table_provider(
             &self,
             name: TableReference,
-        ) -> Option<Arc<dyn TableProvider>> {
+        ) -> Result<Arc<dyn TableProvider>> {
             let schema = match name.table() {
-                "test" => Some(Schema::new(vec![
+                "test" => Ok(Schema::new(vec![
                     Field::new("t_date32", DataType::Date32, false),
                     Field::new("t_date64", DataType::Date64, false),
                 ])),
-                "j1" => Some(Schema::new(vec![
+                "j1" => Ok(Schema::new(vec![
                     Field::new("j1_id", DataType::Int32, false),
                     Field::new("j1_string", DataType::Utf8, false),
                 ])),
-                "j2" => Some(Schema::new(vec![
+                "j2" => Ok(Schema::new(vec![
                     Field::new("j2_id", DataType::Int32, false),
                     Field::new("j2_string", DataType::Utf8, false),
                 ])),
-                "j3" => Some(Schema::new(vec![
+                "j3" => Ok(Schema::new(vec![
                     Field::new("j3_id", DataType::Int32, false),
                     Field::new("j3_string", DataType::Utf8, false),
                 ])),
-                "person" => Some(Schema::new(vec![
+                "person" => Ok(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
                     Field::new("first_name", DataType::Utf8, false),
                     Field::new("last_name", DataType::Utf8, false),
@@ -4291,7 +4291,7 @@ mod tests {
                     ),
                     Field::new("😀", DataType::Int32, false),
                 ])),
-                "orders" => Some(Schema::new(vec![
+                "orders" => Ok(Schema::new(vec![
                     Field::new("order_id", DataType::UInt32, false),
                     Field::new("customer_id", DataType::UInt32, false),
                     Field::new("o_item_id", DataType::Utf8, false),
@@ -4299,12 +4299,12 @@ mod tests {
                     Field::new("price", DataType::Float64, false),
                     Field::new("delivered", DataType::Boolean, false),
                 ])),
-                "lineitem" => Some(Schema::new(vec![
+                "lineitem" => Ok(Schema::new(vec![
                     Field::new("l_item_id", DataType::UInt32, false),
                     Field::new("l_description", DataType::Utf8, false),
                     Field::new("price", DataType::Float64, false),
                 ])),
-                "aggregate_test_100" => Some(Schema::new(vec![
+                "aggregate_test_100" => Ok(Schema::new(vec![
                     Field::new("c1", DataType::Utf8, false),
                     Field::new("c2", DataType::UInt32, false),
                     Field::new("c3", DataType::Int8, false),
@@ -4319,11 +4319,16 @@ mod tests {
                     Field::new("c12", DataType::Float64, false),
                     Field::new("c13", DataType::Utf8, false),
                 ])),
-                _ => None,
+                _ => Err(DataFusionError::Plan(format!(
+                    "No table named: {} found",
+                    name.table()
+                ))),
             };
-            schema.map(|s| -> Arc<dyn TableProvider> {
-                Arc::new(EmptyTable::new(Arc::new(s)))
-            })
+
+            match schema {
+                Ok(t) => Ok(Arc::new(EmptyTable::new(Arc::new(t)))),
+                Err(e) => Err(e)
+            }
         }
 
         fn get_function_meta(&self, name: &str) -> Option<Arc<ScalarUDF>> {
