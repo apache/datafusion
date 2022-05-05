@@ -1369,10 +1369,13 @@ impl ContextProvider for SessionState {
             Ok(schema) => {
                 schema.table(resolved_ref.table).ok_or_else(|| {
                     //DataFusionError::Plan(format!("Table with name '{}' not found", name.table()))
-                    DataFusionError::Plan(format!("'{}.{}.{}' not found", resolved_ref.catalog, resolved_ref.schema, resolved_ref.table))
+                    DataFusionError::Plan(format!(
+                        "'{}.{}.{}' not found",
+                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                    ))
                 })
-            },
-            Err(e) => Err(e)
+            }
+            Err(e) => Err(e),
         }
     }
 

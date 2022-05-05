@@ -4327,7 +4327,7 @@ mod tests {
 
             match schema {
                 Ok(t) => Ok(Arc::new(EmptyTable::new(Arc::new(t)))),
-                Err(e) => Err(e)
+                Err(e) => Err(e),
             }
         }
 
