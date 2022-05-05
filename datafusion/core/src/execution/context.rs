@@ -1366,14 +1366,12 @@ impl ContextProvider for SessionState {
     fn get_table_provider(&self, name: TableReference) -> Result<Arc<dyn TableProvider>> {
         let resolved_ref = self.resolve_table_ref(name);
         match self.schema_for_ref(resolved_ref) {
-            Ok(schema) => {
-                schema.table(resolved_ref.table).ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "'{}.{}.{}' not found",
-                        resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
-                    ))
-                })
-            }
+            Ok(schema) => schema.table(resolved_ref.table).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "'{}.{}.{}' not found",
+                    resolved_ref.catalog, resolved_ref.schema, resolved_ref.table
+                ))
+            }),
             Err(e) => Err(e),
         }
     }
