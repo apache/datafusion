@@ -17,7 +17,7 @@
 
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
