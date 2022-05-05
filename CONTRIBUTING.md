@@ -55,13 +55,13 @@ Testing setup:
 
 Formatting instructions:
 
-- `cargo fmt --all -- --check`
-- `cargo clippy --all-targets --workspace -- -D warnings`
-- `find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \; ; git diff --exit-code`
+- [ci/scripts/rust_fmt.sh](ci/scripts/rust_fmt.sh)
+- [ci/scripts/rust_clippy.sh](ci/scripts/rust_clippy.sh)
+- [ci/scripts/rust_toml_fmt.sh](ci/scripts/rust_toml_fmt.sh)
 
-or simply run:
+or run them all at once:
 
-- `./dev/format-code.sh`
+- [dev/rust_lint.sh](dev/rust_lint.sh)
 
 ## Test Organization
 
