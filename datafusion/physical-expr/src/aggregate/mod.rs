@@ -78,6 +78,3 @@ pub trait AggregateExpr: Send + Sync + Debug {
         "AggregateExpr: default name"
     }
 }
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
-struct DistinctScalarValues(Vec<ScalarValue>);
