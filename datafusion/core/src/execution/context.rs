@@ -72,7 +72,7 @@ use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::projection_push_down::ProjectionPushDown;
 use crate::optimizer::simplify_expressions::SimplifyExpressions;
 use crate::optimizer::single_distinct_to_groupby::SingleDistinctToGroupBy;
-use crate::optimizer::to_approx_perc::ToApproxPerc;
+use crate::optimizer::subquery_filter_to_join::SubqueryFilterToJoin;
 
 use crate::physical_optimizer::coalesce_batches::CoalesceBatches;
 use crate::physical_optimizer::merge_exec::AddCoalescePartitionsExec;
@@ -401,10 +401,7 @@ impl SessionContext {
                 }
             }
 
-            plan => Ok(Arc::new(DataFrame::new(
-                self.state.clone(),
-                &self.optimize(&plan)?,
-            ))),
+            plan => Ok(Arc::new(DataFrame::new(self.state.clone(), &plan))),
         }
     }
 
@@ -1203,6 +1200,7 @@ impl SessionState {
                 // Simplify expressions first to maximize the chance
                 // of applying other optimizations
                 Arc::new(SimplifyExpressions::new()),
+                Arc::new(SubqueryFilterToJoin::new()),
                 Arc::new(EliminateFilter::new()),
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
@@ -1210,10 +1208,6 @@ impl SessionState {
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
-                // ToApproxPerc must be applied last because
-                // it rewrites only the function and may interfere with
-                // other rules
-                Arc::new(ToApproxPerc::new()),
             ],
             physical_optimizers: vec![
                 Arc::new(AggregateStatistics::new()),
@@ -1366,7 +1360,8 @@ impl SessionState {
         logical_plan: &LogicalPlan,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let planner = self.query_planner.clone();
-        planner.create_physical_plan(logical_plan, self).await
+        let logical_plan = self.optimize(logical_plan)?;
+        planner.create_physical_plan(&logical_plan, self).await
     }
 }
 
@@ -1893,26 +1888,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ctx_sql_should_optimize_plan() -> Result<()> {
-        let ctx = SessionContext::new();
-        let plan1 = ctx
-            .create_logical_plan("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")?;
-
-        let opt_plan1 = ctx.optimize(&plan1)?;
-
-        let plan2 = ctx
-            .sql("SELECT * FROM (SELECT 1) AS one WHERE TRUE AND TRUE")
-            .await?;
-
-        assert_eq!(
-            format!("{:?}", opt_plan1),
-            format!("{:?}", plan2.to_logical_plan())
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn custom_query_planner() -> Result<()> {
         let runtime = Arc::new(RuntimeEnv::new(RuntimeConfig::default()).unwrap());
         let session_state = SessionState::with_config_rt(SessionConfig::new(), runtime)
@@ -2112,6 +2087,44 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn union_test() -> Result<()> {
+        let ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        let result = ctx
+            .sql("SELECT 1 A UNION ALL SELECT 2")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+        assert_batches_eq!(expected, &result);
+
+        let result = ctx
+            .sql("SELECT 1 UNION SELECT 2")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+
+        let expected = vec![
+            "+----------+",
+            "| Int64(1) |",
+            "+----------+",
+            "| 1        |",
+            "| 2        |",
+            "+----------+",
+        ];
+        assert_batches_eq!(expected, &result);
+
         Ok(())
     }
 

@@ -298,7 +298,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn distributed_hash_aggregate_plan() -> Result<(), BallistaError> {
+    async fn distributed_aggregate_plan() -> Result<(), BallistaError> {
         let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
@@ -311,7 +311,7 @@ mod test {
             )
             .await?;
 
-        let plan = df.to_logical_plan();
+        let plan = df.to_logical_plan()?;
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
 
@@ -327,12 +327,12 @@ mod test {
         /* Expected result:
 
         ShuffleWriterExec: Some(Hash([Column { name: "l_returnflag", index: 0 }], 2))
-          HashAggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+          AggregateExec: mode=Partial, gby=[l_returnflag@1 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
             CsvExec: source=Path(testdata/lineitem: [testdata/lineitem/partition0.tbl,testdata/lineitem/partition1.tbl]), has_header=false
 
         ShuffleWriterExec: None
           ProjectionExec: expr=[l_returnflag@0 as l_returnflag, SUM(lineitem.l_extendedprice Multiply Int64(1))@1 as sum_disc_price]
-            HashAggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
+            AggregateExec: mode=FinalPartitioned, gby=[l_returnflag@0 as l_returnflag], aggr=[SUM(l_extendedprice Multiply Int64(1))]
               CoalesceBatchesExec: target_batch_size=4096
                 UnresolvedShuffleExec
 
@@ -425,7 +425,7 @@ order by
             )
             .await?;
 
-        let plan = df.to_logical_plan();
+        let plan = df.to_logical_plan()?;
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
 
@@ -449,7 +449,7 @@ order by
           CsvExec: source=Path(testdata/orders: [testdata/orders/orders.tbl]), has_header=false
 
         ShuffleWriterExec: Some(Hash([Column { name: "l_shipmode", index: 0 }], 2))
-          HashAggregateExec: mode=Partial, gby=[l_shipmode@4 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+          AggregateExec: mode=Partial, gby=[l_shipmode@4 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
             CoalesceBatchesExec: target_batch_size=4096
               HashJoinExec: mode=Partitioned, join_type=Inner, on=[(Column { name: "l_orderkey", index: 0 }, Column { name: "o_orderkey", index: 0 })]
                 CoalesceBatchesExec: target_batch_size=4096
@@ -459,7 +459,7 @@ order by
 
         ShuffleWriterExec: None
           ProjectionExec: expr=[l_shipmode@0 as l_shipmode, SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@1 as high_line_count, SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)@2 as low_line_count]
-            HashAggregateExec: mode=FinalPartitioned, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
+            AggregateExec: mode=FinalPartitioned, gby=[l_shipmode@0 as l_shipmode], aggr=[SUM(CASE WHEN #orders.o_orderpriority Eq Utf8("1-URGENT") Or #orders.o_orderpriority Eq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END), SUM(CASE WHEN #orders.o_orderpriority NotEq Utf8("1-URGENT") And #orders.o_orderpriority NotEq Utf8("2-HIGH") THEN Int64(1) ELSE Int64(0) END)]
               CoalesceBatchesExec: target_batch_size=4096
                 UnresolvedShuffleExec
 
@@ -560,7 +560,7 @@ order by
     }
 
     #[tokio::test]
-    async fn roundtrip_serde_hash_aggregate() -> Result<(), BallistaError> {
+    async fn roundtrip_serde_aggregate() -> Result<(), BallistaError> {
         let ctx = datafusion_test_context("testdata").await?;
 
         // simplified form of TPC-H query 1
@@ -573,7 +573,7 @@ order by
             )
             .await?;
 
-        let plan = df.to_logical_plan();
+        let plan = df.to_logical_plan()?;
         let plan = ctx.optimize(&plan)?;
         let plan = ctx.create_physical_plan(&plan).await?;
 

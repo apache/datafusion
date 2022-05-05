@@ -33,7 +33,6 @@ use futures::StreamExt;
 use super::expressions::PhysicalSortExpr;
 use super::{stream::RecordBatchReceiverStream, Distribution, SendableRecordBatchStream};
 use crate::execution::context::TaskContext;
-use async_trait::async_trait;
 
 /// `EXPLAIN ANALYZE` execution plan operator. This operator runs its input,
 /// discards the results, and then prints out an annotated plan with metrics
@@ -58,7 +57,6 @@ impl AnalyzeExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for AnalyzeExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -102,7 +100,7 @@ impl ExecutionPlan for AnalyzeExec {
         )))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
@@ -126,7 +124,7 @@ impl ExecutionPlan for AnalyzeExec {
         let (tx, rx) = tokio::sync::mpsc::channel(input_partitions);
 
         let captured_input = self.input.clone();
-        let mut input_stream = captured_input.execute(0, context).await?;
+        let mut input_stream = captured_input.execute(0, context)?;
         let captured_schema = self.schema.clone();
         let verbose = self.verbose;
 

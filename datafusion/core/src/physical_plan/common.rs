@@ -179,7 +179,7 @@ pub(crate) fn spawn_execution(
     context: Arc<TaskContext>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut stream = match input.execute(partition, context).await {
+        let mut stream = match input.execute(partition, context) {
             Err(e) => {
                 // If send fails, plan being torn
                 // down, no place to send the error

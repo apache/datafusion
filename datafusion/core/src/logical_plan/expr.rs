@@ -71,6 +71,7 @@ pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
         Expr::Alias(inner_expr, name) => {
             Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
         }
+        Expr::ScalarSubquery(_) => e.clone(),
         _ => match e.name(input_schema) {
             Ok(name) => match input_schema.field_with_unqualified_name(&name) {
                 Ok(field) => Expr::Column(field.qualified_column()),

@@ -18,7 +18,7 @@
 use crate::aggregate::accumulator_v2::AccumulatorV2;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::Accumulator;
 use std::any::Any;
 use std::fmt::Debug;
@@ -29,12 +29,13 @@ pub(crate) mod approx_median;
 pub(crate) mod approx_percentile_cont;
 pub(crate) mod approx_percentile_cont_with_weight;
 pub(crate) mod array_agg;
+pub(crate) mod array_agg_distinct;
 pub(crate) mod average;
 pub(crate) mod coercion_rule;
 pub(crate) mod correlation;
 pub(crate) mod count;
+pub(crate) mod count_distinct;
 pub(crate) mod covariance;
-pub(crate) mod distinct_expressions;
 #[macro_use]
 pub(crate) mod min_max;
 pub mod accumulator_v2;
@@ -43,6 +44,7 @@ mod hyperloglog;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
+pub(crate) mod sum_distinct;
 mod tdigest;
 pub(crate) mod variance;
 
@@ -90,3 +92,6 @@ pub trait AggregateExpr: Send + Sync + Debug {
         unreachable!()
     }
 }
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+struct DistinctScalarValues(Vec<ScalarValue>);

@@ -17,8 +17,8 @@
 
 [workspace]
 members = [
-    "datafusion/core",
     "datafusion/common",
+    "datafusion/core",
     "datafusion/expr",
     "datafusion/jit",
     "datafusion/physical-expr",

@@ -29,7 +29,6 @@ use crate::scalar::ScalarValue;
 use arrow::array::new_null_array;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -96,7 +95,6 @@ impl ValuesExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for ValuesExec {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -138,7 +136,7 @@ impl ExecutionPlan for ValuesExec {
         }))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,

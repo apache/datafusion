@@ -477,7 +477,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl ExecutionPlan for TopKExec {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -515,7 +514,7 @@ mod tests {
         }
 
         /// Execute one partition and return an iterator over RecordBatch
-        async fn execute(
+        fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,

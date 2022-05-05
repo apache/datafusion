@@ -22,6 +22,7 @@ mod binary;
 mod case;
 mod cast;
 mod column;
+mod datetime;
 mod get_indexed_field;
 mod in_list;
 mod is_not_null;
@@ -42,17 +43,19 @@ pub use crate::aggregate::approx_median::ApproxMedian;
 pub use crate::aggregate::approx_percentile_cont::ApproxPercentileCont;
 pub use crate::aggregate::approx_percentile_cont_with_weight::ApproxPercentileContWithWeight;
 pub use crate::aggregate::array_agg::ArrayAgg;
+pub use crate::aggregate::array_agg_distinct::DistinctArrayAgg;
 pub use crate::aggregate::average::{Avg, AvgAccumulator};
 pub use crate::aggregate::build_in::create_aggregate_expr;
 pub use crate::aggregate::correlation::Correlation;
 pub use crate::aggregate::count::Count;
+pub use crate::aggregate::count_distinct::DistinctCount;
 pub use crate::aggregate::covariance::{Covariance, CovariancePop};
-pub use crate::aggregate::distinct_expressions::{DistinctArrayAgg, DistinctCount};
 pub use crate::aggregate::min_max::{Max, Min};
 pub use crate::aggregate::min_max::{MaxAccumulator, MinAccumulator};
 pub use crate::aggregate::stats::StatsType;
 pub use crate::aggregate::stddev::{Stddev, StddevPop};
 pub use crate::aggregate::sum::Sum;
+pub use crate::aggregate::sum_distinct::DistinctSum;
 pub use crate::aggregate::variance::{Variance, VariancePop};
 
 pub use crate::window::cume_dist::cume_dist;
@@ -67,6 +70,7 @@ pub use cast::{
     cast, cast_column, cast_with_options, CastExpr, DEFAULT_DATAFUSION_CAST_OPTIONS,
 };
 pub use column::{col, Column};
+pub use datetime::DateIntervalExpr;
 pub use get_indexed_field::GetIndexedFieldExpr;
 pub use in_list::{in_list, InListExpr};
 pub use is_not_null::{is_not_null, IsNotNullExpr};

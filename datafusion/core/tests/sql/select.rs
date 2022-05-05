@@ -509,8 +509,15 @@ async fn query_get_indexed_field() -> Result<()> {
     // Original column is micros, convert to millis and check timestamp
     let sql = "SELECT some_list[0] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 7  |", "+----+",
+        "+----+",
+        "| i0 |",
+        "+----+",
+        "| 0  |",
+        "| 4  |",
+        "| 7  |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -567,8 +574,15 @@ async fn query_nested_get_indexed_field() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_list[0][0] as i0 FROM ints LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| i0 |", "+----+", "| 0  |", "| 5  |", "| 11 |", "+----+",
+        "+----+",
+        "| i0 |",
+        "+----+",
+        "| 0  |",
+        "| 5  |",
+        "| 11 |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -617,8 +631,15 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
     assert_batches_eq!(expected, &actual);
     let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
     let expected = vec![
-        "+----+", "| i0 |", "+----+", "| 0  |", "| 4  |", "| 8  |", "+----+",
+        "+----+",
+        "| i0 |",
+        "+----+",
+        "| 0  |",
+        "| 4  |",
+        "| 8  |",
+        "+----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())
@@ -831,6 +852,29 @@ async fn query_on_string_dictionary() -> Result<()> {
 }
 
 #[tokio::test]
+async fn query_cte_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Int16, false),
+        Field::new("a", DataType::Int16, false),
+    ]);
+    let empty_table = Arc::new(EmptyTable::new(Arc::new(schema)));
+    ctx.register_table("t1", empty_table)?;
+    let sql = "WITH \
+        v1 AS (SELECT * FROM t1), \
+        v2 AS (SELECT v1.id AS id, v1a.id AS id_a, v1b.id AS id_b \
+        FROM v1, v1 v1a, v1 v1b \
+        WHERE v1a.id = v1.id - 1 \
+        AND v1b.id = v1.id + 1) \
+        SELECT * FROM v2";
+    let actual = execute_to_batches(&ctx, sql).await;
+    // the purpose of this test is just to make sure the query produces a valid plan
+    let expected = vec!["++", "++"];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_cte() -> Result<()> {
     // Test for SELECT <expression> without FROM.
     // Should evaluate expressions in project position.
@@ -852,19 +896,41 @@ async fn query_cte() -> Result<()> {
     let sql =
         "WITH t AS (SELECT 1 AS a), u AS (SELECT 2 AS a) SELECT * FROM t UNION ALL SELECT * FROM u";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| a |",
+        "+---+",
+        "| 1 |",
+        "| 2 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     // with + join
     let sql = "WITH t AS (SELECT 1 AS id1), u AS (SELECT 1 AS id2, 5 as x) SELECT x FROM t JOIN u ON (id1 = id2)";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+---+", "| x |", "+---+", "| 5 |", "+---+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+---+",
+        "| x |",
+        "+---+",
+        "| 5 |",
+        "+---+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     // backward reference
     let sql = "WITH t AS (SELECT 1 AS id1), u AS (SELECT * FROM t) SELECT * from u";
     let actual = execute_to_batches(&ctx, sql).await;
-    let expected = vec!["+-----+", "| id1 |", "+-----+", "| 1   |", "+-----+"];
+    #[rustfmt::skip]
+    let expected = vec![
+        "+-----+",
+        "| id1 |",
+        "+-----+",
+        "| 1   |",
+        "+-----+"
+    ];
     assert_batches_eq!(expected, &actual);
 
     Ok(())
@@ -897,6 +963,61 @@ async fn csv_select_nested() -> Result<()> {
         "| a  | 6  | -31  |",
         "| a  | 6  | 36   |",
         "+----+----+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_select_nested_without_aliases() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT o1, o2, c3
+               FROM (
+                 SELECT c1 AS o1, c2 + 1 AS o2, c3
+                 FROM (
+                   SELECT c1, c2, c3, c4
+                   FROM aggregate_test_100
+                   WHERE c1 = 'a' AND c2 >= 4
+                   ORDER BY c2 ASC, c3 ASC
+                 )
+               )";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+------+",
+        "| o1 | o2 | c3   |",
+        "+----+----+------+",
+        "| a  | 5  | -101 |",
+        "| a  | 5  | -54  |",
+        "| a  | 5  | -38  |",
+        "| a  | 5  | 65   |",
+        "| a  | 6  | -101 |",
+        "| a  | 6  | -31  |",
+        "| a  | 6  | 36   |",
+        "+----+----+------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
+async fn csv_join_unaliased_subqueries() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT o1, o2, c3, p1, p2, p3 FROM \
+        (SELECT c1 AS o1, c2 + 1 AS o2, c3 FROM aggregate_test_100), \
+        (SELECT c1 AS p1, c2 - 1 AS p2, c3 AS p3 FROM aggregate_test_100) LIMIT 5";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+----+----+----+----+-----+",
+        "| o1 | o2 | c3 | p1 | p2 | p3  |",
+        "+----+----+----+----+----+-----+",
+        "| c  | 3  | 1  | c  | 1  | 1   |",
+        "| c  | 3  | 1  | d  | 4  | -40 |",
+        "| c  | 3  | 1  | b  | 0  | 29  |",
+        "| c  | 3  | 1  | a  | 0  | -85 |",
+        "| c  | 3  | 1  | b  | 4  | -82 |",
+        "+----+----+----+----+----+-----+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

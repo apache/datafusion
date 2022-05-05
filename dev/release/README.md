@@ -34,14 +34,16 @@ Python binding or Ballista always requires a new DataFusion version release.
 
 ### Major Release
 
-DataFusion typically has major releases from the `master` branch every 3 months, including breaking API changes. 
+DataFusion typically has major releases from the `master` branch every 3 months, including breaking API changes.
 
 ### Minor Release
 
 Starting v7.0.0, we are experimenting with maintaining an active stable release branch (e.g. `maint-7.x`). Every month, we will review the `maint-*` branch and prepare a minor release (e.g. v7.1.0) when necessary. A patch release (v7.0.1) can be requested on demand if it is urgent bug/security fix.
 
 #### How to add changes to `maint-*` branch?
+
 If you would like to propose your change for inclusion in the maintenance branch
+
 1. follow normal workflow to create PR to `master` branch and wait for its approval and merges.
 2. after PR is squash merged to `master`, branch from most recent maintenance branch (e.g. `maint-7-x`), cherry-pick the commit and create a PR to maintenance branch (e.g. `maint-7-x`).
 
@@ -103,9 +105,6 @@ If there is a ballista release, update versions in ballista Cargo.tomls, run
 ./dev/update_ballista_versions.py 0.5.0
 ```
 
-If there is a datafusion python binding release, update versions in
-`./python/Cargo.toml`.
-
 Lastly commit the version change:
 
 ```
@@ -114,10 +113,14 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Manully edit the base version tag argument in
-`dev/release/update_change_log-{ballista,datafusion,python}.sh`. Commits
+Manually edit the base version tag argument in
+`dev/release/update_change_log-{ballista,datafusion}.sh`. Commits
 between the base verstion tag and the latest upstream master will be used to
 populate the changelog content.
+
+You will need a GitHub Personal Access Token for the following steps. Follow 
+[these instructions](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token)
+to generate one if you do not already have one.
 
 ```bash
 # create the changelog
@@ -137,12 +140,12 @@ the changelog and update the PR accordingly.
 
 ## Prepare release candidate artifacts
 
-After the PR gets merged, you are ready to create releaes artifacts based off the
+After the PR gets merged, you are ready to create release artifacts based off the
 merged commit.
 
 (Note you need to be a committer to run these scripts as they upload to the apache svn distribution servers)
 
-### Pick an Release Candidate (RC) number
+### Pick a Release Candidate (RC) number
 
 Pick numbers in sequential order, with `0` for `rc0`, `1` for `rc1`, etc.
 
@@ -151,7 +154,7 @@ Pick numbers in sequential order, with `0` for `rc0`, `1` for `rc1`, etc.
 While the official release artifacts are signed tarballs and zip files, we also
 tag the commit it was created for convenience and code archaeology.
 
-Using a string such as `5.1.0` as the `<version>`, create and push the tag thusly:
+Using a string such as `5.1.0` as the `<version>`, create and push the tag by running these commands:
 
 ```shell
 git fetch apache
@@ -159,9 +162,6 @@ git tag <version>-<rc> apache/master
 # push tag to Github remote
 git push apache <version>
 ```
-
-This should trigger the `Python Release Build` Github Action workflow for the
-pushed tag. You can monitor the pipline run status at https://github.com/apache/arrow-datafusion/actions/workflows/python_build.yml.
 
 ### Create, sign, and upload artifacts
 
@@ -240,7 +240,7 @@ the `release-tarball.sh` script:
 ./dev/release/release-tarball.sh 5.1.0 0
 ```
 
-Congratulations! The release is now offical!
+Congratulations! The release is now official!
 
 ### Create release git tags
 
@@ -274,6 +274,14 @@ create an account and login to crates.io before asking to be added as an owner
 of the following crates:
 
 - [datafusion](https://crates.io/crates/datafusion)
+- [datafusion-cli](https://crates.io/crates/datafusion-cli)
+- [datafusion-common](https://crates.io/crates/datafusion-common)
+- [datafusion-data-access](https://crates.io/crates/datafusion-data-access)
+- [datafusion-expr](https://crates.io/crates/datafusion-expr)
+- [datafusion-jit](https://crates.io/crates/datafusion-jit)
+- [datafusion-physical-expr](https://crates.io/crates/datafusion-physical-expr)
+- [datafusion-proto](https://crates.io/crates/datafusion-proto)
+- [datafusion-row](https://crates.io/crates/datafusion-row)
 - [ballista](https://crates.io/crates/ballista)
 - [ballista-core](https://crates.io/crates/ballista-core)
 - [ballista-executor](https://crates.io/crates/ballista-executor)
@@ -282,14 +290,31 @@ of the following crates:
 Download and unpack the official release tarball
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "5.1.0"`) and then publish the crate with the
-following commands
+(e.g. `version = "5.1.0"`) and then publish the crates with the
+following commands. Crates need to be published in the correct order as shown in this diagram.
+
+![](crate-deps.svg)
+
+_To update this diagram, manually edit the dependencies in [crate-deps.dot](crate-deps.dot) and then run:_
+
+``` bash
+dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
+```
 
 ```shell
-(cd datafusion-common && cargo publish)
-(cd datafusion-expr && cargo publish)
+(cd data-access && cargo publish)
+(cd datafusion/common && cargo publish)
+(cd datafusion/expr && cargo publish)
+(cd datafusion/physical-expr && cargo publish)
+(cd datafusion/jit && cargo publish)
+(cd datafusion/row && cargo publish)
 (cd datafusion && cargo publish)
+(cd datafusion/proto && cargo publish)
+(cd datafusion-cli && cargo publish)
 ```
+
+Note that `datafusion-cli` will depend on the previously published version of Ballista (which depends on the 
+previously published version of DataFusion) until https://github.com/apache/arrow-datafusion/issues/2433 is resolved.
 
 If there is a ballista release, run
 
@@ -299,7 +324,6 @@ If there is a ballista release, run
 (cd ballista/rust/scheduler && cargo publish)
 (cd ballista/rust/client && cargo publish)
 ```
-
 
 ### Publish datafusion-cli on Homebrew and crates.io
 

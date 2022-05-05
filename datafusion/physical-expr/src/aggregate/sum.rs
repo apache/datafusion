@@ -336,6 +336,15 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
         (ScalarValue::Int64(lhs), ScalarValue::Int8(rhs)) => {
             typed_sum!(lhs, rhs, Int64, i64)
         }
+        (ScalarValue::Int64(lhs), ScalarValue::UInt32(rhs)) => {
+            typed_sum!(lhs, rhs, Int64, i64)
+        }
+        (ScalarValue::Int64(lhs), ScalarValue::UInt16(rhs)) => {
+            typed_sum!(lhs, rhs, Int64, i64)
+        }
+        (ScalarValue::Int64(lhs), ScalarValue::UInt8(rhs)) => {
+            typed_sum!(lhs, rhs, Int64, i64)
+        }
         e => {
             return Err(DataFusionError::Internal(format!(
                 "Sum is not expected to receive a scalar {:?}",
@@ -486,6 +495,7 @@ impl AccumulatorV2 for SumAccumulatorV2 {
 mod tests {
     use super::*;
     use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
     use crate::generic_test_op;
     use arrow::datatypes::*;
     use arrow::record_batch::RecordBatch;
@@ -683,20 +693,5 @@ mod tests {
             ScalarValue::from(15_f64),
             DataType::Float64
         )
-    }
-
-    fn aggregate(
-        batch: &RecordBatch,
-        agg: Arc<dyn AggregateExpr>,
-    ) -> Result<ScalarValue> {
-        let mut accum = agg.create_accumulator()?;
-        let expr = agg.expressions();
-        let values = expr
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-        accum.update_batch(&values)?;
-        accum.evaluate()
     }
 }

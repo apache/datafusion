@@ -265,6 +265,7 @@ impl AccumulatorV2 for AvgAccumulatorV2 {
 mod tests {
     use super::*;
     use crate::expressions::col;
+    use crate::expressions::tests::aggregate;
     use crate::generic_test_op;
     use arrow::record_batch::RecordBatch;
     use arrow::{array::*, datatypes::*};
@@ -403,20 +404,5 @@ mod tests {
             ScalarValue::from(3_f64),
             DataType::Float64
         )
-    }
-
-    fn aggregate(
-        batch: &RecordBatch,
-        agg: Arc<dyn AggregateExpr>,
-    ) -> Result<ScalarValue> {
-        let mut accum = agg.create_accumulator()?;
-        let expr = agg.expressions();
-        let values = expr
-            .iter()
-            .map(|e| e.evaluate(batch))
-            .map(|r| r.map(|v| v.into_array(batch.num_rows())))
-            .collect::<Result<Vec<_>>>()?;
-        accum.update_batch(&values)?;
-        accum.evaluate()
     }
 }

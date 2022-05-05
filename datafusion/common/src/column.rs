@@ -17,7 +17,7 @@
 
 //! Column
 
-use crate::{DFSchema, DataFusionError, Result};
+use crate::{DFSchema, DataFusionError, Result, SchemaError};
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::fmt;
@@ -119,10 +119,16 @@ impl Column {
             }
         }
 
-        Err(DataFusionError::Plan(format!(
-            "Column {} not found in provided schemas",
-            self
-        )))
+        Err(DataFusionError::SchemaError(SchemaError::FieldNotFound {
+            qualifier: self.relation.clone(),
+            name: self.name,
+            valid_fields: Some(
+                schemas
+                    .iter()
+                    .flat_map(|s| s.fields().iter().map(|f| f.qualified_name()))
+                    .collect(),
+            ),
+        }))
     }
 }
 

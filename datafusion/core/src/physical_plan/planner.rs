@@ -62,6 +62,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
+use datafusion_physical_expr::expressions::DateIntervalExpr;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -186,8 +187,14 @@ fn create_physical_name(e: &Expr, is_first_expr: bool) -> Result<String> {
                 Ok(format!("{} IN ({:?})", expr, list))
             }
         }
-        Expr::Exists(_) => Err(DataFusionError::NotImplemented(
+        Expr::Exists { .. } => Err(DataFusionError::NotImplemented(
             "EXISTS is not yet supported in the physical plan".to_string(),
+        )),
+        Expr::InSubquery { .. } => Err(DataFusionError::NotImplemented(
+            "IN subquery is not yet supported in the physical plan".to_string(),
+        )),
+        Expr::ScalarSubquery(_) => Err(DataFusionError::NotImplemented(
+            "Scalar subqueries are not yet supported in the physical plan".to_string(),
         )),
         Expr::Between {
             expr,
@@ -791,11 +798,9 @@ impl DefaultPhysicalPlanner {
                     *produce_one_row,
                     SchemaRef::new(schema.as_ref().to_owned().into()),
                 ))),
-                LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
+                LogicalPlan::SubqueryAlias(SubqueryAlias { input,.. }) => {
                     match input.as_ref() {
-                        LogicalPlan::TableScan(scan) => {
-                            let mut scan = scan.clone();
-                            scan.table_name = alias.clone();
+                        LogicalPlan::TableScan(..) => {
                             self.create_initial_plan(input, session_state).await
                         }
                         _ => Err(DataFusionError::Plan("SubqueryAlias should only wrap TableScan".to_string()))
@@ -958,7 +963,27 @@ pub fn create_physical_expr(
                 input_schema,
                 execution_props,
             )?;
-            binary(lhs, *op, rhs, input_schema)
+            match (
+                lhs.data_type(input_schema)?,
+                op,
+                rhs.data_type(input_schema)?,
+            ) {
+                (
+                    DataType::Date32 | DataType::Date64,
+                    Operator::Plus | Operator::Minus,
+                    DataType::Interval(_),
+                ) => Ok(Arc::new(DateIntervalExpr::try_new(
+                    lhs,
+                    *op,
+                    rhs,
+                    input_schema,
+                )?)),
+                _ => {
+                    // assume that we can coerce both sides into a common type
+                    // and then perform a binary operation
+                    binary(lhs, *op, rhs, input_schema)
+                }
+            }
         }
         Expr::Case {
             expr,
@@ -1485,7 +1510,6 @@ mod tests {
         logical_plan::LogicalPlanBuilder, physical_plan::SendableRecordBatchStream,
     };
     use arrow::datatypes::{DataType, Field, SchemaRef};
-    use async_trait::async_trait;
     use datafusion_common::{DFField, DFSchema, DFSchemaRef};
     use datafusion_expr::sum;
     use datafusion_expr::{col, lit};
@@ -1873,7 +1897,7 @@ mod tests {
         let formatted = format!("{:?}", execution_plan);
 
         // Make sure the plan contains a FinalPartitioned, which means it will not use the Final
-        // mode in HashAggregate (which is slower)
+        // mode in Aggregate (which is slower)
         assert!(formatted.contains("FinalPartitioned"));
 
         Ok(())
@@ -1975,7 +1999,6 @@ mod tests {
         schema: SchemaRef,
     }
 
-    #[async_trait]
     impl ExecutionPlan for NoOpExecutionPlan {
         /// Return a reference to Any that can be used for downcasting
         fn as_any(&self) -> &dyn Any {
@@ -2009,7 +2032,7 @@ mod tests {
             unimplemented!("NoOpExecutionPlan::with_new_children");
         }
 
-        async fn execute(
+        fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,

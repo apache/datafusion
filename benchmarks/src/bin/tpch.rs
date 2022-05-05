@@ -655,7 +655,7 @@ async fn convert_tbl(opt: ConvertOpt) -> Result<()> {
         }
 
         // create the physical plan
-        let csv = csv.to_logical_plan();
+        let csv = csv.to_logical_plan()?;
         let csv = ctx.optimize(&csv)?;
         let csv = ctx.create_physical_plan(&csv).await?;
 
@@ -1072,6 +1072,16 @@ mod tests {
     #[tokio::test]
     async fn run_q14() -> Result<()> {
         run_query(14).await
+    }
+
+    #[tokio::test]
+    async fn run_q16() -> Result<()> {
+        run_query(16).await
+    }
+
+    #[tokio::test]
+    async fn run_q18() -> Result<()> {
+        run_query(18).await
     }
 
     #[tokio::test]

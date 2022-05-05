@@ -19,7 +19,7 @@
 
 use crate::execution::context::TaskContext;
 use crate::physical_plan::aggregates::hash::GroupedHashAggregateStream;
-use crate::physical_plan::aggregates::no_grouping::NoGroupingAggregateStream;
+use crate::physical_plan::aggregates::no_grouping::AggregateStream;
 use crate::physical_plan::metrics::{
     BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet,
 };
@@ -30,7 +30,6 @@ use crate::physical_plan::{
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
-use async_trait::async_trait;
 use datafusion_common::Result;
 use datafusion_expr::Accumulator;
 use datafusion_physical_expr::expressions::Column;
@@ -148,7 +147,6 @@ impl AggregateExec {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for AggregateExec {
     /// Return a reference to Any that can be used for down-casting
     fn as_any(&self) -> &dyn Any {
@@ -199,18 +197,18 @@ impl ExecutionPlan for AggregateExec {
         )?))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context).await?;
+        let input = self.input.execute(partition, context)?;
         let group_expr = self.group_expr.iter().map(|x| x.0.clone()).collect();
 
         let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
 
         if self.group_expr.is_empty() {
-            Ok(Box::pin(NoGroupingAggregateStream::new(
+            Ok(Box::pin(AggregateStream::new(
                 self.mode,
                 self.schema.clone(),
                 self.aggr_expr.clone(),
@@ -240,7 +238,7 @@ impl ExecutionPlan for AggregateExec {
     ) -> std::fmt::Result {
         match t {
             DisplayFormatType::Default => {
-                write!(f, "HashAggregateExec: mode={:?}", self.mode)?;
+                write!(f, "AggregateExec: mode={:?}", self.mode)?;
                 let g: Vec<String> = self
                     .group_expr
                     .iter()
@@ -456,7 +454,6 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use arrow::error::Result as ArrowResult;
     use arrow::record_batch::RecordBatch;
-    use async_trait::async_trait;
     use datafusion_common::{DataFusionError, Result};
     use datafusion_physical_expr::{AggregateExpr, PhysicalExpr, PhysicalSortExpr};
     use futures::{FutureExt, Stream};
@@ -528,8 +525,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(partial_aggregate.execute(0, task_ctx.clone()).await?)
-                .await?;
+            common::collect(partial_aggregate.execute(0, task_ctx.clone())?).await?;
 
         let expected = vec![
             "+---+---------------+-------------+",
@@ -561,7 +557,7 @@ mod tests {
         )?);
 
         let result =
-            common::collect(merged_aggregate.execute(0, task_ctx.clone()).await?).await?;
+            common::collect(merged_aggregate.execute(0, task_ctx.clone())?).await?;
         assert_eq!(result.len(), 1);
 
         let batch = &result[0];
@@ -595,7 +591,6 @@ mod tests {
         pub yield_first: bool,
     }
 
-    #[async_trait]
     impl ExecutionPlan for TestYieldingExec {
         fn as_any(&self) -> &dyn Any {
             self
@@ -626,7 +621,7 @@ mod tests {
             )))
         }
 
-        async fn execute(
+        fn execute(
             &self,
             _partition: usize,
             _context: Arc<TaskContext>,
@@ -721,7 +716,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let hash_aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -729,7 +724,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec, task_ctx);
+        let fut = crate::physical_plan::collect(aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);
@@ -759,7 +754,7 @@ mod tests {
 
         let blocking_exec = Arc::new(BlockingExec::new(Arc::clone(&schema), 1));
         let refs = blocking_exec.refs();
-        let hash_aggregate_exec = Arc::new(AggregateExec::try_new(
+        let aggregate_exec = Arc::new(AggregateExec::try_new(
             AggregateMode::Partial,
             groups.clone(),
             aggregates.clone(),
@@ -767,7 +762,7 @@ mod tests {
             schema,
         )?);
 
-        let fut = crate::physical_plan::collect(hash_aggregate_exec, task_ctx);
+        let fut = crate::physical_plan::collect(aggregate_exec, task_ctx);
         let mut fut = fut.boxed();
 
         assert_is_pending(&mut fut);

@@ -172,10 +172,11 @@ pub(crate) fn rebase_expr(
 
 /// Determines if the set of `Expr`'s are a valid projection on the input
 /// `Expr::Column`'s.
-pub(crate) fn can_columns_satisfy_exprs(
+pub(crate) fn check_columns_satisfy_exprs(
     columns: &[Expr],
     exprs: &[Expr],
-) -> Result<bool> {
+    message_prefix: &str,
+) -> Result<()> {
     columns.iter().try_for_each(|c| match c {
         Expr::Column(_) => Ok(()),
         _ => Err(DataFusionError::Internal(
@@ -183,7 +184,22 @@ pub(crate) fn can_columns_satisfy_exprs(
         )),
     })?;
 
-    Ok(find_column_exprs(exprs).iter().all(|c| columns.contains(c)))
+    for e in &find_column_exprs(exprs) {
+        if !columns.contains(e) {
+            return Err(DataFusionError::Plan(format!(
+                "{}: Expression {:?} could not be resolved from available columns: {}",
+                message_prefix,
+                e,
+                columns
+                    .iter()
+                    .map(|e| format!("{}", e))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Returns a cloned `Expr`, but any of the `Expr`'s in the tree may be
@@ -371,7 +387,17 @@ where
             Expr::Column { .. }
             | Expr::Literal(_)
             | Expr::ScalarVariable(_, _)
-            | Expr::Exists(_) => Ok(expr.clone()),
+            | Expr::Exists { .. }
+            | Expr::ScalarSubquery(_) => Ok(expr.clone()),
+            Expr::InSubquery {
+                expr: nested_expr,
+                subquery,
+                negated,
+            } => Ok(Expr::InSubquery {
+                expr: Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                subquery: subquery.clone(),
+                negated: *negated,
+            }),
             Expr::Wildcard => Ok(Expr::Wildcard),
             Expr::QualifiedWildcard { .. } => Ok(expr.clone()),
             Expr::GetIndexedField { expr, key } => Ok(Expr::GetIndexedField {
@@ -537,9 +563,9 @@ pub(crate) fn make_decimal_type(
 }
 
 // Normalize an identifer to a lowercase string unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: Ident) -> String {
+pub(crate) fn normalize_ident(id: &Ident) -> String {
     match id.quote_style {
-        Some(_) => id.value,
+        Some(_) => id.value.clone(),
         None => id.value.to_ascii_lowercase(),
     }
 }
