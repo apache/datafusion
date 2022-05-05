@@ -585,8 +585,9 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
     })
 }
 
+/// Converts [A, B, C] -> A AND B AND C
 pub fn combine_conjunctive(predicates: &[&Expr]) -> Expr {
-    assert!(predicates.len() > 0);
+    assert!(!predicates.is_empty());
     // reduce filters to a single filter with an AND
     predicates
         .iter()
@@ -596,8 +597,9 @@ pub fn combine_conjunctive(predicates: &[&Expr]) -> Expr {
         })
 }
 
+/// Converts [A, B, C] -> A OR B OR C
 pub fn combine_disjunctive(predicates: &[&Expr]) -> Expr {
-    assert!(predicates.len() > 0);
+    assert!(!predicates.is_empty());
     // reduce filters to a single filter with an AND
     predicates
         .iter()

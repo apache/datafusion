@@ -83,7 +83,7 @@ impl SubqueryFilterToJoin {
                         (left.as_ref(), right.as_ref())
                     {
                         if let Some(columns) =
-                            self.are_correlated_columns(outer, &column_a, &column_b)
+                            self.are_correlated_columns(outer, column_a, column_b)
                         {
                             if *op == Operator::Eq {
                                 correlated_columns.push(columns);
@@ -136,7 +136,7 @@ impl SubqueryFilterToJoin {
                                 LogicalPlan::Filter(Filter { predicate, input }) => {
                                     let non_correlated_predicates = self
                                         .extract_correlated_columns(
-                                            &predicate,
+                                            predicate,
                                             outer_plan.schema(),
                                             &mut correlated_columns,
                                         );
@@ -167,6 +167,7 @@ impl SubqueryFilterToJoin {
                     _ => None,
                 };
 
+                // optimize the subquery and obtain the appropriate IN join key
                 let (right_input, right_key) =
                     if let Some((plan, key)) = right_decorrelated_plan {
                         let right_input = self.optimize(&plan, execution_props)?;
@@ -225,7 +226,7 @@ impl SubqueryFilterToJoin {
                 let right_input = match &*subquery.subquery {
                     LogicalPlan::Filter(Filter { predicate, input }) => {
                         let non_correlated_predicates = self.extract_correlated_columns(
-                            &predicate,
+                            predicate,
                             outer_plan.schema(),
                             &mut correlated_columns,
                         );
@@ -380,6 +381,7 @@ fn column_is_correlated(outer: &Arc<DFSchema>, column: &Column) -> bool {
     false
 }
 
+#[allow(unused)]
 fn detect_correlated_columns(outer: &Arc<DFSchema>, expression: &Expr) -> Result<bool> {
     for se in utils::expr_sub_expressions(expression)?.into_iter() {
         match se {
