@@ -172,16 +172,7 @@ fn optimize_plan(
                 _execution_props,
             )?;
 
-            let new_required_columns_optimized = new_input
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.qualified_column())
-                .collect::<HashSet<Column>>();
-
-            if new_fields.is_empty()
-                || (has_projection && &new_required_columns_optimized == required_columns)
-            {
+            if new_fields.is_empty() {
                 // no need for an expression at all
                 Ok(new_input)
             } else {
