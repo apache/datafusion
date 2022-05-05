@@ -35,58 +35,22 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
         .iter()
         .enumerate()
         .map(|(i, arg)| -> (Field, ArrayRef) {
-            let field_name = format!("c_{}", i);
+            let field_name = format!("c{}", i);
             match arg.data_type() {
-                DataType::Utf8 => (
-                    Field::new(field_name.as_str(), DataType::Utf8, true),
-                    arg.clone(),
-                ),
-                DataType::LargeUtf8 => (
-                    Field::new(field_name.as_str(), DataType::LargeUtf8, true),
-                    arg.clone(),
-                ),
-                DataType::Boolean => (
-                    Field::new(field_name.as_str(), DataType::Boolean, true),
-                    arg.clone(),
-                ),
-                DataType::Float32 => (
-                    Field::new(field_name.as_str(), DataType::Float64, true),
-                    arg.clone(),
-                ),
-                DataType::Float64 => (
-                    Field::new(field_name.as_str(), DataType::Float64, true),
-                    arg.clone(),
-                ),
-                DataType::Int8 => (
-                    Field::new(field_name.as_str(), DataType::Int8, true),
-                    arg.clone(),
-                ),
-                DataType::Int16 => (
-                    Field::new(field_name.as_str(), DataType::Int16, true),
-                    arg.clone(),
-                ),
-                DataType::Int32 => (
-                    Field::new(field_name.as_str(), DataType::Int32, true),
-                    arg.clone(),
-                ),
-                DataType::Int64 => (
-                    Field::new(field_name.as_str(), DataType::Int64, true),
-                    arg.clone(),
-                ),
-                DataType::UInt8 => (
-                    Field::new(field_name.as_str(), DataType::UInt8, true),
-                    arg.clone(),
-                ),
-                DataType::UInt16 => (
-                    Field::new(field_name.as_str(), DataType::UInt16, true),
-                    arg.clone(),
-                ),
-                DataType::UInt32 => (
-                    Field::new(field_name.as_str(), DataType::UInt32, true),
-                    arg.clone(),
-                ),
-                DataType::UInt64 => (
-                    Field::new(field_name.as_str(), DataType::UInt64, true),
+                DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Boolean
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64 => (
+                    Field::new(field_name.as_str(), arg.data_type().clone(), true),
                     arg.clone(),
                 ),
                 data_type => unimplemented!("struct not support {} type", data_type),

@@ -514,14 +514,14 @@ async fn test_array_literals() -> Result<()> {
 async fn test_struct_literals() -> Result<()> {
     test_expression!(
         "STRUCT(1,2,3,4,5)",
-        "{\"c_0\": 1, \"c_1\": 2, \"c_2\": 3, \"c_3\": 4, \"c_4\": 5}"
+        "{\"c0\": 1, \"c1\": 2, \"c2\": 3, \"c3\": 4, \"c4\": 5}"
     );
-    test_expression!("STRUCT(Null)", "{\"c_0\": null}");
-    test_expression!("STRUCT(1,Null)", "{\"c_0\": \"1\", \"c_1\": null}");
-    test_expression!("STRUCT(true, false)", "{\"c_0\": true, \"c_1\": false}");
+    test_expression!("STRUCT(Null)", "{\"c0\": null}");
+    test_expression!("STRUCT(1,Null)", "{\"c0\": \"1\", \"c1\": null}");
+    test_expression!("STRUCT(true, false)", "{\"c0\": true, \"c1\": false}");
     test_expression!(
         "STRUCT('str1', 'str2')",
-        "{\"c_0\": \"str1\", \"c_1\": \"str2\"}"
+        "{\"c0\": \"str1\", \"c1\": \"str2\"}"
     );
 
     Ok(())
