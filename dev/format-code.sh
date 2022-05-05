@@ -24,4 +24,4 @@ fi
 
 cargo fmt --all
 cargo clippy --all-targets --workspace -- -D warnings
-find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \; ; git diff --exit-code
+find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
