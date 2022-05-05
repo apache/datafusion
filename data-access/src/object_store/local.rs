@@ -230,4 +230,30 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_globbing() -> Result<()> {
+        let tmp = tempdir()?;
+        let a1_path = tmp.path().join("a1.txt");
+        let a2_path = tmp.path().join("a2.txt");
+        let b1_path = tmp.path().join("b1.txt");
+        File::create(&a1_path)?;
+        File::create(&a2_path)?;
+        File::create(&b1_path)?;
+
+        let glob = format!("{}/a*.txt", tmp.path().to_str().unwrap());
+        let mut all_files = HashSet::new();
+        let mut files = LocalFileSystem.glob_file(&glob).await?;
+        while let Some(file) = files.next().await {
+            let file = file?;
+            assert_eq!(file.size(), 0);
+            all_files.insert(file.path().to_owned());
+        }
+
+        assert_eq!(all_files.len(), 2);
+        assert!(all_files.contains(a1_path.to_str().unwrap()));
+        assert!(all_files.contains(a2_path.to_str().unwrap()));
+
+        Ok(())
+    }
 }
