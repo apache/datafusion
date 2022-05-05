@@ -1600,6 +1600,7 @@ mod tests {
     use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
+    use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use crate::{
         assert_batches_eq, assert_batches_sorted_eq,
@@ -2124,7 +2125,41 @@ mod tests {
             "+----------+",
         ];
         assert_batches_eq!(expected, &result);
+        Ok(())
+    }
 
+    #[tokio::test]
+    async fn read_with_glob_path() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                format!("{}/alltypes_plain*.parquet", parquet_test_data()),
+                ParquetReadOptions::default(),
+            )
+            .await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn read_from_registered_table_with_glob_path() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        ctx.register_parquet(
+            "test",
+            &format!("{}/alltypes_plain*.parquet", parquet_test_data()),
+            ParquetReadOptions::default(),
+        )
+        .await?;
+        let df = ctx.sql("SELECT * FROM test").await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
         Ok(())
     }
 
