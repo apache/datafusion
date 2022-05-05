@@ -25,9 +25,9 @@ use datafusion_expr::logical_plan::{
 };
 
 use crate::logical_plan::{
-    and, build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
-    Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
-    Repartition, Union, Values,
+    and, build_join_schema, or, Column, CreateMemoryTable, DFSchemaRef, Expr,
+    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
+    Recursion, Repartition, Union, Values,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -567,6 +567,7 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
             split_conjunction(left, predicates);
             split_conjunction(right, predicates);
         }
+        // TODO: are we sure we want to ignore aliases?
         Expr::Alias(expr, _) => {
             split_conjunction(expr, predicates);
         }
@@ -577,18 +578,33 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
 /// its predicate be all `predicates` ANDed.
 pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
-    // reduce filters to a single filter with an AND
-    let predicate = predicates
-        .iter()
-        .skip(1)
-        .fold(predicates[0].clone(), |acc, predicate| {
-            and(acc, (*predicate).to_owned())
-        });
-
+    let predicate = combine_conjunctive(predicates);
     LogicalPlan::Filter(Filter {
         predicate,
         input: Arc::new(plan),
     })
+}
+
+pub fn combine_conjunctive(predicates: &[&Expr]) -> Expr {
+    assert!(predicates.len() > 0);
+    // reduce filters to a single filter with an AND
+    predicates
+        .iter()
+        .skip(1)
+        .fold(predicates[0].clone(), |acc, predicate| {
+            and(acc, (*predicate).to_owned())
+        })
+}
+
+pub fn combine_disjunctive(predicates: &[&Expr]) -> Expr {
+    assert!(predicates.len() > 0);
+    // reduce filters to a single filter with an AND
+    predicates
+        .iter()
+        .skip(1)
+        .fold(predicates[0].clone(), |acc, predicate| {
+            or(acc, (*predicate).to_owned())
+        })
 }
 
 #[cfg(test)]
