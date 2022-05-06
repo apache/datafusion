@@ -25,7 +25,7 @@
 //! ```text
 //!   WHERE t1.f IN (SELECT f FROM t2) OR t2.f = 'x'
 //! ```
-//! won't
+//!
 use std::sync::Arc;
 
 use crate::error::{DataFusionError, Result};
@@ -64,7 +64,7 @@ impl SubqueryFilterToJoin {
 
     // TODO: do we need to check correlation/dependency only with outer input top-level schema?
     // NOTE: We only match against an equality filter with an outer column
-    fn extract_correlated_columns(
+    fn extract_correlated_as_join_columns(
         &self,
         expr: &Expr,
         outer: &Arc<DFSchema>,
@@ -106,7 +106,7 @@ impl SubqueryFilterToJoin {
         }
     }
 
-    fn rewrite_outer_plan(
+    fn rewrite_correlated_subquery_as_join(
         &self,
         outer_plan: LogicalPlan,
         expr: &Expr,
@@ -118,7 +118,7 @@ impl SubqueryFilterToJoin {
                 subquery,
                 negated,
             } => {
-                let mut correlated_columns = vec![];
+                let mut correlated_join_columns = vec![];
                 let subquery_ref = &*subquery.subquery;
                 let right_decorrelated_plan = match subquery_ref {
                     // NOTE: We only pattern match against Projection(Filter(..)). We will have another optimization rule
@@ -131,22 +131,24 @@ impl SubqueryFilterToJoin {
                                 "Only single column allowed in InSubquery".to_string(),
                             ));
                         };
-                        if let Expr::Column(right_key) = &expr[0] {
-                            match &**input {
-                                LogicalPlan::Filter(Filter { predicate, input }) => {
-                                    let non_correlated_predicates = self
-                                        .extract_correlated_columns(
-                                            predicate,
-                                            outer_plan.schema(),
-                                            &mut correlated_columns,
-                                        );
+                        match (&expr[0], &**input) {
+                            (
+                                Expr::Column(right_key),
+                                LogicalPlan::Filter(Filter { predicate, input }),
+                            ) => {
+                                // Extract correlated columns as join columns from the filter predicate
+                                let non_correlated_predicate = self
+                                    .extract_correlated_as_join_columns(
+                                        predicate,
+                                        outer_plan.schema(),
+                                        &mut correlated_join_columns,
+                                    );
 
-                                    // Strip the projection away and use its input for the semi/anti-join
-                                    // Note that this rule is quite quirky. But a removing a projection below a semi
-                                    // or anti join is inconsequential if it is a Column projection.
-                                    let plan = if let Some(predicate) =
-                                        non_correlated_predicates
-                                    {
+                                // Strip the projection away and use its input for the semi/anti-join
+                                // Note that this rule is quite quirky. But a removing a projection below a semi
+                                // or anti join is inconsequential if it is a Column projection.
+                                let plan =
+                                    if let Some(predicate) = non_correlated_predicate {
                                         LogicalPlan::Filter(Filter {
                                             input: input.clone(),
                                             predicate,
@@ -154,14 +156,9 @@ impl SubqueryFilterToJoin {
                                     } else {
                                         (**input).clone()
                                     };
-                                    Some((plan, right_key.clone()))
-                                }
-                                _ => None,
+                                Some((plan, right_key.clone()))
                             }
-                        } else {
-                            // If the projection is not a Column, we don't pattern match
-                            // against correlated predicates
-                            None
+                            _ => None,
                         }
                     }
                     _ => None,
@@ -173,6 +170,9 @@ impl SubqueryFilterToJoin {
                         let right_input = self.optimize(&plan, execution_props)?;
                         (right_input, key)
                     } else {
+                        // If we were unable to decorrelate the subquery by matching against
+                        // the pattern, we assume the subquery itself is not correlated
+                        // and we run the semi/anti join on its output column
                         let right_input = self.optimize(subquery_ref, execution_props)?;
                         let right_schema = right_input.schema();
                         if right_schema.fields().len() != 1 {
@@ -194,7 +194,7 @@ impl SubqueryFilterToJoin {
                         ))
                     }
                 };
-                correlated_columns.push((left_key, right_key));
+                correlated_join_columns.push((left_key, right_key));
 
                 let join_type = if *negated {
                     JoinType::Anti
@@ -211,7 +211,7 @@ impl SubqueryFilterToJoin {
                 Ok(LogicalPlan::Join(Join {
                     left: Arc::new(outer_plan),
                     right: Arc::new(right_input),
-                    on: correlated_columns,
+                    on: correlated_join_columns,
                     join_type,
                     join_constraint: JoinConstraint::On,
                     schema: Arc::new(schema),
@@ -222,15 +222,16 @@ impl SubqueryFilterToJoin {
                 // NOTE: We only pattern match against Filter(..). We will have another optimization rule
                 // which tries to pull up all correlated predicates in an Exists into a Filter(..)
                 // at the root node of the Exists's subquery
-                let mut correlated_columns = vec![];
+                let mut correlated_join_columns = vec![];
                 let right_input = match &*subquery.subquery {
                     LogicalPlan::Filter(Filter { predicate, input }) => {
-                        let non_correlated_predicates = self.extract_correlated_columns(
-                            predicate,
-                            outer_plan.schema(),
-                            &mut correlated_columns,
-                        );
-                        if let Some(predicate) = non_correlated_predicates {
+                        let non_correlated_predicate = self
+                            .extract_correlated_as_join_columns(
+                                predicate,
+                                outer_plan.schema(),
+                                &mut correlated_join_columns,
+                            );
+                        if let Some(predicate) = non_correlated_predicate {
                             Arc::new(LogicalPlan::Filter(Filter {
                                 input: input.clone(),
                                 predicate,
@@ -259,7 +260,7 @@ impl SubqueryFilterToJoin {
                 Ok(LogicalPlan::Join(Join {
                     left: Arc::new(outer_plan),
                     right: Arc::new(right_input),
-                    on: correlated_columns,
+                    on: correlated_join_columns,
                     join_type,
                     join_constraint: JoinConstraint::On,
                     schema: Arc::new(schema),
@@ -319,11 +320,16 @@ impl OptimizerRule for SubqueryFilterToJoin {
 
                 // Add subquery joins to new_input
                 // optimized_input value should retain for possible optimization rollback
-                let opt_result = subquery_filters
-                    .iter()
-                    .try_fold(optimized_input.clone(), |input, &e| {
-                        self.rewrite_outer_plan(input, e, execution_props)
-                    });
+                let opt_result = subquery_filters.iter().try_fold(
+                    optimized_input.clone(),
+                    |input, &e| {
+                        self.rewrite_correlated_subquery_as_join(
+                            input,
+                            e,
+                            execution_props,
+                        )
+                    },
+                );
 
                 // In case of expressions which could not be rewritten
                 // return original filter with optimized input
