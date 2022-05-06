@@ -25,11 +25,11 @@ use crate::logical_plan::{DFField, DFSchema};
 use arrow::datatypes::DataType;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
-use datafusion_expr::AccumulatorFunctionImplementation;
 use datafusion_expr::BuiltinScalarFunction;
 pub use datafusion_expr::Expr;
 use datafusion_expr::StateTypeFunction;
 pub use datafusion_expr::{lit, lit_timestamp_nano, Literal};
+use datafusion_expr::{AccumulatorFunctionImplementation, LogicalPlan};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
@@ -137,6 +137,42 @@ pub fn create_udaf(
 
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
+    expr: impl IntoIterator<Item = &'a Expr>,
+    plan: &LogicalPlan,
+) -> Result<Vec<DFField>> {
+    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+    let mut fields = vec![];
+    for expr in &exprs {
+        match expr {
+            Expr::Column(c) => {
+                match plan {
+                    LogicalPlan::Aggregate(agg) => {
+                        let group_expr = agg.columns_in_group_expr()?;
+                        if let Some(_) = group_expr.into_iter().find(|x| x == c) {
+                            // fall back to legacy behavior, which has known issues, but at least use valid expressions and schemas
+                            fields.push(expr.to_field(&agg.input.schema())?);
+                        } else {
+                            // fall back to legacy behavior, which has known issues
+                            fields.push(expr.to_field(plan.schema())?);
+                        }
+                    }
+                    _ => {
+                        // fall back to legacy behavior, which has known issues
+                        fields.push(expr.to_field(plan.schema())?);
+                    }
+                }
+            }
+            _ => {
+                // fall back to legacy behavior, which has known issues
+                fields.push(expr.to_field(&plan.schema())?);
+            }
+        }
+    }
+    Ok(fields)
+}
+
+/// Create field meta-data from an expression, for use in a result set schema
+pub fn exprlist_to_fields_from_schema<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
     input_schema: &DFSchema,
 ) -> Result<Vec<DFField>> {

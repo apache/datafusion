@@ -124,6 +124,10 @@ impl ExprSchemable for Expr {
                 "QualifiedWildcard expressions are not valid in a logical query plan"
                     .to_owned(),
             )),
+            Expr::GroupingSet(_) => {
+                // TODO grouping sets do not really have a type
+                Ok(DataType::Null)
+            }
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(schema)?;
 
@@ -197,6 +201,10 @@ impl ExprSchemable for Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 let data_type = expr.get_type(input_schema)?;
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
+            }
+            Expr::GroupingSet(_) => {
+                // TODO grouping sets do not really have the concept of nullable
+                Ok(true)
             }
         }
     }

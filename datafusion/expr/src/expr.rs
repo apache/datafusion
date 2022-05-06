@@ -249,6 +249,24 @@ pub enum Expr {
     Wildcard,
     /// Represents a reference to all fields in a specific schema.
     QualifiedWildcard { qualifier: String },
+    /// List of grouping set expressions. Only valid in the context of an aggregate
+    /// GROUP BY expression list
+    GroupingSet(GroupingSet),
+}
+
+/// Grouping sets
+/// See https://www.postgresql.org/docs/current/queries-table-expressions.html#QUERIES-GROUPING-SETS
+/// for Postgres definition.
+/// See https://spark.apache.org/docs/latest/sql-ref-syntax-qry-select-groupby.html
+/// for Apache Spark definition.
+#[derive(Clone, PartialEq, Hash)]
+pub enum GroupingSet {
+    /// Rollup grouping sets
+    Rollup(Vec<Expr>),
+    /// Cube grouping sets
+    Cube(Vec<Expr>),
+    /// User-defined grouping sets
+    GroupingSets(Vec<Vec<Expr>>),
 }
 
 /// Recursively find all columns referenced by an expression
@@ -319,6 +337,21 @@ pub fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
             .iter()
             .flat_map(find_columns_referenced_by_expr)
             .collect(),
+        Expr::GroupingSet(set) => match set {
+            GroupingSet::Rollup(exprs) | GroupingSet::Cube(exprs) => exprs
+                .iter()
+                .flat_map(find_columns_referenced_by_expr)
+                .collect(),
+            GroupingSet::GroupingSets(lists_of_exprs) => {
+                let mut cols = vec![];
+                for exprs in lists_of_exprs {
+                    for expr in exprs {
+                        cols.extend(find_columns_referenced_by_expr(expr));
+                    }
+                }
+                cols
+            }
+        },
     }
 }
 
@@ -627,6 +660,51 @@ impl fmt::Debug for Expr {
             Expr::GetIndexedField { ref expr, key } => {
                 write!(f, "({:?})[{}]", expr, key)
             }
+            Expr::GroupingSet(grouping_sets) => match grouping_sets {
+                GroupingSet::Rollup(exprs) => {
+                    // ROLLUP (c0, c1, c2)
+                    write!(
+                        f,
+                        "ROLLUP ({})",
+                        exprs
+                            .iter()
+                            .map(|e| format!("{}", e))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                }
+                GroupingSet::Cube(exprs) => {
+                    // CUBE (c0, c1, c2)
+                    write!(
+                        f,
+                        "CUBE ({})",
+                        exprs
+                            .iter()
+                            .map(|e| format!("{}", e))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                }
+                GroupingSet::GroupingSets(lists_of_exprs) => {
+                    // GROUPING SETS ((c0), (c1, c2), (c3, c4))
+                    write!(
+                        f,
+                        "GROUPING SETS ({})",
+                        lists_of_exprs
+                            .iter()
+                            .map(|exprs| format!(
+                                "({})",
+                                exprs
+                                    .iter()
+                                    .map(|e| format!("{}", e))
+                                    .collect::<Vec<String>>()
+                                    .join(", ")
+                            ))
+                            .collect::<Vec<String>>()
+                            .join(", ")
+                    )
+                }
+            },
         }
     }
 }
@@ -781,6 +859,23 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             }
             Ok(format!("{}({})", fun.name, names.join(",")))
         }
+        Expr::GroupingSet(grouping_set) => match grouping_set {
+            GroupingSet::Rollup(exprs) => Ok(format!(
+                "ROLLUP ({})",
+                create_names(exprs.as_slice(), input_schema)?
+            )),
+            GroupingSet::Cube(exprs) => Ok(format!(
+                "CUBE ({})",
+                create_names(exprs.as_slice(), input_schema)?
+            )),
+            GroupingSet::GroupingSets(_list_of_exprs) => {
+                todo!()
+                // Ok(format!(
+                //     "GROUPING SETS ({})",
+                //     list_of_exprs.iter().map(|exprs| format!("({})", create_names(exprs.as_slice(), input_schema))).collect::<Result<Vec<_>>>()?.join(", ")
+                // ))
+            }
+        },
         Expr::InList {
             expr,
             list,
@@ -819,6 +914,15 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
             "Create name does not support qualified wildcard".to_string(),
         )),
     }
+}
+
+/// Create a comma separated list of names from a list of expressions
+fn create_names(exprs: &[Expr], input_schema: &DFSchema) -> Result<String> {
+    Ok(exprs
+        .iter()
+        .map(|e| create_name(e, input_schema))
+        .collect::<Result<Vec<String>>>()?
+        .join(", "))
 }
 
 #[cfg(test)]

@@ -19,6 +19,7 @@
 
 use super::Expr;
 use datafusion_common::Result;
+use datafusion_expr::expr::GroupingSet;
 
 /// Controls how the visitor recursion should proceed.
 pub enum Recursion<V: ExpressionVisitor> {
@@ -103,6 +104,19 @@ impl ExprVisitable for Expr {
             | Expr::TryCast { expr, .. }
             | Expr::Sort { expr, .. }
             | Expr::GetIndexedField { expr, .. } => expr.accept(visitor),
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => exprs
+                .iter()
+                .fold(Ok(visitor), |v, e| v.and_then(|v| e.accept(v))),
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => exprs
+                .iter()
+                .fold(Ok(visitor), |v, e| v.and_then(|v| e.accept(v))),
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                lists_of_exprs.iter().fold(Ok(visitor), |v, exprs| {
+                    v.and_then(|v| {
+                        exprs.iter().fold(Ok(v), |v, e| v.and_then(|v| e.accept(v)))
+                    })
+                })
+            }
             Expr::Column(_)
             | Expr::ScalarVariable(_, _)
             | Expr::Literal(_)

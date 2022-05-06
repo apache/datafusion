@@ -507,7 +507,8 @@ mod tests {
 
     use super::*;
     use crate::logical_plan::{
-        col, exprlist_to_fields, lit, max, min, Expr, JoinType, LogicalPlanBuilder,
+        col, exprlist_to_fields_from_schema, lit, max, min, Expr, JoinType,
+        LogicalPlanBuilder,
     };
     use crate::test::*;
     use arrow::datatypes::DataType;
@@ -810,7 +811,8 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
-        let projected_fields = exprlist_to_fields(&expr, input_schema).unwrap();
+        let projected_fields =
+            exprlist_to_fields_from_schema(&expr, input_schema).unwrap();
         let projected_schema = DFSchema::new_with_metadata(
             projected_fields,
             input_schema.metadata().clone(),
