@@ -318,16 +318,21 @@ fn extract_job_id_from_job_key(job_key: &str) -> Result<&str> {
 
 fn extract_stage_id_from_stage_key(stage_key: &str) -> Result<StageKey> {
     let splits: Vec<&str> = stage_key.split('/').collect();
-    if splits.len() < 4 {
+    if splits.len() > 4 {
+        Ok((
+            splits[splits.len() - 2].to_string(),
+            splits[splits.len() - 1].parse::<u32>().map_err(|e| {
+                BallistaError::Internal(format!(
+                    "Invalid stage ID in stage key: {}, {:?}",
+                    stage_key, e
+                ))
+            })?,
+        ))
+    } else {
         Err(BallistaError::Internal(format!(
             "Unexpected stage key: {}",
             stage_key
         )))
-    } else {
-        Ok((
-            splits.get(2).unwrap().to_string(),
-            splits.get(3).unwrap().parse::<u32>().unwrap(),
-        ))
     }
 }
 
@@ -351,4 +356,33 @@ fn encode_protobuf<T: Message + Default>(msg: &T) -> Result<Vec<u8>> {
         ))
     })?;
     Ok(value)
+}
+
+#[cfg(test)]
+mod test {
+    use super::extract_stage_id_from_stage_key;
+
+    #[test]
+    fn test_extract_stage_id_from_stage_key() {
+        let (job_id, stage_id) =
+            extract_stage_id_from_stage_key("/ballista/default/stages/2Yoyba8/1")
+                .expect("extracting stage key");
+
+        assert_eq!(job_id.as_str(), "2Yoyba8");
+        assert_eq!(stage_id, 1);
+
+        let (job_id, stage_id) =
+            extract_stage_id_from_stage_key("ballista/default/stages/2Yoyba8/1")
+                .expect("extracting stage key");
+
+        assert_eq!(job_id.as_str(), "2Yoyba8");
+        assert_eq!(stage_id, 1);
+
+        let (job_id, stage_id) =
+            extract_stage_id_from_stage_key("ballista//stages/2Yoyba8/1")
+                .expect("extracting stage key");
+
+        assert_eq!(job_id.as_str(), "2Yoyba8");
+        assert_eq!(stage_id, 1);
+    }
 }
