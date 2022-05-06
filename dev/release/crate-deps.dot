@@ -30,7 +30,6 @@ digraph G {
 	datafusion_jit -> datafusion_expr
 
     datafusion_row -> datafusion_common
-    datafusion_row -> datafusion_expr
     datafusion_row -> datafusion_jit
 
 	datafusion -> datafusion_common
