@@ -22,6 +22,7 @@ pub use super::Operator;
 use crate::error::Result;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{DFField, DFSchema};
+use crate::sql::utils::find_columns_referenced_by_expr;
 use arrow::datatypes::DataType;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
@@ -35,7 +36,6 @@ use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
 };
 use std::sync::Arc;
-use crate::sql::utils::find_columns_referenced_by_expr;
 
 /// Combines an array of filter expressions into a single filter expression
 /// consisting of the input filter expressions joined with logical AND.
@@ -143,7 +143,11 @@ pub fn exprlist_to_fields<'a>(
 ) -> Result<Vec<DFField>> {
     match plan {
         LogicalPlan::Aggregate(agg) => {
-            let group_expr: Vec<Column> = agg.group_expr.iter().flat_map(|expr| find_columns_referenced_by_expr(expr)).collect();
+            let group_expr: Vec<Column> = agg
+                .group_expr
+                .iter()
+                .flat_map(find_columns_referenced_by_expr)
+                .collect();
             let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
             let mut fields = vec![];
             for expr in &exprs {
