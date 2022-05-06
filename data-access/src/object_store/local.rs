@@ -85,9 +85,7 @@ impl ObjectStore for LocalFileSystem {
             Ok(Box::pin(list_entries))
         } else {
             Ok(Box::pin(
-                self.list_file(prefix)
-                    .await?
-                    .map_ok(ListEntry::FileMeta),
+                self.list_file(prefix).await?.map_ok(ListEntry::FileMeta),
             ))
         }
     }
