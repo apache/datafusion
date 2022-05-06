@@ -4682,7 +4682,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
         \n    TableScan: person projection=None";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[tokio::test]
@@ -4692,7 +4692,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, CUBE (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
         \n    TableScan: person projection=None";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
@@ -4700,7 +4700,7 @@ mod tests {
     async fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
         let expected = "TBD";
-        quick_test(sql, &expected);
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
