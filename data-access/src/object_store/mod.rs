@@ -98,7 +98,7 @@ pub trait ObjectStore: Sync + Send + Debug {
             let start_path =
                 find_longest_search_path_without_glob_pattern(normalized_glob_pattern);
             let file_stream = self.list_file(&start_path).await?;
-            let pattern = Pattern::new(&normalized_glob_pattern).unwrap();
+            let pattern = Pattern::new(normalized_glob_pattern).unwrap();
             Ok(Box::pin(file_stream.filter(move |fr| {
                 let matches_pattern = match fr {
                     Ok(f) => pattern.matches(f.path()),
