@@ -36,7 +36,8 @@ async fn information_schema_tables_not_exist_by_default() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Table or CTE with name 'information_schema.tables' not found"
+        // Error propagates from SessionState::schema_for_ref
+        "Error during planning: failed to resolve schema: information_schema"
     );
 }
 
@@ -313,7 +314,8 @@ async fn information_schema_show_columns() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Unknown relation for SHOW COLUMNS: \"T\""
+        // Error propagates from SessionState::get_table_provider
+        "Error during planning: 'datafusion.public.T' not found"
     );
 }
 
@@ -375,7 +377,8 @@ async fn information_schema_show_table_table_names() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Unknown relation for SHOW COLUMNS: t2"
+        // Error propagates from SessionState::get_table_provider
+        "Error during planning: 'datafusion.public.t2' not found"
     );
 
     let err = plan_and_collect(&ctx, "SHOW columns from datafusion.public.t2")
@@ -383,7 +386,8 @@ async fn information_schema_show_table_table_names() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Unknown relation for SHOW COLUMNS: datafusion.public.t2"
+        // Error propagates from SessionState::get_table_provider
+        "Error during planning: 'datafusion.public.t2' not found"
     );
 }
 
@@ -407,7 +411,8 @@ async fn information_schema_columns_not_exist_by_default() {
         .unwrap_err();
     assert_eq!(
         err.to_string(),
-        "Error during planning: Table or CTE with name 'information_schema.columns' not found"
+        // Error propagates from SessionState::schema_for_ref
+        "Error during planning: failed to resolve schema: information_schema"
     );
 }
 
