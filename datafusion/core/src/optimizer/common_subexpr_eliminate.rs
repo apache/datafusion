@@ -487,26 +487,26 @@ impl ExprIdentifierVisitor<'_> {
                 GroupingSet::Rollup(exprs) => {
                     desc.push_str("Rollup");
                     for expr in exprs {
-                        desc.push_str("-");
+                        desc.push('-');
                         desc.push_str(&Self::desc_expr(expr));
                     }
                 }
                 GroupingSet::Cube(exprs) => {
                     desc.push_str("Cube");
                     for expr in exprs {
-                        desc.push_str("-");
+                        desc.push('-');
                         desc.push_str(&Self::desc_expr(expr));
                     }
                 }
                 GroupingSet::GroupingSets(lists_of_exprs) => {
                     desc.push_str("GroupingSets");
                     for exprs in lists_of_exprs {
-                        desc.push_str("(");
+                        desc.push('(');
                         for expr in exprs {
-                            desc.push_str("-");
+                            desc.push('-');
                             desc.push_str(&Self::desc_expr(expr));
                         }
-                        desc.push_str(")");
+                        desc.push(')');
                     }
                 }
             },

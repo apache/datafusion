@@ -149,9 +149,9 @@ pub fn exprlist_to_fields<'a>(
                 match expr {
                     Expr::Column(c) if group_expr.iter().any(|x| x == c) => {
                         // resolve against schema of input to aggregate
-                        fields.push(expr.to_field(&agg.input.schema())?);
+                        fields.push(expr.to_field(agg.input.schema())?);
                     }
-                    _ => fields.push(expr.to_field(plan.schema())?)
+                    _ => fields.push(expr.to_field(plan.schema())?),
                 }
             }
             Ok(fields)

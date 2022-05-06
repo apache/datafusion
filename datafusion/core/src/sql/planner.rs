@@ -1161,10 +1161,10 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         for expr in &group_by_exprs {
             match expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
-                    aggr_projection_exprs.extend_from_slice(&exprs)
+                    aggr_projection_exprs.extend_from_slice(exprs)
                 }
                 Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
-                    aggr_projection_exprs.extend_from_slice(&exprs)
+                    aggr_projection_exprs.extend_from_slice(exprs)
                 }
                 Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                     for exprs in lists_of_exprs {
