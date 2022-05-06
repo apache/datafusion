@@ -37,7 +37,7 @@ use crate::logical_plan::{
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
 use crate::scalar::ScalarValue;
-use crate::sql::utils::{make_decimal_type, normalize_ident};
+use crate::sql::utils::{make_decimal_type, normalize_ident, resolve_columns};
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::aggregates,
@@ -1144,30 +1144,45 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         group_by_exprs: Vec<Expr>,
         aggr_exprs: Vec<Expr>,
     ) -> Result<(LogicalPlan, Vec<Expr>, Option<Expr>)> {
+        // create the aggregate plan
+        let plan = LogicalPlanBuilder::from(input.clone())
+            .aggregate(group_by_exprs.clone(), aggr_exprs.clone())?
+            .build()?;
+
+        // in this next section of code we are re-writing the projection to refer to columns
+        // output by the aggregate plan. For example, if the projection contains the expression
+        // `SUM(a)` then we replace that with a reference to a column `#SUM(a)` produced by
+        // the aggregate plan.
+
+        // combine the original grouping and aggregate expressions into one list (note that
+        // we do not add the "having" expression since that is not part of the projection)
         let aggr_projection_exprs = group_by_exprs
             .iter()
             .chain(aggr_exprs.iter())
             .cloned()
             .collect::<Vec<Expr>>();
 
-        let plan = LogicalPlanBuilder::from(input.clone())
-            .aggregate(group_by_exprs, aggr_exprs)?
-            .build()?;
+        // now attempt to resolve columns and replace with fully-qualified columns
+        let aggr_projection_exprs = aggr_projection_exprs
+            .iter()
+            .map(|expr| resolve_columns(expr, &input))
+            .collect::<Result<Vec<Expr>>>()?;
 
-        // After aggregation, these are all of the columns that will be
-        // available to next phases of planning.
+        // next we replace any expressions that are not a column with a column referencing
+        // an output column from the aggregate schema
         let column_exprs_post_aggr = aggr_projection_exprs
             .iter()
             .map(|expr| expr_as_column_expr(expr, &input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        // Rewrite the SELECT expression to use the columns produced by the
-        // aggregation.
+        // next we re-write the projection
         let select_exprs_post_aggr = select_exprs
             .iter()
             .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &input))
             .collect::<Result<Vec<Expr>>>()?;
 
+        // finally, we have some validation that the re-written projection can be resolved
+        // from the aggregate output columns
         check_columns_satisfy_exprs(
             &column_exprs_post_aggr,
             &select_exprs_post_aggr,

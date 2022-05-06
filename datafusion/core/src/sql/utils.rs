@@ -139,6 +139,10 @@ where
     exprs
 }
 
+// pub(crate) fn resolve_columns(plan: &LogicalPlan) -> Result<LogicalPlan> {
+//
+// }
+
 /// Convert any `Expr` to an `Expr::Column`.
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
@@ -153,6 +157,22 @@ pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Exp
             Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
         }
     }
+}
+
+/// Make a best-effort attempt at resolving all columns in the expression tree
+pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
+    clone_with_replacement(expr, &|nested_expr| {
+        match nested_expr {
+            Expr::Column(col) => {
+                let field = plan.schema().field_from_column(col)?;
+                Ok(Some(Expr::Column(field.qualified_column())))
+            }
+            _ => {
+                // keep recursing
+                Ok(None)
+            }
+        }
+    })
 }
 
 /// Rebuilds an `Expr` as a projection on top of a collection of `Expr`'s.
@@ -174,6 +194,12 @@ pub(crate) fn rebase_expr(
     base_exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Expr> {
+    // make a best effort attempt to replace columns with fully qualified columns
+    let base_exprs = base_exprs
+        .iter()
+        .map(|expr| resolve_columns(expr, plan))
+        .collect::<Result<Vec<_>>>()?;
+
     clone_with_replacement(expr, &|nested_expr| {
         if base_exprs.contains(nested_expr) {
             Ok(Some(expr_as_column_expr(nested_expr, plan)?))
@@ -238,6 +264,11 @@ where
 {
     let replacement_opt = replacement_fn(expr)?;
 
+    println!(
+        "clone_with_replacement: {:?} replacement = {:?}",
+        expr, replacement_opt
+    );
+
     match replacement_opt {
         // If we were provided a replacement, use the replacement. Do not
         // descend further.
@@ -286,10 +317,13 @@ where
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
             }),
-            Expr::Alias(nested_expr, alias_name) => Ok(Expr::Alias(
-                Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
-                alias_name.clone(),
-            )),
+            Expr::Alias(nested_expr, alias_name) => {
+                println!("alias case: alias={}, expr={:?}", alias_name, nested_expr);
+                Ok(Expr::Alias(
+                    Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                    alias_name.clone(),
+                ))
+            }
             Expr::Between {
                 expr: nested_expr,
                 negated,

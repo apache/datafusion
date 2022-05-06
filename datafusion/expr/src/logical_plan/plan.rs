@@ -15,11 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::expr::find_columns_referenced_by_expr;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError};
+use datafusion_common::{Column, DFSchemaRef, DataFusionError, Result};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -281,7 +282,7 @@ impl LogicalPlan {
     }
 
     /// returns all `Using` join columns in a logical plan
-    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
+    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>> {
         struct UsingJoinColumnVisitor {
             using_columns: Vec<HashSet<Column>>,
         }
@@ -289,7 +290,10 @@ impl LogicalPlan {
         impl PlanVisitor for UsingJoinColumnVisitor {
             type Error = DataFusionError;
 
-            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
+            fn pre_visit(
+                &mut self,
+                plan: &LogicalPlan,
+            ) -> std::result::Result<bool, Self::Error> {
                 if let LogicalPlan::Join(Join {
                     join_constraint: JoinConstraint::Using,
                     on,
@@ -1124,6 +1128,19 @@ pub struct Aggregate {
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
+}
+
+impl Aggregate {
+    /// Return all columns referenced in the grouping expressions
+    pub fn columns_in_group_expr(&self) -> Result<Vec<Column>> {
+        let mut cols = vec![];
+        for e in &self.group_expr {
+            for col in find_columns_referenced_by_expr(e) {
+                cols.push(col)
+            }
+        }
+        Ok(cols)
+    }
 }
 
 /// Sorts its input according to a list of sort expressions.
