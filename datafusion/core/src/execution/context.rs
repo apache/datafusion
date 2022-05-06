@@ -2160,6 +2160,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_with_glob_path_issue_2465() -> Result<()> {
+        let ctx = SessionContext::new();
+
+        let df = ctx
+            .read_parquet(
+                // it was reported that when a path contains // (two consecutive separator) no files were found
+                // in this test, regardless of parquet_test_data() value, our path now contains a //
+                format!("{}/..//*/alltypes_plain*.parquet", parquet_test_data()),
+                ParquetReadOptions::default(),
+            )
+            .await?;
+        let results = df.collect().await?;
+        let total_rows: usize = results.iter().map(|rb| rb.num_rows()).sum();
+        // alltypes_plain.parquet = 8 rows, alltypes_plain.snappy.parquet = 2 rows, alltypes_dictionary.parquet = 2 rows
+        assert_eq!(total_rows, 10);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn read_from_registered_table_with_glob_path() -> Result<()> {
         let ctx = SessionContext::new();
 
