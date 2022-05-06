@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aggregate::accumulator_v2::AccumulatorV2;
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::PhysicalExpr;
 use arrow::datatypes::Field;
 use datafusion_common::{Result, ScalarValue};
@@ -38,9 +38,9 @@ pub(crate) mod count_distinct;
 pub(crate) mod covariance;
 #[macro_use]
 pub(crate) mod min_max;
-pub mod accumulator_v2;
 pub mod build_in;
 mod hyperloglog;
+pub mod row_accumulator;
 pub(crate) mod stats;
 pub(crate) mod stddev;
 pub(crate) mod sum;
@@ -81,14 +81,19 @@ pub trait AggregateExpr: Send + Sync + Debug {
     }
 
     /// If the aggregate expression is supported by row format
-    fn accumulator_v2_supported(&self) -> bool {
+    fn row_accumulator_supported(&self) -> bool {
         false
     }
 
-    fn create_accumulator_v2(
+    /// RowAccumulator to access/update row-based aggregation state in-place.
+    /// Currently, row accumulator only supports states of fixed-sized type.
+    ///
+    /// We recommend implementing `RowAccumulator` along with the standard `Accumulator`,
+    /// when its state is of fixed size, as RowAccumulator is more memory efficient and CPU-friendly.
+    fn create_row_accumulator(
         &self,
         _start_index: usize,
-    ) -> Result<Box<dyn AccumulatorV2>> {
+    ) -> Result<Box<dyn RowAccumulator>> {
         unreachable!()
     }
 }

@@ -284,10 +284,7 @@ pub fn create_row_hashes<'a>(
     Ok(hashes_buffer)
 }
 
-/// Test version of `create_row_hashes` that produces the same value for
-/// all hashes (to test collisions)
-///
-/// See comments on `hashes_buffer` for more details
+/// Creates hash values for every row, based on their raw bytes.
 #[cfg(not(feature = "force_hash_collisions"))]
 pub fn create_row_hashes<'a>(
     rows: &[Vec<u8>],

@@ -52,10 +52,22 @@ use datafusion_row::writer::{write_row, RowWriter};
 use datafusion_row::{MutableRecordBatch, RowType};
 use hashbrown::raw::RawTable;
 
-/// Grouping aggregate with row format to store the aggregation state.
+/// Grouping aggregate with row-format aggregation states inside.
 ///
-/// The Architecture is similar to that in [`super::GroupedHashAggregateStream`] but use
-/// row format inside the HashTable to store aggregation buffers.
+/// For each aggregation entry, we use:
+/// - [Compact] row represents grouping keys for fast hash computation and comparison directly on raw bytes.
+/// - [WordAligned] row to store aggregation state, designed to be CPU-friendly when updates over every field are often.
+///
+/// The architecture is the following:
+///
+/// 1. For each input RecordBatch, update aggregation states corresponding to all appeared grouping keys.
+/// 2. At the end of the aggregation (e.g. end of batches in a partition), the accumulator converts its state to a RecordBatch of a single row
+/// 3. The RecordBatches of all accumulators are merged (`concatenate` in `rust/arrow`) together to a single RecordBatch.
+/// 4. The state's RecordBatch is `merge`d to a new state
+/// 5. The state is mapped to the final value
+///
+/// [Compact]: datafusion_row::layout::RowType::Compact
+/// [WordAligned]: datafusion_row::layout::RowType::WordAligned
 pub(crate) struct GroupedHashAggregateStreamV2 {
     schema: SchemaRef,
     input: SendableRecordBatchStream,
@@ -68,7 +80,7 @@ pub(crate) struct GroupedHashAggregateStreamV2 {
 
     group_schema: SchemaRef,
     aggr_schema: SchemaRef,
-    aggr_layout: RowLayout,
+    aggr_layout: Arc<RowLayout>,
 
     baseline_metrics: BaselineMetrics,
     random_state: RandomState,
@@ -106,7 +118,7 @@ impl GroupedHashAggregateStreamV2 {
         let group_schema = group_schema(&schema, group_expr.len());
         let aggr_schema = aggr_state_schema(&aggr_expr)?;
 
-        let aggr_layout = RowLayout::new(&aggr_schema, RowType::WordAligned);
+        let aggr_layout = Arc::new(RowLayout::new(&aggr_schema, RowType::WordAligned));
         timer.done();
 
         Ok(Self {
@@ -151,7 +163,7 @@ impl Stream for GroupedHashAggregateStreamV2 {
                         &this.group_expr,
                         &mut this.accumulators,
                         &this.group_schema,
-                        &this.aggr_layout,
+                        this.aggr_layout.clone(),
                         batch,
                         &mut this.aggr_state,
                         &this.aggregate_expressions,
@@ -203,7 +215,7 @@ fn group_aggregate_batch(
     group_expr: &[Arc<dyn PhysicalExpr>],
     accumulators: &mut [AccumulatorItemV2],
     group_schema: &Schema,
-    state_layout: &RowLayout,
+    state_layout: Arc<RowLayout>,
     batch: RecordBatch,
     aggr_state: &mut AggregationState,
     aggregate_expressions: &[Vec<Arc<dyn PhysicalExpr>>],

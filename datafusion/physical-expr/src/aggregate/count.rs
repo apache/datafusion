@@ -21,7 +21,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::aggregate::accumulator_v2::AccumulatorV2;
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::{AggregateExpr, PhysicalExpr};
 use arrow::compute;
 use arrow::datatypes::DataType;
@@ -96,15 +96,15 @@ impl AggregateExpr for Count {
         &self.name
     }
 
-    fn accumulator_v2_supported(&self) -> bool {
+    fn row_accumulator_supported(&self) -> bool {
         true
     }
 
-    fn create_accumulator_v2(
+    fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn AccumulatorV2>> {
-        Ok(Box::new(CountAccumulatorV2::new(start_index)))
+    ) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(CountRowAccumulator::new(start_index)))
     }
 }
 
@@ -146,17 +146,17 @@ impl Accumulator for CountAccumulator {
 }
 
 #[derive(Debug)]
-struct CountAccumulatorV2 {
-    index: usize,
+struct CountRowAccumulator {
+    state_index: usize,
 }
 
-impl CountAccumulatorV2 {
+impl CountRowAccumulator {
     pub fn new(index: usize) -> Self {
-        Self { index }
+        Self { state_index: index }
     }
 }
 
-impl AccumulatorV2 for CountAccumulatorV2 {
+impl RowAccumulator for CountRowAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -164,7 +164,7 @@ impl AccumulatorV2 for CountAccumulatorV2 {
     ) -> Result<()> {
         let array = &values[0];
         let delta = (array.len() - array.data().null_count()) as u64;
-        accessor.add_u64(self.index, delta);
+        accessor.add_u64(self.state_index, delta);
         Ok(())
     }
 
@@ -176,13 +176,18 @@ impl AccumulatorV2 for CountAccumulatorV2 {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         let delta = &compute::sum(counts);
         if let Some(d) = delta {
-            accessor.add_u64(self.index, *d);
+            accessor.add_u64(self.state_index, *d);
         }
         Ok(())
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
-        Ok(accessor.get_as_scalar(&DataType::UInt64, self.index))
+        Ok(accessor.get_as_scalar(&DataType::UInt64, self.state_index))
+    }
+
+    #[inline(always)]
+    fn state_index(&self) -> usize {
+        self.state_index
     }
 }
 

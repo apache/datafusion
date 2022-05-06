@@ -34,10 +34,11 @@ use arrow::{
 use datafusion_common::{DataFusionError, Result, ScalarValue};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::accumulator_v2::AccumulatorV2;
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::DecimalArray;
+use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
 
 /// SUM aggregate expression
@@ -99,7 +100,7 @@ impl AggregateExpr for Sum {
         &self.name
     }
 
-    fn accumulator_v2_supported(&self) -> bool {
+    fn row_accumulator_supported(&self) -> bool {
         matches!(
             self.data_type,
             DataType::UInt8
@@ -115,11 +116,11 @@ impl AggregateExpr for Sum {
         )
     }
 
-    fn create_accumulator_v2(
+    fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn AccumulatorV2>> {
-        Ok(Box::new(SumAccumulatorV2::new(
+    ) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(SumRowAccumulator::new(
             start_index,
             self.data_type.clone(),
         )))
@@ -172,7 +173,8 @@ fn sum_decimal_batch(
 }
 
 // sums the array and returns a ScalarValue of its corresponding type.
-pub(crate) fn sum_batch(values: &ArrayRef) -> Result<ScalarValue> {
+pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<ScalarValue> {
+    let values = &cast(values, sum_type)?;
     Ok(match values.data_type() {
         DataType::Decimal(precision, scale) => {
             sum_decimal_batch(values, precision, scale)?
@@ -439,7 +441,7 @@ impl Accumulator for SumAccumulator {
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let values = &values[0];
-        self.sum = sum(&self.sum, &sum_batch(values)?)?;
+        self.sum = sum(&self.sum, &sum_batch(values, &self.sum.get_datatype())?)?;
         Ok(())
     }
 
@@ -456,25 +458,30 @@ impl Accumulator for SumAccumulator {
 }
 
 #[derive(Debug)]
-struct SumAccumulatorV2 {
+struct SumRowAccumulator {
     index: usize,
     datatype: DataType,
 }
 
-impl SumAccumulatorV2 {
+impl SumRowAccumulator {
     pub fn new(index: usize, datatype: DataType) -> Self {
         Self { index, datatype }
     }
 }
 
-impl AccumulatorV2 for SumAccumulatorV2 {
+impl RowAccumulator for SumRowAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
         accessor: &mut RowAccessor,
     ) -> Result<()> {
         let values = &values[0];
-        add_to_row(&self.datatype, self.index, accessor, &sum_batch(values)?)?;
+        add_to_row(
+            &self.datatype,
+            self.index,
+            accessor,
+            &sum_batch(values, &self.datatype)?,
+        )?;
         Ok(())
     }
 
@@ -488,6 +495,11 @@ impl AccumulatorV2 for SumAccumulatorV2 {
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
         Ok(accessor.get_as_scalar(&self.datatype, self.index))
+    }
+
+    #[inline(always)]
+    fn state_index(&self) -> usize {
+        self.index
     }
 }
 
@@ -532,7 +544,7 @@ mod tests {
                 .collect::<DecimalArray>()
                 .with_precision_and_scale(10, 0)?,
         );
-        let result = sum_batch(&array)?;
+        let result = sum_batch(&array, &DataType::Decimal(10, 0))?;
         assert_eq!(ScalarValue::Decimal128(Some(15), 10, 0), result);
 
         // test agg
@@ -567,7 +579,7 @@ mod tests {
                 .collect::<DecimalArray>()
                 .with_precision_and_scale(10, 0)?,
         );
-        let result = sum_batch(&array)?;
+        let result = sum_batch(&array, &DataType::Decimal(10, 0))?;
         assert_eq!(ScalarValue::Decimal128(Some(13), 10, 0), result);
 
         // test agg
@@ -601,7 +613,7 @@ mod tests {
                 .collect::<DecimalArray>()
                 .with_precision_and_scale(10, 0)?,
         );
-        let result = sum_batch(&array)?;
+        let result = sum_batch(&array, &DataType::Decimal(10, 0))?;
         assert_eq!(ScalarValue::Decimal128(None, 10, 0), result);
 
         // test agg

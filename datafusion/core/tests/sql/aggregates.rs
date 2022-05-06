@@ -653,6 +653,28 @@ async fn csv_query_array_agg_one() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_array_agg_with_overflow() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql =
+        "select c2, sum(c3) sum_c3, avg(c3) avg_c3, max(c3) max_c3, min(c3) min_c3, count(c3) count_c3 from aggregate_test_100 group by c2 order by c2";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----+--------+---------------------+--------+--------+----------+",
+        "| c2 | sum_c3 | avg_c3              | max_c3 | min_c3 | count_c3 |",
+        "+----+--------+---------------------+--------+--------+----------+",
+        "| 1  | 367    | 16.681818181818183  | 125    | -99    | 22       |",
+        "| 2  | 184    | 8.363636363636363   | 122    | -117   | 22       |",
+        "| 3  | 395    | 20.789473684210527  | 123    | -101   | 19       |",
+        "| 4  | 29     | 1.2608695652173914  | 123    | -117   | 23       |",
+        "| 5  | -194   | -13.857142857142858 | 118    | -101   | 14       |",
+        "+----+--------+---------------------+--------+--------+----------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_array_agg_distinct() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;

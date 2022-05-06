@@ -37,7 +37,7 @@ use datafusion_common::ScalarValue;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Accumulator;
 
-use crate::aggregate::accumulator_v2::AccumulatorV2;
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
 use arrow::array::Array;
 use arrow::array::DecimalArray;
@@ -114,7 +114,7 @@ impl AggregateExpr for Max {
         &self.name
     }
 
-    fn accumulator_v2_supported(&self) -> bool {
+    fn row_accumulator_supported(&self) -> bool {
         matches!(
             self.data_type,
             DataType::UInt8
@@ -130,11 +130,11 @@ impl AggregateExpr for Max {
         )
     }
 
-    fn create_accumulator_v2(
+    fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn AccumulatorV2>> {
-        Ok(Box::new(MaxAccumulatorV2::new(
+    ) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(MaxRowAccumulator::new(
             start_index,
             self.data_type.clone(),
         )))
@@ -547,18 +547,18 @@ impl Accumulator for MaxAccumulator {
 }
 
 #[derive(Debug)]
-struct MaxAccumulatorV2 {
+struct MaxRowAccumulator {
     index: usize,
     data_type: DataType,
 }
 
-impl MaxAccumulatorV2 {
+impl MaxRowAccumulator {
     pub fn new(index: usize, data_type: DataType) -> Self {
         Self { index, data_type }
     }
 }
 
-impl AccumulatorV2 for MaxAccumulatorV2 {
+impl RowAccumulator for MaxRowAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -580,6 +580,11 @@ impl AccumulatorV2 for MaxAccumulatorV2 {
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
         Ok(accessor.get_as_scalar(&self.data_type, self.index))
+    }
+
+    #[inline(always)]
+    fn state_index(&self) -> usize {
+        self.index
     }
 }
 
@@ -642,7 +647,7 @@ impl AggregateExpr for Min {
         &self.name
     }
 
-    fn accumulator_v2_supported(&self) -> bool {
+    fn row_accumulator_supported(&self) -> bool {
         matches!(
             self.data_type,
             DataType::UInt8
@@ -658,11 +663,11 @@ impl AggregateExpr for Min {
         )
     }
 
-    fn create_accumulator_v2(
+    fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn AccumulatorV2>> {
-        Ok(Box::new(MinAccumulatorV2::new(
+    ) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(MinRowAccumulator::new(
             start_index,
             self.data_type.clone(),
         )))
@@ -706,18 +711,18 @@ impl Accumulator for MinAccumulator {
 }
 
 #[derive(Debug)]
-struct MinAccumulatorV2 {
+struct MinRowAccumulator {
     index: usize,
     data_type: DataType,
 }
 
-impl MinAccumulatorV2 {
+impl MinRowAccumulator {
     pub fn new(index: usize, data_type: DataType) -> Self {
         Self { index, data_type }
     }
 }
 
-impl AccumulatorV2 for MinAccumulatorV2 {
+impl RowAccumulator for MinRowAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -739,6 +744,11 @@ impl AccumulatorV2 for MinAccumulatorV2 {
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
         Ok(accessor.get_as_scalar(&self.data_type, self.index))
+    }
+
+    #[inline(always)]
+    fn state_index(&self) -> usize {
+        self.index
     }
 }
 

@@ -21,7 +21,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use crate::aggregate::accumulator_v2::AccumulatorV2;
+use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::aggregate::sum;
 use crate::expressions::format_state_name;
 use crate::{AggregateExpr, PhysicalExpr};
@@ -104,7 +104,7 @@ impl AggregateExpr for Avg {
         &self.name
     }
 
-    fn accumulator_v2_supported(&self) -> bool {
+    fn row_accumulator_supported(&self) -> bool {
         matches!(
             self.data_type,
             DataType::UInt8
@@ -120,11 +120,11 @@ impl AggregateExpr for Avg {
         )
     }
 
-    fn create_accumulator_v2(
+    fn create_row_accumulator(
         &self,
         start_index: usize,
-    ) -> Result<Box<dyn AccumulatorV2>> {
-        Ok(Box::new(AvgAccumulatorV2::new(
+    ) -> Result<Box<dyn RowAccumulator>> {
+        Ok(Box::new(AvgRowAccumulator::new(
             start_index,
             self.data_type.clone(),
         )))
@@ -158,7 +158,10 @@ impl Accumulator for AvgAccumulator {
         let values = &values[0];
 
         self.count += (values.len() - values.data().null_count()) as u64;
-        self.sum = sum::sum(&self.sum, &sum::sum_batch(values)?)?;
+        self.sum = sum::sum(
+            &self.sum,
+            &sum::sum_batch(values, &self.sum.get_datatype())?,
+        )?;
         Ok(())
     }
 
@@ -168,7 +171,10 @@ impl Accumulator for AvgAccumulator {
         self.count += compute::sum(counts).unwrap_or(0);
 
         // sums are summed
-        self.sum = sum::sum(&self.sum, &sum::sum_batch(&states[1])?)?;
+        self.sum = sum::sum(
+            &self.sum,
+            &sum::sum_batch(&states[1], &self.sum.get_datatype())?,
+        )?;
         Ok(())
     }
 
@@ -196,21 +202,21 @@ impl Accumulator for AvgAccumulator {
 }
 
 #[derive(Debug)]
-struct AvgAccumulatorV2 {
-    start_index: usize,
+struct AvgRowAccumulator {
+    state_index: usize,
     sum_datatype: DataType,
 }
 
-impl AvgAccumulatorV2 {
+impl AvgRowAccumulator {
     pub fn new(start_index: usize, sum_datatype: DataType) -> Self {
         Self {
-            start_index,
+            state_index: start_index,
             sum_datatype,
         }
     }
 }
 
-impl AccumulatorV2 for AvgAccumulatorV2 {
+impl RowAccumulator for AvgRowAccumulator {
     fn update_batch(
         &mut self,
         values: &[ArrayRef],
@@ -219,14 +225,14 @@ impl AccumulatorV2 for AvgAccumulatorV2 {
         let values = &values[0];
         // count
         let delta = (values.len() - values.data().null_count()) as u64;
-        accessor.add_u64(self.start_index, delta);
+        accessor.add_u64(self.state_index(), delta);
 
         // sum
         sum::add_to_row(
             &self.sum_datatype,
-            self.start_index + 1,
+            self.state_index() + 1,
             accessor,
-            &sum::sum_batch(values)?,
+            &sum::sum_batch(values, &self.sum_datatype)?,
         )?;
         Ok(())
     }
@@ -239,29 +245,34 @@ impl AccumulatorV2 for AvgAccumulatorV2 {
         let counts = states[0].as_any().downcast_ref::<UInt64Array>().unwrap();
         // count
         let delta = compute::sum(counts).unwrap_or(0);
-        accessor.add_u64(self.start_index, delta);
+        accessor.add_u64(self.state_index(), delta);
 
         // sum
         sum::add_to_row(
             &self.sum_datatype,
-            self.start_index + 1,
+            self.state_index() + 1,
             accessor,
-            &sum::sum_batch(&states[1])?,
+            &sum::sum_batch(&states[1], &self.sum_datatype)?,
         )?;
         Ok(())
     }
 
     fn evaluate(&self, accessor: &RowAccessor) -> Result<ScalarValue> {
         assert_eq!(self.sum_datatype, DataType::Float64);
-        Ok(match accessor.get_u64_opt(self.start_index) {
+        Ok(match accessor.get_u64_opt(self.state_index()) {
             None => ScalarValue::Float64(None),
             Some(0) => ScalarValue::Float64(Some(0.0)),
             Some(n) => ScalarValue::Float64(
                 accessor
-                    .get_f64_opt(self.start_index + 1)
+                    .get_f64_opt(self.state_index() + 1)
                     .map(|f| f / n as f64),
             ),
         })
+    }
+
+    #[inline(always)]
+    fn state_index(&self) -> usize {
+        self.state_index
     }
 }
 

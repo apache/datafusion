@@ -45,7 +45,7 @@ mod row_hash;
 
 use crate::physical_plan::aggregates::row_hash::GroupedHashAggregateStreamV2;
 pub use datafusion_expr::AggregateFunction;
-use datafusion_physical_expr::aggregate::accumulator_v2::AccumulatorV2;
+use datafusion_physical_expr::aggregate::row_accumulator::RowAccumulator;
 pub use datafusion_physical_expr::expressions::create_aggregate_expr;
 use datafusion_row::{row_supported, RowType};
 
@@ -387,7 +387,7 @@ fn merge_expressions(
 }
 
 pub(crate) type AccumulatorItem = Box<dyn Accumulator>;
-pub(crate) type AccumulatorItemV2 = Box<dyn AccumulatorV2>;
+pub(crate) type AccumulatorItemV2 = Box<dyn RowAccumulator>;
 
 fn create_accumulators(
     aggr_expr: &[Arc<dyn AggregateExpr>],
@@ -399,16 +399,22 @@ fn create_accumulators(
 }
 
 fn accumulator_v2_supported(aggr_expr: &[Arc<dyn AggregateExpr>]) -> bool {
-    aggr_expr.iter().all(|expr| expr.accumulator_v2_supported())
+    aggr_expr
+        .iter()
+        .all(|expr| expr.row_accumulator_supported())
 }
 
 fn create_accumulators_v2(
     aggr_expr: &[Arc<dyn AggregateExpr>],
 ) -> datafusion_common::Result<Vec<AccumulatorItemV2>> {
+    let mut state_index = 0;
     aggr_expr
         .iter()
-        .enumerate()
-        .map(|(idx, expr)| expr.create_accumulator_v2(idx))
+        .map(|expr| {
+            let result = expr.create_row_accumulator(state_index);
+            state_index += expr.state_fields().unwrap().len();
+            result
+        })
         .collect::<datafusion_common::Result<Vec<_>>>()
 }
 

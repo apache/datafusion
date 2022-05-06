@@ -23,13 +23,14 @@ use crate::{fn_get_idx, fn_get_idx_opt, fn_set_idx};
 use arrow::datatypes::{DataType, Schema};
 use arrow::util::bit_util::{get_bit_raw, set_bit_raw};
 use datafusion_common::ScalarValue;
+use std::sync::Arc;
 
 //TODO: DRY with reader and writer
 
 /// Read the tuple `data[base_offset..]` we are currently pointing to
 pub struct RowAccessor<'a> {
     /// Layout on how to read each field
-    layout: RowLayout,
+    layout: Arc<RowLayout>,
     /// Raw bytes slice where the tuple stores
     data: &'a mut [u8],
     /// Start position for the current tuple in the raw bytes slice.
@@ -103,13 +104,13 @@ impl<'a> RowAccessor<'a> {
     /// new
     pub fn new(schema: &Schema, row_type: RowType) -> Self {
         Self {
-            layout: RowLayout::new(schema, row_type),
+            layout: Arc::new(RowLayout::new(schema, row_type)),
             data: &mut [],
             base_offset: 0,
         }
     }
 
-    pub fn new_from_layout(layout: RowLayout) -> Self {
+    pub fn new_from_layout(layout: Arc<RowLayout>) -> Self {
         Self {
             layout,
             data: &mut [],
