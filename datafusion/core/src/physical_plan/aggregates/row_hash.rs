@@ -395,9 +395,9 @@ impl std::fmt::Debug for AggregationState {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         // hashes are not store inline, so could only get values
         let map_string = "RawTable";
-        f.debug_struct("RowAccumulators")
+        f.debug_struct("AggregationState")
             .field("map", &map_string)
-            .field("row_group_states", &self.group_states)
+            .field("group_states", &self.group_states)
             .finish()
     }
 }
