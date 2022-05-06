@@ -27,6 +27,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
+use datafusion_expr::expr::find_columns_referenced_by_expr;
 use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
@@ -58,9 +59,13 @@ pub(crate) fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
-/// appearance (depth first), with duplicates omitted.
+/// appearance (depth first), and may contain duplicates.
 pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
-    find_exprs_in_exprs(exprs, &|nested_expr| matches!(nested_expr, Expr::Column(_)))
+    exprs
+        .iter()
+        .flat_map(find_columns_referenced_by_expr)
+        .map(Expr::Column)
+        .collect()
 }
 
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
@@ -137,8 +142,16 @@ where
 /// Convert any `Expr` to an `Expr::Column`.
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
-        Expr::Column(_) => Ok(expr.clone()),
-        _ => Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?))),
+        Expr::Column(col) => {
+            let field = plan.schema().field_from_column(col)?;
+            Ok(Expr::Column(field.qualified_column()))
+        }
+        _ => {
+            // we should not be trying to create a name for the expression
+            // based on the input schema but this is the current behavior
+            // see https://github.com/apache/arrow-datafusion/issues/2456
+            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
+        }
     }
 }
 

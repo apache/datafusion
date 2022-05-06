@@ -233,6 +233,27 @@ async fn csv_query_group_by_avg() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_group_by_with_aliases() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    let sql = "SELECT c1 AS c12, avg(c12) AS c1 FROM aggregate_test_100 GROUP BY c1";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-----+---------------------+",
+        "| c12 | c1                  |",
+        "+-----+---------------------+",
+        "| a   | 0.48754517466109415 |",
+        "| b   | 0.41040709263815384 |",
+        "| c   | 0.6600456536439784  |",
+        "| d   | 0.48855379387549824 |",
+        "| e   | 0.48600669271341534 |",
+        "+-----+---------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_int_count() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
