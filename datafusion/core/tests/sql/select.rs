@@ -1177,12 +1177,10 @@ async fn boolean_literal() -> Result<()> {
 #[tokio::test]
 async fn unprojected_filter() {
     let ctx = SessionContext::new();
-    let df = ctx
-        .read_table(test::table_with_sequence(1, 3).unwrap())
-        .unwrap();
+    let df = ctx.read_table(table_with_sequence(1, 3).unwrap()).unwrap();
 
     let df = df
-        .select(vec![binary_expr(col("i"), Operator::Plus, col("i"))])
+        .select(vec![col("i") + col("i")])
         .unwrap()
         .filter(col("i").gt(lit(2)))
         .unwrap();

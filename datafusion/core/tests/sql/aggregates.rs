@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion::scalar::ScalarValue;
+use datafusion::{logical_plan::LogicalPlanBuilder, scalar::ScalarValue};
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -1450,8 +1450,7 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
 
 #[tokio::test]
 async fn aggregate_with_alias() -> Result<()> {
-    let tmp_dir = TempDir::new()?;
-    let ctx = create_ctx(&tmp_dir, 1).await?;
+    let ctx = SessionContext::new();
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("c1", DataType::Utf8, false),
