@@ -125,7 +125,7 @@ impl ExprSchemable for Expr {
                     .to_owned(),
             )),
             Expr::GroupingSet(_) => {
-                // TODO grouping sets do not really have a type
+                // grouping sets do not really have a type and do not appear in projections
                 Ok(DataType::Null)
             }
             Expr::GetIndexedField { ref expr, key } => {
@@ -203,7 +203,8 @@ impl ExprSchemable for Expr {
                 get_indexed_field(&data_type, key).map(|x| x.is_nullable())
             }
             Expr::GroupingSet(_) => {
-                // TODO grouping sets do not really have the concept of nullable
+                // grouping sets do not really have the concept of nullable and do not appear
+                // in projections
                 Ok(true)
             }
         }

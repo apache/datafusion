@@ -868,12 +868,15 @@ fn create_name(e: &Expr, input_schema: &DFSchema) -> Result<String> {
                 "CUBE ({})",
                 create_names(exprs.as_slice(), input_schema)?
             )),
-            GroupingSet::GroupingSets(_list_of_exprs) => {
-                todo!()
-                // Ok(format!(
-                //     "GROUPING SETS ({})",
-                //     list_of_exprs.iter().map(|exprs| format!("({})", create_names(exprs.as_slice(), input_schema))).collect::<Result<Vec<_>>>()?.join(", ")
-                // ))
+            GroupingSet::GroupingSets(lists_of_exprs) => {
+                let mut list_of_names = vec![];
+                for exprs in lists_of_exprs {
+                    list_of_names.push(format!(
+                        "({})",
+                        create_names(exprs.as_slice(), input_schema)?
+                    ));
+                }
+                Ok(format!("GROUPING SETS ({})", list_of_names.join(", ")))
             }
         },
         Expr::InList {
