@@ -251,6 +251,77 @@ pub enum Expr {
     QualifiedWildcard { qualifier: String },
 }
 
+/// Recursively find all columns referenced by an expression
+pub fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+    match e {
+        Expr::Alias(expr, _)
+        | Expr::Negative(expr)
+        | Expr::Cast { expr, .. }
+        | Expr::TryCast { expr, .. }
+        | Expr::Sort { expr, .. }
+        | Expr::InList { expr, .. }
+        | Expr::InSubquery { expr, .. }
+        | Expr::GetIndexedField { expr, .. }
+        | Expr::Not(expr)
+        | Expr::IsNotNull(expr)
+        | Expr::IsNull(expr) => find_columns_referenced_by_expr(expr),
+        Expr::Column(c) => vec![c.clone()],
+        Expr::BinaryExpr { left, right, .. } => {
+            let mut cols = vec![];
+            cols.extend(find_columns_referenced_by_expr(left.as_ref()));
+            cols.extend(find_columns_referenced_by_expr(right.as_ref()));
+            cols
+        }
+        Expr::Case {
+            expr,
+            when_then_expr,
+            else_expr,
+        } => {
+            let mut cols = vec![];
+            if let Some(expr) = expr {
+                cols.extend(find_columns_referenced_by_expr(expr.as_ref()));
+            }
+            for (w, t) in when_then_expr {
+                cols.extend(find_columns_referenced_by_expr(w.as_ref()));
+                cols.extend(find_columns_referenced_by_expr(t.as_ref()));
+            }
+            if let Some(else_expr) = else_expr {
+                cols.extend(find_columns_referenced_by_expr(else_expr.as_ref()));
+            }
+            cols
+        }
+        Expr::ScalarFunction { args, .. } => args
+            .iter()
+            .flat_map(find_columns_referenced_by_expr)
+            .collect(),
+        Expr::AggregateFunction { args, .. } => args
+            .iter()
+            .flat_map(find_columns_referenced_by_expr)
+            .collect(),
+        Expr::ScalarVariable(_, _)
+        | Expr::Exists { .. }
+        | Expr::Wildcard
+        | Expr::QualifiedWildcard { .. }
+        | Expr::ScalarSubquery(_)
+        | Expr::Literal(_) => vec![],
+        Expr::Between {
+            expr, low, high, ..
+        } => {
+            let mut cols = vec![];
+            cols.extend(find_columns_referenced_by_expr(expr.as_ref()));
+            cols.extend(find_columns_referenced_by_expr(low.as_ref()));
+            cols.extend(find_columns_referenced_by_expr(high.as_ref()));
+            cols
+        }
+        Expr::ScalarUDF { args, .. }
+        | Expr::WindowFunction { args, .. }
+        | Expr::AggregateUDF { args, .. } => args
+            .iter()
+            .flat_map(find_columns_referenced_by_expr)
+            .collect(),
+    }
+}
+
 /// Fixed seed for the hashing so that Ords are consistent across runs
 const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
