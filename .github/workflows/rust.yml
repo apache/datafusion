@@ -307,7 +307,10 @@ jobs:
           rustup default stable
           rustup component add rustfmt
       - name: Run
-        run: cargo fmt --all -- --check
+        run: ci/scripts/rust_fmt.sh
+        env:
+          CARGO_HOME: "/github/home/.cargo"
+          CARGO_TARGET_DIR: "/github/home/target"
 
   clippy:
     name: Clippy
@@ -347,8 +350,7 @@ jobs:
         run: |
           rustup component add clippy
       - name: Run clippy
-        run: |
-          cargo clippy --all-targets --workspace -- -D warnings
+        run: ci/scripts/rust_clippy.sh
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
@@ -479,7 +481,7 @@ jobs:
           # check which Cargo.toml introduces formatting violation
           #
           # ignore ./Cargo.toml because putting workspaces in multi-line lists make it easy to read
-          find . -mindepth 2 -name 'Cargo.toml' -exec cargo tomlfmt -p {} \;
+          ci/scripts/rust_toml_fmt.sh
           git diff --exit-code
         env:
           CARGO_HOME: "/github/home/.cargo"
