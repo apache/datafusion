@@ -651,6 +651,21 @@ async fn query_nested_get_indexed_field_on_struct() -> Result<()> {
         "+----------------+",
     ];
     assert_batches_eq!(expected, &actual);
+
+    // Access to field of struct by CompoundIdentifier
+    let sql = "SELECT some_struct.bar as l0 FROM structs LIMIT 3";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+----------------+",
+        "| l0             |",
+        "+----------------+",
+        "| [0, 1, 2, 3]   |",
+        "| [4, 5, 6, 7]   |",
+        "| [8, 9, 10, 11] |",
+        "+----------------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
     let sql = "SELECT some_struct[\"bar\"][0] as i0 FROM structs LIMIT 3";
     let actual = execute_to_batches(&ctx, sql).await;
     #[rustfmt::skip]
