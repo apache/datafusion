@@ -506,10 +506,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::logical_plan::{
-        col, exprlist_to_fields_from_schema, lit, max, min, Expr, JoinType,
-        LogicalPlanBuilder,
-    };
+    use crate::logical_plan::{col, lit, max, min, Expr, JoinType, LogicalPlanBuilder, exprlist_to_fields};
     use crate::test::*;
     use arrow::datatypes::DataType;
 
@@ -812,7 +809,7 @@ mod tests {
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("a"), col("b")];
         let projected_fields =
-            exprlist_to_fields_from_schema(&expr, input_schema).unwrap();
+            exprlist_to_fields(&expr, &table_scan).unwrap();
         let projected_schema = DFSchema::new_with_metadata(
             projected_fields,
             input_schema.metadata().clone(),

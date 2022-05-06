@@ -41,7 +41,7 @@ pub use expr::{
     avg, bit_length, btrim, call_fn, case, ceil, character_length, chr, coalesce, col,
     columnize_expr, combine_filters, concat, concat_expr, concat_ws, concat_ws_expr, cos,
     count, count_distinct, create_udaf, create_udf, date_part, date_trunc, digest,
-    exists, exp, exprlist_to_fields_from_schema, floor, in_list, in_subquery, initcap,
+    exists, exp, exprlist_to_fields, floor, in_list, in_subquery, initcap,
     left, length, lit, lit_timestamp_nano, ln, log10, log2, lower, lpad, ltrim, max, md5,
     min, not_exists, not_in_subquery, now, now_expr, nullif, octet_length, or, power,
     random, regexp_match, regexp_replace, repeat, replace, reverse, right, round, rpad,
