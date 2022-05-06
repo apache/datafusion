@@ -576,7 +576,7 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
 }
 
 /// returns a new [LogicalPlan] that wraps `plan` in a [LogicalPlan::Filter] with
-/// its predicate be all `predicates` ANDed.
+/// its predicate with all `predicates` ANDed.
 pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> LogicalPlan {
     let predicate = combine_conjunctive(predicates);
     LogicalPlan::Filter(Filter {
@@ -607,6 +607,37 @@ pub fn combine_disjunctive(predicates: &[&Expr]) -> Expr {
         .fold(predicates[0].clone(), |acc, predicate| {
             or(acc, (*predicate).to_owned())
         })
+}
+
+/// Checks if the column belongs to the outer schema
+pub(crate) fn column_is_correlated(outer: &Arc<DFSchema>, column: &Column) -> bool {
+    for field in outer.fields() {
+        if *column == field.qualified_column() || *column == field.unqualified_column() {
+            return true;
+        }
+    }
+    false
+}
+
+pub(crate) fn detect_correlated_columns(
+    outer: &Arc<DFSchema>,
+    expression: &Expr,
+) -> Result<bool> {
+    for se in expr_sub_expressions(expression)?.into_iter() {
+        match se {
+            Expr::Column(c) => {
+                if column_is_correlated(outer, &c) {
+                    return Ok(true);
+                }
+            }
+            _ => {
+                if detect_correlated_columns(outer, &se)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]

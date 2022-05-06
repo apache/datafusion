@@ -54,9 +54,9 @@ impl SubqueryFilterToJoin {
         column_a: &Column,
         column_b: &Column,
     ) -> Option<(Column, Column)> {
-        if column_is_correlated(outer, column_a) {
+        if utils::column_is_correlated(outer, column_a) {
             return Some((column_a.clone(), column_b.clone()));
-        } else if column_is_correlated(outer, column_b) {
+        } else if utils::column_is_correlated(outer, column_b) {
             return Some((column_b.clone(), column_a.clone()));
         }
         None
@@ -376,34 +376,6 @@ fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Res
             }
             _ => extract_subquery_filters(&se, extracted),
         })
-}
-
-fn column_is_correlated(outer: &Arc<DFSchema>, column: &Column) -> bool {
-    for field in outer.fields() {
-        if *column == field.qualified_column() || *column == field.unqualified_column() {
-            return true;
-        }
-    }
-    false
-}
-
-#[allow(unused)]
-fn detect_correlated_columns(outer: &Arc<DFSchema>, expression: &Expr) -> Result<bool> {
-    for se in utils::expr_sub_expressions(expression)?.into_iter() {
-        match se {
-            Expr::Column(c) => {
-                if column_is_correlated(outer, &c) {
-                    return Ok(true);
-                }
-            }
-            _ => {
-                if detect_correlated_columns(outer, &se)? {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
 }
 
 #[cfg(test)]
