@@ -142,7 +142,10 @@ where
 /// Convert any `Expr` to an `Expr::Column`.
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
-        Expr::Column(_) => Ok(expr.clone()),
+        Expr::Column(col) => match plan.schema().field_from_column(col) {
+            Ok(field) => Ok(Expr::Column(field.qualified_column())),
+            _ => Ok(expr.clone()),
+        },
         _ => Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?))),
     }
 }
