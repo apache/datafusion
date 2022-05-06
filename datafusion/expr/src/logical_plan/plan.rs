@@ -19,7 +19,7 @@ use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion_common::{Column, DFSchemaRef, DataFusionError, Result};
+use datafusion_common::{Column, DFSchemaRef, DataFusionError};
 use std::collections::HashSet;
 ///! Logical plan types
 use std::fmt::{self, Debug, Display, Formatter};
@@ -281,7 +281,7 @@ impl LogicalPlan {
     }
 
     /// returns all `Using` join columns in a logical plan
-    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>> {
+    pub fn using_columns(&self) -> Result<Vec<HashSet<Column>>, DataFusionError> {
         struct UsingJoinColumnVisitor {
             using_columns: Vec<HashSet<Column>>,
         }
@@ -289,10 +289,7 @@ impl LogicalPlan {
         impl PlanVisitor for UsingJoinColumnVisitor {
             type Error = DataFusionError;
 
-            fn pre_visit(
-                &mut self,
-                plan: &LogicalPlan,
-            ) -> std::result::Result<bool, Self::Error> {
+            fn pre_visit(&mut self, plan: &LogicalPlan) -> Result<bool, Self::Error> {
                 if let LogicalPlan::Join(Join {
                     join_constraint: JoinConstraint::Using,
                     on,
