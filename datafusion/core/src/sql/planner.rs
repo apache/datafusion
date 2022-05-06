@@ -1009,6 +1009,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .map(|e| {
                 let group_by_expr =
                     self.sql_expr_to_logical_expr(e, &combined_schema, ctes)?;
+                // aliases from the projection can conflict with same-named expressions in the input
+                let mut alias_map = alias_map.clone();
+                for f in plan.schema().fields() {
+                    alias_map.remove(f.name());
+                }
                 let group_by_expr = resolve_aliases_to_exprs(&group_by_expr, &alias_map)?;
                 let group_by_expr =
                     resolve_positions_to_exprs(&group_by_expr, &select_exprs)
@@ -1110,7 +1115,29 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         LogicalPlanBuilder::from(input).project(expr)?.build()
     }
 
-    /// Wrap a plan in an aggregate
+    /// Create an aggregate plan.
+    ///
+    /// An aggregate plan consists of grouping expressions, aggregate expressions, and an
+    /// optional HAVING expression (which is a filter on the output of the aggregate).
+    ///
+    /// # Arguments
+    ///
+    /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
+    ///                       "having" expressions must all be resolvable from this plan.
+    /// * `select_exprs`    - TBD
+    /// * `having_expr_opt` - Optional HAVING clause
+    /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
+    ///                       references or more complex expressions
+    /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
+    ///
+    /// # Return
+    ///
+    /// The return value is a triplet of (plan, select_exprs_post_aggr, having_expr_post_aggr_opt)
+    /// where:
+    ///
+    /// * `plan` - A [LogicalPlan::Aggregate] plan
+    /// * `select_exprs_post_aggr` - ???
+    /// * `having_expr_post_aggr_opt` - ???
     fn aggregate(
         &self,
         input: LogicalPlan,
@@ -1123,7 +1150,8 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .chain(aggr_exprs.iter())
             .cloned()
-            .collect::<Vec<Expr>>();
+            .map(|expr| expr_as_column_expr(&expr, &input)) //TODO did this matter
+            .collect::<Result<Vec<Expr>>>()?;
 
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs, aggr_exprs)?

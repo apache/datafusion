@@ -27,6 +27,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
+use datafusion_expr::expr::find_columns_referenced_by_expr;
 use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
@@ -60,7 +61,11 @@ pub(crate) fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
 /// appearance (depth first), with duplicates omitted.
 pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
-    find_exprs_in_exprs(exprs, &|nested_expr| matches!(nested_expr, Expr::Column(_)))
+    exprs
+        .iter()
+        .flat_map(|e| find_columns_referenced_by_expr(e))
+        .map(|col| Expr::Column(col))
+        .collect()
 }
 
 /// Search the provided `Expr`'s, and all of their nested `Expr`, for any that
