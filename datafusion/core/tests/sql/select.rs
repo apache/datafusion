@@ -398,15 +398,37 @@ async fn select_distinct_from() {
         1 IS NOT DISTINCT FROM CAST(NULL as INT) as c,
         1 IS NOT DISTINCT FROM 1 as d,
         NULL IS DISTINCT FROM NULL as e,
-        NULL IS NOT DISTINCT FROM NULL as f
+        NULL IS NOT DISTINCT FROM NULL as f,
+        NULL is DISTINCT FROM 1 as g,
+        NULL is NOT DISTINCT FROM 1 as h
     ";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+------+-------+-------+------+-------+------+",
-        "| a    | b     | c     | d    | e     | f    |",
-        "+------+-------+-------+------+-------+------+",
-        "| true | false | false | true | false | true |",
-        "+------+-------+-------+------+-------+------+",
+        "+------+-------+-------+------+-------+------+------+-------+",
+        "| a    | b     | c     | d    | e     | f    | g    | h     |",
+        "+------+-------+-------+------+-------+------+------+-------+",
+        "| true | false | false | true | false | true | true | false |",
+        "+------+-------+-------+------+-------+------+------+-------+",
+    ];
+    assert_batches_eq!(expected, &actual);
+
+    let sql = "select
+        NULL IS DISTINCT FROM NULL as a,
+        NULL IS NOT DISTINCT FROM NULL as b,
+        NULL is DISTINCT FROM 1 as c,
+        NULL is NOT DISTINCT FROM 1 as d,
+        1 IS DISTINCT FROM CAST(NULL as INT) as e,
+        1 IS DISTINCT FROM 1 as f,
+        1 IS NOT DISTINCT FROM CAST(NULL as INT) as g,
+        1 IS NOT DISTINCT FROM 1 as h
+    ";
+    let actual = execute_to_batches(&ctx, sql).await;
+    let expected = vec![
+        "+-------+------+------+-------+------+-------+-------+------+",
+        "| a     | b    | c    | d     | e    | f     | g     | h    |",
+        "+-------+------+------+-------+------+-------+-------+------+",
+        "| false | true | true | false | true | false | false | true |",
+        "+-------+------+------+-------+------+-------+-------+------+",
     ];
     assert_batches_eq!(expected, &actual);
 }
