@@ -142,11 +142,16 @@ where
 /// Convert any `Expr` to an `Expr::Column`.
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
-        Expr::Column(col) => match plan.schema().field_from_column(col) {
-            Ok(field) => Ok(Expr::Column(field.qualified_column())),
-            _ => Ok(expr.clone()),
-        },
-        _ => Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?))),
+        Expr::Column(col) => {
+            let field = plan.schema().field_from_column(col)?;
+            Ok(Expr::Column(field.qualified_column()))
+        }
+        _ => {
+            // we should not be trying to create a name for the expression
+            // based on the input schema but this is the current behavior
+            // see https://github.com/apache/arrow-datafusion/issues/2456
+            Ok(Expr::Column(Column::from_name(expr.name(plan.schema())?)))
+        }
     }
 }
 
