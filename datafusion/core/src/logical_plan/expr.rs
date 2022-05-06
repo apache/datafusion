@@ -142,25 +142,7 @@ pub fn exprlist_to_fields<'a>(
 ) -> Result<Vec<DFField>> {
     let input_schema = &plan.schema();
     let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-    match plan {
-        LogicalPlan::Aggregate(agg) => {
-            let mut fields = vec![];
-            let group_columns: Vec<Expr> = agg
-                .columns_in_group_expr()?
-                .iter()
-                .map(|col| Expr::Column(col.clone()))
-                .collect();
-            for e in &exprs {
-                if group_columns.iter().any(|col| col == e) {
-                    fields.push(e.to_field(agg.input.schema())?);
-                } else {
-                    fields.push(e.to_field(input_schema)?);
-                }
-            }
-            Ok(fields)
-        }
-        _ => exprs.iter().map(|e| e.to_field(input_schema)).collect(),
-    }
+    exprs.iter().map(|e| e.to_field(input_schema)).collect()
 }
 
 /// Calls a named built in function
