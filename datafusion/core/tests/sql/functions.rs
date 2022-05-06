@@ -176,11 +176,11 @@ async fn coalesce_static_value_with_null() -> Result<()> {
     let sql = "SELECT COALESCE(NULL, 'test')";
     let actual = execute_to_batches(&ctx, sql).await;
     let expected = vec![
-        "+-----------------------------------+",
-        "| coalesce(Utf8(NULL),Utf8(\"test\")) |",
-        "+-----------------------------------+",
-        "| test                              |",
-        "+-----------------------------------+",
+        "+-----------------------------+",
+        "| coalesce(NULL,Utf8(\"test\")) |",
+        "+-----------------------------+",
+        "| test                        |",
+        "+-----------------------------+",
     ];
     assert_batches_eq!(expected, &actual);
     Ok(())

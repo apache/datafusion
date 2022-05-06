@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use crate::expressions::binary::{eq_decimal, eq_decimal_scalar};
+use crate::expressions::binary::{eq_decimal, eq_decimal_scalar, eq_null};
 use arrow::array::Array;
 use arrow::array::*;
 use arrow::compute::kernels::boolean::nullif;

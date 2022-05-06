@@ -58,6 +58,7 @@ macro_rules! make_utf8_to_return_type {
             Ok(match arg_type {
                 DataType::LargeUtf8 => $largeUtf8Type,
                 DataType::Utf8 => $utf8Type,
+                DataType::Null => DataType::Null,
                 _ => {
                     // this error is internal as `data_types` should have captured this.
                     return Err(DataFusionError::Internal(format!(
@@ -209,6 +210,7 @@ pub fn return_type(
             DataType::Utf8 => {
                 DataType::List(Box::new(Field::new("item", DataType::Utf8, true)))
             }
+            DataType::Null => DataType::Null,
             _ => {
                 // this error is internal as `data_types` should have captured this.
                 return Err(DataFusionError::Internal(

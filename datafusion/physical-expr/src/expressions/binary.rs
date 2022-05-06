@@ -604,6 +604,20 @@ macro_rules! compute_decimal_op {
     }};
 }
 
+macro_rules! compute_null_op {
+    ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
+        let ll = $LEFT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast array");
+        let rr = $RIGHT
+            .as_any()
+            .downcast_ref::<$DT>()
+            .expect("compute_op failed to downcast array");
+        Ok(Arc::new(paste::expr! {[<$OP _null>]}(&ll, &rr)?))
+    }};
+}
+
 /// Invoke a compute kernel on a pair of binary data arrays
 macro_rules! compute_utf8_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident, $DT:ident) => {{
@@ -909,6 +923,7 @@ macro_rules! binary_array_op_scalar {
 macro_rules! binary_array_op {
     ($LEFT:expr, $RIGHT:expr, $OP:ident) => {{
         match $LEFT.data_type() {
+            DataType::Null => compute_null_op!($LEFT, $RIGHT, $OP, NullArray),
             DataType::Decimal(_,_) => compute_decimal_op!($LEFT, $RIGHT, $OP, DecimalArray),
             DataType::Int8 => compute_op!($LEFT, $RIGHT, $OP, Int8Array),
             DataType::Int16 => compute_op!($LEFT, $RIGHT, $OP, Int16Array),
@@ -1261,7 +1276,16 @@ impl BinaryExpr {
             Operator::GtEq => gt_eq_dyn(&left, &right),
             Operator::Eq => eq_dyn(&left, &right),
             Operator::NotEq => neq_dyn(&left, &right),
-            Operator::IsDistinctFrom => binary_array_op!(left, right, is_distinct_from),
+            Operator::IsDistinctFrom => {
+                match (left_data_type, right_data_type) {
+                    // exchange lhs and rhs when lhs is Null, since `binary_array_op` is
+                    // always try to down cast array according to $LEFT expression.
+                    (DataType::Null, _) => {
+                        binary_array_op!(right, left, is_distinct_from)
+                    }
+                    _ => binary_array_op!(left, right, is_distinct_from),
+                }
+            }
             Operator::IsNotDistinctFrom => {
                 binary_array_op!(left, right, is_not_distinct_from)
             }
@@ -1334,6 +1358,27 @@ fn is_distinct_from_utf8<OffsetSize: StringOffsetSizeTrait>(
         .zip(right.iter())
         .map(|(x, y)| Some(x != y))
         .collect())
+}
+
+fn is_distinct_from_null(left: &NullArray, _right: &NullArray) -> Result<BooleanArray> {
+    let length = left.len();
+    make_boolean_array(length, false)
+}
+
+fn is_not_distinct_from_null(
+    left: &NullArray,
+    _right: &NullArray,
+) -> Result<BooleanArray> {
+    let length = left.len();
+    make_boolean_array(length, true)
+}
+
+pub fn eq_null(left: &NullArray, _right: &NullArray) -> Result<BooleanArray> {
+    Ok((0..left.len()).into_iter().map(|_| None).collect())
+}
+
+fn make_boolean_array(length: usize, value: bool) -> Result<BooleanArray> {
+    Ok((0..length).into_iter().map(|_| Some(value)).collect())
 }
 
 fn is_not_distinct_from<T>(

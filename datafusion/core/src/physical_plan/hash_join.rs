@@ -817,7 +817,11 @@ fn equal_rows(
         .iter()
         .zip(right_arrays)
         .all(|(l, r)| match l.data_type() {
-            DataType::Null => true,
+            DataType::Null => {
+                // lhs and rhs are both `DataType::Null`, so the euqal result
+                // is dependent on `null_equals_null`
+                null_equals_null
+            }
             DataType::Boolean => {
                 equal_rows_elem!(BooleanArray, l, r, left, right, null_equals_null)
             }

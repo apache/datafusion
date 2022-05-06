@@ -1545,7 +1545,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
                         SQLExpr::Value(Value::SingleQuotedString(s)) => Ok(lit(s)),
                         SQLExpr::Value(Value::Null) => {
-                            Ok(Expr::Literal(ScalarValue::Utf8(None)))
+                            Ok(Expr::Literal(ScalarValue::Null))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
                         SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
@@ -1583,7 +1583,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
             SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
-            SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Utf8(None))),
+            SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
@@ -1662,11 +1662,19 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else {
                     match (var_names.pop(), var_names.pop()) {
                         (Some(name), Some(relation)) if var_names.is_empty() => {
-                            // table.column identifier
-                            Ok(Expr::Column(Column {
-                                relation: Some(relation),
-                                name,
-                            }))
+                            if let Some(field) = schema.fields().iter().find(|f| f.name().eq(&relation)) {
+                                // Access to a field of a column which is a structure, example: SELECT my_struct.key
+                                Ok(Expr::GetIndexedField {
+                                    expr: Box::new(Expr::Column(field.qualified_column())),
+                                    key: ScalarValue::Utf8(Some(name)),
+                                })
+                            } else {
+                                // table.column identifier
+                                Ok(Expr::Column(Column {
+                                    relation: Some(relation),
+                                    name,
+                                }))
+                            }
                         }
                         _ => Err(DataFusionError::NotImplemented(format!(
                             "Unsupported compound identifier '{:?}'",

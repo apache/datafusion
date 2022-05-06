@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::expr::find_columns_referenced_by_expr;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::{Expr, TableProviderFilterPushDown, TableSource};
@@ -1128,19 +1127,6 @@ pub struct Aggregate {
     pub aggr_expr: Vec<Expr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
-}
-
-impl Aggregate {
-    /// Return all columns referenced in the grouping expressions
-    pub fn columns_in_group_expr(&self) -> Result<Vec<Column>> {
-        let mut cols = vec![];
-        for e in &self.group_expr {
-            for col in find_columns_referenced_by_expr(e) {
-                cols.push(col)
-            }
-        }
-        Ok(cols)
-    }
 }
 
 /// Sorts its input according to a list of sort expressions.
