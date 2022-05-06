@@ -2111,7 +2111,15 @@ mod tests {
             .await
             .unwrap();
 
-        let expected = vec!["+---+", "| a |", "+---+", "| 1 |", "| 2 |", "+---+"];
+        #[rustfmt::skip]
+        let expected = vec![
+            "+---+",
+            "| a |",
+            "+---+",
+            "| 1 |",
+            "| 2 |",
+            "+---+"
+        ];
         assert_batches_eq!(expected, &result);
 
         let result = ctx
