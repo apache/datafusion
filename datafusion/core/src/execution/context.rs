@@ -1603,14 +1603,13 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
-    use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use crate::{
-        assert_batches_eq, assert_batches_sorted_eq,
-        logical_plan::{col, create_udf, sum, Expr},
+        assert_batches_eq,
+        logical_plan::{create_udf, Expr},
     };
     use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
