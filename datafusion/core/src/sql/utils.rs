@@ -139,10 +139,6 @@ where
     exprs
 }
 
-// pub(crate) fn resolve_columns(plan: &LogicalPlan) -> Result<LogicalPlan> {
-//
-// }
-
 /// Convert any `Expr` to an `Expr::Column`.
 pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
@@ -264,11 +260,6 @@ where
 {
     let replacement_opt = replacement_fn(expr)?;
 
-    println!(
-        "clone_with_replacement: {:?} replacement = {:?}",
-        expr, replacement_opt
-    );
-
     match replacement_opt {
         // If we were provided a replacement, use the replacement. Do not
         // descend further.
@@ -317,13 +308,10 @@ where
                     .map(|e| clone_with_replacement(e, replacement_fn))
                     .collect::<Result<Vec<Expr>>>()?,
             }),
-            Expr::Alias(nested_expr, alias_name) => {
-                println!("alias case: alias={}, expr={:?}", alias_name, nested_expr);
-                Ok(Expr::Alias(
-                    Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
-                    alias_name.clone(),
-                ))
-            }
+            Expr::Alias(nested_expr, alias_name) => Ok(Expr::Alias(
+                Box::new(clone_with_replacement(&**nested_expr, replacement_fn)?),
+                alias_name.clone(),
+            )),
             Expr::Between {
                 expr: nested_expr,
                 negated,
