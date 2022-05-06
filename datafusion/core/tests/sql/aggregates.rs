@@ -16,7 +16,7 @@
 // under the License.
 
 use super::*;
-use datafusion::scalar::ScalarValue;
+use datafusion::{logical_plan::LogicalPlanBuilder, scalar::ScalarValue};
 
 #[tokio::test]
 async fn csv_query_avg_multi_batch() -> Result<()> {
@@ -1445,5 +1445,30 @@ async fn count_distinct_integers_aggregated_multiple_partitions() -> Result<()> 
     ];
     assert_batches_sorted_eq!(expected, &results);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn aggregate_with_alias() -> Result<()> {
+    let ctx = SessionContext::new();
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c1", DataType::Utf8, false),
+        Field::new("c2", DataType::UInt32, false),
+    ]));
+
+    let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
+        .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
+        .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
+        .build()?;
+
+    let plan = ctx.optimize(&plan)?;
+
+    let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
+    assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
+    assert_eq!(
+        "total_salary",
+        physical_plan.schema().field(1).name().as_str()
+    );
     Ok(())
 }

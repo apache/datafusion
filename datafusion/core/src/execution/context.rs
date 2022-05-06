@@ -1603,14 +1603,13 @@ impl FunctionRegistry for TaskContext {
 mod tests {
     use super::*;
     use crate::execution::context::QueryPlanner;
-    use crate::logical_plan::{binary_expr, lit, Operator};
     use crate::physical_plan::functions::make_scalar_function;
     use crate::test;
     use crate::test_util::parquet_test_data;
     use crate::variable::VarType;
     use crate::{
-        assert_batches_eq, assert_batches_sorted_eq,
-        logical_plan::{col, create_udf, sum, Expr},
+        assert_batches_eq,
+        logical_plan::{create_udf, Expr},
     };
     use crate::{logical_plan::create_udaf, physical_plan::expressions::AvgAccumulator};
     use arrow::array::ArrayRef;
@@ -1698,56 +1697,6 @@ mod tests {
         assert!(ctx.deregister_table("dual")?.is_some());
         assert!(ctx.deregister_table("dual")?.is_none());
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn unprojected_filter() {
-        let ctx = SessionContext::new();
-        let df = ctx
-            .read_table(test::table_with_sequence(1, 3).unwrap())
-            .unwrap();
-
-        let df = df
-            .select(vec![binary_expr(col("i"), Operator::Plus, col("i"))])
-            .unwrap()
-            .filter(col("i").gt(lit(2)))
-            .unwrap();
-        let results = df.collect().await.unwrap();
-
-        let expected = vec![
-            "+--------------------------+",
-            "| ?table?.i Plus ?table?.i |",
-            "+--------------------------+",
-            "| 6                        |",
-            "+--------------------------+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-    }
-
-    #[tokio::test]
-    async fn aggregate_with_alias() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let ctx = create_ctx(&tmp_dir, 1).await?;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::UInt32, false),
-        ]));
-
-        let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
-            .build()?;
-
-        let plan = ctx.optimize(&plan)?;
-
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
-        assert_eq!(
-            "total_salary",
-            physical_plan.schema().field(1).name().as_str()
-        );
         Ok(())
     }
 
@@ -2094,51 +2043,6 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn union_test() -> Result<()> {
-        let ctx = SessionContext::with_config(
-            SessionConfig::new().with_information_schema(true),
-        );
-
-        let result = ctx
-            .sql("SELECT 1 A UNION ALL SELECT 2")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "+---+"
-        ];
-        assert_batches_eq!(expected, &result);
-
-        let result = ctx
-            .sql("SELECT 1 UNION SELECT 2")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        let expected = vec![
-            "+----------+",
-            "| Int64(1) |",
-            "+----------+",
-            "| 1        |",
-            "| 2        |",
-            "+----------+",
-        ];
-        assert_batches_eq!(expected, &result);
         Ok(())
     }
 
