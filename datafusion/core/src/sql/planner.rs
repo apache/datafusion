@@ -1028,7 +1028,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .collect::<Result<Vec<Expr>>>()?;
 
         // process group by, aggregation or having
-        let (plan, select_exprs_post_aggr, having_expr_post_aggr_opt) =
+        let (plan, select_exprs_post_aggr, having_expr_post_aggr) =
             if !group_by_exprs.is_empty() || !aggr_exprs.is_empty() {
                 self.aggregate(
                     plan,
@@ -1056,7 +1056,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 (plan, select_exprs, having_expr_opt)
             };
 
-        let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr_opt {
+        let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
             LogicalPlanBuilder::from(plan)
                 .filter(having_expr_post_aggr)?
                 .build()?
@@ -1124,20 +1124,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     ///
     /// * `input`           - The input plan that will be aggregated. The grouping, aggregate, and
     ///                       "having" expressions must all be resolvable from this plan.
-    /// * `select_exprs`    - TBD
-    /// * `having_expr_opt` - Optional HAVING clause
+    /// * `select_exprs`    - The projection expressions from the SELECT clause.
+    /// * `having_expr_opt` - Optional HAVING clause.
     /// * `group_by_exprs`  - Grouping expressions from the GROUP BY clause. These can be column
-    ///                       references or more complex expressions
+    ///                       references or more complex expressions.
     /// * `aggr_exprs`      - Aggregate expressions, such as `SUM(a)` or `COUNT(1)`.
     ///
     /// # Return
     ///
-    /// The return value is a triplet of (plan, select_exprs_post_aggr, having_expr_post_aggr_opt)
-    /// where:
+    /// The return value is a triplet of the following items:
     ///
-    /// * `plan` - A [LogicalPlan::Aggregate] plan
-    /// * `select_exprs_post_aggr` - ???
-    /// * `having_expr_post_aggr_opt` - ???
+    /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
+    /// * `select_exprs_post_aggr` - The projection expressions rewritten to refernce columns from
+    ///                              the aggregate
+    /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
+    ///                              the aggregate
     fn aggregate(
         &self,
         input: LogicalPlan,
@@ -1178,7 +1179,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // Rewrite the HAVING expression to use the columns produced by the
         // aggregation.
-        let having_expr_post_aggr_opt = if let Some(having_expr) = having_expr_opt {
+        let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
             let having_expr_post_aggr =
                 rebase_expr(having_expr, &aggr_projection_exprs, &input)?;
 
@@ -1193,7 +1194,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             None
         };
 
-        Ok((plan, select_exprs_post_aggr, having_expr_post_aggr_opt))
+        Ok((plan, select_exprs_post_aggr, having_expr_post_aggr))
     }
 
     /// Wrap a plan in a limit
