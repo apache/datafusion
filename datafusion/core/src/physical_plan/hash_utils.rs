@@ -39,6 +39,19 @@ fn combine_hashes(l: u64, r: u64) -> u64 {
     hash.wrapping_mul(37).wrapping_add(r)
 }
 
+fn hash_null(random_state: &RandomState, hashes_buffer: &'_ mut [u64], mul_col: bool) {
+    if mul_col {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            // stable hash for null value
+            *hash = combine_hashes(i128::get_hash(&1, random_state), *hash);
+        })
+    } else {
+        hashes_buffer.iter_mut().for_each(|hash| {
+            *hash = i128::get_hash(&1, random_state);
+        })
+    }
+}
+
 fn hash_decimal128<'a>(
     array: &ArrayRef,
     random_state: &RandomState,
@@ -284,6 +297,9 @@ pub fn create_hashes<'a>(
 
     for col in arrays {
         match col.data_type() {
+            DataType::Null => {
+                hash_null(random_state, hashes_buffer, multi_col);
+            }
             DataType::Decimal(_, _) => {
                 hash_decimal128(col, random_state, hashes_buffer, multi_col);
             }

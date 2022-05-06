@@ -1531,7 +1531,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
                         SQLExpr::Value(Value::SingleQuotedString(s)) => Ok(lit(s)),
                         SQLExpr::Value(Value::Null) => {
-                            Ok(Expr::Literal(ScalarValue::Utf8(None)))
+                            Ok(Expr::Literal(ScalarValue::Null))
                         }
                         SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
                         SQLExpr::UnaryOp { op, expr } => self.parse_sql_unary_op(
@@ -1569,7 +1569,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Value(Value::Number(n, _)) => parse_sql_number(&n),
             SQLExpr::Value(Value::SingleQuotedString(ref s)) => Ok(lit(s.clone())),
             SQLExpr::Value(Value::Boolean(n)) => Ok(lit(n)),
-            SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Utf8(None))),
+            SQLExpr::Value(Value::Null) => Ok(Expr::Literal(ScalarValue::Null)),
             SQLExpr::Extract { field, expr } => Ok(Expr::ScalarFunction {
                 fun: BuiltinScalarFunction::DatePart,
                 args: vec![
