@@ -57,7 +57,7 @@ impl ObjectStore for LocalFileSystem {
             if d != "/" && d != "\\" {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "delimiter not supported on local filesystem",
+                    format!("delimiter not supported on local filesystem: {}", d),
                 ));
             }
             let mut entry_stream = tokio::fs::read_dir(prefix).await?;
@@ -97,12 +97,12 @@ impl ObjectStore for LocalFileSystem {
 
 /// Try to convert a PathBuf reference into a &str
 pub fn path_as_str(path: &std::path::Path) -> Result<&str> {
-    if let Some(child_path) = path.to_str() {
-        Ok(child_path)
+    if let Some(path) = path.to_str() {
+        Ok(path)
     } else {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "Invalid path".to_string(),
+            format!("Invalid path: {}", path.display()),
         ))
     }
 }
