@@ -109,10 +109,10 @@ impl SubqueryFilterToJoin {
     fn rewrite_correlated_subquery_as_join(
         &self,
         outer_plan: LogicalPlan,
-        expr: &Expr,
+        subquery_expr: &Expr,
         execution_props: &ExecutionProps,
     ) -> Result<LogicalPlan> {
-        match expr {
+        match subquery_expr {
             Expr::InSubquery {
                 expr,
                 subquery,
@@ -322,10 +322,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 // optimized_input value should retain for possible optimization rollback
                 let opt_result = subquery_filters.iter().try_fold(
                     optimized_input.clone(),
-                    |input, &e| {
+                    |outer_plan, &subquery_expr| {
                         self.rewrite_correlated_subquery_as_join(
-                            input,
-                            e,
+                            outer_plan,
+                            &subquery_expr,
                             execution_props,
                         )
                     },

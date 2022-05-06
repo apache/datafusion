@@ -567,7 +567,6 @@ pub fn split_conjunction<'a>(predicate: &'a Expr, predicates: &mut Vec<&'a Expr>
             split_conjunction(left, predicates);
             split_conjunction(right, predicates);
         }
-        // TODO: are we sure we want to ignore aliases?
         Expr::Alias(expr, _) => {
             split_conjunction(expr, predicates);
         }
