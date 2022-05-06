@@ -190,12 +190,6 @@ pub(crate) fn rebase_expr(
     base_exprs: &[Expr],
     plan: &LogicalPlan,
 ) -> Result<Expr> {
-    // make a best effort attempt to replace columns with fully qualified columns
-    let base_exprs = base_exprs
-        .iter()
-        .map(|expr| resolve_columns(expr, plan))
-        .collect::<Result<Vec<_>>>()?;
-
     clone_with_replacement(expr, &|nested_expr| {
         if base_exprs.contains(nested_expr) {
             Ok(Some(expr_as_column_expr(nested_expr, plan)?))
