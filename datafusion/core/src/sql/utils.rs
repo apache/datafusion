@@ -155,6 +155,22 @@ pub(crate) fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Exp
     }
 }
 
+/// Make a best-effort attempt at resolving all columns in the expression tree
+pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
+    clone_with_replacement(expr, &|nested_expr| {
+        match nested_expr {
+            Expr::Column(col) => {
+                let field = plan.schema().field_from_column(col)?;
+                Ok(Some(Expr::Column(field.qualified_column())))
+            }
+            _ => {
+                // keep recursing
+                Ok(None)
+            }
+        }
+    })
+}
+
 /// Rebuilds an `Expr` as a projection on top of a collection of `Expr`'s.
 ///
 /// For example, the expression `a + b < 1` would require, as input, the 2

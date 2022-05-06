@@ -212,6 +212,32 @@ async fn csv_query_having_without_group_by() -> Result<()> {
 }
 
 #[tokio::test]
+async fn csv_query_group_by_substr() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_aggregate_csv(&ctx).await?;
+    // there is an input column "c1" as well a projection expression aliased as "c1"
+    let sql = "SELECT substr(c1, 1, 1) c1 \
+        FROM aggregate_test_100 \
+        GROUP BY substr(c1, 1, 1) \
+        ";
+    let actual = execute_to_batches(&ctx, sql).await;
+    #[rustfmt::skip]
+    let expected = vec![
+        "+----+",
+        "| c1 |",
+        "+----+",
+        "| a  |",
+        "| b  |",
+        "| c  |",
+        "| d  |",
+        "| e  |",
+        "+----+",
+    ];
+    assert_batches_sorted_eq!(expected, &actual);
+    Ok(())
+}
+
+#[tokio::test]
 async fn csv_query_group_by_avg() -> Result<()> {
     let ctx = SessionContext::new();
     register_aggregate_csv(&ctx).await?;
