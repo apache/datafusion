@@ -1150,8 +1150,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             .iter()
             .chain(aggr_exprs.iter())
             .cloned()
-            .map(|expr| expr_as_column_expr(&expr, &input)) //TODO did this matter
-            .collect::<Result<Vec<Expr>>>()?;
+            .collect::<Vec<Expr>>();
 
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(group_by_exprs, aggr_exprs)?

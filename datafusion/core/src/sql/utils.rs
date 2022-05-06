@@ -59,12 +59,12 @@ pub(crate) fn find_window_exprs(exprs: &[Expr]) -> Vec<Expr> {
 }
 
 /// Collect all deeply nested `Expr::Column`'s. They are returned in order of
-/// appearance (depth first), with duplicates omitted.
+/// appearance (depth first), and may contain duplicates.
 pub(crate) fn find_column_exprs(exprs: &[Expr]) -> Vec<Expr> {
     exprs
         .iter()
-        .flat_map(|e| find_columns_referenced_by_expr(e))
-        .map(|col| Expr::Column(col))
+        .flat_map(find_columns_referenced_by_expr)
+        .map(Expr::Column)
         .collect()
 }
 

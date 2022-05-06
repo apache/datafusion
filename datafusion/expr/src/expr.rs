@@ -292,11 +292,11 @@ pub fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
         }
         Expr::ScalarFunction { args, .. } => args
             .iter()
-            .flat_map(|e| find_columns_referenced_by_expr(e))
+            .flat_map(find_columns_referenced_by_expr)
             .collect(),
         Expr::AggregateFunction { args, .. } => args
             .iter()
-            .flat_map(|e| find_columns_referenced_by_expr(e))
+            .flat_map(find_columns_referenced_by_expr)
             .collect(),
         Expr::ScalarVariable(_, _)
         | Expr::Exists { .. }
