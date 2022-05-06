@@ -1159,7 +1159,6 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         // we do not add the "having" expression since that is not part of the projection)
         let mut aggr_projection_exprs = vec![];
         for expr in &group_by_exprs {
-            // TODO this needs to be recursive to handle GROUP BY function(arg, ..)
             match expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                     aggr_projection_exprs.extend_from_slice(&exprs)
@@ -1167,7 +1166,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
                     aggr_projection_exprs.extend_from_slice(&exprs)
                 }
-                Expr::GroupingSet(GroupingSet::GroupingSets(_)) => todo!(),
+                Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                    for exprs in lists_of_exprs {
+                        aggr_projection_exprs.extend_from_slice(exprs)
+                    }
+                }
                 _ => aggr_projection_exprs.push(expr.clone()),
             }
         }
@@ -1895,14 +1898,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 } else if name == "cube" {
                     let args = self.function_args_to_expr(function.args, schema)?;
                     return Ok(Expr::GroupingSet(GroupingSet::Cube(args)));
-                } else if name == "grouping sets" { // TODO is not possible to hit this case yet
-                    todo!()
                 }
 
                 // next, scalar built-in
                 if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
                     let args = self.function_args_to_expr(function.args, schema)?;
-
                     return Ok(Expr::ScalarFunction { fun, args });
                 };
 
@@ -2597,7 +2597,7 @@ mod tests {
 
     #[test]
     fn select_no_relation() {
-        assert_expected_plan(
+        quick_test(
             "SELECT 1",
             "Projection: Int64(1)\
              \n  EmptyRelation",
@@ -2606,7 +2606,7 @@ mod tests {
 
     #[test]
     fn test_real_f32() {
-        assert_expected_plan(
+        quick_test(
             "SELECT CAST(1.1 AS REAL)",
             "Projection: CAST(Float64(1.1) AS Float32)\
              \n  EmptyRelation",
@@ -2642,7 +2642,7 @@ mod tests {
 
     #[test]
     fn select_wildcard_with_repeated_column_but_is_aliased() {
-        assert_expected_plan(
+        quick_test(
             "SELECT *, first_name AS fn from person",
             "Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀, #person.first_name AS fn\
             \n  TableScan: person projection=None",
@@ -2651,7 +2651,7 @@ mod tests {
 
     #[test]
     fn select_scalar_func_with_literal_no_relation() {
-        assert_expected_plan(
+        quick_test(
             "SELECT sqrt(9)",
             "Projection: sqrt(Int64(9))\
              \n  EmptyRelation",
@@ -2665,7 +2665,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.first_name, #person.last_name\
                         \n  Filter: #person.state = Utf8(\"CO\")\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2689,7 +2689,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.first_name, #person.last_name\
                         \n  Filter: NOT #person.state\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2699,7 +2699,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.first_name, #person.last_name\
             \n  Filter: #person.state = Utf8(\"CO\") AND #person.age >= Int64(21) AND #person.age <= Int64(65)\
             \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2711,7 +2711,7 @@ mod tests {
             \n  Filter: #person.birth_date < CAST(Int64(158412331400600000) AS Timestamp(Nanosecond, None))\
             \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2723,7 +2723,7 @@ mod tests {
             \n  Filter: #person.birth_date < CAST(Utf8(\"2020-01-01\") AS Date32)\
             \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2744,7 +2744,7 @@ mod tests {
                         AND #person.age < Int64(65) \
                         AND #person.age <= Int64(65)\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2754,7 +2754,7 @@ mod tests {
             \n  Filter: #person.age BETWEEN Int64(21) AND Int64(65)\
             \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2764,7 +2764,7 @@ mod tests {
             \n  Filter: #person.age NOT BETWEEN Int64(21) AND Int64(65)\
             \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2783,7 +2783,7 @@ mod tests {
                         \n      Projection: #a.fn1, #a.last_name, #a.birth_date, #a.age, alias=a\
                         \n        Projection: #person.first_name AS fn1, #person.last_name, #person.birth_date, #person.age, alias=a\
                         \n          TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2803,7 +2803,7 @@ mod tests {
                         \n        Filter: #person.age > Int64(20)\
                         \n          TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2814,7 +2814,7 @@ mod tests {
                         \n  Projection: #l.l_item_id AS a, #l.l_description AS b, #l.price AS c, alias=l\
                         \n    SubqueryAlias: l\
                         \n      TableScan: lineitem projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2836,7 +2836,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.age\
                         \n  Filter: #person.age > Int64(100) AND #person.age < Int64(200)\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2886,7 +2886,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) < Int64(30)\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2898,7 +2898,7 @@ mod tests {
                         \n  Filter: #MAX(person.first_name) > Utf8(\"M\")\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age), MAX(#person.first_name)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2925,7 +2925,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) < Int64(30)\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2937,7 +2937,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) < Int64(30)\
                         \n    Aggregate: groupBy=[[]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2950,7 +2950,7 @@ mod tests {
                         \n  Filter: #person.first_name = Utf8(\"M\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2965,7 +2965,7 @@ mod tests {
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      Filter: #person.id > Int64(5)\
                         \n        TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2981,7 +2981,7 @@ mod tests {
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      Filter: #person.id > Int64(5) AND #person.age > Int64(18)\
                         \n        TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -2994,7 +2994,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(2) AND #person.first_name = Utf8(\"M\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3008,7 +3008,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(2) AND #MAX(person.age) < Int64(5) AND #person.first_name = Utf8(\"M\") AND #person.first_name = Utf8(\"N\")\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3021,7 +3021,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3049,7 +3049,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(100) AND #MAX(person.age) < Int64(200)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3062,7 +3062,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(100) AND #MIN(person.id) < Int64(50)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), MIN(#person.id)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3076,7 +3076,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3091,7 +3091,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) + Int64(1) > Int64(100)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age)]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3105,7 +3105,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(100) AND #MIN(person.id - Int64(2)) < Int64(50)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), MIN(#person.id - Int64(2))]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3118,7 +3118,7 @@ mod tests {
                         \n  Filter: #MAX(person.age) > Int64(100) AND #COUNT(UInt8(1)) < Int64(50)\
                         \n    Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.age), COUNT(UInt8(1))]]\
                         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3126,7 +3126,7 @@ mod tests {
         let sql = "SELECT age + salary from person";
         let expected = "Projection: #person.age + #person.salary\
                         \n  TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3134,18 +3134,18 @@ mod tests {
         let sql = "SELECT (age + salary)/2 from person";
         let expected = "Projection: #person.age + #person.salary / Int64(2)\
                         \n  TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
     fn select_wildcard_with_groupby() {
-        assert_expected_plan(
+        quick_test(
             r#"SELECT * FROM person GROUP BY id, first_name, last_name, age, state, salary, birth_date, "😀""#,
             "Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
              \n  Aggregate: groupBy=[[#person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀]], aggr=[[]]\
              \n    TableScan: person projection=None",
         );
-        assert_expected_plan(
+        quick_test(
             "SELECT * FROM (SELECT first_name, last_name FROM person) AS a GROUP BY first_name, last_name",
             "Projection: #a.first_name, #a.last_name\
              \n  Aggregate: groupBy=[[#a.first_name, #a.last_name]], aggr=[[]]\
@@ -3157,7 +3157,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate() {
-        assert_expected_plan(
+        quick_test(
             "SELECT MIN(age) FROM person",
             "Projection: #MIN(person.age)\
             \n  Aggregate: groupBy=[[]], aggr=[[MIN(#person.age)]]\
@@ -3167,7 +3167,7 @@ mod tests {
 
     #[test]
     fn test_sum_aggregate() {
-        assert_expected_plan(
+        quick_test(
             "SELECT SUM(age) from person",
             "Projection: #SUM(person.age)\
             \n  Aggregate: groupBy=[[]], aggr=[[SUM(#person.age)]]\
@@ -3194,7 +3194,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_repeated_aggregate_with_single_alias() {
-        assert_expected_plan(
+        quick_test(
             "SELECT MIN(age), MIN(age) AS a FROM person",
             "Projection: #MIN(person.age), #MIN(person.age) AS a\
              \n  Aggregate: groupBy=[[]], aggr=[[MIN(#person.age)]]\
@@ -3204,7 +3204,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_repeated_aggregate_with_unique_aliases() {
-        assert_expected_plan(
+        quick_test(
             "SELECT MIN(age) AS a, MIN(age) AS b FROM person",
             "Projection: #MIN(person.age) AS a, #MIN(person.age) AS b\
              \n  Aggregate: groupBy=[[]], aggr=[[MIN(#person.age)]]\
@@ -3224,7 +3224,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state, MIN(age), MAX(age) FROM person GROUP BY state",
             "Projection: #person.state, #MIN(person.age), #MAX(person.age)\
             \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age), MAX(#person.age)]]\
@@ -3234,7 +3234,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_with_aliases() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state AS a, MIN(age) AS b FROM person GROUP BY state",
             "Projection: #person.state AS a, #MIN(person.age) AS b\
              \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age)]]\
@@ -3254,7 +3254,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_column_unselected() {
-        assert_expected_plan(
+        quick_test(
             "SELECT MIN(age), MAX(age) FROM person GROUP BY state",
             "Projection: #MIN(person.age), #MAX(person.age)\
              \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age), MAX(#person.age)]]\
@@ -3312,7 +3312,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_and_column_is_in_aggregate_and_groupby() {
-        assert_expected_plan(
+        quick_test(
             "SELECT MAX(first_name) FROM person GROUP BY first_name",
             "Projection: #MAX(person.first_name)\
              \n  Aggregate: groupBy=[[#person.first_name]], aggr=[[MAX(#person.first_name)]]\
@@ -3322,13 +3322,13 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_can_use_positions() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 1, 2",
             "Projection: #person.state, #person.age AS b, #COUNT(UInt8(1))\
              \n  Aggregate: groupBy=[[#person.state, #person.age]], aggr=[[COUNT(UInt8(1))]]\
              \n    TableScan: person projection=None",
         );
-        assert_expected_plan(
+        quick_test(
             "SELECT state, age AS b, COUNT(1) FROM person GROUP BY 2, 1",
             "Projection: #person.state, #person.age AS b, #COUNT(UInt8(1))\
              \n  Aggregate: groupBy=[[#person.age, #person.state]], aggr=[[COUNT(UInt8(1))]]\
@@ -3355,7 +3355,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_can_use_alias() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state AS a, MIN(age) AS b FROM person GROUP BY a",
             "Projection: #person.state AS a, #MIN(person.age) AS b\
              \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age)]]\
@@ -3375,7 +3375,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_aggregate_repeated_and_one_has_alias() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state, MIN(age), MIN(age) AS ma FROM person GROUP BY state",
             "Projection: #person.state, #MIN(person.age), #MIN(person.age) AS ma\
              \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age)]]\
@@ -3385,7 +3385,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_with_groupby_non_column_expression_unselected() {
-        assert_expected_plan(
+        quick_test(
             "SELECT MIN(first_name) FROM person GROUP BY age + 1",
             "Projection: #MIN(person.first_name)\
              \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
@@ -3396,13 +3396,13 @@ mod tests {
     #[test]
     fn select_simple_aggregate_with_groupby_non_column_expression_selected_and_resolvable(
     ) {
-        assert_expected_plan(
+        quick_test(
             "SELECT age + 1, MIN(first_name) FROM person GROUP BY age + 1",
             "Projection: #person.age + Int64(1), #MIN(person.first_name)\
              \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
              \n    TableScan: person projection=None",
         );
-        assert_expected_plan(
+        quick_test(
             "SELECT MIN(first_name), age + 1 FROM person GROUP BY age + 1",
             "Projection: #MIN(person.first_name), #person.age + Int64(1)\
              \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
@@ -3413,7 +3413,7 @@ mod tests {
     #[test]
     fn select_simple_aggregate_with_groupby_non_column_expression_nested_and_resolvable()
     {
-        assert_expected_plan(
+        quick_test(
             "SELECT ((age + 1) / 2) * (age + 1), MIN(first_name) FROM person GROUP BY age + 1",
             "Projection: #person.age + Int64(1) / Int64(2) * #person.age + Int64(1), #MIN(person.first_name)\
              \n  Aggregate: groupBy=[[#person.age + Int64(1)]], aggr=[[MIN(#person.first_name)]]\
@@ -3446,7 +3446,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_nested_in_binary_expr_with_groupby() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state, MIN(age) < 10 FROM person GROUP BY state",
             "Projection: #person.state, #MIN(person.age) < Int64(10)\
              \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age)]]\
@@ -3456,7 +3456,7 @@ mod tests {
 
     #[test]
     fn select_simple_aggregate_and_nested_groupby_column() {
-        assert_expected_plan(
+        quick_test(
             "SELECT age + 1, MAX(first_name) FROM person GROUP BY age",
             "Projection: #person.age + Int64(1), #MAX(person.first_name)\
              \n  Aggregate: groupBy=[[#person.age]], aggr=[[MAX(#person.first_name)]]\
@@ -3466,7 +3466,7 @@ mod tests {
 
     #[test]
     fn select_aggregate_compounded_with_groupby_column() {
-        assert_expected_plan(
+        quick_test(
             "SELECT age + MIN(salary) FROM person GROUP BY age",
             "Projection: #person.age + #MIN(person.salary)\
              \n  Aggregate: groupBy=[[#person.age]], aggr=[[MIN(#person.salary)]]\
@@ -3476,7 +3476,7 @@ mod tests {
 
     #[test]
     fn select_aggregate_with_non_column_inner_expression_with_groupby() {
-        assert_expected_plan(
+        quick_test(
             "SELECT state, MIN(age + 1) FROM person GROUP BY state",
             "Projection: #person.state, #MIN(person.age + Int64(1))\
             \n  Aggregate: groupBy=[[#person.state]], aggr=[[MIN(#person.age + Int64(1))]]\
@@ -3486,7 +3486,7 @@ mod tests {
 
     #[test]
     fn test_wildcard() {
-        assert_expected_plan(
+        quick_test(
             "SELECT * from person",
             "Projection: #person.id, #person.first_name, #person.last_name, #person.age, #person.state, #person.salary, #person.birth_date, #person.😀\
             \n  TableScan: person projection=None",
@@ -3499,7 +3499,7 @@ mod tests {
         let expected = "Projection: #COUNT(UInt8(1))\
                         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(UInt8(1))]]\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3508,7 +3508,7 @@ mod tests {
         let expected = "Projection: #COUNT(person.id)\
                         \n  Aggregate: groupBy=[[]], aggr=[[COUNT(#person.id)]]\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3517,7 +3517,7 @@ mod tests {
         let expected = "Projection: #APPROXPERCENTILECONT(person.age,Float64(0.5))\
                         \n  Aggregate: groupBy=[[]], aggr=[[APPROXPERCENTILECONT(#person.age, Float64(0.5))]]\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3525,7 +3525,7 @@ mod tests {
         let sql = "SELECT sqrt(age) FROM person";
         let expected = "Projection: sqrt(#person.age)\
                         \n  TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3533,7 +3533,7 @@ mod tests {
         let sql = "SELECT sqrt(person.age) AS square_people FROM person";
         let expected = "Projection: sqrt(#person.age) AS square_people\
                         \n  TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3543,7 +3543,7 @@ mod tests {
         let expected = "Projection: #aggregate_test_100.c3 / #aggregate_test_100.c4 + #aggregate_test_100.c5\
             \n  Filter: #aggregate_test_100.c3 / nullif(#aggregate_test_100.c4 + #aggregate_test_100.c5, Int64(0)) > Float64(0.1)\
             \n    TableScan: aggregate_test_100 projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3552,7 +3552,7 @@ mod tests {
         let expected = "Projection: #aggregate_test_100.c3\
             \n  Filter: #aggregate_test_100.c3 > Float64(-0.1) AND (- #aggregate_test_100.c4) > Int64(0)\
             \n    TableScan: aggregate_test_100 projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3561,7 +3561,7 @@ mod tests {
         let expected = "Projection: #aggregate_test_100.c3\
             \n  Filter: #aggregate_test_100.c3 > Float64(0.1) AND #aggregate_test_100.c4 > Int64(0)\
             \n    TableScan: aggregate_test_100 projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3571,7 +3571,7 @@ mod tests {
                         \n  Projection: #person.id\
                         \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3581,7 +3581,7 @@ mod tests {
                         \n  Projection: #person.id, #person.state, #person.age\
                         \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3610,7 +3610,7 @@ mod tests {
         let expected = "Sort: #person.id ASC NULLS LAST\
                         \n  Projection: #person.id\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3619,19 +3619,19 @@ mod tests {
         let expected = "Sort: #person.id DESC NULLS FIRST\
                         \n  Projection: #person.id\
                         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
     fn select_order_by_nulls_last() {
-        assert_expected_plan(
+        quick_test(
             "SELECT id FROM person ORDER BY id DESC NULLS LAST",
             "Sort: #person.id DESC NULLS LAST\
             \n  Projection: #person.id\
             \n    TableScan: person projection=None",
         );
 
-        assert_expected_plan(
+        quick_test(
             "SELECT id FROM person ORDER BY id NULLS LAST",
             "Sort: #person.id ASC NULLS LAST\
             \n  Projection: #person.id\
@@ -3646,7 +3646,7 @@ mod tests {
                         \n  Aggregate: groupBy=[[#person.state]], aggr=[[]]\
                         \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3656,7 +3656,7 @@ mod tests {
                         \n  Aggregate: groupBy=[[#person.state]], aggr=[[MAX(#person.age)]]\
                         \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3666,7 +3666,7 @@ mod tests {
                         \n  Aggregate: groupBy=[[#person.state]], aggr=[[COUNT(UInt8(1))]]\
                         \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3677,7 +3677,7 @@ mod tests {
         \n  Aggregate: groupBy=[[#person.state]], aggr=[[COUNT(#person.state)]]\
         \n    TableScan: person projection=None";
 
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3686,7 +3686,7 @@ mod tests {
         let expected = "Projection: #aggregate_test_100.c1, #MIN(aggregate_test_100.c12)\
                        \n  Aggregate: groupBy=[[#aggregate_test_100.c1, #aggregate_test_100.c13]], aggr=[[MIN(#aggregate_test_100.c12)]]\
                        \n    TableScan: aggregate_test_100 projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3705,14 +3705,14 @@ mod tests {
     fn create_external_table_csv() {
         let sql = "CREATE EXTERNAL TABLE t(c1 int) STORED AS CSV LOCATION 'foo.csv'";
         let expected = "CreateExternalTable: \"t\"";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
     fn create_external_table_csv_no_schema() {
         let sql = "CREATE EXTERNAL TABLE t STORED AS CSV LOCATION 'foo.csv'";
         let expected = "CreateExternalTable: \"t\"";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3730,7 +3730,7 @@ mod tests {
     fn create_external_table_parquet_no_schema() {
         let sql = "CREATE EXTERNAL TABLE t STORED AS PARQUET LOCATION 'foo.parquet'";
         let expected = "CreateExternalTable: \"t\"";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3743,7 +3743,7 @@ mod tests {
         \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3757,7 +3757,7 @@ mod tests {
         \n    Inner Join: #person.id = #orders.customer_id\
         \n      TableScan: person projection=None\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3771,7 +3771,7 @@ mod tests {
         \n    TableScan: person projection=None\
         \n    Filter: #orders.order_id > Int64(1)\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3785,7 +3785,7 @@ mod tests {
         \n    Filter: #person.id > Int64(1)\
         \n      TableScan: person projection=None\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3798,7 +3798,7 @@ mod tests {
         \n  Inner Join: #person.id = #orders.customer_id\
         \n    TableScan: person projection=None\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3812,7 +3812,7 @@ mod tests {
         \n    TableScan: person projection=None\
         \n    SubqueryAlias: person2\
         \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3826,7 +3826,7 @@ mod tests {
         \n    TableScan: lineitem projection=None\
         \n    SubqueryAlias: lineitem2\
         \n      TableScan: lineitem projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3842,7 +3842,7 @@ mod tests {
             \n      TableScan: person projection=None\
             \n      TableScan: orders projection=None\
             \n    TableScan: lineitem projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3853,7 +3853,7 @@ mod tests {
         let expected = "Projection: #orders.order_id\
             \n  Filter: #orders.delivered = Boolean(false) OR #orders.delivered = Boolean(true)\
             \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3864,7 +3864,7 @@ mod tests {
             \n    TableScan: orders projection=None\
             \n  Projection: #orders.order_id\
             \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3882,7 +3882,7 @@ mod tests {
             \n    TableScan: orders projection=None\
             \n  Projection: #orders.order_id\
             \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3893,7 +3893,7 @@ mod tests {
             \n    TableScan: orders projection=None\
             \n  Projection: #orders.customer_id\
             \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3904,7 +3904,7 @@ mod tests {
             \n    EmptyRelation\
             \n  Projection: Int64(3) AS column0, Int64(4) AS column1\
             \n    EmptyRelation";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3927,7 +3927,7 @@ mod tests {
         Projection: #orders.order_id, #MAX(orders.order_id)\
         \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3937,7 +3937,7 @@ mod tests {
         Projection: #orders.order_id AS oid, #MAX(orders.order_id) AS max_oid\
         \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3947,7 +3947,7 @@ mod tests {
         Projection: #orders.order_id AS oid, #MAX(orders.order_id) AS max_oid, #MAX(orders.order_id) AS max_oid_dup\
         \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3958,7 +3958,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.order_id)]]\
         \n    WindowAggr: windowExpr=[[MAX(#orders.order_id) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3968,7 +3968,7 @@ mod tests {
         Projection: #orders.order_id, #MAX(orders.qty * Float64(1.1))\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty * Float64(1.1))]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -3979,7 +3979,7 @@ mod tests {
         Projection: #orders.order_id, #MAX(orders.qty), #MIN(orders.qty), #AVG(orders.qty)\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty), MIN(#orders.qty), AVG(#orders.qty)]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -3998,7 +3998,7 @@ mod tests {
         Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id]]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4021,7 +4021,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4032,7 +4032,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND 3 FOLLOWING]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4043,7 +4043,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] ROWS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4086,7 +4086,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST] GROUPS BETWEEN 3 PRECEDING AND CURRENT ROW]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id DESC NULLS FIRST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4109,7 +4109,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id + Int64(1) ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4134,7 +4134,7 @@ mod tests {
         \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS LAST, #orders.order_id ASC NULLS LAST]]]\
         \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]]]\
         \n        TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4159,7 +4159,7 @@ mod tests {
         \n    WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n      WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]]]\
         \n        TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4188,7 +4188,7 @@ mod tests {
         \n      WindowAggr: windowExpr=[[MAX(#orders.qty) ORDER BY [#orders.qty ASC NULLS LAST, #orders.order_id ASC NULLS LAST]]]\
         \n        WindowAggr: windowExpr=[[MIN(#orders.qty) ORDER BY [#orders.order_id ASC NULLS LAST, #orders.qty ASC NULLS LAST]]]\
         \n          TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4208,7 +4208,7 @@ mod tests {
         Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4228,7 +4228,7 @@ mod tests {
         Projection: #orders.order_id, #MAX(orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST]\
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4252,7 +4252,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.qty] ORDER BY [#orders.order_id ASC NULLS LAST]]]\
         \n    WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     /// psql result
@@ -4275,7 +4275,7 @@ mod tests {
         \n  WindowAggr: windowExpr=[[MAX(#orders.qty) PARTITION BY [#orders.order_id] ORDER BY [#orders.qty ASC NULLS LAST]]]\
         \n    WindowAggr: windowExpr=[[MIN(#orders.qty) PARTITION BY [#orders.order_id, #orders.qty] ORDER BY [#orders.price ASC NULLS LAST]]]\
         \n      TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4286,7 +4286,7 @@ mod tests {
         Projection: #orders.order_id, #APPROXPERCENTILECONT(orders.qty,Float64(0.5)) PARTITION BY [#orders.order_id]\
         \n  WindowAggr: windowExpr=[[APPROXPERCENTILECONT(#orders.qty, Float64(0.5)) PARTITION BY [#orders.order_id]]]\
         \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4294,7 +4294,7 @@ mod tests {
         let sql = "SELECT date '2020-12-10' AS date FROM person";
         let expected = "Projection: CAST(Utf8(\"2020-12-10\") AS Date32) AS date\
             \n  TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4302,7 +4302,7 @@ mod tests {
         let sql = r#"SELECT "😀" FROM person"#;
         let expected = "Projection: #person.😀\
             \n  TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     fn logical_plan(sql: &str) -> Result<LogicalPlan> {
@@ -4313,7 +4313,7 @@ mod tests {
     }
 
     /// Create logical plan, write with formatter, compare to expected output
-    fn assert_expected_plan(sql: &str, expected: &str) {
+    fn quick_test(sql: &str, expected: &str) {
         let plan = logical_plan(sql).unwrap();
         assert_eq!(format!("{:?}", plan), expected);
     }
@@ -4425,7 +4425,7 @@ mod tests {
         let sql = r#"SELECT person.first_name FROM public.person"#;
         let expected = "Projection: #public.person.first_name\
             \n  TableScan: public.person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4437,7 +4437,7 @@ mod tests {
                                  \n      TableScan: person projection=None\
                                  \n      TableScan: lineitem projection=None\
                                  \n    TableScan: orders projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4450,7 +4450,7 @@ mod tests {
                                     \n        TableScan: person projection=None\
                                     \n        TableScan: orders projection=None\
                                     \n      TableScan: lineitem projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4462,7 +4462,7 @@ mod tests {
                                     \n      TableScan: person projection=None\
                                     \n    SubqueryAlias: folks\
                                     \n      TableScan: person projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4478,7 +4478,7 @@ mod tests {
         let sql = "select t_date32 + interval '5 days' FROM test";
         let expected = "Projection: #test.t_date32 + IntervalDayTime(\"21474836480\")\
                             \n  TableScan: test projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4491,7 +4491,7 @@ mod tests {
             "Projection: #test.t_date64\
             \n  Filter: #test.t_date64 BETWEEN CAST(Utf8(\"1999-12-31\") AS Date32) AND CAST(Utf8(\"1999-12-31\") AS Date32) + IntervalDayTime(\"128849018880\")\
             \n    TableScan: test projection=None";
-        assert_expected_plan(sql, expected);
+        quick_test(sql, expected);
     }
 
     #[test]
@@ -4512,7 +4512,7 @@ mod tests {
         \n      TableScan: person projection=None",
             subquery_expected
         );
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[test]
@@ -4541,7 +4541,7 @@ mod tests {
             \n        TableScan: person projection=None",
             subquery_expected
         );
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[test]
@@ -4563,7 +4563,7 @@ mod tests {
             \n      TableScan: person projection=None",
             subquery_expected
         );
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[test]
@@ -4581,7 +4581,7 @@ mod tests {
             \n      TableScan: person projection=None",
             subquery_expected
         );
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[test]
@@ -4600,7 +4600,7 @@ mod tests {
             \n      TableScan: person projection=None",
             subquery_expected
         );
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[test]
@@ -4618,7 +4618,7 @@ mod tests {
             \n    TableScan: person projection=None",
             subquery_expected
         );
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[test]
@@ -4647,7 +4647,7 @@ mod tests {
             subquery
         );
 
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[tokio::test]
@@ -4665,7 +4665,7 @@ mod tests {
         \n  Filter: EXISTS ({})\
         \n    TableScan: person projection=None", subquery);
 
-        assert_expected_plan(sql, &expected)
+        quick_test(sql, &expected)
     }
 
     #[tokio::test]
@@ -4674,7 +4674,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[tokio::test]
@@ -4684,7 +4684,7 @@ mod tests {
         let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
         \n  Aggregate: groupBy=[[#person.id, CUBE (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
         \n    TableScan: person projection=None";
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
@@ -4692,7 +4692,7 @@ mod tests {
     async fn aggregate_with_grouping_sets() {
         let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
         let expected = "TBD";
-        assert_expected_plan(sql, &expected);
+        quick_test(sql, &expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
