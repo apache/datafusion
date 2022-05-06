@@ -53,6 +53,16 @@ Testing setup:
 - `git submodule init`
 - `git submodule update`
 
+Formatting instructions:
+
+- [ci/scripts/rust_fmt.sh](ci/scripts/rust_fmt.sh)
+- [ci/scripts/rust_clippy.sh](ci/scripts/rust_clippy.sh)
+- [ci/scripts/rust_toml_fmt.sh](ci/scripts/rust_toml_fmt.sh)
+
+or run them all at once:
+
+- [dev/rust_lint.sh](dev/rust_lint.sh)
+
 ## Test Organization
 
 DataFusion has several levels of tests in its [Test
