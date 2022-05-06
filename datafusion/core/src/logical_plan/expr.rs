@@ -25,11 +25,11 @@ use crate::logical_plan::{DFField, DFSchema};
 use arrow::datatypes::DataType;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
+use datafusion_expr::AccumulatorFunctionImplementation;
 use datafusion_expr::BuiltinScalarFunction;
 pub use datafusion_expr::Expr;
 use datafusion_expr::StateTypeFunction;
 pub use datafusion_expr::{lit, lit_timestamp_nano, Literal};
-use datafusion_expr::{AccumulatorFunctionImplementation, LogicalPlan};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
@@ -138,11 +138,9 @@ pub fn create_udaf(
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
-    plan: &LogicalPlan,
+    input_schema: &DFSchema,
 ) -> Result<Vec<DFField>> {
-    let input_schema = &plan.schema();
-    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-    exprs.iter().map(|e| e.to_field(input_schema)).collect()
+    expr.into_iter().map(|e| e.to_field(input_schema)).collect()
 }
 
 /// Calls a named built in function
