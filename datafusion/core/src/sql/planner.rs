@@ -1135,7 +1135,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// The return value is a triplet of the following items:
     ///
     /// * `plan`                   - A [LogicalPlan::Aggregate] plan for the newly created aggregate.
-    /// * `select_exprs_post_aggr` - The projection expressions rewritten to refernce columns from
+    /// * `select_exprs_post_aggr` - The projection expressions rewritten to reference columns from
     ///                              the aggregate
     /// * `having_expr_post_aggr`  - The "having" expression rewritten to reference a column from
     ///                              the aggregate
