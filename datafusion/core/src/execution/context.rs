@@ -1702,56 +1702,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unprojected_filter() {
-        let ctx = SessionContext::new();
-        let df = ctx
-            .read_table(test::table_with_sequence(1, 3).unwrap())
-            .unwrap();
-
-        let df = df
-            .select(vec![binary_expr(col("i"), Operator::Plus, col("i"))])
-            .unwrap()
-            .filter(col("i").gt(lit(2)))
-            .unwrap();
-        let results = df.collect().await.unwrap();
-
-        let expected = vec![
-            "+--------------------------+",
-            "| ?table?.i Plus ?table?.i |",
-            "+--------------------------+",
-            "| 6                        |",
-            "+--------------------------+",
-        ];
-        assert_batches_sorted_eq!(expected, &results);
-    }
-
-    #[tokio::test]
-    async fn aggregate_with_alias() -> Result<()> {
-        let tmp_dir = TempDir::new()?;
-        let ctx = create_ctx(&tmp_dir, 1).await?;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-            Field::new("c2", DataType::UInt32, false),
-        ]));
-
-        let plan = LogicalPlanBuilder::scan_empty(None, schema.as_ref(), None)?
-            .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-            .project(vec![col("c1"), sum(col("c2")).alias("total_salary")])?
-            .build()?;
-
-        let plan = ctx.optimize(&plan)?;
-
-        let physical_plan = ctx.create_physical_plan(&Arc::new(plan)).await?;
-        assert_eq!("c1", physical_plan.schema().field(0).name().as_str());
-        assert_eq!(
-            "total_salary",
-            physical_plan.schema().field(1).name().as_str()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn case_sensitive_identifiers_user_defined_functions() -> Result<()> {
         let mut ctx = SessionContext::new();
         ctx.register_table("t", test::table_with_sequence(1, 1).unwrap())
@@ -2094,51 +2044,6 @@ mod tests {
         let results = ctx.sql("SELECT * FROM information_schema.tables WHERE table_catalog='test' AND table_schema='abc' AND table_name = 'y'").await.unwrap().collect().await.unwrap();
 
         assert_eq!(results[0].num_rows(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn union_test() -> Result<()> {
-        let ctx = SessionContext::with_config(
-            SessionConfig::new().with_information_schema(true),
-        );
-
-        let result = ctx
-            .sql("SELECT 1 A UNION ALL SELECT 2")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        #[rustfmt::skip]
-        let expected = vec![
-            "+---+",
-            "| a |",
-            "+---+",
-            "| 1 |",
-            "| 2 |",
-            "+---+"
-        ];
-        assert_batches_eq!(expected, &result);
-
-        let result = ctx
-            .sql("SELECT 1 UNION SELECT 2")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        let expected = vec![
-            "+----------+",
-            "| Int64(1) |",
-            "+----------+",
-            "| 1        |",
-            "| 2        |",
-            "+----------+",
-        ];
-        assert_batches_eq!(expected, &result);
         Ok(())
     }
 

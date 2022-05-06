@@ -1173,3 +1173,27 @@ async fn boolean_literal() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn unprojected_filter() {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_table(test::table_with_sequence(1, 3).unwrap())
+        .unwrap();
+
+    let df = df
+        .select(vec![binary_expr(col("i"), Operator::Plus, col("i"))])
+        .unwrap()
+        .filter(col("i").gt(lit(2)))
+        .unwrap();
+    let results = df.collect().await.unwrap();
+
+    let expected = vec![
+        "+--------------------------+",
+        "| ?table?.i Plus ?table?.i |",
+        "+--------------------------+",
+        "| 6                        |",
+        "+--------------------------+",
+    ];
+    assert_batches_sorted_eq!(expected, &results);
+}
