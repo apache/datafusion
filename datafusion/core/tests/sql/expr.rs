@@ -418,6 +418,31 @@ async fn test_boolean_expressions() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_mathematical_expressions_with_null() -> Result<()> {
+    test_expression!("sqrt(NULL)", "NULL");
+    test_expression!("sin(NULL)", "NULL");
+    test_expression!("cos(NULL)", "NULL");
+    test_expression!("tan(NULL)", "NULL");
+    test_expression!("asin(NULL)", "NULL");
+    test_expression!("acos(NULL)", "NULL");
+    test_expression!("atan(NULL)", "NULL");
+    test_expression!("floor(NULL)", "NULL");
+    test_expression!("ceil(NULL)", "NULL");
+    test_expression!("round(NULL)", "NULL");
+    test_expression!("trunc(NULL)", "NULL");
+    test_expression!("abs(NULL)", "NULL");
+    test_expression!("signum(NULL)", "NULL");
+    test_expression!("exp(NULL)", "NULL");
+    test_expression!("ln(NULL)", "NULL");
+    test_expression!("log2(NULL)", "NULL");
+    test_expression!("log10(NULL)", "NULL");
+    test_expression!("power(NULL, 2)", "NULL");
+    test_expression!("power(NULL, NULL)", "NULL");
+    test_expression!("power(2, NULL)", "NULL");
+    Ok(())
+}
+
+#[tokio::test]
 #[cfg_attr(not(feature = "crypto_expressions"), ignore)]
 async fn test_crypto_expressions() -> Result<()> {
     test_expression!("md5('tom')", "34b7da764b21d298ef307d04d8152dc5");
