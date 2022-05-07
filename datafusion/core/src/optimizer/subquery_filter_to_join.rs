@@ -99,11 +99,7 @@ impl SubqueryFilterToJoin {
             }
         }
 
-        if non_correlated_predicates.is_empty() {
-            None
-        } else {
-            Some(utils::combine_conjunctive(&non_correlated_predicates))
-        }
+        utils::combine_conjunctive(&non_correlated_predicates)
     }
 
     fn rewrite_correlated_subquery_as_join(
@@ -292,35 +288,29 @@ impl OptimizerRule for SubqueryFilterToJoin {
                 utils::split_conjunction(predicate, &mut filters);
 
                 // Searching for subquery-based filters
-                let (subquery_filters, regular_filters): (Vec<&Expr>, Vec<&Expr>) =
+                let (subquery_filters, remainder): (Vec<&Expr>, Vec<&Expr>) =
                     filters.into_iter().partition(|&e| {
                         matches!(e, Expr::InSubquery { .. } | Expr::Exists { .. })
                     });
 
-                // Check all subquery filters could be rewritten
-                //
-                // In case of expressions which could not be rewritten
-                // return original filter with optimized input
-                //
-                // TODO: complex expressions which are disjunctive with our subquery expressions
-                // can be rewritten as unions...
-                let mut subqueries_in_regular = vec![];
-                regular_filters.iter().try_for_each(|&e| {
-                    extract_subquery_filters(e, &mut subqueries_in_regular)
-                })?;
+                let remaining_predicate = utils::combine_conjunctive(&remainder);
 
-                // Since we are unable to simplify the correlated subquery,
-                // we must do a row scan against the outer plan anyway, so we abort
-                if !subqueries_in_regular.is_empty() {
-                    return Ok(LogicalPlan::Filter(Filter {
-                        predicate: predicate.clone(),
-                        input: Arc::new(optimized_input),
-                    }));
-                };
+                if let Some(predicate) = remaining_predicate {
+                    // Since we are unable to simplify the correlated subquery,
+                    // we must do a row scan against the outer plan anyway, so we abort
+                    //
+                    // TODO: complex expressions which are disjunctive with our subquery expressions
+                    // can be rewritten as unions (without deduplication...)?
+                    if utils::contains_joinable_subquery(&predicate)? {
+                        return Ok(LogicalPlan::Filter(Filter {
+                            predicate: predicate.clone(),
+                            input: Arc::new(optimized_input),
+                        }));
+                    }
+                }
 
-                // Add subquery joins to new_input
-                // optimized_input value should retain for possible optimization rollback
-                let opt_result = subquery_filters.iter().try_fold(
+                // Add subquery joins to optimized_input
+                let new_input = subquery_filters.iter().try_fold(
                     optimized_input.clone(),
                     |outer_plan, &subquery_expr| {
                         self.rewrite_correlated_subquery_as_join(
@@ -329,26 +319,10 @@ impl OptimizerRule for SubqueryFilterToJoin {
                             execution_props,
                         )
                     },
-                );
+                )?;
 
-                // In case of expressions which could not be rewritten
-                // return original filter with optimized input
-                let new_input = match opt_result {
-                    Ok(plan) => plan,
-                    Err(_) => {
-                        return Ok(LogicalPlan::Filter(Filter {
-                            predicate: predicate.clone(),
-                            input: Arc::new(optimized_input),
-                        }))
-                    }
-                };
-
-                // Apply regular filters to join output if some or just return join
-                if regular_filters.is_empty() {
-                    Ok(new_input)
-                } else {
-                    Ok(utils::add_filter(new_input, &regular_filters))
-                }
+                // Apply filters to join output if any
+                Ok(utils::filter_by_all(new_input, &remainder))
             }
             _ => {
                 // Apply the optimization to all inputs of the plan
