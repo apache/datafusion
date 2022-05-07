@@ -517,7 +517,8 @@ async fn test_struct_literals() -> Result<()> {
         "{\"c0\": 1, \"c1\": 2, \"c2\": 3, \"c3\": 4, \"c4\": 5}"
     );
     test_expression!("STRUCT(Null)", "{\"c0\": null}");
-    test_expression!("STRUCT(1,Null)", "{\"c0\": \"1\", \"c1\": null}");
+    test_expression!("STRUCT(2)", "{\"c0\": 2}");
+    test_expression!("STRUCT('1',Null)", "{\"c0\": \"1\", \"c1\": null}");
     test_expression!("STRUCT(true, false)", "{\"c0\": true, \"c1\": false}");
     test_expression!(
         "STRUCT('str1', 'str2')",
