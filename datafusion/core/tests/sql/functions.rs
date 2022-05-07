@@ -17,7 +17,6 @@
 
 use super::*;
 
-/// sqrt(f32) is slightly different than sqrt(CAST(f32 AS double)))
 #[tokio::test]
 async fn sqrt_f32_vs_f64() -> Result<()> {
     let ctx = create_ctx()?;
@@ -25,7 +24,8 @@ async fn sqrt_f32_vs_f64() -> Result<()> {
     // sqrt(f32)'s plan passes
     let sql = "SELECT avg(sqrt(c11)) FROM aggregate_test_100";
     let actual = execute(&ctx, sql).await;
-    let expected = vec![vec!["0.6584407806396484"]];
+    let sql = "SELECT avg(CAST(sqrt(c11) AS double)) FROM aggregate_test_100";
+    let expected = execute(&ctx, sql).await;
 
     assert_eq!(actual, expected);
     let sql = "SELECT avg(sqrt(CAST(c11 AS double))) FROM aggregate_test_100";

@@ -38,8 +38,8 @@ pub enum RowType {
 }
 
 /// Reveals how the fields of a record are stored in the raw-bytes format
-#[derive(Debug)]
-pub(crate) struct RowLayout {
+#[derive(Debug, Clone)]
+pub struct RowLayout {
     /// Type of the layout
     row_type: RowType,
     /// If a row is null free according to its schema
@@ -55,8 +55,14 @@ pub(crate) struct RowLayout {
 }
 
 impl RowLayout {
-    pub(crate) fn new(schema: &Schema, row_type: RowType) -> Self {
-        assert!(row_supported(schema, row_type));
+    /// new
+    pub fn new(schema: &Schema, row_type: RowType) -> Self {
+        assert!(
+            row_supported(schema, row_type),
+            "{:?}Row with {:?} not supported yet.",
+            row_type,
+            schema,
+        );
         let null_free = schema_null_free(schema);
         let field_count = schema.fields().len();
         let null_width = if null_free {
@@ -81,8 +87,9 @@ impl RowLayout {
         }
     }
 
+    /// Get fixed part width for this layout
     #[inline(always)]
-    pub(crate) fn fixed_part_width(&self) -> usize {
+    pub fn fixed_part_width(&self) -> usize {
         self.null_width + self.values_width
     }
 }
@@ -149,7 +156,7 @@ pub(crate) fn estimate_row_width(schema: &Schema, layout: &RowLayout) -> usize {
 
 /// Tell if we can create raw-bytes based rows since we currently
 /// has limited data type supports in the row format
-fn row_supported(schema: &Schema, row_type: RowType) -> bool {
+pub fn row_supported(schema: &Schema, row_type: RowType) -> bool {
     schema
         .fields()
         .iter()

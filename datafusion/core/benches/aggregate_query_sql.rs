@@ -133,6 +133,16 @@ fn criterion_benchmark(c: &mut Criterion) {
             )
         })
     });
+
+    c.bench_function("aggregate_query_group_by_u64_multiple_keys", |b| {
+        b.iter(|| {
+            query(
+                ctx.clone(),
+                "SELECT u64_wide, utf8, MIN(f64), AVG(f64), COUNT(f64) \
+                 FROM t GROUP BY u64_wide, utf8",
+            )
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);
