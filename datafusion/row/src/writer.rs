@@ -75,6 +75,7 @@ pub fn bench_write_batch(
     Ok(lengths)
 }
 
+#[macro_export]
 macro_rules! set_idx {
     ($WIDTH: literal, $SELF: ident, $IDX: ident, $VALUE: ident) => {{
         $SELF.assert_index_valid($IDX);
@@ -83,6 +84,7 @@ macro_rules! set_idx {
     }};
 }
 
+#[macro_export]
 macro_rules! fn_set_idx {
     ($NATIVE: ident, $WIDTH: literal) => {
         paste::item! {

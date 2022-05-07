@@ -233,7 +233,6 @@ pub use datafusion_data_access;
 pub use datafusion_expr as logical_expr;
 pub use datafusion_physical_expr as physical_expr;
 
-#[cfg(feature = "row")]
 pub use datafusion_row as row;
 
 #[cfg(feature = "jit")]
