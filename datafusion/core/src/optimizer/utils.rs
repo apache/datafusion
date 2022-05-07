@@ -652,7 +652,7 @@ pub fn combine_disjunctive(predicates: &[&Expr]) -> Option<Expr> {
     }
 }
 
-/// Recursively walk an expression tree, checking if
+/// Recursively walk an expression tree, returning true if it encounters a joinable subquery
 struct SubqueryVisitor<'a> {
     contains_joinable_subquery: &'a mut bool,
 }
@@ -689,27 +689,38 @@ pub(crate) fn column_is_correlated(outer: &Arc<DFSchema>, column: &Column) -> bo
     false
 }
 
-// TODO: rewrite as expr.accept(Visitor)
-/// Checks if expression contains any column in the outer schema
-pub(crate) fn detect_correlated_columns(
-    outer: &Arc<DFSchema>,
-    expression: &Expr,
-) -> Result<bool> {
-    for se in expr_sub_expressions(expression)?.into_iter() {
-        match se {
+/// Recursively walk an expression tree, returning true if it encounters a joinable subquery
+struct CorrelatedColumnsVisitor<'a> {
+    outer_schema: &'a Arc<DFSchema>,
+    contains_correlated_columns: &'a mut bool,
+}
+
+impl ExpressionVisitor for CorrelatedColumnsVisitor<'_> {
+    fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
+        match expr {
             Expr::Column(c) => {
-                if column_is_correlated(outer, &c) {
-                    return Ok(true);
+                if column_is_correlated(self.outer_schema, &c) {
+                    *self.contains_correlated_columns = true;
+                    return Ok(Recursion::Stop(self));
                 }
             }
-            _ => {
-                if detect_correlated_columns(outer, &se)? {
-                    return Ok(true);
-                }
-            }
+            _ => {}
         }
+        Ok(Recursion::Continue(self))
     }
-    Ok(false)
+}
+
+/// Recursively walk an expression tree, returning true if it encounters a correlated column
+pub fn contains_correlated_columns(
+    outer_schema: &Arc<DFSchema>,
+    expr: &Expr,
+) -> Result<bool> {
+    let mut contains_correlated_columns = false;
+    expr.accept(CorrelatedColumnsVisitor {
+        outer_schema,
+        contains_correlated_columns: &mut contains_correlated_columns,
+    })?;
+    Ok(contains_correlated_columns)
 }
 
 #[cfg(test)]
