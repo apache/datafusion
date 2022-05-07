@@ -36,7 +36,6 @@ use crate::logical_plan::{
 };
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
-use datafusion_common::{Column, DFSchema};
 
 /// Optimizer rule for rewriting subquery filters to joins
 #[derive(Default)]
@@ -46,60 +45,6 @@ impl SubqueryFilterToJoin {
     #[allow(missing_docs)]
     pub fn new() -> Self {
         Self {}
-    }
-
-    fn are_correlated_columns(
-        &self,
-        outer: &Arc<DFSchema>,
-        column_a: &Column,
-        column_b: &Column,
-    ) -> Option<(Column, Column)> {
-        if utils::column_is_correlated(outer, column_a) {
-            return Some((column_a.clone(), column_b.clone()));
-        } else if utils::column_is_correlated(outer, column_b) {
-            return Some((column_b.clone(), column_a.clone()));
-        }
-        None
-    }
-
-    // TODO: do we need to check correlation/dependency only with outer input top-level schema?
-    // NOTE: We only match against an equality filter with an outer column
-    fn extract_correlated_as_join_columns(
-        &self,
-        expr: &Expr,
-        outer: &Arc<DFSchema>,
-        correlated_columns: &mut Vec<(Column, Column)>,
-    ) -> Option<Expr> {
-        let mut filters = vec![];
-        // This will also strip aliases
-        utils::split_conjunction(expr, &mut filters);
-
-        let mut non_correlated_predicates = vec![];
-        for filter in filters {
-            match filter {
-                Expr::BinaryExpr { left, op, right } => {
-                    let mut extracted_column = false;
-                    if let (Expr::Column(column_a), Expr::Column(column_b)) =
-                        (left.as_ref(), right.as_ref())
-                    {
-                        if let Some(columns) =
-                            self.are_correlated_columns(outer, column_a, column_b)
-                        {
-                            if *op == Operator::Eq {
-                                correlated_columns.push(columns);
-                                extracted_column = true;
-                            }
-                        }
-                    }
-                    if !extracted_column {
-                        non_correlated_predicates.push(filter);
-                    }
-                }
-                _ => non_correlated_predicates.push(filter),
-            }
-        }
-
-        utils::combine_conjunctive(&non_correlated_predicates)
     }
 
     fn rewrite_correlated_subquery_as_join(
@@ -133,8 +78,8 @@ impl SubqueryFilterToJoin {
                                 LogicalPlan::Filter(Filter { predicate, input }),
                             ) => {
                                 // Extract correlated columns as join columns from the filter predicate
-                                let non_correlated_predicate = self
-                                    .extract_correlated_as_join_columns(
+                                let non_correlated_predicate =
+                                    utils::extract_correlated_as_join_columns(
                                         predicate,
                                         outer_plan.schema(),
                                         &mut correlated_join_columns,
@@ -221,8 +166,8 @@ impl SubqueryFilterToJoin {
                 let mut correlated_join_columns = vec![];
                 let right_input = match &*subquery.subquery {
                     LogicalPlan::Filter(Filter { predicate, input }) => {
-                        let non_correlated_predicate = self
-                            .extract_correlated_as_join_columns(
+                        let non_correlated_predicate =
+                            utils::extract_correlated_as_join_columns(
                                 predicate,
                                 outer_plan.schema(),
                                 &mut correlated_join_columns,

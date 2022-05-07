@@ -720,6 +720,60 @@ pub fn contains_correlated_columns(
     Ok(contains_correlated_columns)
 }
 
+/// Check if one of the columns belongs to the outer schema, then return (outer, inner)
+fn maybe_correlated_columns(
+    outer: &Arc<DFSchema>,
+    column_a: &Column,
+    column_b: &Column,
+) -> Option<(Column, Column)> {
+    if column_is_correlated(outer, column_a) {
+        return Some((column_a.clone(), column_b.clone()));
+    } else if column_is_correlated(outer, column_b) {
+        return Some((column_b.clone(), column_a.clone()));
+    }
+    None
+}
+
+/// Extract filters of the form  Column = Column where one of the columns
+/// from the given expression belongs to the outer schema
+pub(crate) fn extract_correlated_as_join_columns(
+    expr: &Expr,
+    outer: &Arc<DFSchema>,
+    correlated_columns: &mut Vec<(Column, Column)>,
+) -> Option<Expr> {
+    let mut filters = vec![];
+    // This will also strip aliases
+    split_conjunction(expr, &mut filters);
+
+    let mut non_correlated_predicates = vec![];
+    for filter in filters {
+        match filter {
+            Expr::BinaryExpr { left, op, right } => {
+                let mut extracted_column = false;
+                if let (Expr::Column(column_a), Expr::Column(column_b)) =
+                    (left.as_ref(), right.as_ref())
+                {
+                    if let Some(columns) =
+                        maybe_correlated_columns(outer, column_a, column_b)
+                    {
+                        if *op == Operator::Eq {
+                            correlated_columns.push(columns);
+                            extracted_column = true;
+                        }
+                    }
+                }
+                if !extracted_column {
+                    non_correlated_predicates.push(filter);
+                }
+            }
+            _ => non_correlated_predicates.push(filter),
+        }
+    }
+
+    combine_conjunctive(&non_correlated_predicates)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
