@@ -34,7 +34,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
     let vec: Vec<_> = args
         .iter()
         .enumerate()
-        .map(|(i, arg)| -> (Field, ArrayRef) {
+        .map(|(i, arg)| -> Result<(Field, ArrayRef)> {
             let field_name = format!("c{}", i);
             match arg.data_type() {
                 DataType::Utf8
@@ -49,13 +49,17 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                 | DataType::UInt8
                 | DataType::UInt16
                 | DataType::UInt32
-                | DataType::UInt64 => (
+                | DataType::UInt64 => Ok((
                     Field::new(field_name.as_str(), arg.data_type().clone(), true),
                     arg.clone(),
-                ),
-                data_type => unimplemented!("struct not support {} type", data_type),
+                )),
+                data_type => Err(DataFusionError::NotImplemented(format!(
+                    "Struct is not implemented for type '{:?}'.",
+                    data_type
+                ))),
             }
         })
+        .map(|x| x.unwrap())
         .collect();
 
     Ok(Arc::new(StructArray::from(vec)))
