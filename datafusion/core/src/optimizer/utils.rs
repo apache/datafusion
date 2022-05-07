@@ -697,14 +697,11 @@ struct CorrelatedColumnsVisitor<'a> {
 
 impl ExpressionVisitor for CorrelatedColumnsVisitor<'_> {
     fn pre_visit(self, expr: &Expr) -> Result<Recursion<Self>> {
-        match expr {
-            Expr::Column(c) => {
-                if column_is_correlated(self.outer_schema, &c) {
-                    *self.contains_correlated_columns = true;
-                    return Ok(Recursion::Stop(self));
-                }
+        if let Expr::Column(c) = expr {
+            if column_is_correlated(self.outer_schema, c) {
+                *self.contains_correlated_columns = true;
+                return Ok(Recursion::Stop(self));
             }
-            _ => {}
         }
         Ok(Recursion::Continue(self))
     }

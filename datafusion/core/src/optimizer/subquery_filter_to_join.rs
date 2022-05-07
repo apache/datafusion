@@ -303,7 +303,7 @@ impl OptimizerRule for SubqueryFilterToJoin {
                     // can be rewritten as unions (without deduplication...)?
                     if utils::contains_joinable_subquery(&predicate)? {
                         return Ok(LogicalPlan::Filter(Filter {
-                            predicate: predicate.clone(),
+                            predicate,
                             input: Arc::new(optimized_input),
                         }));
                     }
@@ -311,11 +311,11 @@ impl OptimizerRule for SubqueryFilterToJoin {
 
                 // Add subquery joins to optimized_input
                 let new_input = subquery_filters.iter().try_fold(
-                    optimized_input.clone(),
+                    optimized_input,
                     |outer_plan, &subquery_expr| {
                         self.rewrite_correlated_subquery_as_join(
                             outer_plan,
-                            &subquery_expr,
+                            subquery_expr,
                             execution_props,
                         )
                     },
@@ -334,22 +334,6 @@ impl OptimizerRule for SubqueryFilterToJoin {
     fn name(&self) -> &str {
         "subquery_filter_to_join"
     }
-}
-
-fn extract_subquery_filters(expression: &Expr, extracted: &mut Vec<Expr>) -> Result<()> {
-    utils::expr_sub_expressions(expression)?
-        .into_iter()
-        .try_for_each(|se| match se {
-            Expr::InSubquery { .. } => {
-                extracted.push(se);
-                Ok(())
-            }
-            Expr::Exists { .. } => {
-                extracted.push(se);
-                Ok(())
-            }
-            _ => extract_subquery_filters(&se, extracted),
-        })
 }
 
 #[cfg(test)]
