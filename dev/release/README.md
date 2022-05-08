@@ -113,7 +113,7 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base verstion tag and the release branch will be used to
+Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
 populate the changelog content.
 
 You will need a GitHub Personal Access Token for the following steps. Follow 
