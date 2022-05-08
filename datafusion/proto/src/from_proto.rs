@@ -467,6 +467,7 @@ impl From<&protobuf::ScalarFunction> for BuiltinScalarFunction {
             ScalarFunction::RegexpMatch => Self::RegexpMatch,
             ScalarFunction::Coalesce => Self::Coalesce,
             ScalarFunction::Power => Self::Power,
+            ScalarFunction::StructFun => Self::Struct,
         }
     }
 }

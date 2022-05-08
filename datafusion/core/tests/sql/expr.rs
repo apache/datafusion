@@ -538,6 +538,24 @@ async fn test_array_literals() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_struct_literals() -> Result<()> {
+    test_expression!(
+        "STRUCT(1,2,3,4,5)",
+        "{\"c0\": 1, \"c1\": 2, \"c2\": 3, \"c3\": 4, \"c4\": 5}"
+    );
+    test_expression!("STRUCT(Null)", "{\"c0\": null}");
+    test_expression!("STRUCT(2)", "{\"c0\": 2}");
+    test_expression!("STRUCT('1',Null)", "{\"c0\": \"1\", \"c1\": null}");
+    test_expression!("STRUCT(true, false)", "{\"c0\": true, \"c1\": false}");
+    test_expression!(
+        "STRUCT('str1', 'str2')",
+        "{\"c0\": \"str1\", \"c1\": \"str2\"}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_interval_expressions() -> Result<()> {
     // day nano intervals
     test_expression!(

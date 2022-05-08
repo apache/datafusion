@@ -21,8 +21,8 @@ use crate::nullif::SUPPORTED_NULLIF_TYPES;
 use crate::type_coercion::data_types;
 use crate::ColumnarValue;
 use crate::{
-    array_expressions, conditional_expressions, Accumulator, BuiltinScalarFunction,
-    Signature, TypeSignature,
+    array_expressions, conditional_expressions, struct_expressions, Accumulator,
+    BuiltinScalarFunction, Signature, TypeSignature,
 };
 use arrow::datatypes::{DataType, Field, TimeUnit};
 use datafusion_common::{DataFusionError, Result};
@@ -224,6 +224,8 @@ pub fn return_type(
             _ => Ok(DataType::Float64),
         },
 
+        BuiltinScalarFunction::Struct => Ok(DataType::Struct(vec![])),
+
         BuiltinScalarFunction::Abs
         | BuiltinScalarFunction::Acos
         | BuiltinScalarFunction::Asin
@@ -256,6 +258,10 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
     match fun {
         BuiltinScalarFunction::Array => Signature::variadic(
             array_expressions::SUPPORTED_ARRAY_TYPES.to_vec(),
+            fun.volatility(),
+        ),
+        BuiltinScalarFunction::Struct => Signature::variadic(
+            struct_expressions::SUPPORTED_STRUCT_TYPES.to_vec(),
             fun.volatility(),
         ),
         BuiltinScalarFunction::Concat | BuiltinScalarFunction::ConcatWithSeparator => {
