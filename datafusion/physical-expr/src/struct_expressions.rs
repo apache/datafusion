@@ -59,8 +59,7 @@ fn array_struct(args: &[ArrayRef]) -> Result<ArrayRef> {
                 ))),
             }
         })
-        .map(|x| x.unwrap())
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     Ok(Arc::new(StructArray::from(vec)))
 }
