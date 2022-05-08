@@ -97,11 +97,10 @@ impl ObjectStore for LocalFileSystem {
 
 /// Try to convert a PathBuf reference into a &str
 pub fn path_as_str(path: &std::path::Path) -> Result<&str> {
-    path.to_str()
-      .map_err(|e| io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("Invalid path '{}': {}", path.display(), e),
-        )))
+    path.to_str().ok_or_else(|| io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("Invalid path '{}'", path.display()),
+    ))
 }
 
 struct LocalFileReader {
