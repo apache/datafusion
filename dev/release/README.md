@@ -113,9 +113,7 @@ git commit -a -m 'Update version'
 
 ### Update CHANGELOG.md
 
-Manually edit the base version tag argument in
-`dev/release/update_change_log-{ballista,datafusion}.sh`. Commits
-between the base verstion tag and the latest upstream master will be used to
+Define release branch (e.g. `master`), base version tag (e.g. `7.0.0`) and future version tag (e.g. `8.0.0`). Commits between the base version tag and the release branch will be used to
 populate the changelog content.
 
 You will need a GitHub Personal Access Token for the following steps. Follow 
@@ -124,7 +122,7 @@ to generate one if you do not already have one.
 
 ```bash
 # create the changelog
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh
+CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh master 8.0.0 7.0.0
 # review change log / edit issues and labels if needed, rerun until you are happy with the result
 git commit -a -m 'Create changelog for release'
 ```

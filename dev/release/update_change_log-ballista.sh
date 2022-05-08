@@ -19,14 +19,16 @@
 #
 
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-ballista.sh
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-ballista.sh master ballista-0.7.0 ballista-0.6.0
+
+RELEASE_BRANCH=$1
+RELEASE_TAG=$2
+BASE_TAG=$3
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
-
-CURRENT_VER=$(grep version "${SOURCE_TOP_DIR}/ballista/rust/client/Cargo.toml" | head -n 1 | awk '{print $3}' | tr -d '"')
 ${SOURCE_DIR}/update_change_log.sh \
     ballista \
-    ballista-0.6.0 \
+    "${BASE_TAG}" \
     --exclude-tags-regex "python-.+" \
-    --future-release "ballista-${CURRENT_VER}"
+    --future-release "${RELEASE_TAG}" \
+    --release-branch "${RELEASE_BRANCH}"
