@@ -21,6 +21,8 @@
 set -e
 
 # Usage:
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh <branch> <release_tag> <base_tag>
+# Example:
 # CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh master 8.0.0 7.1.0
 # CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh maint-7.x 7.1.0 7.0.0
 
