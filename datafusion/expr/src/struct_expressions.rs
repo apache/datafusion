@@ -15,26 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod aggregate;
-pub mod array_expressions;
-pub mod conditional_expressions;
-#[cfg(feature = "crypto_expressions")]
-pub mod crypto_expressions;
-pub mod datetime_expressions;
-pub mod expressions;
-mod functions;
-pub mod math_expressions;
-mod physical_expr;
-#[cfg(feature = "regex_expressions")]
-pub mod regex_expressions;
-mod sort_expr;
-pub mod string_expressions;
-pub mod struct_expressions;
-#[cfg(feature = "unicode_expressions")]
-pub mod unicode_expressions;
-pub mod window;
+use arrow::datatypes::DataType;
 
-pub use aggregate::AggregateExpr;
-pub use functions::ScalarFunctionExpr;
-pub use physical_expr::PhysicalExpr;
-pub use sort_expr::PhysicalSortExpr;
+/// Currently supported types by the struct function.
+pub static SUPPORTED_STRUCT_TYPES: &[DataType] = &[
+    DataType::Boolean,
+    DataType::UInt8,
+    DataType::UInt16,
+    DataType::UInt32,
+    DataType::UInt64,
+    DataType::Int8,
+    DataType::Int16,
+    DataType::Int32,
+    DataType::Int64,
+    DataType::Float32,
+    DataType::Float64,
+    DataType::Utf8,
+    DataType::LargeUtf8,
+];
