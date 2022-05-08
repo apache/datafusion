@@ -21,10 +21,13 @@
 set -e
 
 # Usage:
-# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-datafusion.sh
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh <branch> <release_tag> <base_tag>
+# Example:
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh master 8.0.0 7.1.0
+# CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log-all.sh maint-7.x 7.1.0 7.0.0
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
-${SOURCE_DIR}/update_change_log-datafusion.sh
-${SOURCE_DIR}/update_change_log-ballista.sh
+${SOURCE_DIR}/update_change_log-datafusion.sh $1 $2 $3
+${SOURCE_DIR}/update_change_log-ballista.sh $1 $2 $3
