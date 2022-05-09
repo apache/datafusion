@@ -338,8 +338,9 @@ struct BufferedBatch {
     pub range: Range<usize>,
     /// Array refs of the join key
     pub join_arrays: Vec<ArrayRef>,
-    ///
+    /// Buffered joined index (null joining buffered)
     pub null_joined: Vec<usize>,
+    /// Buffered joined index (streamed joining buffered)
     pub pair_joined: (Vec<usize>, Vec<usize>),
 }
 impl BufferedBatch {
