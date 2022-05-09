@@ -129,7 +129,7 @@ git commit -a -m 'Create changelog for release'
 
 _If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU 
 allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the 
-value of the `--cpus` argument._
+value of the `--cpus` argument in the `update_change_log.sh` script._
 
 You can add `invalid` or `development-process` label to exclude items from
 release notes. Add `datafusion`, `ballista` and `python` labels to group items
