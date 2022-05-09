@@ -147,56 +147,53 @@ fn agg_cols(agg: &Aggregate) -> Result<Vec<Column>> {
         .collect())
 }
 
+fn exprlist_to_fields_aggregate(
+    exprs: &[Expr],
+    plan: &LogicalPlan,
+    agg: &Aggregate,
+) -> Result<Vec<DFField>> {
+    let agg_cols = agg_cols(agg)?;
+    let mut fields = vec![];
+    for expr in exprs {
+        match expr {
+            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
+                // resolve against schema of input to aggregate
+                fields.push(expr.to_field(agg.input.schema())?);
+            }
+            _ => fields.push(expr.to_field(plan.schema())?),
+        }
+    }
+    Ok(fields)
+}
+
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
     plan: &LogicalPlan,
 ) -> Result<Vec<DFField>> {
-    //TODO refactor to avoid duplication
-    //TODO explain what is going on here
-    match plan {
+    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+    // when dealing with aggregate plans we cannot simply look in the aggregate output schema
+    // because it will contain columns representing complex expressions (such a column named
+    // `#GROUPING(person.state)` so in order to resolve `person.state` in this case we need to
+    // look at the input to the aggregate instead.
+    let fields = match plan {
         LogicalPlan::Aggregate(agg) => {
-            let agg_cols = agg_cols(agg)?;
-            let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-            let mut fields = vec![];
-            for expr in &exprs {
-                match expr {
-                    Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                        // resolve against schema of input to aggregate
-                        fields.push(expr.to_field(agg.input.schema())?);
-                    }
-                    _ => fields.push(expr.to_field(plan.schema())?),
-                }
+            Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
+        }
+        LogicalPlan::Window(window) => match window.input.as_ref() {
+            LogicalPlan::Aggregate(agg) => {
+                Some(exprlist_to_fields_aggregate(&exprs, plan, agg))
             }
-            Ok(fields)
-        }
-        LogicalPlan::Window(window) => {
-            match window.input.as_ref() {
-                LogicalPlan::Aggregate(agg) => {
-                    let agg_cols = agg_cols(agg)?;
-                    let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
-                    let mut fields = vec![];
-                    for expr in &exprs {
-                        match expr {
-                            Expr::Column(c) if agg_cols.iter().any(|x| x == c) => {
-                                // resolve against schema of input to aggregate
-                                fields.push(expr.to_field(agg.input.schema())?);
-                            }
-                            _ => fields.push(expr.to_field(plan.schema())?),
-                        }
-                    }
-                    Ok(fields)
-                }
-                _ => {
-                    let input_schema = &plan.schema();
-                    expr.into_iter().map(|e| e.to_field(input_schema)).collect()
-                }
-            }
-        }
-        _ => {
-            let input_schema = &plan.schema();
-            expr.into_iter().map(|e| e.to_field(input_schema)).collect()
-        }
+            _ => None,
+        },
+        _ => None,
+    };
+    if let Some(fields) = fields {
+        fields
+    } else {
+        // look for exact match in plan's output schema
+        let input_schema = &plan.schema();
+        exprs.iter().map(|e| e.to_field(input_schema)).collect()
     }
 }
 
