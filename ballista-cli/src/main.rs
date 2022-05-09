@@ -18,10 +18,12 @@
 use clap::Parser;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionConfig;
-use datafusion_cli::{print_format::PrintFormat};
+use datafusion_cli::{
+    print_format::PrintFormat,
+    print_options::PrintOptions,};
 use ballista_cli::{
-    context::Context, exec, print_options::PrintOptions,
-    DATAFUSION_CLI_VERSION,
+    context::Context, exec,
+    BALLISTA_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
 use std::env;
@@ -91,7 +93,7 @@ pub async fn main() -> Result<()> {
     let args = Args::parse();
 
     if !args.quiet {
-        println!("DataFusion CLI v{}", DATAFUSION_CLI_VERSION);
+        println!("Ballista CLI v{}", BALLISTA_CLI_VERSION);
     }
 
     if let Some(ref path) = args.data_path {

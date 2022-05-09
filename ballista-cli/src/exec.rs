@@ -21,6 +21,9 @@ use crate::{
     command::{Command, OutputFormat},
     context::Context,
     helper::CliHelper,
+
+};
+use datafusion_cli::{
     print_options::PrintOptions,
 };
 use datafusion::error::Result;
