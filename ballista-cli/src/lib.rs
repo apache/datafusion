@@ -23,5 +23,4 @@ pub mod context;
 pub mod exec;
 pub mod functions;
 pub mod helper;
-pub mod print_format;
 pub mod print_options;

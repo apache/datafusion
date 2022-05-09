@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::print_format::PrintFormat;
+use datafusion_cli::print_format::PrintFormat;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::error::Result;
 use std::time::Instant;

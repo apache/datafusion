@@ -18,8 +18,9 @@
 use clap::Parser;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionConfig;
+use datafusion_cli::{print_format::PrintFormat};
 use ballista_cli::{
-    context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
+    context::Context, exec, print_options::PrintOptions,
     DATAFUSION_CLI_VERSION,
 };
 use mimalloc::MiMalloc;
