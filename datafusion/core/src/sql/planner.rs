@@ -4686,6 +4686,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_with_rollup_with_grouping() {
+        let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
+        FROM person GROUP BY id, ROLLUP (state, age)";
+        let expected = "Projection: #person.id, #person.state, #person.age, #GROUPING(person.state), #GROUPING(person.age), #GROUPING(person.state) + #GROUPING(person.age), #COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[GROUPING(#person.state), GROUPING(#person.age), COUNT(UInt8(1))]]\
+        \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[tokio::test]
     async fn aggregate_with_cube() {
         let sql =
             "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
