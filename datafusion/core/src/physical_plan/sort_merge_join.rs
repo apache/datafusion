@@ -22,6 +22,7 @@
 use std::any::Any;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
+use std::fmt::Formatter;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -45,8 +46,8 @@ use crate::physical_plan::expressions::PhysicalSortExpr;
 use crate::physical_plan::join_utils::{build_join_schema, check_join_is_valid, JoinOn};
 use crate::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
 use crate::physical_plan::{
-    metrics, ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    metrics, DisplayFormatType, ExecutionPlan, Partitioning, RecordBatchStream,
+    SendableRecordBatchStream, Statistics,
 };
 
 /// join execution plan executes partitions in parallel and combines them into a set of
@@ -130,6 +131,10 @@ impl ExecutionPlan for SortMergeJoinExec {
         self.right.output_ordering()
     }
 
+    fn relies_on_input_order(&self) -> bool {
+        true
+    }
+
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
         vec![self.left.clone(), self.right.clone()]
     }
@@ -201,6 +206,18 @@ impl ExecutionPlan for SortMergeJoinExec {
 
     fn metrics(&self) -> Option<MetricsSet> {
         Some(self.metrics.clone_inner())
+    }
+
+    fn fmt_as(&self, t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        match t {
+            DisplayFormatType::Default => {
+                write!(
+                    f,
+                    "SortMergeJoin: join_type={:?}, on={:?}, schema={:?}",
+                    self.join_type, self.on, &self.schema
+                )
+            }
+        }
     }
 
     fn statistics(&self) -> Statistics {
@@ -509,9 +526,9 @@ impl SMJStream {
             state: SMJState::Init,
             sort_options,
             null_equals_null,
-            schema: schema.clone(),
+            schema,
             streamed_schema: streamed_schema.clone(),
-            buffered_schema: buffered_schema.clone(),
+            buffered_schema,
             streamed,
             buffered,
             streamed_batch: StreamedBatch::new_empty(streamed_schema),
@@ -844,11 +861,7 @@ impl SMJStream {
 
     // join_type must be `Full`
     fn freeze_buffered_join_null(&mut self, batch_count: usize) -> ArrowResult<()> {
-        for buffered_batch in self
-            .buffered_data
-            .batches
-            .range_mut(..batch_count)
-        {
+        for buffered_batch in self.buffered_data.batches.range_mut(..batch_count) {
             let buffered_indices = UInt64Array::from_iter_values(
                 buffered_batch.null_joined.iter().map(|&index| index as u64),
             );
@@ -882,11 +895,7 @@ impl SMJStream {
 
     // join_type must be `Inner`/`Left`/`Right`/`Full`
     fn freeze_buffered_join_streamed(&mut self, batch_count: usize) -> ArrowResult<()> {
-        for buffered_batch in self
-            .buffered_data
-            .batches
-            .range_mut(..batch_count)
-        {
+        for buffered_batch in self.buffered_data.batches.range_mut(..batch_count) {
             let buffered_indices = UInt64Array::from_iter_values(
                 buffered_batch
                     .pair_joined
