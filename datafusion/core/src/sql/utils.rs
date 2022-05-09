@@ -27,6 +27,7 @@ use crate::{
     error::{DataFusionError, Result},
     logical_plan::{Column, ExpressionVisitor, Recursion},
 };
+use datafusion_expr::expr::GroupingSet;
 use std::collections::HashMap;
 
 /// Collect all deeply nested `Expr::AggregateFunction` and
@@ -100,7 +101,7 @@ impl ExpressionVisitor for ColumnCollector {
     }
 }
 
-fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
+pub(crate) fn find_columns_referenced_by_expr(e: &Expr) -> Vec<Column> {
     // As the `ExpressionVisitor` impl above always returns Ok, this
     // "can't" error
     let ColumnCollector { exprs } = e
@@ -235,22 +236,49 @@ pub(crate) fn check_columns_satisfy_exprs(
             "Expr::Column are required".to_string(),
         )),
     })?;
-
-    for e in &find_column_exprs(exprs) {
-        if !columns.contains(e) {
-            return Err(DataFusionError::Plan(format!(
-                "{}: Expression {:?} could not be resolved from available columns: {}",
-                message_prefix,
-                e,
-                columns
-                    .iter()
-                    .map(|e| format!("{}", e))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )));
+    let column_exprs = find_column_exprs(exprs);
+    for e in &column_exprs {
+        match e {
+            Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                for e in exprs {
+                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                }
+            }
+            Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                for e in exprs {
+                    check_column_satisfies_expr(columns, e, message_prefix)?;
+                }
+            }
+            Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                for exprs in lists_of_exprs {
+                    for e in exprs {
+                        check_column_satisfies_expr(columns, e, message_prefix)?;
+                    }
+                }
+            }
+            _ => check_column_satisfies_expr(columns, e, message_prefix)?,
         }
     }
+    Ok(())
+}
 
+fn check_column_satisfies_expr(
+    columns: &[Expr],
+    expr: &Expr,
+    message_prefix: &str,
+) -> Result<()> {
+    if !columns.contains(expr) {
+        return Err(DataFusionError::Plan(format!(
+            "{}: Expression {:?} could not be resolved from available columns: {}",
+            message_prefix,
+            expr,
+            columns
+                .iter()
+                .map(|e| format!("{}", e))
+                .collect::<Vec<String>>()
+                .join(", ")
+        )));
+    }
     Ok(())
 }
 
@@ -456,6 +484,34 @@ where
                 expr: Box::new(clone_with_replacement(expr.as_ref(), replacement_fn)?),
                 key: key.clone(),
             }),
+            Expr::GroupingSet(set) => match set {
+                GroupingSet::Rollup(exprs) => Ok(Expr::GroupingSet(GroupingSet::Rollup(
+                    exprs
+                        .iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                ))),
+                GroupingSet::Cube(exprs) => Ok(Expr::GroupingSet(GroupingSet::Cube(
+                    exprs
+                        .iter()
+                        .map(|e| clone_with_replacement(e, replacement_fn))
+                        .collect::<Result<Vec<Expr>>>()?,
+                ))),
+                GroupingSet::GroupingSets(lists_of_exprs) => {
+                    let mut new_lists_of_exprs = vec![];
+                    for exprs in lists_of_exprs {
+                        new_lists_of_exprs.push(
+                            exprs
+                                .iter()
+                                .map(|e| clone_with_replacement(e, replacement_fn))
+                                .collect::<Result<Vec<Expr>>>()?,
+                        );
+                    }
+                    Ok(Expr::GroupingSet(GroupingSet::GroupingSets(
+                        new_lists_of_exprs,
+                    )))
+                }
+            },
         },
     }
 }

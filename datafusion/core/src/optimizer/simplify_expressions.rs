@@ -380,6 +380,7 @@ impl<'a> ConstEvaluator<'a> {
             | Expr::ScalarSubquery(_)
             | Expr::WindowFunction { .. }
             | Expr::Sort { .. }
+            | Expr::GroupingSet(_)
             | Expr::Wildcard
             | Expr::QualifiedWildcard { .. } => false,
             Expr::ScalarFunction { fun, .. } => Self::volatility_ok(fun.volatility()),

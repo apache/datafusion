@@ -29,6 +29,7 @@ use crate::logical_plan::{
 use crate::optimizer::optimizer::OptimizerRule;
 use crate::optimizer::utils;
 use arrow::datatypes::DataType;
+use datafusion_expr::expr::GroupingSet;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -482,6 +483,33 @@ impl ExprIdentifierVisitor<'_> {
                 desc.push_str("GetIndexedField-");
                 desc.push_str(&key.to_string());
             }
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::Rollup(exprs) => {
+                    desc.push_str("Rollup");
+                    for expr in exprs {
+                        desc.push('-');
+                        desc.push_str(&Self::desc_expr(expr));
+                    }
+                }
+                GroupingSet::Cube(exprs) => {
+                    desc.push_str("Cube");
+                    for expr in exprs {
+                        desc.push('-');
+                        desc.push_str(&Self::desc_expr(expr));
+                    }
+                }
+                GroupingSet::GroupingSets(lists_of_exprs) => {
+                    desc.push_str("GroupingSets");
+                    for exprs in lists_of_exprs {
+                        desc.push('(');
+                        for expr in exprs {
+                            desc.push('-');
+                            desc.push_str(&Self::desc_expr(expr));
+                        }
+                        desc.push(')');
+                    }
+                }
+            },
         }
 
         desc

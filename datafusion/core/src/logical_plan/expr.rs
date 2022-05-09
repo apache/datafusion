@@ -22,14 +22,15 @@ pub use super::Operator;
 use crate::error::Result;
 use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::{DFField, DFSchema};
+use crate::sql::utils::find_columns_referenced_by_expr;
 use arrow::datatypes::DataType;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
-use datafusion_expr::AccumulatorFunctionImplementation;
 use datafusion_expr::BuiltinScalarFunction;
 pub use datafusion_expr::Expr;
 use datafusion_expr::StateTypeFunction;
 pub use datafusion_expr::{lit, lit_timestamp_nano, Literal};
+use datafusion_expr::{AccumulatorFunctionImplementation, LogicalPlan};
 use datafusion_expr::{AggregateUDF, ScalarUDF};
 use datafusion_expr::{
     ReturnTypeFunction, ScalarFunctionImplementation, Signature, Volatility,
@@ -138,9 +139,33 @@ pub fn create_udaf(
 /// Create field meta-data from an expression, for use in a result set schema
 pub fn exprlist_to_fields<'a>(
     expr: impl IntoIterator<Item = &'a Expr>,
-    input_schema: &DFSchema,
+    plan: &LogicalPlan,
 ) -> Result<Vec<DFField>> {
-    expr.into_iter().map(|e| e.to_field(input_schema)).collect()
+    match plan {
+        LogicalPlan::Aggregate(agg) => {
+            let group_expr: Vec<Column> = agg
+                .group_expr
+                .iter()
+                .flat_map(find_columns_referenced_by_expr)
+                .collect();
+            let exprs: Vec<Expr> = expr.into_iter().cloned().collect();
+            let mut fields = vec![];
+            for expr in &exprs {
+                match expr {
+                    Expr::Column(c) if group_expr.iter().any(|x| x == c) => {
+                        // resolve against schema of input to aggregate
+                        fields.push(expr.to_field(agg.input.schema())?);
+                    }
+                    _ => fields.push(expr.to_field(plan.schema())?),
+                }
+            }
+            Ok(fields)
+        }
+        _ => {
+            let input_schema = &plan.schema();
+            expr.into_iter().map(|e| e.to_field(input_schema)).collect()
+        }
+    }
 }
 
 /// Calls a named built in function

@@ -24,6 +24,7 @@ use crate::logical_plan::ExprSchemable;
 use crate::logical_plan::LogicalPlan;
 use datafusion_common::Column;
 use datafusion_common::Result;
+use datafusion_expr::expr::GroupingSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -214,6 +215,22 @@ impl ExprRewritable for Expr {
                 args: rewrite_vec(args, rewriter)?,
                 fun,
                 distinct,
+            },
+            Expr::GroupingSet(grouping_set) => match grouping_set {
+                GroupingSet::Rollup(exprs) => {
+                    Expr::GroupingSet(GroupingSet::Rollup(rewrite_vec(exprs, rewriter)?))
+                }
+                GroupingSet::Cube(exprs) => {
+                    Expr::GroupingSet(GroupingSet::Cube(rewrite_vec(exprs, rewriter)?))
+                }
+                GroupingSet::GroupingSets(lists_of_exprs) => {
+                    Expr::GroupingSet(GroupingSet::GroupingSets(
+                        lists_of_exprs
+                            .iter()
+                            .map(|exprs| rewrite_vec(exprs.clone(), rewriter))
+                            .collect::<Result<Vec<_>>>()?,
+                    ))
+                }
             },
             Expr::AggregateUDF { args, fun } => Expr::AggregateUDF {
                 args: rewrite_vec(args, rewriter)?,
