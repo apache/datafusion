@@ -55,6 +55,7 @@ git checkout "${SINCE_TAG}" "${OUTPUT_PATH}"
 sed -i.bak '1,18d' "${OUTPUT_PATH}"
 
 docker run -it --rm \
+    --cpus "0.1" \
     -e CHANGELOG_GITHUB_TOKEN=$CHANGELOG_GITHUB_TOKEN \
     -v "$(pwd)":/usr/local/src/your-app \
     githubchangeloggenerator/github-changelog-generator \
