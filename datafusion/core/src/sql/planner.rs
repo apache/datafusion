@@ -50,6 +50,7 @@ use datafusion_expr::{window_function::WindowFunction, BuiltinScalarFunction};
 use hashbrown::HashMap;
 
 use datafusion_common::field_not_found;
+use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
@@ -1156,11 +1157,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         // combine the original grouping and aggregate expressions into one list (note that
         // we do not add the "having" expression since that is not part of the projection)
-        let aggr_projection_exprs = group_by_exprs
-            .iter()
-            .chain(aggr_exprs.iter())
-            .cloned()
-            .collect::<Vec<Expr>>();
+        let mut aggr_projection_exprs = vec![];
+        for expr in &group_by_exprs {
+            match expr {
+                Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
+                    aggr_projection_exprs.extend_from_slice(exprs)
+                }
+                Expr::GroupingSet(GroupingSet::Cube(exprs)) => {
+                    aggr_projection_exprs.extend_from_slice(exprs)
+                }
+                Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
+                    for exprs in lists_of_exprs {
+                        aggr_projection_exprs.extend_from_slice(exprs)
+                    }
+                }
+                _ => aggr_projection_exprs.push(expr.clone()),
+            }
+        }
+        aggr_projection_exprs.extend_from_slice(&aggr_exprs);
 
         // now attempt to resolve columns and replace with fully-qualified columns
         let aggr_projection_exprs = aggr_projection_exprs
@@ -1885,10 +1899,18 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     normalize_ident(&function.name.0[0])
                 };
 
-                // first, scalar built-in
+                // first, check SQL reserved words
+                if name == "rollup" {
+                    let args = self.function_args_to_expr(function.args, schema)?;
+                    return Ok(Expr::GroupingSet(GroupingSet::Rollup(args)));
+                } else if name == "cube" {
+                    let args = self.function_args_to_expr(function.args, schema)?;
+                    return Ok(Expr::GroupingSet(GroupingSet::Cube(args)));
+                }
+
+                // next, scalar built-in
                 if let Ok(fun) = BuiltinScalarFunction::from_str(&name) {
                     let args = self.function_args_to_expr(function.args, schema)?;
-
                     return Ok(Expr::ScalarFunction { fun, args });
                 };
 
@@ -4652,6 +4674,33 @@ mod tests {
         \n    TableScan: person projection=None", subquery);
 
         quick_test(sql, &expected)
+    }
+
+    #[tokio::test]
+    async fn aggregate_with_rollup() {
+        let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, ROLLUP (state, age)";
+        let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[tokio::test]
+    async fn aggregate_with_cube() {
+        let sql =
+            "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
+        let expected = "Projection: #person.id, #person.state, #person.age, #COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[#person.id, CUBE (#person.state, #person.age)]], aggr=[[COUNT(UInt8(1))]]\
+        \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[ignore] // see https://github.com/apache/arrow-datafusion/issues/2469
+    #[tokio::test]
+    async fn aggregate_with_grouping_sets() {
+        let sql = "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, GROUPING SETS ((state), (state, age), (id, state))";
+        let expected = "TBD";
+        quick_test(sql, expected);
     }
 
     fn assert_field_not_found(err: DataFusionError, name: &str) {
