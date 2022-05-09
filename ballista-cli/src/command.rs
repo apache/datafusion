@@ -19,8 +19,8 @@
 
 use crate::context::Context;
 use crate::functions::{display_all_functions, Function};
-use datafusion_cli::print_format::PrintFormat;
-use datafusion_cli::print_options::PrintOptions;
+use crate::print_format::PrintFormat;
+use crate::print_options::PrintOptions;
 use clap::ArgEnum;
 use datafusion::arrow::array::{ArrayRef, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};

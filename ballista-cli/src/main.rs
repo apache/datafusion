@@ -15,16 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use ballista_cli::{
+    context::Context, exec, print_format::PrintFormat, print_options::PrintOptions,
+    BALLISTA_CLI_VERSION,
+};
 use clap::Parser;
 use datafusion::error::Result;
 use datafusion::execution::context::SessionConfig;
-use datafusion_cli::{
-    print_format::PrintFormat,
-    print_options::PrintOptions,};
-use ballista_cli::{
-    context::Context, exec,
-    BALLISTA_CLI_VERSION,
-};
 use mimalloc::MiMalloc;
 use std::env;
 use std::path::Path;
