@@ -400,7 +400,9 @@ impl Stream for SMJStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        self.join_metrics.join_time.timer();
+        let join_time = self.join_metrics.join_time.clone();
+        let _timer = join_time.timer();
+
         loop {
             match &self.state {
                 SMJState::Init => {
