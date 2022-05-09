@@ -4696,6 +4696,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rank_partition_grouping() {
+        let sql = "select
+    sum(age) as total_sum
+   ,state
+   ,last_name
+   ,grouping(state)+grouping(last_name) as lochierarchy
+   ,rank() over (
+ 	partition by grouping(state)+grouping(last_name),
+ 	case when grouping(last_name) = 0 then state end
+ 	order by sum(age) desc) as rank_within_parent
+ from
+    person
+ group by rollup(state,last_name)
+ order by
+   lochierarchy desc,
+   case when lochierarchy = 0 then state end,
+   rank_within_parent
+ limit 100;";
+        let expected = "TBD";
+        quick_test(sql, expected);
+    }
+
+    #[tokio::test]
     async fn aggregate_with_cube() {
         let sql =
             "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
