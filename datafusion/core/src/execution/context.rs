@@ -30,7 +30,7 @@ use crate::{
             parquet::{ParquetFormat, DEFAULT_PARQUET_EXTENSION},
             FileFormat,
         },
-        MemTable,
+        MemTable, ViewTable,
     },
     logical_plan::{PlanType, ToStringifiedPlan},
     optimizer::eliminate_filter::EliminateFilter,
@@ -62,7 +62,7 @@ use crate::datasource::TableProvider;
 use crate::error::{DataFusionError, Result};
 use crate::logical_plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
+    CreateView, DropTable, FileType, FunctionRegistry, LogicalPlan, LogicalPlanBuilder,
     UNNAMED_TABLE,
 };
 use crate::optimizer::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -306,6 +306,33 @@ impl SessionContext {
                             Arc::new(plan.schema().as_ref().into()),
                             batches,
                         )?);
+
+                        self.register_table(name.as_str(), table)?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (false, Ok(_)) => Err(DataFusionError::Execution(format!(
+                        "Table '{:?}' already exists",
+                        name
+                    ))),
+                }
+            }
+
+            LogicalPlan::CreateView(CreateView {
+                name,
+                input,
+                or_replace,
+            }) => {
+                let view = self.table(name.as_str());
+
+                match (or_replace, view) {
+                    (true, Ok(_)) => {
+                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
+                    }
+                    (_, Err(_)) => {
+                        let plan = self.optimize(&input)?;
+                        let table =
+                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
 
                         self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
@@ -732,24 +759,6 @@ impl SessionContext {
             .read()
             .schema_for_ref(table_ref)?
             .deregister_table(table_ref.table())
-    }
-
-    /// Registers a view using a custom `TableProvider` so that
-    /// it can be referenced from SQL statements executed against this
-    /// context.
-    ///
-    /// Returns the `TableProvider` previously registered for this
-    /// reference, if any
-    pub fn register_view<'a>(
-        &'a self,
-        table_ref: impl Into<TableReference<'a>>,
-        provider: Arc<dyn TableProvider>,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
-        let table_ref = table_ref.into();
-        self.state
-            .read()
-            .schema_for_ref(table_ref)?
-            .register_view(table_ref.table().to_owned(), provider)
     }
 
     /// Check whether the given table exists in the schema provider or not

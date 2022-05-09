@@ -67,24 +67,6 @@ pub trait SchemaProvider: Sync + Send {
     /// If no matched table in the schema provider, return false.
     /// Otherwise, return true.
     fn table_exist(&self, name: &str) -> bool;
-
-    /// If supported by the implementation, adds a new view to this schema.
-    /// If a view of the same name existed before, it returns "View already exists" error.
-    #[allow(unused_variables)]
-    fn register_view(
-        &self,
-        name: String,
-        table: Arc<dyn TableProvider>,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
-        Err(DataFusionError::Execution(
-            "schema provider does not support registering views".to_owned(),
-        ))
-    }
-
-    /// If supported by the implementation, checks the view exist in the schema provider or not.
-    /// If no matched view in the schema provider, return false.
-    /// Otherwise, return true.
-    fn view_exist(&self, name: &str) -> bool;
 }
 
 /// Simple in-memory implementation of a schema.
