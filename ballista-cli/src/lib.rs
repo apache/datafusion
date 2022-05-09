@@ -21,6 +21,5 @@ pub const BALLISTA_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub mod command;
 pub mod context;
 pub mod exec;
-pub mod functions;
 
-pub use datafusion_cli::{helper, print_format, print_options};
+pub use datafusion_cli::{helper, print_format, print_options, functions};
