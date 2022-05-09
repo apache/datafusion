@@ -818,6 +818,16 @@ impl SMJStream {
 
     // join_type must be one of: `Left`/`Right`/`Full`/`Semi`/`Anti`
     fn freeze_streamed_join_null(&mut self) -> ArrowResult<()> {
+        if !matches!(
+            self.join_type,
+            JoinType::Left
+                | JoinType::Right
+                | JoinType::Full
+                | JoinType::Semi
+                | JoinType::Anti
+        ) {
+            return Ok(());
+        }
         let streamed_indices = UInt64Array::from_iter_values(
             self.streamed_batch
                 .null_joined
@@ -862,6 +872,9 @@ impl SMJStream {
 
     // join_type must be `Full`
     fn freeze_buffered_join_null(&mut self, batch_count: usize) -> ArrowResult<()> {
+        if !matches!(self.join_type, JoinType::Full) {
+            return Ok(());
+        }
         for buffered_batch in self.buffered_data.batches.range_mut(..batch_count) {
             let buffered_indices = UInt64Array::from_iter_values(
                 buffered_batch.null_joined.iter().map(|&index| index as u64),
@@ -896,6 +909,12 @@ impl SMJStream {
 
     // join_type must be `Inner`/`Left`/`Right`/`Full`
     fn freeze_buffered_join_streamed(&mut self, batch_count: usize) -> ArrowResult<()> {
+        if !matches!(
+            self.join_type,
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full
+        ) {
+            return Ok(());
+        }
         for buffered_batch in self.buffered_data.batches.range_mut(..batch_count) {
             let buffered_indices = UInt64Array::from_iter_values(
                 buffered_batch
