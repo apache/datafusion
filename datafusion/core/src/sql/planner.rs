@@ -4698,23 +4698,22 @@ mod tests {
     #[tokio::test]
     async fn rank_partition_grouping() {
         let sql = "select
-    sum(age) as total_sum
-   ,state
-   ,last_name
-   ,grouping(state)+grouping(last_name) as lochierarchy
-   ,rank() over (
- 	partition by grouping(state)+grouping(last_name),
- 	case when grouping(last_name) = 0 then state end
- 	order by sum(age) desc) as rank_within_parent
- from
-    person
- group by rollup(state,last_name)
- order by
-   lochierarchy desc,
-   case when lochierarchy = 0 then state end,
-   rank_within_parent
- limit 100;";
-        let expected = "TBD";
+            sum(age) as total_sum,
+            state,
+            last_name,
+            grouping(state) + grouping(last_name) as x,
+            rank() over (
+                partition by grouping(state) + grouping(last_name),
+                case when grouping(last_name) = 0 then state end
+                order by sum(age) desc
+                ) as the_rank
+            from
+                person
+            group by rollup(state, last_name)";
+        let expected = "Projection: #SUM(person.age) AS total_sum, #person.state, #person.last_name, #GROUPING(person.state) + #GROUPING(person.last_name) AS x, #RANK() PARTITION BY [#GROUPING(person.state) + #GROUPING(person.last_name), CASE WHEN #GROUPING(person.last_name) = Int64(0) THEN #person.state END] ORDER BY [#SUM(person.age) DESC NULLS FIRST] AS the_rank\
+        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [#GROUPING(person.state) + #GROUPING(person.last_name), CASE WHEN #GROUPING(person.last_name) = Int64(0) THEN #person.state END] ORDER BY [#SUM(person.age) DESC NULLS FIRST]]]\
+        \n    Aggregate: groupBy=[[ROLLUP (#person.state, #person.last_name)]], aggr=[[SUM(#person.age), GROUPING(#person.state), GROUPING(#person.last_name)]]\
+        \n      TableScan: person projection=None";
         quick_test(sql, expected);
     }
 
