@@ -97,9 +97,10 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
             ScalarValue::Int64(Some(s.parse().unwrap()))
         }
         SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
+        SQLExpr::Identifier(Ident { value, .. }) => ScalarValue::Utf8(Some(value)),
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
-                "Unsuported index key expression: {}",
+                "Unsuported index key expression: {:?}",
                 key
             ))))
         }
@@ -1643,6 +1644,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                         column
                     )))
                 }
+            }
+
+            SQLExpr::ArrayIndex { obj, indexs } => {
+                let expr = self.sql_expr_to_logical_expr(*obj, schema, ctes)?;
+                plan_indexed(expr, indexs)
             }
 
             SQLExpr::CompoundIdentifier(ids) => {
