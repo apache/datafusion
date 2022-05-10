@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! View data source which uses a LogicalPlan as it's input.
+
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
