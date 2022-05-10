@@ -36,7 +36,7 @@ datafusion = { path = "../../../datafusion/core", version = "7.0.0" }
 futures = "0.3"
 log = "0.4"
 parking_lot = "0.12"
-sqlparser = "0.16"
+sqlparser = "0.17"
 tempfile = "3"
 tokio = "1.0"
 
