@@ -28,6 +28,23 @@ Install and run using Cargo
 
 The easiest way to install Ballista CLI a spin is via `cargo install ballista-cli`.
 
+Run using Docker
+================
+
+There is no officially published Docker image for the Ballista CLI, so it is necessary to build from source
+instead.
+
+Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note that there is :code:`.dockerignore` file in the root of the repository that may need to be deleted in order for this to work.
+
+.. code-block:: bash
+
+    git clone https://github.com/apache/arrow-datafusion
+    git checkout 8.0.0
+    cd arrow-datafusion
+    docker build -f ballista-cli/Dockerfile . --tag ballista-cli
+    docker run -it -v $(your_data_location):/data ballista-cli
+
+
 Usage
 =====
 
