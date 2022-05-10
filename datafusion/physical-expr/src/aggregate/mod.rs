@@ -36,6 +36,7 @@ pub(crate) mod correlation;
 pub(crate) mod count;
 pub(crate) mod count_distinct;
 pub(crate) mod covariance;
+pub(crate) mod grouping;
 #[macro_use]
 pub(crate) mod min_max;
 pub mod build_in;

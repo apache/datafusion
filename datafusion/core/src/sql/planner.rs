@@ -4695,6 +4695,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn aggregate_with_rollup_with_grouping() {
+        let sql = "SELECT id, state, age, grouping(state), grouping(age), grouping(state) + grouping(age), COUNT(*) \
+        FROM person GROUP BY id, ROLLUP (state, age)";
+        let expected = "Projection: #person.id, #person.state, #person.age, #GROUPING(person.state), #GROUPING(person.age), #GROUPING(person.state) + #GROUPING(person.age), #COUNT(UInt8(1))\
+        \n  Aggregate: groupBy=[[#person.id, ROLLUP (#person.state, #person.age)]], aggr=[[GROUPING(#person.state), GROUPING(#person.age), COUNT(UInt8(1))]]\
+        \n    TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[tokio::test]
+    async fn rank_partition_grouping() {
+        let sql = "select
+            sum(age) as total_sum,
+            state,
+            last_name,
+            grouping(state) + grouping(last_name) as x,
+            rank() over (
+                partition by grouping(state) + grouping(last_name),
+                case when grouping(last_name) = 0 then state end
+                order by sum(age) desc
+                ) as the_rank
+            from
+                person
+            group by rollup(state, last_name)";
+        let expected = "Projection: #SUM(person.age) AS total_sum, #person.state, #person.last_name, #GROUPING(person.state) + #GROUPING(person.last_name) AS x, #RANK() PARTITION BY [#GROUPING(person.state) + #GROUPING(person.last_name), CASE WHEN #GROUPING(person.last_name) = Int64(0) THEN #person.state END] ORDER BY [#SUM(person.age) DESC NULLS FIRST] AS the_rank\
+        \n  WindowAggr: windowExpr=[[RANK() PARTITION BY [#GROUPING(person.state) + #GROUPING(person.last_name), CASE WHEN #GROUPING(person.last_name) = Int64(0) THEN #person.state END] ORDER BY [#SUM(person.age) DESC NULLS FIRST]]]\
+        \n    Aggregate: groupBy=[[ROLLUP (#person.state, #person.last_name)]], aggr=[[SUM(#person.age), GROUPING(#person.state), GROUPING(#person.last_name)]]\
+        \n      TableScan: person projection=None";
+        quick_test(sql, expected);
+    }
+
+    #[tokio::test]
     async fn aggregate_with_cube() {
         let sql =
             "SELECT id, state, age, COUNT(*) FROM person GROUP BY id, CUBE (state, age)";
