@@ -97,7 +97,6 @@ fn plan_key(key: SQLExpr) -> Result<ScalarValue> {
             ScalarValue::Int64(Some(s.parse().unwrap()))
         }
         SQLExpr::Value(Value::SingleQuotedString(s)) => ScalarValue::Utf8(Some(s)),
-        SQLExpr::Identifier(Ident { value, .. }) => ScalarValue::Utf8(Some(value)),
         _ => {
             return Err(DataFusionError::SQL(ParserError(format!(
                 "Unsuported index key expression: {:?}",
