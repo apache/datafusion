@@ -44,4 +44,4 @@ cranelift-module = { version = "0.83.0", optional = true }
 ordered-float = "3.0"
 parquet = { version = "13", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
-sqlparser = "0.16"
+sqlparser = "0.17"
