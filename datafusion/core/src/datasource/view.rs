@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! The table implementation.
-
 use std::{any::Any, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
@@ -164,7 +162,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn query_view_plan() -> Result<()> {
+    async fn query_view_with_filter() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT column1, column2 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
+        let results = session_ctx
+            .sql("SELECT column1 FROM xyz WHERE column2 = 5")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 4       |",
+            "+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_join_views() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT column1, column2 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let view_sql = "CREATE VIEW lmn AS SELECT column1, column3 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND (table_name = 'xyz' OR table_name = 'lmn')").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 2);
+
+        let results = session_ctx
+            .sql("SELECT * FROM xyz JOIN lmn USING (column1)")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------+---------+---------+",
+            "| column2 | column1 | column3 |",
+            "+---------+---------+---------+",
+            "| 2       | 1       | 3       |",
+            "| 5       | 4       | 6       |",
+            "+---------+---------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_view_plan() -> Result<()> {
         let session_ctx = SessionContext::with_config(
             SessionConfig::new().with_information_schema(true),
         );
