@@ -29,9 +29,7 @@ use crate::{
     physical_plan::ExecutionPlan,
 };
 
-use crate::datasource::{
-    datasource::TableProviderFilterPushDown, TableProvider, TableType,
-};
+use crate::datasource::{TableProvider, TableType};
 
 /// An implementation of `TableProvider` that uses the object store
 /// or file system listing capability to get the list of files.
@@ -76,33 +74,28 @@ impl TableProvider for ViewTable {
 
     async fn scan(
         &self,
-        projection: &Option<Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
+        _projection: &Option<Vec<usize>>,
+        _filters: &[Expr],
+        _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.context.create_physical_plan(&self.logical_plan).await
-    }
-
-    fn supports_filter_pushdown(
-        &self,
-        filter: &Expr,
-    ) -> Result<TableProviderFilterPushDown> {
-        Ok(TableProviderFilterPushDown::Unsupported)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::assert_batches_eq;
+    use crate::{assert_batches_eq, execution::context::SessionConfig};
 
     use super::*;
 
     #[tokio::test]
     async fn query_view() -> Result<()> {
-        let session_ctx = SessionContext::new();
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
 
         session_ctx
-            .sql("CREATE TABLE abc AS VALUES (1,2,3)")
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
             .await?
             .collect()
             .await?;
@@ -110,8 +103,11 @@ mod tests {
         let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
         session_ctx.sql(view_sql).await?.collect().await?;
 
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
         let results = session_ctx
-            .sql("SELECT * FROM abc")
+            .sql("SELECT * FROM xyz")
             .await?
             .collect()
             .await?;
@@ -121,7 +117,167 @@ mod tests {
             "| column1 | column2 | column3 |",
             "+---------+---------+---------+",
             "| 1       | 2       | 3       |",
+            "| 4       | 5       | 6       |",
             "+---------+---------+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_view_with_projection() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT column1, column2 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
+        let results = session_ctx
+            .sql("SELECT column1 FROM xyz")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 4       |",
+            "+---------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn query_view_plan() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx
+            .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------------+--------------------------------------------------------+",
+            "| plan_type     | plan                                                   |",
+            "+---------------+--------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                      |",
+            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3 |",
+            "|               |     TableScan: abc projection=Some([0, 1, 2])          |",
+            "| physical_plan | EmptyExec: produce_one_row=false                       |",
+            "|               |                                                        |",
+            "+---------------+--------------------------------------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        let results = session_ctx
+            .sql("EXPLAIN CREATE VIEW xyz AS SELECT * FROM abc WHERE column2 = 5")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------------+--------------------------------------------------------+",
+            "| plan_type     | plan                                                   |",
+            "+---------------+--------------------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                                      |",
+            "|               |   Projection: #abc.column1, #abc.column2, #abc.column3 |",
+            "|               |     Filter: #abc.column2 = Int64(5)                    |",
+            "|               |       TableScan: abc projection=Some([0, 1, 2])        |",
+            "| physical_plan | EmptyExec: produce_one_row=false                       |",
+            "|               |                                                        |",
+            "+---------------+--------------------------------------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        let results = session_ctx
+            .sql("EXPLAIN CREATE VIEW xyz AS SELECT column1, column2 FROM abc WHERE column2 = 5")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------------+----------------------------------------------+",
+            "| plan_type     | plan                                         |",
+            "+---------------+----------------------------------------------+",
+            "| logical_plan  | CreateView: \"xyz\"                            |",
+            "|               |   Projection: #abc.column1, #abc.column2     |",
+            "|               |     Filter: #abc.column2 = Int64(5)          |",
+            "|               |       TableScan: abc projection=Some([0, 1]) |",
+            "| physical_plan | EmptyExec: produce_one_row=false             |",
+            "|               |                                              |",
+            "+---------------+----------------------------------------------+",
+        ];
+
+        assert_batches_eq!(expected, &results);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_or_replace_view() -> Result<()> {
+        let session_ctx = SessionContext::with_config(
+            SessionConfig::new().with_information_schema(true),
+        );
+
+        session_ctx
+            .sql("CREATE TABLE abc AS VALUES (1,2,3), (4,5,6)")
+            .await?
+            .collect()
+            .await?;
+
+        let view_sql = "CREATE VIEW xyz AS SELECT * FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let view_sql = "CREATE OR REPLACE VIEW xyz AS SELECT column1 FROM abc";
+        session_ctx.sql(view_sql).await?.collect().await?;
+
+        let results = session_ctx.sql("SELECT * FROM information_schema.tables WHERE table_type='VIEW' AND table_name = 'xyz'").await?.collect().await?;
+        assert_eq!(results[0].num_rows(), 1);
+
+        let results = session_ctx
+            .sql("SELECT * FROM xyz")
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+---------+",
+            "| column1 |",
+            "+---------+",
+            "| 1       |",
+            "| 4       |",
+            "+---------+",
         ];
 
         assert_batches_eq!(expected, &results);

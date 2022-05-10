@@ -326,7 +326,12 @@ impl SessionContext {
 
                 match (or_replace, view) {
                     (true, Ok(_)) => {
-                        let plan = LogicalPlanBuilder::empty(false).build()?;
+                        self.deregister_table(name.as_str())?;
+                        let plan = self.optimize(&input)?;
+                        let table =
+                            Arc::new(ViewTable::try_new(self.clone(), plan.clone())?);
+
+                        self.register_table(name.as_str(), table)?;
                         Ok(Arc::new(DataFrame::new(self.state.clone(), &plan)))
                     }
                     (_, Err(_)) => {
