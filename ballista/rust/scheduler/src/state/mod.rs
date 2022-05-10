@@ -23,8 +23,8 @@ use datafusion::physical_plan::ExecutionPlan;
 
 use ballista_core::error::Result;
 
-use crate::scheduler_server::SessionContextRegistry;
-use ballista_core::serde::protobuf::{ExecutorHeartbeat, JobStatus};
+use crate::scheduler_server::{SessionBuilder, SessionContextRegistry};
+use ballista_core::serde::protobuf::{ExecutorHeartbeat, JobStatus, KeyValuePair};
 use ballista_core::serde::scheduler::ExecutorMetadata;
 use ballista_core::serde::{AsExecutionPlan, AsLogicalPlan, BallistaCodec};
 
@@ -51,12 +51,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
     pub fn new(
         config_client: Arc<dyn StateBackendClient>,
         namespace: String,
+        session_builder: SessionBuilder,
         codec: BallistaCodec<T, U>,
     ) -> Self {
         Self {
             persistent_state: PersistentSchedulerState::new(
                 config_client,
                 namespace,
+                session_builder,
                 codec,
             ),
             executor_manager: ExecutorManager::new(),
@@ -120,9 +122,14 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerState<T,
             .await
     }
 
-    pub async fn save_job_session(&self, job_id: &str, session_id: &str) -> Result<()> {
+    pub async fn save_job_session(
+        &self,
+        job_id: &str,
+        session_id: &str,
+        configs: Vec<KeyValuePair>,
+    ) -> Result<()> {
         self.persistent_state
-            .save_job_session(job_id, session_id)
+            .save_job_session(job_id, session_id, configs)
             .await
     }
 
@@ -178,6 +185,7 @@ mod test {
     };
     use ballista_core::serde::scheduler::{ExecutorMetadata, ExecutorSpecification};
     use ballista_core::serde::BallistaCodec;
+    use datafusion::execution::context::default_session_builder;
 
     use super::{backend::standalone::StandaloneClient, SchedulerState};
 
@@ -187,6 +195,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                default_session_builder,
                 BallistaCodec::default(),
             );
         let meta = ExecutorMetadata {
@@ -213,6 +222,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                default_session_builder,
                 BallistaCodec::default(),
             );
         let meta = JobStatus {
@@ -234,6 +244,7 @@ mod test {
             SchedulerState::new(
                 Arc::new(StandaloneClient::try_new_temporary()?),
                 "test".to_string(),
+                default_session_builder,
                 BallistaCodec::default(),
             );
         let meta = JobStatus {
