@@ -525,6 +525,15 @@ pub fn signature(fun: &BuiltinScalarFunction) -> Signature {
             ],
             fun.volatility(),
         ),
+        BuiltinScalarFunction::Round => Signature::one_of(
+            vec![
+                TypeSignature::Exact(vec![DataType::Float64, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::Float32, DataType::Int64]),
+                TypeSignature::Exact(vec![DataType::Float64]),
+                TypeSignature::Exact(vec![DataType::Float32]),
+            ],
+            fun.volatility(),
+        ),
         // math expressions expect 1 argument of type f64 or f32
         // priority is given to f64 because e.g. `sqrt(1i32)` is in IR (real numbers) and thus we
         // return the best approximation for it (in f64).
