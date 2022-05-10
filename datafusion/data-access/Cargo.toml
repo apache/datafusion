@@ -18,7 +18,7 @@
 [package]
 name = "datafusion-data-access"
 description = "General data access layer currently mainly based on the object store interfaces"
-version = "1.0.0"
+version = "7.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "README.md"

@@ -304,7 +304,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```
 
 ```shell
-(cd data-access && cargo publish)
+(cd datafusion/data-access && cargo publish)
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
