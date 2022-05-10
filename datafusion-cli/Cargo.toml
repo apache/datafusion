@@ -17,7 +17,7 @@
 
 [package]
 name = "datafusion-cli"
-description = "Command Line Client for DataFusion query engine and Ballista distributed computation engine."
+description = "Command Line Client for DataFusion query engine."
 version = "7.0.0"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 edition = "2021"
