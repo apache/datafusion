@@ -82,6 +82,11 @@ pub fn create_aggregate_expr(
             name,
             return_type,
         )),
+        (AggregateFunction::Grouping, _) => Arc::new(expressions::Grouping::new(
+            coerced_phy_exprs[0].clone(),
+            name,
+            return_type,
+        )),
         (AggregateFunction::Sum, false) => Arc::new(expressions::Sum::new(
             coerced_phy_exprs[0].clone(),
             name,
