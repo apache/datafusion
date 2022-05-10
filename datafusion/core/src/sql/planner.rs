@@ -4352,7 +4352,7 @@ mod tests {
                 ])),
                 "test_decimal" => Ok(Schema::new(vec![
                     Field::new("id", DataType::Int32, false),
-                    Field::new("price", DataType::Decimal(10,2), false),
+                    Field::new("price", DataType::Decimal(10, 2), false),
                 ])),
                 "person" => Ok(Schema::new(vec![
                     Field::new("id", DataType::UInt32, false),
@@ -4701,9 +4701,9 @@ mod tests {
 
     #[tokio::test]
     async fn round_decimal() {
-        let sql =
-            "SELECT round(price/3, 2) FROM test_decimal";
-        let expected = "TBD";
+        let sql = "SELECT round(price/3, 2) FROM test_decimal";
+        let expected = "Projection: round(#test_decimal.price / Int64(3), Int64(2))\
+        \n  TableScan: test_decimal projection=None";
         quick_test(sql, expected);
     }
 
