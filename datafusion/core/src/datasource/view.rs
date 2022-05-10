@@ -31,8 +31,7 @@ use crate::{
 
 use crate::datasource::{TableProvider, TableType};
 
-/// An implementation of `TableProvider` that uses the object store
-/// or file system listing capability to get the list of files.
+/// An implementation of `TableProvider` that uses another logical plan.
 pub struct ViewTable {
     /// To create ExecutionPlan
     context: SessionContext,
