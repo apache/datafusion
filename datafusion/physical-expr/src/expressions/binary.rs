@@ -61,14 +61,6 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::binary_rule::binary_operator_data_type;
 use datafusion_expr::{binary_rule::coerce_types, ColumnarValue, Operator};
 
-// TODO move to arrow_rs
-// https://github.com/apache/arrow-rs/issues/1312
-fn as_decimal_array(arr: &dyn Array) -> &DecimalArray {
-    arr.as_any()
-        .downcast_ref::<DecimalArray>()
-        .expect("Unable to downcast to typed array to DecimalArray")
-}
-
 /// create a `dyn_op` wrapper function for the specified operation
 /// that call the underlying dyn_op arrow kernel if the type is
 /// supported, and translates ArrowError to DataFusionError
