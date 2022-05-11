@@ -524,7 +524,7 @@ impl LogicalPlanBuilder {
     pub fn offset(&self, offset: usize) -> Result<Self> {
         Ok(Self::from(LogicalPlan::Offset(Offset {
             offset,
-            input: Arc::new(self.plan.clone())
+            input: Arc::new(self.plan.clone()),
         })))
     }
 

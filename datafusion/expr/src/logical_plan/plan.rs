@@ -788,7 +788,9 @@ impl LogicalPlan {
                         }
                     },
                     LogicalPlan::Limit(Limit { ref n, .. }) => write!(f, "Limit: {}", n),
-                    LogicalPlan::Offset(Offset { ref offset, .. }) => write!(f, "Offset: {}", offset),
+                    LogicalPlan::Offset(Offset { ref offset, .. }) => {
+                        write!(f, "Offset: {}", offset)
+                    }
                     LogicalPlan::Subquery(Subquery { subquery, .. }) => {
                         write!(f, "Subquery: {:?}", subquery)
                     }
@@ -1145,7 +1147,7 @@ pub struct Offset {
     /// The offset
     pub offset: usize,
     /// The logical plan
-    pub input: Arc<LogicalPlan>
+    pub input: Arc<LogicalPlan>,
 }
 
 /// Aggregates its input based on a set of grouping and aggregate

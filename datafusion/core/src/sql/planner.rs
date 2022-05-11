@@ -53,10 +53,11 @@ use datafusion_common::field_not_found;
 use datafusion_expr::expr::GroupingSet;
 use datafusion_expr::logical_plan::{Filter, Subquery};
 use sqlparser::ast::{
-    BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, Offset as SQLOffset, FunctionArg,
-    FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName, Query,
-    Select, SelectItem, SetExpr, SetOperator, ShowStatementFilter, TableFactor,
-    TableWithJoins, TrimWhereField, UnaryOperator, Value, Values as SQLValues,
+    BinaryOperator, DataType as SQLDataType, DateTimeField, Expr as SQLExpr, FunctionArg,
+    FunctionArgExpr, Ident, Join, JoinConstraint, JoinOperator, ObjectName,
+    Offset as SQLOffset, Query, Select, SelectItem, SetExpr, SetOperator,
+    ShowStatementFilter, TableFactor, TableWithJoins, TrimWhereField, UnaryOperator,
+    Value, Values as SQLValues,
 };
 use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
 use sqlparser::ast::{ObjectType, OrderByExpr, Statement};
@@ -1262,7 +1263,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     }
 
     /// Wrap a plan in a offset
-    fn offset(&self, input: LogicalPlan, offset: Option<SQLOffset>) -> Result<LogicalPlan> {
+    fn offset(
+        &self,
+        input: LogicalPlan,
+        offset: Option<SQLOffset>,
+    ) -> Result<LogicalPlan> {
         match offset {
             Some(offset_expr) => {
                 let offset = match self.sql_to_rex(
@@ -1270,15 +1275,17 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     input.schema(),
                     &mut HashMap::new(),
                 )? {
-                    Expr::Literal(ScalarValue::Int64(Some(offset))) => Ok(offset as usize),
+                    Expr::Literal(ScalarValue::Int64(Some(offset))) => {
+                        Ok(offset as usize)
+                    }
                     _ => Err(DataFusionError::Plan(
                         "Unexpected expression in OFFSET clause".to_string(),
                     )),
                 }?;
 
                 LogicalPlanBuilder::from(input).offset(offset)?.build()
-            },
-            _ => Ok(input)
+            }
+            _ => Ok(input),
         }
     }
 

@@ -26,8 +26,8 @@ use datafusion_expr::logical_plan::{
 
 use crate::logical_plan::{
     and, build_join_schema, Column, CreateMemoryTable, CreateView, DFSchemaRef, Expr,
-    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Offset, Operator, Partitioning,
-    Recursion, Repartition, Union, Values,
+    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Offset, Operator,
+    Partitioning, Recursion, Repartition, Union, Values,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;

@@ -49,10 +49,10 @@ NUM_CHANGES=$(git diff --cached --name-only . |
 	awk '{print $1}' |
 	wc -l)
 
-if [ ${NUM_CHANGES} -eq 0 ]; then
-	echo -e "$(GREEN INFO): no staged changes in *.rs, $(GREEN skip cargo fmt/clippy)"
-	exit 0
-fi
+#if [ ${NUM_CHANGES} -eq 0 ]; then
+#	echo -e "$(GREEN INFO): no staged changes in *.rs, $(GREEN skip cargo fmt/clippy)"
+#	exit 0
+#fi
 
 # 1. cargo clippy
 
