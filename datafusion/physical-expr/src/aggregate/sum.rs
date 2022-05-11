@@ -368,38 +368,42 @@ macro_rules! downcast_arg {
     }};
 }
 
-
 macro_rules! union_arrays {
-($LHS: expr, $RHS: expr, $DTYPE: expr, $ARR_DTYPE: ident, $NAME: expr) => {{
-    let lhs_casted = &cast(&$LHS.to_array(), $DTYPE)?;
-    let rhs_casted = &cast(&$RHS.to_array(), $DTYPE)?;
-    let lhs_prim_array = downcast_arg!(lhs_casted, $NAME, $ARR_DTYPE);
-    let rhs_prim_array = downcast_arg!(rhs_casted, $NAME, $ARR_DTYPE);
+    ($LHS: expr, $RHS: expr, $DTYPE: expr, $ARR_DTYPE: ident, $NAME: expr) => {{
+        let lhs_casted = &cast(&$LHS.to_array(), $DTYPE)?;
+        let rhs_casted = &cast(&$RHS.to_array(), $DTYPE)?;
+        let lhs_prim_array = downcast_arg!(lhs_casted, $NAME, $ARR_DTYPE);
+        let rhs_prim_array = downcast_arg!(rhs_casted, $NAME, $ARR_DTYPE);
 
-    let chained = lhs_prim_array.iter()
-    .chain(rhs_prim_array.iter())
-    .collect::<$ARR_DTYPE>();
+        let chained = lhs_prim_array
+            .iter()
+            .chain(rhs_prim_array.iter())
+            .collect::<$ARR_DTYPE>();
 
-    Arc::new(chained)
-}};
+        Arc::new(chained)
+    }};
 }
 
 pub(crate) fn sum_v2(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     let result = match (lhs.get_datatype(), rhs.get_datatype()) {
         (DataType::Float64, _) | (_, DataType::Float64) => {
-            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Float64, Float64Array, "f64");
+            let data: ArrayRef =
+                union_arrays!(&lhs, &rhs, &DataType::Float64, Float64Array, "f64");
             sum_batch(&data, &arrow::datatypes::DataType::Float64)
         }
         (DataType::Float32, _) | (_, DataType::Float32) => {
-            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Float32, Float32Array, "f32");
+            let data: ArrayRef =
+                union_arrays!(&lhs, &rhs, &DataType::Float32, Float32Array, "f32");
             sum_batch(&data, &arrow::datatypes::DataType::Float32)
         }
         (DataType::Float16, _) | (_, DataType::Float16) => {
-            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Float16, Float16Array, "f16");
+            let data: ArrayRef =
+                union_arrays!(&lhs, &rhs, &DataType::Float16, Float16Array, "f16");
             sum_batch(&data, &arrow::datatypes::DataType::Float16)
         }
         _ => {
-            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Int64, Int64Array, "i64");
+            let data: ArrayRef =
+                union_arrays!(&lhs, &rhs, &DataType::Int64, Int64Array, "i64");
             sum_batch(&data, &arrow::datatypes::DataType::Int64)
         }
     }?;
