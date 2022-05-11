@@ -205,7 +205,7 @@ dependencies = [
  "futures",
  "log",
  "parking_lot",
- "sqlparser 0.16.0",
+ "sqlparser",
  "tempfile",
  "tokio",
 ]
@@ -232,7 +232,7 @@ dependencies = [
  "prost-types",
  "rustc_version",
  "serde",
- "sqlparser 0.16.0",
+ "sqlparser",
  "tokio",
  "tonic",
  "tonic-build",
@@ -507,7 +507,7 @@ dependencies = [
  "pin-project-lite",
  "rand",
  "smallvec",
- "sqlparser 0.17.0",
+ "sqlparser",
  "tempfile",
  "tokio",
  "tokio-stream",
@@ -536,12 +536,12 @@ dependencies = [
  "arrow",
  "ordered-float 3.0.0",
  "parquet",
- "sqlparser 0.17.0",
+ "sqlparser",
 ]
 
 [[package]]
 name = "datafusion-data-access"
-version = "1.0.0"
+version = "7.0.0"
 dependencies = [
  "async-trait",
  "chrono",
@@ -559,7 +559,7 @@ dependencies = [
  "ahash",
  "arrow",
  "datafusion-common",
- "sqlparser 0.17.0",
+ "sqlparser",
 ]
 
 [[package]]
@@ -1934,15 +1934,6 @@ checksum = "66d72b759436ae32898a2af0a14218dbf55efde3feeb170eb623637db85ee1e0"
 dependencies = [
  "libc",
  "winapi",
-]
-
-[[package]]
-name = "sqlparser"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e9a527b68048eb95495a1508f6c8395c8defcff5ecdbe8ad4106d08a2ef2a3c"
-dependencies = [
- "log",
 ]
 
 [[package]]
