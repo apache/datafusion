@@ -61,7 +61,7 @@ pub use plan::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
     CreateView, CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType,
-    Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor, Repartition,
+    Limit, LogicalPlan, Offset, Partitioning, PlanType, PlanVisitor, Repartition,
     StringifiedPlan, Subquery, TableScan, ToStringifiedPlan, Union,
     UserDefinedLogicalNode, Values,
 };

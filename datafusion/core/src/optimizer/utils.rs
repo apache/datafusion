@@ -26,7 +26,7 @@ use datafusion_expr::logical_plan::{
 
 use crate::logical_plan::{
     and, build_join_schema, Column, CreateMemoryTable, CreateView, DFSchemaRef, Expr,
-    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
+    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Offset, Operator, Partitioning,
     Recursion, Repartition, Union, Values,
 };
 use crate::prelude::lit;
@@ -247,6 +247,10 @@ pub fn from_plan(
         }
         LogicalPlan::Limit(Limit { n, .. }) => Ok(LogicalPlan::Limit(Limit {
             n: *n,
+            input: Arc::new(inputs[0].clone()),
+        })),
+        LogicalPlan::Offset(Offset { offset, .. }) => Ok(LogicalPlan::Offset(Offset {
+            offset: *offset,
             input: Arc::new(inputs[0].clone()),
         })),
         LogicalPlan::CreateMemoryTable(CreateMemoryTable {

@@ -48,7 +48,7 @@ use crate::logical_plan::expr::exprlist_to_fields;
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, provider_as_source,
     rewrite_sort_cols_by_aggs, Column, CrossJoin, DFField, DFSchema, DFSchemaRef, Limit,
-    Partitioning, Repartition, Values,
+    Offset, Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
 use datafusion_common::ToDFSchema;
@@ -517,6 +517,14 @@ impl LogicalPlanBuilder {
         Ok(Self::from(LogicalPlan::Limit(Limit {
             n,
             input: Arc::new(self.plan.clone()),
+        })))
+    }
+
+    /// Apply an offset
+    pub fn offset(&self, offset: usize) -> Result<Self> {
+        Ok(Self::from(LogicalPlan::Offset(Offset {
+            offset,
+            input: Arc::new(self.plan.clone())
         })))
     }
 
