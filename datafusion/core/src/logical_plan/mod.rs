@@ -60,8 +60,9 @@ pub use expr_visitor::{ExprVisitable, ExpressionVisitor, Recursion};
 pub use plan::{provider_as_source, source_as_provider};
 pub use plan::{
     CreateCatalog, CreateCatalogSchema, CreateExternalTable, CreateMemoryTable,
-    CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType, Limit,
-    LogicalPlan, Partitioning, PlanType, PlanVisitor, Repartition, StringifiedPlan,
-    Subquery, TableScan, ToStringifiedPlan, Union, UserDefinedLogicalNode, Values,
+    CreateView, CrossJoin, DropTable, EmptyRelation, FileType, JoinConstraint, JoinType,
+    Limit, LogicalPlan, Partitioning, PlanType, PlanVisitor, Repartition,
+    StringifiedPlan, Subquery, TableScan, ToStringifiedPlan, Union,
+    UserDefinedLogicalNode, Values,
 };
 pub use registry::FunctionRegistry;
