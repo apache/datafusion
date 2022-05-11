@@ -32,7 +32,6 @@ ADD Cargo.toml .
 COPY ballista ./ballista/
 COPY ballista-examples ./ballista-examples/
 COPY benchmarks ./benchmarks/
-COPY data-access ./data-access/
 COPY datafusion ./datafusion/
 COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/
@@ -46,7 +45,6 @@ FROM base as builder
 RUN mkdir /tmp/ballista/ballista
 RUN mkdir /tmp/ballista/ballista-examples
 RUN mkdir /tmp/ballista/benchmarks
-RUN mkdir /tmp/ballista/data-access
 RUN mkdir /tmp/ballista/datafusion
 RUN mkdir /tmp/ballista/datafusion-cli
 RUN mkdir /tmp/ballista/datafusion-examples
@@ -54,7 +52,6 @@ ADD Cargo.toml .
 COPY ballista ./ballista/
 COPY ballista-examples ./ballista-examples/
 COPY benchmarks ./benchmarks/
-COPY data-access ./data-access/
 COPY datafusion ./datafusion/
 COPY datafusion-cli ./datafusion-cli/
 COPY datafusion-examples ./datafusion-examples/

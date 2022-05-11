@@ -19,6 +19,7 @@
 members = [
     "datafusion/common",
     "datafusion/core",
+    "datafusion/data-access",
     "datafusion/expr",
     "datafusion/jit",
     "datafusion/physical-expr",
@@ -31,7 +32,6 @@ members = [
     "ballista/rust/executor",
     "ballista/rust/scheduler",
     "ballista-examples",
-    "data-access",
 ]
 exclude = ["datafusion-cli"]
 
