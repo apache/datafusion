@@ -1111,7 +1111,6 @@ mod tests {
         run_query(14).await
     }
 
-    #[ignore] // https://github.com/apache/arrow-datafusion/issues/166
     #[tokio::test]
     async fn run_q15() -> Result<()> {
         run_query(15).await
