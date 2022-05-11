@@ -763,6 +763,11 @@ message TaskDefinition {
   repeated KeyValuePair props = 5;
 }
 
+message JobSessionConfig {
+  string session_id = 1;
+  repeated KeyValuePair configs = 2;
+}
+
 message PollWorkResult {
   TaskDefinition task = 1;
 }

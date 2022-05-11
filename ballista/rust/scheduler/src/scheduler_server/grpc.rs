@@ -351,9 +351,12 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                         .session_registry()
                         .lookup_session(session_id.as_str())
                         .await
-                        .expect(
-                            "SessionContext does not exist in SessionContextRegistry.",
-                        );
+                        .ok_or_else(|| {
+                            Status::invalid_argument(format!(
+                                "SessionContext not found for session ID {}",
+                                session_id
+                            ))
+                        })?;
                     update_datafusion_context(session_ctx, &config)
                 }
                 _ => {
@@ -419,7 +422,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan> SchedulerGrpc
                 })?;
 
             state
-                .save_job_session(&job_id, &session_id)
+                .save_job_session(&job_id, &session_id, settings)
                 .await
                 .map_err(|e| {
                     tonic::Status::internal(format!(
@@ -560,6 +563,7 @@ mod test {
     };
     use ballista_core::serde::scheduler::ExecutorSpecification;
     use ballista_core::serde::BallistaCodec;
+    use datafusion::execution::context::default_session_builder;
 
     use super::{SchedulerGrpc, SchedulerServer};
 
@@ -596,6 +600,7 @@ mod test {
             SchedulerState::new(
                 state_storage.clone(),
                 namespace.to_string(),
+                default_session_builder,
                 BallistaCodec::default(),
             );
         state.init().await?;
@@ -618,6 +623,7 @@ mod test {
             SchedulerState::new(
                 state_storage.clone(),
                 namespace.to_string(),
+                default_session_builder,
                 BallistaCodec::default(),
             );
         state.init().await?;

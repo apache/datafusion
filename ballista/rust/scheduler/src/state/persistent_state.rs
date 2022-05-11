@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use log::debug;
+use ballista_core::config::BallistaConfig;
+use log::{debug, error};
 use parking_lot::RwLock;
 use prost::Message;
 use std::any::type_name;
@@ -25,9 +26,11 @@ use std::sync::Arc;
 
 use ballista_core::error::{BallistaError, Result};
 
-use ballista_core::serde::protobuf::JobStatus;
+use ballista_core::serde::protobuf::{JobSessionConfig, JobStatus, KeyValuePair};
 
-use crate::scheduler_server::SessionContextRegistry;
+use crate::scheduler_server::{
+    create_datafusion_context, SessionBuilder, SessionContextRegistry,
+};
 use crate::state::backend::StateBackendClient;
 use crate::state::stage_manager::StageKey;
 use ballista_core::serde::scheduler::ExecutorMetadata;
@@ -54,6 +57,8 @@ pub(crate) struct PersistentSchedulerState<
 
     /// DataFusion session contexts that are registered within the Scheduler
     session_context_registry: Arc<SessionContextRegistry>,
+
+    session_builder: SessionBuilder,
 }
 
 impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
@@ -62,6 +67,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
     pub(crate) fn new(
         config_client: Arc<dyn StateBackendClient>,
         namespace: String,
+        session_builder: SessionBuilder,
         codec: BallistaCodec<T, U>,
     ) -> Self {
         Self {
@@ -73,6 +79,7 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
             stages: Arc::new(RwLock::new(HashMap::new())),
             job2session: Arc::new(RwLock::new(HashMap::new())),
             session_context_registry: Arc::new(SessionContextRegistry::default()),
+            session_builder,
         }
     }
 
@@ -128,14 +135,32 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         {
             for (key, entry) in entries {
                 let (job_id, stage_id) = extract_stage_id_from_stage_key(&key).unwrap();
-                let session_id = self
-                    .get_session_from_job(&job_id)
-                    .expect("session id does not exist for job");
-                let session_ctx = self
-                    .session_context_registry
-                    .lookup_session(&session_id)
-                    .await
-                    .expect("SessionContext does not exist in SessionContextRegistry.");
+                let job_session = self
+                    .config_client
+                    .get(&get_job_config_key(&self.namespace, &job_id))
+                    .await?;
+                let job_session: JobSessionConfig = decode_protobuf(&job_session)?;
+
+                // Rebuild SessionContext from serialized settings
+                let mut config_builder = BallistaConfig::builder();
+                for kv_pair in &job_session.configs {
+                    config_builder = config_builder.set(&kv_pair.key, &kv_pair.value);
+                }
+                let config = config_builder.build().map_err(|e| {
+                    let msg = format!("Could not parse configs: {}", e);
+                    error!("{}", msg);
+                    BallistaError::Internal(format!(
+                        "Error building configs for job ID {}",
+                        job_id
+                    ))
+                })?;
+
+                let session_ctx =
+                    create_datafusion_context(&config, self.session_builder);
+                self.session_registry()
+                    .register_session(session_ctx.clone())
+                    .await;
+
                 let value = U::try_decode(&entry)?;
                 let runtime = session_ctx.runtime_env();
                 let plan = value.try_into_physical_plan(
@@ -143,6 +168,9 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
                     runtime.deref(),
                     self.codec.physical_extension_codec(),
                 )?;
+
+                let mut job2_sess = self.job2session.write();
+                job2_sess.insert(job_id.clone(), job_session.session_id);
 
                 tmp_stages.insert((job_id, stage_id), plan);
             }
@@ -195,9 +223,19 @@ impl<T: 'static + AsLogicalPlan, U: 'static + AsExecutionPlan>
         &self,
         job_id: &str,
         session_id: &str,
+        configs: Vec<KeyValuePair>,
     ) -> Result<()> {
+        let key = get_job_config_key(&self.namespace, job_id);
+        let value = encode_protobuf(&protobuf::JobSessionConfig {
+            session_id: session_id.to_string(),
+            configs,
+        })?;
+
+        self.synchronize_save(key, value).await?;
+
         let mut job2_sess = self.job2session.write();
         job2_sess.insert(job_id.to_string(), session_id.to_string());
+
         Ok(())
     }
 
@@ -303,6 +341,10 @@ fn get_job_key(namespace: &str, id: &str) -> String {
     format!("{}/{}", get_job_prefix(namespace), id)
 }
 
+fn get_job_config_key(namespace: &str, id: &str) -> String {
+    format!("config/{}/{}", get_job_prefix(namespace), id)
+}
+
 fn get_stage_prefix(namespace: &str) -> String {
     format!("/ballista/{}/stages", namespace,)
 }
@@ -361,6 +403,20 @@ fn encode_protobuf<T: Message + Default>(msg: &T) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod test {
     use super::extract_stage_id_from_stage_key;
+    use crate::state::backend::standalone::StandaloneClient;
+
+    use crate::state::persistent_state::PersistentSchedulerState;
+
+    use ballista_core::serde::protobuf::job_status::Status;
+    use ballista_core::serde::protobuf::{
+        JobStatus, LogicalPlanNode, PhysicalPlanNode, QueuedJob,
+    };
+    use ballista_core::serde::BallistaCodec;
+    use datafusion::execution::context::default_session_builder;
+    use datafusion::logical_plan::LogicalPlanBuilder;
+    use datafusion::prelude::SessionContext;
+
+    use std::sync::Arc;
 
     #[test]
     fn test_extract_stage_id_from_stage_key() {
@@ -384,5 +440,89 @@ mod test {
 
         assert_eq!(job_id.as_str(), "2Yoyba8");
         assert_eq!(stage_id, 1);
+    }
+
+    #[tokio::test]
+    async fn test_init_from_storage() {
+        let ctx = SessionContext::new();
+
+        let plan = LogicalPlanBuilder::empty(true)
+            .build()
+            .expect("create empty logical plan");
+        let plan = ctx
+            .create_physical_plan(&plan)
+            .await
+            .expect("create physical plan");
+
+        let expected_plan = format!("{:?}", plan);
+
+        let job_id = "job-id".to_string();
+        let session_id = "session-id".to_string();
+
+        let config_client = Arc::new(
+            StandaloneClient::try_new_temporary().expect("creating config client"),
+        );
+
+        let persistent_state: PersistentSchedulerState<
+            LogicalPlanNode,
+            PhysicalPlanNode,
+        > = PersistentSchedulerState::new(
+            config_client.clone(),
+            "default".to_string(),
+            default_session_builder,
+            BallistaCodec::default(),
+        );
+
+        persistent_state
+            .save_job_session(&job_id, &session_id, vec![])
+            .await
+            .expect("saving session");
+        persistent_state
+            .save_job_metadata(
+                &job_id,
+                &JobStatus {
+                    status: Some(Status::Queued(QueuedJob {})),
+                },
+            )
+            .await
+            .expect("saving job metadata");
+        persistent_state
+            .save_stage_plan(&job_id, 1, plan)
+            .await
+            .expect("saving stage plan");
+
+        assert_eq!(
+            persistent_state
+                .get_stage_plan(&job_id, 1)
+                .map(|plan| format!("{:?}", plan)),
+            Some(expected_plan.clone())
+        );
+        assert_eq!(
+            persistent_state.get_session_from_job(&job_id),
+            Some("session-id".to_string())
+        );
+
+        let persistent_state: PersistentSchedulerState<
+            LogicalPlanNode,
+            PhysicalPlanNode,
+        > = PersistentSchedulerState::new(
+            config_client.clone(),
+            "default".to_string(),
+            default_session_builder,
+            BallistaCodec::default(),
+        );
+
+        persistent_state.init().await.expect("initializing state");
+
+        assert_eq!(
+            persistent_state
+                .get_stage_plan(&job_id, 1)
+                .map(|plan| format!("{:?}", plan)),
+            Some(expected_plan.clone())
+        );
+        assert_eq!(
+            persistent_state.get_session_from_job(&job_id),
+            Some("session-id".to_string())
+        );
     }
 }

@@ -127,6 +127,10 @@ CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log-all.sh master 8.0
 git commit -a -m 'Create changelog for release'
 ```
 
+_If you see the error `"You have exceeded a secondary rate limit"` when running this script, try reducing the CPU 
+allocation to slow the process down and throttle the number of GitHub requests made per minute, by modifying the 
+value of the `--cpus` argument in the `update_change_log.sh` script._
+
 You can add `invalid` or `development-process` label to exclude items from
 release notes. Add `datafusion`, `ballista` and `python` labels to group items
 into each sub-project's change log.
@@ -301,7 +305,7 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 ```
 
 ```shell
-(cd data-access && cargo publish)
+(cd datafusion/data-access && cargo publish)
 (cd datafusion/common && cargo publish)
 (cd datafusion/expr && cargo publish)
 (cd datafusion/physical-expr && cargo publish)
