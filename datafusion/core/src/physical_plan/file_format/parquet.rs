@@ -420,6 +420,11 @@ impl Iterator for ParquetExecStream {
                 _ => self.error = result.is_err(),
             }
 
+            //record output rows in parquetExec
+            if let Ok(batch) = &result {
+                self.baseline_metrics.record_output(batch.num_rows());
+            }
+
             return Some(result);
         }
     }
