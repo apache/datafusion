@@ -21,7 +21,7 @@ syntax = "proto3";
 package ballista.protobuf;
 
 option java_multiple_files = true;
-option java_package = "org.ballistacompute.protobuf";
+option java_package = "org.apache.arrow.ballista.protobuf";
 option java_outer_classname = "BallistaProto";
 
 import "datafusion.proto";
