@@ -36,10 +36,11 @@ use datafusion_expr::Accumulator;
 
 use crate::aggregate::row_accumulator::RowAccumulator;
 use crate::expressions::format_state_name;
-use arrow::array::Array;
 use arrow::array::DecimalArray;
+use arrow::array::{Array, Float16Array};
 use arrow::compute::cast;
 use datafusion_row::accessor::RowAccessor;
+use std::any::type_name;
 
 /// SUM aggregate expression
 #[derive(Debug)]
@@ -162,7 +163,6 @@ fn sum_decimal_batch(
     if array.null_count() == array.len() {
         return Ok(ScalarValue::Decimal128(None, *precision, *scale));
     }
-
     let mut result = 0_i128;
     for i in 0..array.len() {
         if array.is_valid(i) {
@@ -356,6 +356,57 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     })
 }
 
+macro_rules! downcast_arg {
+    ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
+        $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "could not cast {} to {}",
+                $NAME,
+                type_name::<$ARRAY_TYPE>()
+            ))
+        })?
+    }};
+}
+
+
+macro_rules! union_arrays {
+($LHS: expr, $RHS: expr, $DTYPE: expr, $ARR_DTYPE: ident, $NAME: expr) => {{
+    let lhs_casted = &cast(&$LHS.to_array(), $DTYPE)?;
+    let rhs_casted = &cast(&$RHS.to_array(), $DTYPE)?;
+    let lhs_prim_array = downcast_arg!(lhs_casted, $NAME, $ARR_DTYPE);
+    let rhs_prim_array = downcast_arg!(rhs_casted, $NAME, $ARR_DTYPE);
+
+    let chained = lhs_prim_array.iter()
+    .chain(rhs_prim_array.iter())
+    .collect::<$ARR_DTYPE>();
+
+    Arc::new(chained)
+}};
+}
+
+pub(crate) fn sum_v2(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+    let result = match (lhs.get_datatype(), rhs.get_datatype()) {
+        (DataType::Float64, _) | (_, DataType::Float64) => {
+            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Float64, Float64Array, "f64");
+            sum_batch(&data, &arrow::datatypes::DataType::Float64)
+        }
+        (DataType::Float32, _) | (_, DataType::Float32) => {
+            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Float32, Float32Array, "f32");
+            sum_batch(&data, &arrow::datatypes::DataType::Float32)
+        }
+        (DataType::Float16, _) | (_, DataType::Float16) => {
+            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Float16, Float16Array, "f16");
+            sum_batch(&data, &arrow::datatypes::DataType::Float16)
+        }
+        _ => {
+            let data: ArrayRef = union_arrays!(&lhs, &rhs, &DataType::Int64, Int64Array, "i64");
+            sum_batch(&data, &arrow::datatypes::DataType::Int64)
+        }
+    }?;
+
+    Ok(result)
+}
+
 pub(crate) fn add_to_row(
     dt: &DataType,
     index: usize,
@@ -440,7 +491,12 @@ impl Accumulator for SumAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
         let values = &values[0];
+
         self.sum = sum(&self.sum, &sum_batch(values, &self.sum.get_datatype())?)?;
         Ok(())
     }
@@ -705,5 +761,16 @@ mod tests {
             ScalarValue::from(15_f64),
             DataType::Float64
         )
+    }
+
+    #[test]
+    fn test_sum_v2() -> Result<()> {
+        let lhs = ScalarValue::Float64(Some(1.0));
+        let rhs = ScalarValue::Int32(Some(2));
+
+        let res = sum_v2(&lhs, &rhs);
+
+        assert!(res.unwrap() == ScalarValue::Float64(Some(3.0)));
+        Ok(())
     }
 }
