@@ -201,6 +201,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
       - name: Build datafusion-cli
         run: (cd datafusion-cli && cargo build)
+      - name: Build ballista-cli
+        run: (cd ballista-cli && cargo build)
       - name: Test Psql Parity
         run: python -m pytest -v integration-tests/test_psql_parity.py
         env:
