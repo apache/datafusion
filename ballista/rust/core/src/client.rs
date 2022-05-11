@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use std::collections::HashMap;
 use std::{
     convert::{TryFrom, TryInto},
     task::{Context, Poll},
@@ -154,7 +155,7 @@ impl Stream for FlightDataStream {
                         flight_data_to_arrow_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
-                            &[],
+                            &HashMap::new(),
                         )
                     });
                 Some(converted_chunk)
