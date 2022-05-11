@@ -25,6 +25,9 @@ fn main() -> Result<(), String> {
     println!("cargo:rerun-if-changed=../../../datafusion/proto/proto/datafusion.proto");
     tonic_build::configure()
         .extern_path(".datafusion", "::datafusion_proto::protobuf")
-        .compile(&["proto/ballista.proto"], &["proto", "../../../datafusion/proto/proto"])
+        .compile(
+            &["proto/ballista.proto"],
+            &["proto", "../../../datafusion/proto/proto"],
+        )
         .map_err(|e| format!("protobuf compilation failed: {}", e))
 }
