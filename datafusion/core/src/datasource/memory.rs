@@ -27,7 +27,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 
-use crate::datasource::TableProvider;
+use crate::datasource::{TableProvider, TableType};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::TaskContext;
 use crate::logical_plan::Expr;
@@ -125,6 +125,10 @@ impl TableProvider for MemTable {
 
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(

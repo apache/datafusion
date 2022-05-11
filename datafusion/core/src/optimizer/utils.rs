@@ -25,9 +25,9 @@ use datafusion_expr::logical_plan::{
 };
 
 use crate::logical_plan::{
-    and, build_join_schema, Column, CreateMemoryTable, DFSchemaRef, Expr, ExprVisitable,
-    Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning, Recursion,
-    Repartition, Union, Values,
+    and, build_join_schema, Column, CreateMemoryTable, CreateView, DFSchemaRef, Expr,
+    ExprVisitable, Limit, LogicalPlan, LogicalPlanBuilder, Operator, Partitioning,
+    Recursion, Repartition, Union, Values,
 };
 use crate::prelude::lit;
 use crate::scalar::ScalarValue;
@@ -257,6 +257,13 @@ pub fn from_plan(
             input: Arc::new(inputs[0].clone()),
             name: name.clone(),
             if_not_exists: *if_not_exists,
+        })),
+        LogicalPlan::CreateView(CreateView {
+            name, or_replace, ..
+        }) => Ok(LogicalPlan::CreateView(CreateView {
+            input: Arc::new(inputs[0].clone()),
+            name: name.clone(),
+            or_replace: *or_replace,
         })),
         LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
             node: e.node.from_template(expr, inputs),
