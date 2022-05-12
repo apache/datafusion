@@ -56,6 +56,9 @@ digraph G {
     ballista -> ballista_executor
 
 	datafusion_cli -> datafusion
-	datafusion_cli -> ballista
+
+	ballista_cli -> datafusion
+	ballista_cli -> datafusion_cli
+	ballista_cli -> ballista
 
 }

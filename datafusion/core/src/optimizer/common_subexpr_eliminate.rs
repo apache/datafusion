@@ -224,6 +224,7 @@ fn optimize(plan: &LogicalPlan, execution_props: &ExecutionProps) -> Result<Logi
         | LogicalPlan::Explain { .. }
         | LogicalPlan::Analyze { .. }
         | LogicalPlan::CreateMemoryTable(_)
+        | LogicalPlan::CreateView(_)
         | LogicalPlan::CreateCatalogSchema(_)
         | LogicalPlan::CreateCatalog(_)
         | LogicalPlan::DropTable(_)
