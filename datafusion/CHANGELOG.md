@@ -19,6 +19,71 @@
 
 # Changelog
 
+## [8.0.0](https://github.com/apache/arrow-datafusion/tree/8.0.0) (2022-05-12)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.1.0-rc1...8.0.0)
+
+**Implemented enhancements:**
+
+- Include `Expr` to `datafusion::prelude` [\#2347](https://github.com/apache/arrow-datafusion/issues/2347)
+- Implement `Serialization` API for DataFusion [\#2340](https://github.com/apache/arrow-datafusion/issues/2340)
+- Implement `power` function [\#1493](https://github.com/apache/arrow-datafusion/issues/1493)
+- allow `lit` python function to support `boolean` and other types [\#1136](https://github.com/apache/arrow-datafusion/issues/1136)
+- Automate dependency updates [\#37](https://github.com/apache/arrow-datafusion/issues/37)
+
+**Fixed bugs:**
+
+- CASE expr with NULL literals panics `'WHEN expression did not return a BooleanArray'` [\#1189](https://github.com/apache/arrow-datafusion/issues/1189)
+- Function calls with NULL literals do not work [\#1188](https://github.com/apache/arrow-datafusion/issues/1188)
+
+**Closed issues:**
+
+- Make expected result string in unit tests more readable [\#2412](https://github.com/apache/arrow-datafusion/issues/2412)
+- remove duplicated `fn aggregate()` in aggregate expression tests [\#2399](https://github.com/apache/arrow-datafusion/issues/2399)
+- split `distinct_expression.rs` into `count_distinct.rs` and `array_agg_distinct.rs` [\#2385](https://github.com/apache/arrow-datafusion/issues/2385)
+- move sql tests in `context.rs` to corresponding test files in `datafustion/core/tests/sql` [\#2328](https://github.com/apache/arrow-datafusion/issues/2328)
+- Date32/Date64 as join keys for merge join [\#2314](https://github.com/apache/arrow-datafusion/issues/2314)
+- Error precision and scale for decimal coercion in logic comparison [\#2232](https://github.com/apache/arrow-datafusion/issues/2232)
+- Support Multiple row layout [\#2188](https://github.com/apache/arrow-datafusion/issues/2188)
+-  TPC-H Query 18 [\#169](https://github.com/apache/arrow-datafusion/issues/169)
+-  TPC-H Query 16 [\#167](https://github.com/apache/arrow-datafusion/issues/167)
+-   Implement Sort-Merge Join [\#141](https://github.com/apache/arrow-datafusion/issues/141)
+-   Split logical expressions out into separate source files [\#114](https://github.com/apache/arrow-datafusion/issues/114)
+
+## [7.1.0-rc1](https://github.com/apache/arrow-datafusion/tree/7.1.0-rc1) (2022-04-10)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.0.0-rc2...7.1.0-rc1)
+
+**Breaking changes:**
+
+- Improve object store key with considering host and port in ObjectStoreRegistry [\#1778](https://github.com/apache/arrow-datafusion/issues/1778)
+- Remove Sync from SendableRecordBatchStream [\#1614](https://github.com/apache/arrow-datafusion/issues/1614)
+
+**Implemented enhancements:**
+
+- Support substring with three arguments: \(str, from, for\) for DataFrame API and Ballista [\#2092](https://github.com/apache/arrow-datafusion/issues/2092)
+- Convert `SqlToRel::statement_to_pan` to take ownership rather than references. [\#1469](https://github.com/apache/arrow-datafusion/issues/1469)
+
+**Fixed bugs:**
+
+- Parquet reader thread errors do not make query fail [\#1767](https://github.com/apache/arrow-datafusion/issues/1767)
+- `not()` with NULL literals does not work: can't be evaluated because the expression's type is Utf8, not boolean [\#1191](https://github.com/apache/arrow-datafusion/issues/1191)
+
+**Closed issues:**
+
+- Optimize memory usage pattern to avoid "double memory" behavior [\#2149](https://github.com/apache/arrow-datafusion/issues/2149)
+- Document approx\_percentile\_cont\_with\_weight in users guide [\#2078](https://github.com/apache/arrow-datafusion/issues/2078)
+- Add filters and projections to EXPLAIN PLAN for ParquetExec, CSVExec etc [\#2073](https://github.com/apache/arrow-datafusion/issues/2073)
+- \[follow up\]cleaning up statements.remove\(0\) [\#1986](https://github.com/apache/arrow-datafusion/issues/1986)
+- Formatting error on documentation for Python [\#1873](https://github.com/apache/arrow-datafusion/issues/1873)
+- Remove duplicate tests from `test_const_evaluator_scalar_functions` [\#1727](https://github.com/apache/arrow-datafusion/issues/1727)
+-   Address limitations of logical expression rewrite logic [\#116](https://github.com/apache/arrow-datafusion/issues/116)
+
+## [7.0.0-rc2](https://github.com/apache/arrow-datafusion/tree/7.0.0-rc2) (2022-02-14)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.0.0...7.0.0-rc2)
+
+
 ## [7.0.0](https://github.com/apache/arrow-datafusion/tree/7.0.0) (2022-02-14)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/6.0.0...7.0.0)
@@ -32,7 +97,7 @@
 - Remove non idiomatic `DataFusionError::into_arrow_external_error` in favor of From conversion [\#1645](https://github.com/apache/arrow-datafusion/pull/1645) ([alamb](https://github.com/alamb))
 - Remove `Accumulator::update` and `Accumulator::merge` [\#1582](https://github.com/apache/arrow-datafusion/pull/1582) ([Jimexist](https://github.com/Jimexist))
 - implement `Hash` for various types and replace `PartialOrd` [\#1580](https://github.com/apache/arrow-datafusion/pull/1580) ([Jimexist](https://github.com/Jimexist))
-- Replace `DataFusionError` with `GenericError` in `ObjectStore` interface [\#1541](https://github.com/apache/arrow-datafusion/pull/1541) ([matthewmturner](https://github.com/matthewmturner))
+- Replace `DatafusionError` with `GenericError` in `ObjectStore` interface [\#1541](https://github.com/apache/arrow-datafusion/pull/1541) ([matthewmturner](https://github.com/matthewmturner))
 - Make `FLOAT` SQL type map to `Float32` rather than `Float64` [\#1423](https://github.com/apache/arrow-datafusion/pull/1423) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([liukun4515](https://github.com/liukun4515))
 - Map `REAL` SQL type to `Float32` rather than `Float64` to be consistent with pg  [\#1390](https://github.com/apache/arrow-datafusion/pull/1390) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([hntd187](https://github.com/hntd187))
 
@@ -79,7 +144,7 @@
 - Add support for `ORDER BY` on unprojected columns [\#1415](https://github.com/apache/arrow-datafusion/pull/1415) ([viirya](https://github.com/viirya))
 - Support decimal for `min` and `max` aggregate [\#1407](https://github.com/apache/arrow-datafusion/pull/1407) ([liukun4515](https://github.com/liukun4515))
 - Consolidate `ConstantFolding` and `SimplifyExpression` [\#1375](https://github.com/apache/arrow-datafusion/pull/1375) ([alamb](https://github.com/alamb))
-- DataFusion cli quiet mode command to contain option bool [\#1345](https://github.com/apache/arrow-datafusion/pull/1345) ([Jimexist](https://github.com/Jimexist))
+- Datafusion cli quiet mode command to contain option bool [\#1345](https://github.com/apache/arrow-datafusion/pull/1345) ([Jimexist](https://github.com/Jimexist))
 - Implement `array_agg` aggregate function [\#1300](https://github.com/apache/arrow-datafusion/pull/1300) ([viirya](https://github.com/viirya))
 - Add a command to switch output format in cli [\#1284](https://github.com/apache/arrow-datafusion/pull/1284) ([capkurmagati](https://github.com/capkurmagati))
 - Support `=`, `<`, `<=`, `>`, `>=`, `!=`, `is distinct from`, `is not distinct from` for `BooleanArray` [\#1163](https://github.com/apache/arrow-datafusion/pull/1163) ([alamb](https://github.com/alamb))
@@ -94,7 +159,7 @@
 - CTE/WITH .. UNION ALL confuses name resolution in WHERE [\#1509](https://github.com/apache/arrow-datafusion/issues/1509)
 - ORDER BY min\(x\) results in error  `Plan("No field named 'foo.x'. Valid fields are 'MIN(foo.x)'.")` [\#1479](https://github.com/apache/arrow-datafusion/issues/1479)
 - Sort discards field metadata on the output schema [\#1476](https://github.com/apache/arrow-datafusion/issues/1476)
-- DataFusion should not strip out timezone information from existing types [\#1454](https://github.com/apache/arrow-datafusion/issues/1454)
+- Datafusion should not strip out timezone information from existing types [\#1454](https://github.com/apache/arrow-datafusion/issues/1454)
 - Error on some queries: "column types must match schema types, expected XXX but found YYY" [\#1447](https://github.com/apache/arrow-datafusion/issues/1447)
 - Query failing to return any results when filter is an equality check on strings \(bad statistics in parquet\) [\#1433](https://github.com/apache/arrow-datafusion/issues/1433)
 - Field names containing period such as `f.c1` cannot be named in SQL query [\#1432](https://github.com/apache/arrow-datafusion/issues/1432)
@@ -111,7 +176,7 @@
 - Fix single\_distinct\_to\_groupby for arbitrary expressions [\#1519](https://github.com/apache/arrow-datafusion/pull/1519) ([james727](https://github.com/james727))
 - Fix SortExec discards field metadata on the output schema [\#1477](https://github.com/apache/arrow-datafusion/pull/1477) ([alamb](https://github.com/alamb))
 - fix calculate in many\_to\_many\_hash\_partition test. [\#1463](https://github.com/apache/arrow-datafusion/pull/1463) ([Ted-Jiang](https://github.com/Ted-Jiang))
-- Add Timezone to Scalar::Time\* types,   and better timezone awareness to DataFusion's time types [\#1455](https://github.com/apache/arrow-datafusion/pull/1455) ([maxburke](https://github.com/maxburke))
+- Add Timezone to Scalar::Time\* types,   and better timezone awareness to Datafusion's time types [\#1455](https://github.com/apache/arrow-datafusion/pull/1455) ([maxburke](https://github.com/maxburke))
 - Support identifiers with `.` in them [\#1449](https://github.com/apache/arrow-datafusion/pull/1449) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([alamb](https://github.com/alamb))
 - Fixes for working with functions in dataframes, additional documentation [\#1430](https://github.com/apache/arrow-datafusion/pull/1430) ([tobyhede](https://github.com/tobyhede))
 - \[Minor\] Fix `send_time` metric for hash-repartition [\#1421](https://github.com/apache/arrow-datafusion/pull/1421) ([Dandandan](https://github.com/Dandandan))
@@ -130,7 +195,7 @@
 
 - Clarify docs about `Accumulator::update` and `Accumulator::update_batch` [\#1542](https://github.com/apache/arrow-datafusion/pull/1542) ([alamb](https://github.com/alamb))
 - Fix duplicated `cargo run --example parquet_sql` [\#1482](https://github.com/apache/arrow-datafusion/pull/1482) ([sergey-melnychuk](https://github.com/sergey-melnychuk))
-- add documentation to DataFusion cli's new commands [\#1348](https://github.com/apache/arrow-datafusion/pull/1348) ([liukun4515](https://github.com/liukun4515))
+- add documentation to Datafusion cli's new commands [\#1348](https://github.com/apache/arrow-datafusion/pull/1348) ([liukun4515](https://github.com/liukun4515))
 - fix some clippy warnings from nightly channel [\#1277](https://github.com/apache/arrow-datafusion/pull/1277) [[sql](https://github.com/apache/arrow-datafusion/labels/sql)] ([Jimexist](https://github.com/Jimexist))
 
 **Performance improvements:**
@@ -470,7 +535,7 @@
 - delete redundant code [\#973](https://github.com/apache/arrow-datafusion/issues/973)
 - How to build DataFusion python wheel  [\#853](https://github.com/apache/arrow-datafusion/issues/853)
 -   Add support for partition pruning [\#204](https://github.com/apache/arrow-datafusion/issues/204)
-- \[DataFusion\] Support joins on TimestampMillisecond columns [\#187](https://github.com/apache/arrow-datafusion/issues/187)
+- \[Datafusion\] Support joins on TimestampMillisecond columns [\#187](https://github.com/apache/arrow-datafusion/issues/187)
 -  TPC-H Query 21 [\#173](https://github.com/apache/arrow-datafusion/issues/173)
 -  TPC-H Query 13 [\#164](https://github.com/apache/arrow-datafusion/issues/164)
 -  TPC-H Query 8 [\#162](https://github.com/apache/arrow-datafusion/issues/162)
@@ -509,7 +574,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - Box ScalarValue:Lists, reduce size by half size [\#788](https://github.com/apache/arrow-datafusion/pull/788) ([alamb](https://github.com/alamb))
 - JOIN conditions are order dependent [\#778](https://github.com/apache/arrow-datafusion/pull/778) ([seddonm1](https://github.com/seddonm1))
 - Show the result of all optimizer passes in EXPLAIN VERBOSE [\#759](https://github.com/apache/arrow-datafusion/pull/759) ([alamb](https://github.com/alamb))
-- \#723 DataFusion add option in ExecutionConfig to enable/disable parquet pruning [\#749](https://github.com/apache/arrow-datafusion/pull/749) ([lvheyang](https://github.com/lvheyang))
+- \#723 Datafusion add option in ExecutionConfig to enable/disable parquet pruning [\#749](https://github.com/apache/arrow-datafusion/pull/749) ([lvheyang](https://github.com/lvheyang))
 - Update API for extension planning to include logical plan [\#643](https://github.com/apache/arrow-datafusion/pull/643) ([alamb](https://github.com/alamb))
 - Rename MergeExec to CoalescePartitionsExec [\#635](https://github.com/apache/arrow-datafusion/pull/635) ([andygrove](https://github.com/andygrove))
 - fix 593, reduce cloning by taking ownership in logical planner's `from` fn [\#610](https://github.com/apache/arrow-datafusion/pull/610) ([Jimexist](https://github.com/Jimexist))
@@ -520,7 +585,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 - Use 4.x arrow-rs from crates.io rather than git sha [\#395](https://github.com/apache/arrow-datafusion/pull/395) ([alamb](https://github.com/alamb))
 - Return Vec\<bool\> from PredicateBuilder rather than an `Fn` [\#370](https://github.com/apache/arrow-datafusion/pull/370) ([alamb](https://github.com/alamb))
 - Refactor: move RowGroupPredicateBuilder into its own module, rename to PruningPredicateBuilder [\#365](https://github.com/apache/arrow-datafusion/pull/365) ([alamb](https://github.com/alamb))
-- \[DataFusion\] NOW\(\) function support [\#288](https://github.com/apache/arrow-datafusion/pull/288) ([msathis](https://github.com/msathis))
+- \[Datafusion\] NOW\(\) function support [\#288](https://github.com/apache/arrow-datafusion/pull/288) ([msathis](https://github.com/msathis))
 - Implement select distinct [\#262](https://github.com/apache/arrow-datafusion/pull/262) ([Dandandan](https://github.com/Dandandan))
 - Refactor datafusion/src/physical\_plan/common.rs build\_file\_list to take less param and reuse code [\#253](https://github.com/apache/arrow-datafusion/pull/253) ([Jimexist](https://github.com/Jimexist))
 - Support qualified columns in queries [\#55](https://github.com/apache/arrow-datafusion/pull/55) ([houqp](https://github.com/houqp))
@@ -718,7 +783,7 @@ For older versions, see [apache/arrow/CHANGELOG.md](https://github.com/apache/ar
 -   RFC Roadmap for 2021 \(DataFusion\) [\#140](https://github.com/apache/arrow-datafusion/issues/140)
 -   Implement hash partitioning [\#131](https://github.com/apache/arrow-datafusion/issues/131)
 -   Grouping by column position [\#110](https://github.com/apache/arrow-datafusion/issues/110)
--  \[DataFusion\] GROUP BY with a high cardinality doesn't seem to finish [\#107](https://github.com/apache/arrow-datafusion/issues/107)
+-  \[Datafusion\] GROUP BY with a high cardinality doesn't seem to finish [\#107](https://github.com/apache/arrow-datafusion/issues/107)
 - \[Rust\]  Add support for JSON data sources [\#103](https://github.com/apache/arrow-datafusion/issues/103)
 - \[Rust\]  Implement metrics framework [\#95](https://github.com/apache/arrow-datafusion/issues/95)
 - Publically export Arrow crate from datafusion  [\#36](https://github.com/apache/arrow-datafusion/issues/36)

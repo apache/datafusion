@@ -19,6 +19,52 @@
 
 # Changelog
 
+## [8.0.0](https://github.com/apache/arrow-datafusion/tree/8.0.0) (2022-05-12)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.1.0-rc1...8.0.0)
+
+**Fixed bugs:**
+
+- Ballista integration tests no longer work [\#2440](https://github.com/apache/arrow-datafusion/issues/2440)
+- Ballista crates cannot be released from DafaFusion 7.0.0 source release [\#1980](https://github.com/apache/arrow-datafusion/issues/1980)
+
+**Closed issues:**
+
+- Make expected result string in unit tests more readable [\#2412](https://github.com/apache/arrow-datafusion/issues/2412)
+- remove duplicated `fn aggregate()` in aggregate expression tests [\#2399](https://github.com/apache/arrow-datafusion/issues/2399)
+- split `distinct_expression.rs` into `count_distinct.rs` and `array_agg_distinct.rs` [\#2385](https://github.com/apache/arrow-datafusion/issues/2385)
+- move sql tests in `context.rs` to corresponding test files in `datafustion/core/tests/sql` [\#2328](https://github.com/apache/arrow-datafusion/issues/2328)
+- Date32/Date64 as join keys for merge join [\#2314](https://github.com/apache/arrow-datafusion/issues/2314)
+- Error precision and scale for decimal coercion in logic comparison [\#2232](https://github.com/apache/arrow-datafusion/issues/2232)
+- Support Multiple row layout [\#2188](https://github.com/apache/arrow-datafusion/issues/2188)
+- Discussion: Is Ballista a standalone system or framework [\#1916](https://github.com/apache/arrow-datafusion/issues/1916)
+
+## [7.1.0-rc1](https://github.com/apache/arrow-datafusion/tree/7.1.0-rc1) (2022-04-10)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.0.0-rc2...7.1.0-rc1)
+
+**Implemented enhancements:**
+
+- Support substring with three arguments: \(str, from, for\) for DataFrame API and Ballista [\#2092](https://github.com/apache/arrow-datafusion/issues/2092)
+- UnionAll support for Ballista [\#2032](https://github.com/apache/arrow-datafusion/issues/2032)
+- Separate cpu-bound and IO-bound work in ballista-executor by using diff tokio runtime. [\#1770](https://github.com/apache/arrow-datafusion/issues/1770)
+- \[Ballista\] Introduce DAGScheduler for better managing the stage-based task scheduling [\#1704](https://github.com/apache/arrow-datafusion/issues/1704)
+- \[Ballista\] Support to better manage cluster state, like alive executors, executor available task slots, etc [\#1703](https://github.com/apache/arrow-datafusion/issues/1703)
+
+**Closed issues:**
+
+- Optimize memory usage pattern to avoid "double memory" behavior [\#2149](https://github.com/apache/arrow-datafusion/issues/2149)
+- Document approx\_percentile\_cont\_with\_weight in users guide [\#2078](https://github.com/apache/arrow-datafusion/issues/2078)
+- \[follow up\]cleaning up statements.remove\(0\) [\#1986](https://github.com/apache/arrow-datafusion/issues/1986)
+- Formatting error on documentation for Python [\#1873](https://github.com/apache/arrow-datafusion/issues/1873)
+- Remove duplicate tests from `test_const_evaluator_scalar_functions` [\#1727](https://github.com/apache/arrow-datafusion/issues/1727)
+- Question: Is the Ballista project providing value to the overall DataFusion project? [\#1273](https://github.com/apache/arrow-datafusion/issues/1273)
+
+## [7.0.0-rc2](https://github.com/apache/arrow-datafusion/tree/7.0.0-rc2) (2022-02-14)
+
+[Full Changelog](https://github.com/apache/arrow-datafusion/compare/7.0.0...7.0.0-rc2)
+
+
 ## [ballista-0.6.0](https://github.com/apache/arrow-datafusion/tree/ballista-0.6.0) (2021-11-13)
 
 [Full Changelog](https://github.com/apache/arrow-datafusion/compare/ballista-0.5.0...ballista-0.6.0)
