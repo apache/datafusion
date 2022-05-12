@@ -281,6 +281,7 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     let result = match (lhs.get_datatype(), rhs.get_datatype()) {
         (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
             let max_precision = p1.max(p2);
+
             match (lhs, rhs) {
                 (
                     ScalarValue::Decimal128(v1, _, _),
@@ -297,27 +298,29 @@ pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
                         sum_decimal_with_diff_scale(v2, v1, &max_precision, &s2, &s1)
                     })
                 }
-                _ => Err(DataFusionError::Internal("".to_string())),
+                _ => Err(DataFusionError::Internal(
+                    "Internal state error on sum decimals ".to_string(),
+                )),
             }
         }
         (DataType::Float64, _) | (_, DataType::Float64) => {
             let data: ArrayRef =
-                union_arrays!(&lhs, &rhs, &DataType::Float64, Float64Array, "f64");
+                union_arrays!(lhs, rhs, &DataType::Float64, Float64Array, "f64");
             sum_batch(&data, &arrow::datatypes::DataType::Float64)
         }
         (DataType::Float32, _) | (_, DataType::Float32) => {
             let data: ArrayRef =
-                union_arrays!(&lhs, &rhs, &DataType::Float32, Float32Array, "f32");
+                union_arrays!(lhs, rhs, &DataType::Float32, Float32Array, "f32");
             sum_batch(&data, &arrow::datatypes::DataType::Float32)
         }
         (DataType::Float16, _) | (_, DataType::Float16) => {
             let data: ArrayRef =
-                union_arrays!(&lhs, &rhs, &DataType::Float16, Float16Array, "f16");
+                union_arrays!(lhs, rhs, &DataType::Float16, Float16Array, "f16");
             sum_batch(&data, &arrow::datatypes::DataType::Float16)
         }
         _ => {
             let data: ArrayRef =
-                union_arrays!(&lhs, &rhs, &DataType::Int64, Int64Array, "i64");
+                union_arrays!(lhs, rhs, &DataType::Int64, Int64Array, "i64");
             sum_batch(&data, &arrow::datatypes::DataType::Int64)
         }
     }?;
