@@ -123,7 +123,7 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          cargo test --no-default-features
+          cargo test --no-default-features --features standalone
           # test datafusion examples
           cd datafusion-examples
           cargo run --example csv_sql
@@ -135,7 +135,7 @@ jobs:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
 
-  # test the crate
+  # run ballista tests
   ballista-test:
     name: Test Ballista on AMD64 Rust ${{ matrix.rust }}
     needs: [linux-build-lib]
