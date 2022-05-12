@@ -123,7 +123,7 @@ jobs:
         run: |
           export ARROW_TEST_DATA=$(pwd)/testing/data
           export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          cargo test --no-default-features --features standalone
+          cargo test
           # test datafusion examples
           cd datafusion-examples
           cargo run --example csv_sql
