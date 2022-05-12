@@ -21,5 +21,6 @@ Clients
 .. toctree::
    :maxdepth: 2
 
+   cli
    rust
    python

@@ -17,16 +17,16 @@
   under the License.
 -->
 
-# DataFusion Command-line Interface
+# Ballista Command-line Interface
 
-[DataFusion](df) is an extensible query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
+[Ballista](df) is a distributed query execution framework, written in Rust, that uses Apache Arrow as its in-memory format.
 
-The DataFusion CLI allows SQL queries to be executed by an in-process DataFusion context, or by a distributed
+The Ballista CLI allows SQL queries to be executed by an in-process DataFusion context, or by a distributed
 Ballista context.
 
 ```ignore
 USAGE:
-    datafusion-cli [FLAGS] [OPTIONS]
+    ballista-cli [FLAGS] [OPTIONS]
 
 FLAGS:
     -h, --help       Prints help information
@@ -51,9 +51,9 @@ $ echo "1,2" > data.csv
 ```
 
 ```sql,ignore
-$ datafusion-cli
+$ ballista-cli
 
-DataFusion CLI v7.0.0
+Ballista CLI v0.6.0
 
 > CREATE EXTERNAL TABLE foo (a INT, b INT) STORED AS CSV LOCATION 'data.csv';
 0 rows in set. Query took 0.001 seconds.
@@ -67,28 +67,28 @@ DataFusion CLI v7.0.0
 1 row in set. Query took 0.017 seconds.
 ```
 
-## DataFusion-Cli
+## Ballista-Cli
 
-Build the `datafusion-cli` without the feature of ballista.
+Build the `ballista-cli` without the feature of ballista.
 
 ```bash
-cd arrow-datafusion/datafusion-cli
+cd arrow-datafusion/ballista-cli
 cargo build
 ```
 
 ## Ballista
 
-If you want to execute the SQL in ballista by `datafusion-cli`, you must build/compile the `datafusion-cli` with features of "ballista" first.
+If you want to execute the SQL in ballista by `ballista-cli`, you must build/compile the `ballista-cli` with features of "ballista" first.
 
 ```bash
-cd arrow-datafusion/datafusion-cli
-cargo build --features ballista
+cd arrow-datafusion/ballista-cli
+cargo build
 ```
 
-The DataFusion CLI can connect to a Ballista scheduler for query execution.
+The Ballista CLI can connect to a Ballista scheduler for query execution.
 
 ```bash
-datafusion-cli --host localhost --port 50050
+ballista-cli --host localhost --port 50050
 ```
 
 [df]: https://crates.io/crates/datafusion
