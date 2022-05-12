@@ -127,18 +127,18 @@ jobs:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
       # Ballista is currently not part of the main workspace so requires a separate test step
-      - name: Run Ballista tests
-        run: |
-          export ARROW_TEST_DATA=$(pwd)/testing/data
-          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
-          cd ballista/rust
-          # snmalloc requires cmake so build without default features
-          cargo test --no-default-features --features sled
-          # Ensure also compiles in standalone mode
-          cargo test --no-default-features --features standalone
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
+#      - name: Run Ballista tests
+#        run: |
+#          export ARROW_TEST_DATA=$(pwd)/testing/data
+#          export PARQUET_TEST_DATA=$(pwd)/parquet-testing/data
+#          cd ballista/rust
+#          # snmalloc requires cmake so build without default features
+#          cargo test --no-default-features --features sled
+#          # Ensure also compiles in standalone mode
+#          cargo test --no-default-features --features standalone
+#        env:
+#          CARGO_HOME: "/github/home/.cargo"
+#          CARGO_TARGET_DIR: "/github/home/target"
 
   integration-test:
     name: "Integration Test"
