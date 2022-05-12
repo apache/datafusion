@@ -41,6 +41,7 @@ crates = {
 }
 
 ballista_crates = {
+    'ballista-cli': 'ballista-cli/Cargo.toml',
     'core': 'ballista/rust/core/Cargo.toml',
     'client': 'ballista/rust/client/Cargo.toml',
     'executor': 'ballista/rust/executor/Cargo.toml',

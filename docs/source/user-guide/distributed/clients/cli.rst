@@ -39,7 +39,7 @@ Use the following commands to clone this repository and build a Docker image con
 .. code-block:: bash
 
     git clone https://github.com/apache/arrow-datafusion
-    git checkout 7.0.0
+    git checkout 8.0.0
     cd arrow-datafusion
     docker build -f ballista-cli/Dockerfile . --tag ballista-cli
     docker run -it -v $(your_data_location):/data ballista-cli
