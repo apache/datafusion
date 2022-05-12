@@ -32,8 +32,8 @@ readme = "README.md"
 arrow = { version = "13" }
 ballista = { path = "../ballista/rust/client", version = "0.7.0" }
 clap = { version = "3", features = ["derive", "cargo"] }
-datafusion = { path = "../datafusion/core", version = "7.0.0" }
-datafusion-cli = { path = "../datafusion-cli", version = "7.0.0" }
+datafusion = { path = "../datafusion/core", version = "8.0.0" }
+datafusion-cli = { path = "../datafusion-cli", version = "8.0.0" }
 dirs = "4.0.0"
 env_logger = "0.9"
 mimalloc = { version = "*", default-features = false }
