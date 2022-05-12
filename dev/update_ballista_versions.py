@@ -44,6 +44,7 @@ def update_cargo_toml(cargo_toml: str, new_version: str):
         'ballista-core',
         'ballista-executor',
         'ballista-scheduler',
+        'ballista-cli',
     )
     for ballista_dep in ballista_deps:
         dep = doc.get('dependencies', {}).get(ballista_dep)

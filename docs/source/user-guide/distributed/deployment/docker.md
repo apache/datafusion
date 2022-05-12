@@ -26,12 +26,12 @@ There is no officially published Docker image so it is currently necessary to bu
 Run the following commands to clone the source repository and build the Docker image.
 
 ```bash
-git clone git@github.com:apache/arrow-datafusion.git -b 5.1.0
+git clone git@github.com:apache/arrow-datafusion.git -b 8.0.0
 cd arrow-datafusion
 ./dev/build-ballista-docker.sh
 ```
 
-This will create an image with the tag `ballista:0.6.0`.
+This will create an image with the tag `ballista:0.7.0`.
 
 ### Start a Scheduler
 
@@ -39,7 +39,7 @@ Start a scheduler using the following syntax:
 
 ```bash
 docker run --network=host \
-  -d ballista:0.6.0 \
+  -d ballista:0.7.0 \
   /scheduler --bind-port 50050
 ```
 
@@ -48,14 +48,14 @@ Run `docker ps` to check that the process is running:
 ```
 $ docker ps
 CONTAINER ID   IMAGE            COMMAND                  CREATED         STATUS        PORTS     NAMES
-1f3f8b5ed93a   ballista:0.6.0   "/scheduler --bind-p…"   2 seconds ago   Up 1 second             tender_archimedes
+1f3f8b5ed93a   ballista:0.7.0   "/scheduler --bind-p…"   2 seconds ago   Up 1 second             tender_archimedes
 ```
 
 Run `docker logs CONTAINER_ID` to check the output from the process:
 
 ```
 $ docker logs 1f3f8b5ed93a
-[2021-08-28T15:45:11Z INFO  ballista_scheduler] Ballista v0.6.0 Scheduler listening on 0.0.0.0:50050
+[2021-08-28T15:45:11Z INFO  ballista_scheduler] Ballista v0.7.0 Scheduler listening on 0.0.0.0:50050
 ```
 
 ### Start executors
@@ -64,7 +64,7 @@ Start one or more executor processes. Each executor process will need to listen 
 
 ```bash
 docker run --network=host \
-  -d ballista:0.6.0 \
+  -d ballista:0.7.0 \
   /executor --external-host localhost --bind-port 50051
 ```
 
@@ -73,8 +73,8 @@ Use `docker ps` to check that both the scheduer and executor(s) are now running:
 ```
 $ docker ps
 CONTAINER ID   IMAGE            COMMAND                  CREATED          STATUS          PORTS     NAMES
-7c6941bb8dc0   ballista:0.6.0   "/executor --externa…"   3 seconds ago    Up 2 seconds              tender_goldberg
-1f3f8b5ed93a   ballista:0.6.0   "/scheduler --bind-p…"   50 seconds ago   Up 49 seconds             tender_archimedes
+7c6941bb8dc0   ballista:0.7.0   "/executor --externa…"   3 seconds ago    Up 2 seconds              tender_goldberg
+1f3f8b5ed93a   ballista:0.7.0   "/scheduler --bind-p…"   50 seconds ago   Up 49 seconds             tender_archimedes
 ```
 
 Use `docker logs CONTAINER_ID` to check the output from the executor(s):
@@ -84,7 +84,7 @@ $ docker logs 7c6941bb8dc0
 [2021-08-28T15:45:58Z INFO  ballista_executor] Running with config:
 [2021-08-28T15:45:58Z INFO  ballista_executor] work_dir: /tmp/.tmpeyEM76
 [2021-08-28T15:45:58Z INFO  ballista_executor] concurrent_tasks: 4
-[2021-08-28T15:45:58Z INFO  ballista_executor] Ballista v0.6.0 Rust Executor listening on 0.0.0.0:50051
+[2021-08-28T15:45:58Z INFO  ballista_executor] Ballista v0.7.0 Rust Executor listening on 0.0.0.0:50051
 ```
 
 ### Using etcd as backing store
@@ -96,7 +96,7 @@ to launch the scheduler with this option enabled.
 
 ```bash
 docker run --network=host \
-  -d ballista:0.6.0 \
+  -d ballista:0.7.0 \
   /scheduler --bind-port 50050 \
   --config-backend etcd \
   --etcd-urls etcd:2379
