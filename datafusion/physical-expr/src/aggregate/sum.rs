@@ -667,15 +667,4 @@ mod tests {
             DataType::Float64
         )
     }
-
-    #[test]
-    fn test_sum_v2() -> Result<()> {
-        let lhs = ScalarValue::Float64(Some(1.0));
-        let rhs = ScalarValue::Int32(Some(2));
-
-        let res = sum(&lhs, &rhs);
-
-        assert!(res.unwrap() == ScalarValue::Float64(Some(3.0)));
-        Ok(())
-    }
 }
