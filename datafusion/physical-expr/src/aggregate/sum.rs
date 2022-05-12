@@ -159,7 +159,6 @@ fn sum_decimal_batch(
     scale: &usize,
 ) -> Result<ScalarValue> {
     let array = values.as_any().downcast_ref::<DecimalArray>().unwrap();
-
     if array.null_count() == array.len() {
         return Ok(ScalarValue::Decimal128(None, *precision, *scale));
     }
@@ -196,18 +195,6 @@ pub(crate) fn sum_batch(values: &ArrayRef, sum_type: &DataType) -> Result<Scalar
             )));
         }
     })
-}
-
-// returns the sum of two scalar values, including coercion into $TYPE.
-macro_rules! typed_sum {
-    ($OLD_VALUE:expr, $DELTA:expr, $SCALAR:ident, $TYPE:ident) => {{
-        ScalarValue::$SCALAR(match ($OLD_VALUE, $DELTA) {
-            (None, None) => None,
-            (Some(a), None) => Some(a.clone()),
-            (None, Some(b)) => Some(b.clone() as $TYPE),
-            (Some(a), Some(b)) => Some(a + (*b as $TYPE)),
-        })
-    }};
 }
 
 macro_rules! sum_row {
@@ -262,100 +249,6 @@ fn sum_decimal_with_diff_scale(
     }
 }
 
-pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
-    Ok(match (lhs, rhs) {
-        (ScalarValue::Decimal128(v1, p1, s1), ScalarValue::Decimal128(v2, p2, s2)) => {
-            let max_precision = p1.max(p2);
-            if s1.eq(s2) {
-                // s1 = s2
-                sum_decimal(v1, v2, max_precision, s1)
-            } else if s1.gt(s2) {
-                // s1 > s2
-                sum_decimal_with_diff_scale(v1, v2, max_precision, s1, s2)
-            } else {
-                // s1 < s2
-                sum_decimal_with_diff_scale(v2, v1, max_precision, s2, s1)
-            }
-        }
-        // float64 coerces everything to f64
-        (ScalarValue::Float64(lhs), ScalarValue::Float64(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Float32(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int64(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int32(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int16(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::Int8(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt64(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt32(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt16(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        (ScalarValue::Float64(lhs), ScalarValue::UInt8(rhs)) => {
-            typed_sum!(lhs, rhs, Float64, f64)
-        }
-        // float32 has no cast
-        (ScalarValue::Float32(lhs), ScalarValue::Float32(rhs)) => {
-            typed_sum!(lhs, rhs, Float32, f32)
-        }
-        // u64 coerces u* to u64
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt64(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt32(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt16(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        (ScalarValue::UInt64(lhs), ScalarValue::UInt8(rhs)) => {
-            typed_sum!(lhs, rhs, UInt64, u64)
-        }
-        // i64 coerces i* to i64
-        (ScalarValue::Int64(lhs), ScalarValue::Int64(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::Int32(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::Int16(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::Int8(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt32(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt16(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        (ScalarValue::Int64(lhs), ScalarValue::UInt8(rhs)) => {
-            typed_sum!(lhs, rhs, Int64, i64)
-        }
-        e => {
-            return Err(DataFusionError::Internal(format!(
-                "Sum is not expected to receive a scalar {:?}",
-                e
-            )));
-        }
-    })
-}
-
 macro_rules! downcast_arg {
     ($ARG:expr, $NAME:expr, $ARRAY_TYPE:ident) => {{
         $ARG.as_any().downcast_ref::<$ARRAY_TYPE>().ok_or_else(|| {
@@ -384,8 +277,29 @@ macro_rules! union_arrays {
     }};
 }
 
-pub(crate) fn sum_v2(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
+pub(crate) fn sum(lhs: &ScalarValue, rhs: &ScalarValue) -> Result<ScalarValue> {
     let result = match (lhs.get_datatype(), rhs.get_datatype()) {
+        (DataType::Decimal(p1, s1), DataType::Decimal(p2, s2)) => {
+            let max_precision = p1.max(p2);
+            match (lhs, rhs) {
+                (
+                    ScalarValue::Decimal128(v1, _, _),
+                    ScalarValue::Decimal128(v2, _, _),
+                ) => {
+                    Ok(if s1.eq(&s2) {
+                        // s1 = s2
+                        sum_decimal(v1, v2, &max_precision, &s1)
+                    } else if s1.gt(&s2) {
+                        // s1 > s2
+                        sum_decimal_with_diff_scale(v1, v2, &max_precision, &s1, &s2)
+                    } else {
+                        // s1 < s2
+                        sum_decimal_with_diff_scale(v2, v1, &max_precision, &s2, &s1)
+                    })
+                }
+                _ => Err(DataFusionError::Internal("".to_string())),
+            }
+        }
         (DataType::Float64, _) | (_, DataType::Float64) => {
             let data: ArrayRef =
                 union_arrays!(&lhs, &rhs, &DataType::Float64, Float64Array, "f64");
@@ -729,19 +643,6 @@ mod tests {
     }
 
     #[test]
-    fn sum_u32() -> Result<()> {
-        let a: ArrayRef =
-            Arc::new(UInt32Array::from(vec![1_u32, 2_u32, 3_u32, 4_u32, 5_u32]));
-        generic_test_op!(
-            a,
-            DataType::UInt32,
-            Sum,
-            ScalarValue::from(15u64),
-            DataType::UInt64
-        )
-    }
-
-    #[test]
     fn sum_f32() -> Result<()> {
         let a: ArrayRef =
             Arc::new(Float32Array::from(vec![1_f32, 2_f32, 3_f32, 4_f32, 5_f32]));
@@ -772,7 +673,7 @@ mod tests {
         let lhs = ScalarValue::Float64(Some(1.0));
         let rhs = ScalarValue::Int32(Some(2));
 
-        let res = sum_v2(&lhs, &rhs);
+        let res = sum(&lhs, &rhs);
 
         assert!(res.unwrap() == ScalarValue::Float64(Some(3.0)));
         Ok(())
