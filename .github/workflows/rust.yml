@@ -75,14 +75,6 @@ jobs:
         env:
           CARGO_HOME: "/github/home/.cargo"
           CARGO_TARGET_DIR: "/github/home/target"
-      - name: Check DataFusion CLI builds with ballista
-        run: |
-          (cd datafusion-cli && cargo check)
-          (cd datafusion-cli && cargo check --no-default-features)
-          (cd datafusion-cli && cargo check --features=ballista)
-        env:
-          CARGO_HOME: "/github/home/.cargo"
-          CARGO_TARGET_DIR: "/github/home/target"
 
   # test the crate
   linux-test:
@@ -245,6 +237,8 @@ jobs:
           POSTGRES_PASSWORD: postgres
       - name: Build datafusion-cli
         run: (cd datafusion-cli && cargo build)
+      - name: Build ballista-cli
+        run: (cd ballista-cli && cargo build)
       - name: Test Psql Parity
         run: python -m pytest -v integration-tests/test_psql_parity.py
         env:
