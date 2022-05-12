@@ -31,6 +31,11 @@ pub enum Context {
 }
 
 impl Context {
+    /// create a new remote context with given host and port
+    pub async fn new_remote(host: &str, port: u16) -> Result<Context> {
+        Ok(Context::Remote(BallistaContext::try_new(host, port).await?))
+    }
+
     /// create a local context using the given config
     pub fn new_local(config: &SessionConfig) -> Context {
         Context::Local(SessionContext::with_config(config.clone()))

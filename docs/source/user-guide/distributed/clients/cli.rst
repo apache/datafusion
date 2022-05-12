@@ -16,41 +16,22 @@
 .. under the License.
 
 =======================
-DataFusion Command-line
+Ballista Command-line
 =======================
 
-The Arrow DataFusion CLI is a command-line interactive SQL utility that allows
+The Arrow Ballista CLI is a command-line interactive SQL utility that allows
 queries to be executed against CSV and Parquet files. It is a convenient way to
-try DataFusion out with your own data sources.
+try Ballista out with your own data sources.
 
 Install and run using Cargo
 ===========================
 
-The easiest way to install DataFusion CLI a spin is via `cargo install datafusion-cli`.
-
-Install and run using Homebrew (on MacOS)
-=========================================
-
-DataFusion CLI can also be installed via Homebrew (on MacOS). Install it as any other pre-built software like this:
-
-.. code-block:: bash
-
-    brew install datafusion
-    # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/manifests/5.0.0
-    # ######################################################################## 100.0%
-    # ==> Downloading https://ghcr.io/v2/homebrew/core/datafusion/blobs/sha256:9ecc8a01be47ceb9a53b39976696afa87c0a8
-    # ==> Downloading from https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:9ecc8a01be47ceb9a53b39976
-    # ######################################################################## 100.0%
-    # ==> Pouring datafusion--5.0.0.big_sur.bottle.tar.gz
-    # 🍺  /usr/local/Cellar/datafusion/5.0.0: 9 files, 17.4MB
-
-    datafusion-cli
-
+The easiest way to install Ballista CLI a spin is via `cargo install ballista-cli`.
 
 Run using Docker
 ================
 
-There is no officially published Docker image for the DataFusion CLI, so it is necessary to build from source
+There is no officially published Docker image for the Ballista CLI, so it is necessary to build from source
 instead.
 
 Use the following commands to clone this repository and build a Docker image containing the CLI tool. Note that there is :code:`.dockerignore` file in the root of the repository that may need to be deleted in order for this to work.
@@ -60,8 +41,8 @@ Use the following commands to clone this repository and build a Docker image con
     git clone https://github.com/apache/arrow-datafusion
     git checkout 7.0.0
     cd arrow-datafusion
-    docker build -f datafusion-cli/Dockerfile . --tag datafusion-cli
-    docker run -it -v $(your_data_location):/data datafusion-cli
+    docker build -f ballista-cli/Dockerfile . --tag ballista-cli
+    docker run -it -v $(your_data_location):/data ballista-cli
 
 
 Usage
@@ -70,10 +51,10 @@ Usage
 .. code-block:: bash
 
     Apache Arrow <dev@arrow.apache.org>
-    Command Line Client for DataFusion query engine and Ballista distributed computation engine.
+    Command Line Client for Ballista distributed query engine.
 
     USAGE:
-        datafusion-cli [OPTIONS]
+        ballista-cli [OPTIONS]
 
     OPTIONS:
         -c, --batch-size <BATCH_SIZE>    The batch size of each query, or use DataFusion default
@@ -81,7 +62,9 @@ Usage
             --format <FORMAT>            [default: table] [possible values: csv, tsv, table, json,
                                          nd-json]
         -h, --help                       Print help information
+            --host <HOST>                Ballista scheduler host
         -p, --data-path <DATA_PATH>      Path to your data, default to current directory
+            --port <PORT>                Ballista scheduler port
         -q, --quiet                      Reduce printing other than the results and work quietly
         -r, --rc <RC>...                 Run the provided files on startup instead of ~/.datafusionrc
         -V, --version                    Print version information

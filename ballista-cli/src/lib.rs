@@ -15,18 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub mod display;
-mod extension;
-mod plan;
+#![doc = include_str!("../README.md")]
+pub const BALLISTA_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use plan::{
-    Aggregate, Analyze, CreateCatalog, CreateCatalogSchema, CreateExternalTable,
-    CreateMemoryTable, CreateView, CrossJoin, DropTable, EmptyRelation, Explain,
-    Extension, FileType, Filter, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
-    Partitioning, PlanType, PlanVisitor, Projection, Repartition, Sort, StringifiedPlan,
-    Subquery, SubqueryAlias, TableScan, ToStringifiedPlan, Union, Values, Window,
-};
+pub mod command;
+pub mod context;
+pub mod exec;
 
-pub use display::display_schema;
-
-pub use extension::UserDefinedLogicalNode;
+pub use datafusion_cli::{helper, print_format, print_options, functions};

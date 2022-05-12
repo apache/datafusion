@@ -31,8 +31,8 @@ use crate::logical_plan::{
     and, builder::expand_qualified_wildcard, builder::expand_wildcard, col, lit,
     normalize_col, normalize_col_with_schemas, union_with_alias, Column, CreateCatalog,
     CreateCatalogSchema, CreateExternalTable as PlanCreateExternalTable,
-    CreateMemoryTable, DFSchema, DFSchemaRef, DropTable, Expr, FileType, LogicalPlan,
-    LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
+    CreateMemoryTable, CreateView, DFSchema, DFSchemaRef, DropTable, Expr, FileType,
+    LogicalPlan, LogicalPlanBuilder, Operator, PlanType, ToDFSchema, ToStringifiedPlan,
 };
 use crate::optimizer::utils::exprlist_to_columns;
 use crate::prelude::JoinType;
@@ -172,6 +172,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     name: name.to_string(),
                     input: Arc::new(plan),
                     if_not_exists,
+                }))
+            }
+            Statement::CreateView {
+                or_replace,
+                name,
+                columns,
+                query,
+                with_options,
+                ..
+            } if columns.is_empty() && with_options.is_empty() => {
+                let plan = self.query_to_plan(*query, &mut HashMap::new())?;
+                Ok(LogicalPlan::CreateView(CreateView {
+                    name: name.to_string(),
+                    input: Arc::new(plan),
+                    or_replace,
                 }))
             }
             Statement::CreateTable { .. } => Err(DataFusionError::NotImplemented(

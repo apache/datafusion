@@ -285,6 +285,7 @@ of the following crates:
 - [datafusion-proto](https://crates.io/crates/datafusion-proto)
 - [datafusion-row](https://crates.io/crates/datafusion-row)
 - [ballista](https://crates.io/crates/ballista)
+- [ballista-cli](https://crates.io/crates/ballista-cli)
 - [ballista-core](https://crates.io/crates/ballista-core)
 - [ballista-executor](https://crates.io/crates/ballista-executor)
 - [ballista-scheduler](https://crates.io/crates/ballista-scheduler)
@@ -315,9 +316,6 @@ dot -Tsvg dev/release/crate-deps.dot > dev/release/crate-deps.svg
 (cd datafusion-cli && cargo publish)
 ```
 
-Note that `datafusion-cli` will depend on the previously published version of Ballista (which depends on the 
-previously published version of DataFusion) until https://github.com/apache/arrow-datafusion/issues/2433 is resolved.
-
 If there is a ballista release, run
 
 ```shell
@@ -325,6 +323,7 @@ If there is a ballista release, run
 (cd ballista/rust/executor && cargo publish)
 (cd ballista/rust/scheduler && cargo publish)
 (cd ballista/rust/client && cargo publish)
+(cd ballista-cli && cargo publish)
 ```
 
 ### Publish datafusion-cli on Homebrew and crates.io

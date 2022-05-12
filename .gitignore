@@ -85,6 +85,7 @@ cpp/Brewfile.lock.json
 target
 Cargo.lock
 !datafusion-cli/Cargo.lock
+!ballista-cli/Cargo.lock
 
 rusty-tags.vi
 .history

@@ -15,26 +15,24 @@
 # specific language governing permissions and limitations
 # under the License.
 
-[workspace]
-members = [
-    "datafusion/common",
-    "datafusion/core",
-    "datafusion/data-access",
-    "datafusion/expr",
-    "datafusion/jit",
-    "datafusion/physical-expr",
-    "datafusion/proto",
-    "datafusion/row",
-    "datafusion-examples",
-    "benchmarks",
-    "ballista/rust/client",
-    "ballista/rust/core",
-    "ballista/rust/executor",
-    "ballista/rust/scheduler",
-    "ballista-examples",
-]
-exclude = ["ballista-cli", "datafusion-cli"]
+FROM rust:1.59 as builder
 
-[profile.release]
-codegen-units = 1
-lto = true
+COPY ./datafusion /usr/src/datafusion
+
+COPY ./ballista-cli /usr/src/ballista-cli
+
+COPY ./ballista /usr/src/ballista
+
+WORKDIR /usr/src/ballista-cli
+
+RUN rustup component add rustfmt
+
+RUN cargo build --release
+
+FROM debian:bullseye-slim
+
+COPY --from=builder /usr/src/ballista-cli/target/release/ballista-cli /usr/local/bin
+
+ENTRYPOINT ["ballista-cli"]
+
+CMD ["--data-path", "/data"]
