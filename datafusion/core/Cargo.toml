@@ -18,7 +18,7 @@
 [package]
 name = "datafusion"
 description = "DataFusion is an in-memory query engine that uses Apache Arrow as the memory model"
-version = "7.0.0"
+version = "8.0.0"
 homepage = "https://github.com/apache/arrow-datafusion"
 repository = "https://github.com/apache/arrow-datafusion"
 readme = "../README.md"
@@ -59,12 +59,12 @@ arrow = { version = "13", features = ["prettyprint"] }
 async-trait = "0.1.41"
 avro-rs = { version = "0.13", features = ["snappy"], optional = true }
 chrono = { version = "0.4", default-features = false }
-datafusion-common = { path = "../common", version = "7.0.0", features = ["parquet"] }
-datafusion-data-access = { path = "../data-access", version = "7.0.0" }
-datafusion-expr = { path = "../expr", version = "7.0.0" }
-datafusion-jit = { path = "../jit", version = "7.0.0", optional = true }
-datafusion-physical-expr = { path = "../physical-expr", version = "7.0.0" }
-datafusion-row = { path = "../row", version = "7.0.0" }
+datafusion-common = { path = "../common", version = "8.0.0", features = ["parquet"] }
+datafusion-data-access = { path = "../data-access", version = "8.0.0" }
+datafusion-expr = { path = "../expr", version = "8.0.0" }
+datafusion-jit = { path = "../jit", version = "8.0.0", optional = true }
+datafusion-physical-expr = { path = "../physical-expr", version = "8.0.0" }
+datafusion-row = { path = "../row", version = "8.0.0" }
 futures = "0.3"
 hashbrown = { version = "0.12", features = ["raw"] }
 lazy_static = { version = "^1.4.0" }
