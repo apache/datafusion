@@ -52,7 +52,7 @@ jobs:
           # these represent compiled steps of both dependencies and arrow
           # and thus are specific for a particular OS, arch and rust version.
           path: /github/home/target
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}-
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-v1-${{ matrix.rust }}-
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -114,7 +114,7 @@ jobs:
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-v1-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -274,7 +274,7 @@ jobs:
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-v1-${{ matrix.rust }}
       - uses: actions/setup-python@v2
         with:
           python-version: "3.8"
@@ -341,7 +341,7 @@ jobs:
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-v1-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -419,7 +419,7 @@ jobs:
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-v1-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
@@ -464,7 +464,7 @@ jobs:
         with:
           path: /github/home/target
           # this key equals the ones on `linux-build-lib` for re-use
-          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-${{ matrix.rust }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-target-cache-v1-${{ matrix.rust }}
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
         with:
