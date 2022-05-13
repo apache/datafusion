@@ -626,7 +626,7 @@ impl TDigest {
             ScalarValue::Float64(Some(self.count.into_inner())),
             ScalarValue::Float64(Some(self.max.into_inner())),
             ScalarValue::Float64(Some(self.min.into_inner())),
-            ScalarValue::List(Some(Box::new(centroids)), Box::new(DataType::Float64)),
+            ScalarValue::List(Some(centroids), DataType::Float64),
         ]
     }
 
@@ -647,7 +647,7 @@ impl TDigest {
         };
 
         let centroids: Vec<_> = match &state[5] {
-            ScalarValue::List(Some(c), d) if **d == DataType::Float64 => c
+            ScalarValue::List(Some(c), d) if *d == DataType::Float64 => c
                 .chunks(2)
                 .map(|v| Centroid::new(cast_scalar_f64!(v[0]), cast_scalar_f64!(v[1])))
                 .collect(),

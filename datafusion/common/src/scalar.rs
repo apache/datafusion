@@ -72,8 +72,7 @@ pub enum ScalarValue {
     /// large binary
     LargeBinary(Option<Vec<u8>>),
     /// list of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_collection)]
-    List(Option<Box<Vec<ScalarValue>>>, Box<DataType>),
+    List(Option<Vec<ScalarValue>>, DataType),
     /// Date stored as a signed 32bit int
     Date32(Option<i32>),
     /// Date stored as a signed 64bit int
@@ -93,8 +92,7 @@ pub enum ScalarValue {
     /// Interval with MonthDayNano unit
     IntervalMonthDayNano(Option<i128>),
     /// struct of nested ScalarValue (boxed to reduce size_of(ScalarValue))
-    #[allow(clippy::box_collection)]
-    Struct(Option<Box<Vec<ScalarValue>>>, Box<Vec<Field>>),
+    Struct(Option<Vec<ScalarValue>>, Vec<Field>),
 }
 
 // manual implementation of `PartialEq` that uses OrderedFloat to
@@ -392,7 +390,7 @@ macro_rules! build_list {
                 )
             }
             Some(values) => {
-                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values.as_ref(), $SIZE)
+                build_values_list!($VALUE_BUILDER_TY, $SCALAR_TY, values, $SIZE)
             }
         }
     }};
@@ -412,37 +410,34 @@ macro_rules! build_timestamp_list {
                     $SIZE,
                 )
             }
-            Some(values) => {
-                let values = values.as_ref();
-                match $TIME_UNIT {
-                    TimeUnit::Second => {
-                        build_values_list_tz!(
-                            TimestampSecondBuilder,
-                            TimestampSecond,
-                            values,
-                            $SIZE
-                        )
-                    }
-                    TimeUnit::Microsecond => build_values_list_tz!(
-                        TimestampMillisecondBuilder,
-                        TimestampMillisecond,
+            Some(values) => match $TIME_UNIT {
+                TimeUnit::Second => {
+                    build_values_list_tz!(
+                        TimestampSecondBuilder,
+                        TimestampSecond,
                         values,
                         $SIZE
-                    ),
-                    TimeUnit::Millisecond => build_values_list_tz!(
-                        TimestampMicrosecondBuilder,
-                        TimestampMicrosecond,
-                        values,
-                        $SIZE
-                    ),
-                    TimeUnit::Nanosecond => build_values_list_tz!(
-                        TimestampNanosecondBuilder,
-                        TimestampNanosecond,
-                        values,
-                        $SIZE
-                    ),
+                    )
                 }
-            }
+                TimeUnit::Microsecond => build_values_list_tz!(
+                    TimestampMillisecondBuilder,
+                    TimestampMillisecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Millisecond => build_values_list_tz!(
+                    TimestampMicrosecondBuilder,
+                    TimestampMicrosecond,
+                    values,
+                    $SIZE
+                ),
+                TimeUnit::Nanosecond => build_values_list_tz!(
+                    TimestampNanosecondBuilder,
+                    TimestampNanosecond,
+                    values,
+                    $SIZE
+                ),
+            },
         }
     }};
 }
@@ -579,11 +574,9 @@ impl ScalarValue {
             ScalarValue::LargeUtf8(_) => DataType::LargeUtf8,
             ScalarValue::Binary(_) => DataType::Binary,
             ScalarValue::LargeBinary(_) => DataType::LargeBinary,
-            ScalarValue::List(_, data_type) => DataType::List(Box::new(Field::new(
-                "item",
-                data_type.as_ref().clone(),
-                true,
-            ))),
+            ScalarValue::List(_, data_type) => {
+                DataType::List(Box::new(Field::new("item", data_type.clone(), true)))
+            }
             ScalarValue::Date32(_) => DataType::Date32,
             ScalarValue::Date64(_) => DataType::Date64,
             ScalarValue::IntervalYearMonth(_) => {
@@ -593,7 +586,7 @@ impl ScalarValue {
             ScalarValue::IntervalMonthDayNano(_) => {
                 DataType::Interval(IntervalUnit::MonthDayNano)
             }
-            ScalarValue::Struct(_, fields) => DataType::Struct(fields.as_ref().clone()),
+            ScalarValue::Struct(_, fields) => DataType::Struct(fields.clone()),
         }
     }
 
@@ -794,7 +787,6 @@ impl ScalarValue {
                 for scalar in scalars.into_iter() {
                     match scalar {
                         ScalarValue::List(Some(xs), _) => {
-                            let xs = *xs;
                             for s in xs {
                                 match s {
                                     ScalarValue::$SCALAR_TY(Some(val)) => {
@@ -1000,7 +992,7 @@ impl ScalarValue {
             if let ScalarValue::List(values, _) = scalar {
                 match values {
                     Some(values) => {
-                        let element_array = ScalarValue::iter_to_array(*values)?;
+                        let element_array = ScalarValue::iter_to_array(values)?;
 
                         // Add new offset index
                         flat_len += element_array.len() as i32;
@@ -1160,7 +1152,7 @@ impl ScalarValue {
                         .collect::<LargeBinaryArray>(),
                 ),
             },
-            ScalarValue::List(values, data_type) => Arc::new(match data_type.as_ref() {
+            ScalarValue::List(values, data_type) => Arc::new(match data_type {
                 DataType::Boolean => build_list!(BooleanBuilder, Boolean, values, size),
                 DataType::Int8 => build_list!(Int8Builder, Int8, values, size),
                 DataType::Int16 => build_list!(Int16Builder, Int16, values, size),
@@ -1183,7 +1175,7 @@ impl ScalarValue {
                     repeat(self.clone()).take(size),
                     &DataType::List(Box::new(Field::new(
                         "item",
-                        data_type.as_ref().clone(),
+                        data_type.clone(),
                         true,
                     ))),
                 )
@@ -1303,8 +1295,7 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                let value = value.map(Box::new);
-                let data_type = Box::new(nested_type.data_type().clone());
+                let data_type = nested_type.data_type().clone();
                 ScalarValue::List(value, data_type)
             }
             DataType::Date32 => {
@@ -1389,7 +1380,7 @@ impl ScalarValue {
                     let col_scalar = ScalarValue::try_from_array(col_array, index)?;
                     field_values.push(col_scalar);
                 }
-                Self::Struct(Some(Box::new(field_values)), Box::new(fields.clone()))
+                Self::Struct(Some(field_values), fields.clone())
             }
             DataType::FixedSizeList(nested_type, _len) => {
                 let list_array =
@@ -1404,8 +1395,7 @@ impl ScalarValue {
                         Some(scalar_vec)
                     }
                 };
-                let value = value.map(Box::new);
-                let data_type = Box::new(nested_type.data_type().clone());
+                let data_type = nested_type.data_type().clone();
                 ScalarValue::List(value, data_type)
             }
             other => {
@@ -1610,7 +1600,7 @@ impl From<Vec<(&str, ScalarValue)>> for ScalarValue {
             })
             .unzip();
 
-        Self::Struct(Some(Box::new(scalars)), Box::new(fields))
+        Self::Struct(Some(scalars), fields)
     }
 }
 
@@ -1738,11 +1728,9 @@ impl TryFrom<&DataType> for ScalarValue {
                 value_type.as_ref().try_into()?
             }
             DataType::List(ref nested_type) => {
-                ScalarValue::List(None, Box::new(nested_type.data_type().clone()))
+                ScalarValue::List(None, nested_type.data_type().clone())
             }
-            DataType::Struct(fields) => {
-                ScalarValue::Struct(None, Box::new(fields.clone()))
-            }
+            DataType::Struct(fields) => ScalarValue::Struct(None, fields.clone()),
             _ => {
                 return Err(DataFusionError::NotImplemented(format!(
                     "Can't create a scalar from data_type \"{:?}\"",

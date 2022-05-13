@@ -799,13 +799,13 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.as_ref().try_into()?),
+                                        datatype: Some(datatype.try_into()?),
                                         values: Vec::new(),
                                     },
                                 )),
                             }
                         } else {
-                            let scalar_type = match datatype.as_ref() {
+                            let scalar_type = match datatype {
                                 DataType::List(field) => field.as_ref().data_type(),
                                 _ => todo!("Proper error handling"),
                             };
@@ -817,9 +817,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                                         scalar::ScalarValue::List(_, list_type),
                                         DataType::List(field),
                                     ) => {
-                                        if let DataType::List(list_field) =
-                                            list_type.as_ref()
-                                        {
+                                        if let DataType::List(list_field) = list_type {
                                             let scalar_datatype = field.data_type();
                                             let list_datatype = list_field.data_type();
                                             if std::mem::discriminant(list_datatype)
@@ -893,7 +891,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                             protobuf::ScalarValue {
                                 value: Some(protobuf::scalar_value::Value::ListValue(
                                     protobuf::ScalarListValue {
-                                        datatype: Some(datatype.as_ref().try_into()?),
+                                        datatype: Some(datatype.try_into()?),
                                         values: type_checked_values,
                                     },
                                 )),
@@ -902,7 +900,7 @@ impl TryFrom<&ScalarValue> for protobuf::ScalarValue {
                     }
                     None => protobuf::ScalarValue {
                         value: Some(protobuf::scalar_value::Value::NullListValue(
-                            datatype.as_ref().try_into()?,
+                            datatype.try_into()?,
                         )),
                     },
                 }
