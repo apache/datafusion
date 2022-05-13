@@ -161,7 +161,7 @@ impl Stream for FlightDataStream {
                         flight_data_to_arrow_batch(
                             &flight_data_chunk,
                             self.schema.clone(),
-                            &mut self.dictionaries_by_id,
+                            &self.dictionaries_by_id,
                         )
                     });
                 Some(converted_chunk)
