@@ -377,7 +377,7 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         assert_eq!(std::mem::size_of::<ScalarValue>(), 64);
 
-        #[cfg(target_arch = "amd64")]
+        #[cfg(not(target_arch = "aarch64"))]
         assert_eq!(std::mem::size_of::<ScalarValue>(), 48);
     }
 
