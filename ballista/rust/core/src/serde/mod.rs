@@ -697,6 +697,7 @@ mod tests {
         }
     }
 
+    #[ignore] // depends on file from datafusion repo
     #[tokio::test]
     async fn test_extension_plan() -> crate::error::Result<()> {
         let store = Arc::new(LocalFileSystem {});
