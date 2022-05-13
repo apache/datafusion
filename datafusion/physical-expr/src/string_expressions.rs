@@ -24,7 +24,7 @@
 use arrow::{
     array::{
         Array, ArrayRef, BooleanArray, GenericStringArray, Int32Array, Int64Array,
-        PrimitiveArray, StringArray, StringOffsetSizeTrait,
+        OffsetSizeTrait, PrimitiveArray, StringArray,
     },
     datatypes::{ArrowNativeType, ArrowPrimitiveType, DataType},
 };
@@ -98,8 +98,8 @@ pub(crate) fn unary_string_function<'a, T, O, F, R>(
 ) -> Result<GenericStringArray<O>>
 where
     R: AsRef<str>,
-    O: StringOffsetSizeTrait,
-    T: StringOffsetSizeTrait,
+    O: OffsetSizeTrait,
+    T: OffsetSizeTrait,
     F: Fn(&'a str) -> R,
 {
     if args.len() != 1 {
@@ -167,7 +167,7 @@ where
 
 /// Returns the numeric code of the first character of the argument.
 /// ascii('x') = 120
-pub fn ascii<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn ascii<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     let result = string_array
@@ -185,7 +185,7 @@ pub fn ascii<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Removes the longest string containing only characters in characters (a space by default) from the start and end of string.
 /// btrim('xyxtrimyyx', 'xyz') = 'trim'
-pub fn btrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn btrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -363,7 +363,7 @@ pub fn concat_ws(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Converts the first letter of each word to upper case and the rest to lower case. Words are sequences of alphanumeric characters separated by non-alphanumeric characters.
 /// initcap('hi THOMAS') = 'Hi Thomas'
-pub fn initcap<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
 
     // first map is the iterator, second is for the `Option<_>`
@@ -399,7 +399,7 @@ pub fn lower(args: &[ColumnarValue]) -> Result<ColumnarValue> {
 
 /// Removes the longest string containing only characters in characters (a space by default) from the start of string.
 /// ltrim('zzzytest', 'xyz') = 'test'
-pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn ltrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -438,7 +438,7 @@ pub fn ltrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Repeats string the specified number of times.
 /// repeat('Pg', 4) = 'PgPgPgPg'
-pub fn repeat<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn repeat<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let number_array = downcast_arg!(args[1], "number", Int64Array);
 
@@ -456,7 +456,7 @@ pub fn repeat<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Replaces all occurrences in string of substring from with substring to.
 /// replace('abcdefabcdef', 'cd', 'XX') = 'abXXefabXXef'
-pub fn replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn replace<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let from_array = downcast_string_arg!(args[1], "from", T);
     let to_array = downcast_string_arg!(args[2], "to", T);
@@ -476,7 +476,7 @@ pub fn replace<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> 
 
 /// Removes the longest string containing only characters in characters (a space by default) from the end of string.
 /// rtrim('testxxzx', 'xyz') = 'test'
-pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn rtrim<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     match args.len() {
         1 => {
             let string_array = downcast_string_arg!(args[0], "string", T);
@@ -515,7 +515,7 @@ pub fn rtrim<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
 
 /// Splits string at occurrences of delimiter and returns the n'th field (counting from one).
 /// split_part('abc~@~def~@~ghi', '~@~', 2) = 'def'
-pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn split_part<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let delimiter_array = downcast_string_arg!(args[1], "delimiter", T);
     let n_array = downcast_arg!(args[2], "n", Int64Array);
@@ -547,7 +547,7 @@ pub fn split_part<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRe
 
 /// Returns true if string starts with prefix.
 /// starts_with('alphabet', 'alph') = 't'
-pub fn starts_with<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn starts_with<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let string_array = downcast_string_arg!(args[0], "string", T);
     let prefix_array = downcast_string_arg!(args[1], "prefix", T);
 
@@ -567,7 +567,7 @@ pub fn starts_with<T: StringOffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayR
 /// to_hex(2147483647) = '7fffffff'
 pub fn to_hex<T: ArrowPrimitiveType>(args: &[ArrayRef]) -> Result<ArrayRef>
 where
-    T::Native: StringOffsetSizeTrait,
+    T::Native: OffsetSizeTrait,
 {
     let integer_array = downcast_primitive_array_arg!(args[0], "integer", T);
 
