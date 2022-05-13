@@ -32,6 +32,7 @@ use crate::optimizer::utils;
 use crate::sql::utils::find_sort_exprs;
 use arrow::datatypes::{Field, Schema};
 use arrow::error::Result as ArrowResult;
+use datafusion_expr::Expr;
 use std::{
     collections::{BTreeSet, HashSet},
     sync::Arc,
@@ -179,8 +180,12 @@ fn optimize_plan(
                 .map(|f| f.qualified_column())
                 .collect::<HashSet<Column>>();
 
+            let all_column_exprs = new_expr.iter().all(|e| matches!(e, Expr::Column(_)));
+
             if new_fields.is_empty()
-                || (has_projection && &new_required_columns_optimized == required_columns)
+                || (has_projection
+                    && all_column_exprs
+                    && &new_required_columns_optimized == required_columns)
             {
                 // no need for an expression at all
                 Ok(new_input)
