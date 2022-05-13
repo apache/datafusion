@@ -34,8 +34,8 @@ snmalloc = ["snmalloc-rs"]
 
 [dependencies]
 anyhow = "1"
-arrow = { version = "13" }
-arrow-flight = { version = "13" }
+arrow = { version = "14.0.0" }
+arrow-flight = { version = "14.0.0" }
 async-trait = "0.1.41"
 ballista-core = { path = "../core", version = "0.7.0" }
 chrono = { version = "0.4", default-features = false }
