@@ -132,12 +132,14 @@ impl Accumulator for DistinctSumAccumulator {
         // 1. Stores aggregate state in `ScalarValue::List`
         // 2. Constructs `ScalarValue::List` state from distinct numeric stored in hash set
         let state_out = {
-            let mut distinct_values = Box::new(Vec::new());
-            let data_type = Box::new(self.data_type.clone());
+            let mut distinct_values = Vec::new();
             self.hash_values
                 .iter()
                 .for_each(|distinct_value| distinct_values.push(distinct_value.clone()));
-            vec![ScalarValue::List(Some(distinct_values), data_type)]
+            vec![ScalarValue::List(
+                Some(distinct_values),
+                self.data_type.clone(),
+            )]
         };
         Ok(state_out)
     }
