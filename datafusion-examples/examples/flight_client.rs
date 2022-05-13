@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // all the remaining stream messages should be dictionary and record batches
     let mut results = vec![];
-    let mut dictionaries_by_field = HashMap::new();
+    let dictionaries_by_field = HashMap::new();
     while let Some(flight_data) = stream.message().await? {
         let record_batch = flight_data_to_arrow_batch(
             &flight_data,
