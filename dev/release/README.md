@@ -56,6 +56,26 @@ If you would like to propose your change for inclusion in the maintenance branch
   - https://dist.apache.org/repos/dist/dev/arrow/KEYS
   - https://dist.apache.org/repos/dist/release/arrow/KEYS
 
+### How to add signing key
+
+See instructions at https://infra.apache.org/release-signing.html#generate for generating keys.
+
+Committers can add signing keys in Subversion client with their ASF account. e.g.:
+
+``` bash
+$ svn co https://dist.apache.org/repos/dist/dev/arrow
+$ cd arrow
+$ editor KEYS
+$ svn ci KEYS
+```
+
+Follow the instructions in the header of the KEYS file to append your key. Here is an example:
+
+``` bash
+(gpg --list-sigs "John Doe" && gpg --armor --export "John Doe") >> KEYS
+svn commit KEYS -m "Add key for John Doe"
+```
+
 ## Process Overview
 
 As part of the Apache governance model, official releases consist of signed
